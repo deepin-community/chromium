@@ -1,3 +1,10 @@
+chromium (123.0.6312.58-1deepin1) unstable; urgency=medium
+
+  * Remove PowerPC support
+  * Add loong64 support
+
+ -- xiangzelong <xiangzelong@deepin.org>  Wed, 27 Mar 2024 15:02:47 +0800
+
 chromium (123.0.6312.58-1) unstable; urgency=high
 
   * New upstream stable release.

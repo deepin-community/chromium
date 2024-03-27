@@ -64,4 +64,4 @@ i386/angle-lockfree.patch
 
 # loong64
 
-loong64/chromium-123.0.6312.58.diff
+loong64/0001-support-loongarch.patch
