@@ -52,6 +52,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/render_blocking_behavior.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_priority.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_scheduler.h"
+#include "third_party/blink/renderer/platform/loader/fetch/service_worker_router_info.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
@@ -223,7 +224,6 @@ class PLATFORM_EXPORT ResourceFetcher
   bool StartLoad(Resource*);
 
   void SetAutoLoadImages(bool);
-  void SetImagesEnabled(bool);
 
   FetchContext& Context() const;
   void ClearContext();
@@ -244,7 +244,8 @@ class PLATFORM_EXPORT ResourceFetcher
 
   int CountPreloads() const { return preloads_.size(); }
   void ClearPreloads(ClearPreloadsPolicy = kClearAllPreloads);
-  void ScheduleWarnUnusedPreloads();
+  void ScheduleWarnUnusedPreloads(
+      base::OnceCallback<void(Vector<KURL> unused_preloads)> callback);
 
   MHTMLArchive* Archive() const { return archive_.Get(); }
 
@@ -353,7 +354,7 @@ class PLATFORM_EXPORT ResourceFetcher
 
   void SetEarlyHintsPreloadedResources(
       HashMap<KURL, EarlyHintsPreloadEntry> resources) {
-    early_hints_preloaded_resources_ = std::move(resources);
+    unused_early_hints_preloaded_resources_ = std::move(resources);
   }
 
   // Access the UKMRecorder.
@@ -365,7 +366,16 @@ class PLATFORM_EXPORT ResourceFetcher
   void OnMemoryPressure(
       base::MemoryPressureListener::MemoryPressureLevel) override;
 
-  void RecordLCPPSubresourceMetrics();
+  void MaybeRecordLCPPSubresourceMetrics(const KURL& document_url);
+
+  // For every image resource that was deferred, check to see if state has
+  // changed such that the load should no longer be deferred.
+  void ReloadImagesIfNotDeferred();
+
+  // Check if a resource is preloaded by earlyhints when response received.
+  void MarkEarlyHintConsumedIfNeeded(uint64_t inspector_id,
+                                     Resource* resource,
+                                     const ResourceResponse& response);
 
  private:
   friend class ResourceCacheValidationSuppressor;
@@ -405,13 +415,14 @@ class PLATFORM_EXPORT ResourceFetcher
       ResourcePriority::VisibilityStatus,
       const FetchParameters& params);
   ResourceLoadPriority AdjustImagePriority(
-      ResourceLoadPriority priority_so_far,
-      ResourceType type,
+      const ResourceLoadPriority priority_so_far,
+      const ResourceType type,
       const ResourceRequestHead& resource_request,
-      FetchParameters::SpeculativePreloadType speculative_preload_type,
-      bool is_link_preload,
+      const FetchParameters::SpeculativePreloadType speculative_preload_type,
+      const bool is_link_preload,
       const std::optional<float> resource_width,
-      const std::optional<float> resource_height);
+      const std::optional<float> resource_height,
+      const bool is_potentially_lcp_element);
 
   // |virtual_time_pauser| is an output parameter. PrepareRequest may
   // create a new WebScopedVirtualTimePauser and set it to
@@ -506,8 +517,6 @@ class PLATFORM_EXPORT ResourceFetcher
 
   void ResourceTimingReportTimerFired(TimerBase*);
 
-  void ReloadImagesIfNotDeferred();
-
   static RevalidationPolicyForMetrics MapToPolicyForMetrics(RevalidationPolicy,
                                                             Resource*,
                                                             bool should_defer);
@@ -522,7 +531,8 @@ class PLATFORM_EXPORT ResourceFetcher
   void ScheduleStaleRevalidate(Resource* stale_resource);
   void RevalidateStaleResource(Resource* stale_resource);
 
-  void WarnUnusedPreloads();
+  void WarnUnusedPreloads(
+      base::OnceCallback<void(Vector<KURL> unused_preloads)> callback);
 
   void RemoveResourceStrongReference(Resource* resource);
 
@@ -547,8 +557,10 @@ class PLATFORM_EXPORT ResourceFetcher
                                         const PendingResourceTimingInfo& info,
                                         base::TimeTicks response_end);
   SubresourceWebBundle* GetMatchingBundle(const KURL& url) const;
-  void UpdateServiceWorkerSubresourceMetrics(ResourceType resource_type,
-                                             bool handled_by_serviceworker);
+  void UpdateServiceWorkerSubresourceMetrics(
+      ResourceType resource_type,
+      bool handled_by_serviceworker,
+      const blink::ServiceWorkerRouterInfo* router_info);
 
   void RecordResourceHistogram(base::StringPiece prefix,
                                ResourceType type,
@@ -605,7 +617,7 @@ class PLATFORM_EXPORT ResourceFetcher
   HeapHashSet<Member<ResourceLoader>> loaders_;
   HeapHashSet<Member<ResourceLoader>> non_blocking_loaders_;
 
-  HashMap<KURL, EarlyHintsPreloadEntry> early_hints_preloaded_resources_;
+  HashMap<KURL, EarlyHintsPreloadEntry> unused_early_hints_preloaded_resources_;
 
   std::unique_ptr<HashSet<String>> preloaded_urls_for_test_;
 
@@ -616,10 +628,6 @@ class PLATFORM_EXPORT ResourceFetcher
   TaskHandle keepalive_loaders_task_handle_;
 
   uint32_t inflight_keepalive_bytes_ = 0;
-
-  // Records when this fetcher is detached from its context.
-  // Used to evaluate how long the keepalive requests outlive the context.
-  base::TimeTicks detached_time_;
 
   HeapMojoRemote<mojom::blink::BlobRegistry> blob_registry_remote_;
 
@@ -633,9 +641,8 @@ class PLATFORM_EXPORT ResourceFetcher
   // This is not in the bit field below because we want to use AutoReset.
   bool is_in_request_resource_ = false;
 
-  // 27 bits left
+  // 28 bits left
   bool auto_load_images_ : 1;
-  bool images_enabled_ : 1;
   bool allow_stale_resources_ : 1;
   bool image_fetched_ : 1;
   bool stale_while_revalidate_enabled_ : 1;

@@ -44,6 +44,8 @@ struct FormFieldData;
 struct FormDataPredictions;
 struct FormFieldDataPredictions;
 class PaymentsAutofillTable;
+class TestAutofillClient;
+class TestPersonalDataManager;
 
 // Defined by pair-wise equality of all members.
 bool operator==(const FormFieldDataPredictions& a,
@@ -206,6 +208,19 @@ CreditCardFlatRateBenefit GetActiveCreditCardFlatRateBenefit();
 CreditCardCategoryBenefit GetActiveCreditCardCategoryBenefit();
 CreditCardMerchantBenefit GetActiveCreditCardMerchantBenefit();
 
+// Returns a set of merchant origin webpages used for a merchant credit card
+// benefit.
+base::flat_set<url::Origin> GetOriginsForMerchantBenefit();
+
+// Adds `card` with a set `benefit` and `issuer_id` to `personal_data`. Also
+// configures a category benefit with the `optimization_guide`.
+void SetUpCreditCardAndBenefitData(
+    CreditCard& card,
+    const CreditCardBenefit& benefit,
+    const std::string& issuer_id,
+    TestPersonalDataManager& personal_data,
+    AutofillOptimizationGuide* optimization_guide);
+
 // A unit testing utility that is common to a number of the Autofill unit
 // tests.  |SetProfileInfo| provides a quick way to populate a profile with
 // c-strings.
@@ -294,30 +309,18 @@ void ReenableSystemServices();
 void SetServerCreditCards(PaymentsAutofillTable* table,
                           const std::vector<CreditCard>& cards);
 
-// Adds an element at the end of |possible_field_types| and
-// |possible_field_types_validities| given |possible_type| and their
-// corresponding |validity_state|.
-void InitializePossibleTypesAndValidities(
-    std::vector<FieldTypeSet>& possible_field_types,
-    std::vector<FieldTypeValidityStatesMap>& possible_field_types_validities,
-    const std::vector<FieldType>& possible_type,
-    const std::vector<AutofillDataModel::ValidityState>& validity_state = {});
+// Adds `possible_types` at the end of `possible_field_types`.
+void InitializePossibleTypes(std::vector<FieldTypeSet>& possible_field_types,
+                             const std::vector<FieldType>& possible_types);
 
 // Fills the upload |field| with the information passed by parameter.
 void FillUploadField(AutofillUploadContents::Field* field,
                      unsigned signature,
-                     unsigned autofill_type,
-                     unsigned validity_state = 0);
+                     unsigned autofill_type);
 
 void FillUploadField(AutofillUploadContents::Field* field,
                      unsigned signature,
-                     const std::vector<unsigned>& autofill_type,
-                     const std::vector<unsigned>& validity_state = {});
-
-void FillUploadField(AutofillUploadContents::Field* field,
-                     unsigned signature,
-                     unsigned autofill_type,
-                     const std::vector<unsigned>& validity_states);
+                     const std::vector<unsigned>& autofill_type);
 
 // Creates the structure of signatures that would be encoded by
 // `EncodeUploadRequest()` and `EncodeAutofillPageQueryRequest()`

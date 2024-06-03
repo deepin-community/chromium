@@ -12,24 +12,24 @@ vars = {
   'build_with_chromium': False,
 
   'build_url': 'https://chromium.googlesource.com/chromium/src/build.git',
-  'build_revision': 'e5cf1b3ceb3fec6aa5c57b34dede99d36cede32d',
+  'build_revision': '4500e9795bac7285dc446bda838ff5dfefbed650',
 
   'buildtools_url': 'https://chromium.googlesource.com/chromium/src/buildtools.git',
-  'buildtools_revision': '342659133d7d0b33f4e24b640a9ad78c0c423633',
+  'buildtools_revision': '5eb927f0a922dfacf10cfa84ee76f39dcf2a7311',
 
   'depot_tools_url': 'https://chromium.googlesource.com/chromium/tools/depot_tools.git',
-  'depot_tools_revision': '9d7c8e76f82ddc6a3bbc307217e31dec44a0f73a',
+  'depot_tools_revision': '609288a46b37758cbbfd82aefc01359631aec81f',
 
   'inspector_protocol_url': 'https://chromium.googlesource.com/deps/inspector_protocol',
-  'inspector_protocol_revision': '916f43c554c65ebf4ccd896b0f4e2ac99a67c434',
+  'inspector_protocol_revision': '99e195660e59050e845a24d04d4a2eea1c35fc3b',
 
   'clang_format_url': 'https://chromium.googlesource.com/external/github.com/llvm/llvm-project/clang/tools/clang-format.git',
-  'clang_format_revision': 'e5337933f2951cacd3aeacd238ce4578163ca0b9',
+  'clang_format_revision': '3c0acd2d4e73dd911309d9e970ba09d58bf23a62',
 
   'emscripten_tag': 'ade9d780ff17c88d81aa13860361743e3c1e1396',
 
   # GN CIPD package version.
-  'gn_version': 'git_revision:0a2b8eac80f164f10b2cbc126890db0d295790cd',
+  'gn_version': 'git_revision:d823fd85da3fb83146f734377da454473b93a2b2',
 
   'cmake_version': 'version:3.16.1',
 
@@ -46,7 +46,7 @@ vars = {
   # Chrome version used for tests. It should be regularly updated to
   # match the Canary version listed here:
   # https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json
-  'chrome': '123.0.6309.0',
+  'chrome': '125.0.6419.0',
 
   # 'magic' text to tell depot_tools that git submodules should be accepted but
   # but parity with DEPS file is expected.

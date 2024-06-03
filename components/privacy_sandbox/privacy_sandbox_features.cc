@@ -149,6 +149,14 @@ BASE_FEATURE(kPrivacySandboxInternalsDevUI,
              "PrivacySandboxInternalsDevUI",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kFingerprintingProtectionSetting,
+             "FingerprintingProtectionSetting",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kFingerprintingProtectionUx,
+             "FingerprintingProtectionUx",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kIpProtectionV1,
              "IpProtectionV1",
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -161,10 +169,28 @@ BASE_FEATURE(kCookieSettingsUiAlignment,
              "CookieSettingsUiAlignment",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kTrackingProtectionSettingsLaunch,
+             "TrackingProtectionSettingsLaunch",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrivacySandboxRelatedWebsiteSetsUi,
+             "PrivacySandboxRelatedWebsiteSetsUi",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 #if BUILDFLAG(IS_ANDROID)
 BASE_FEATURE(kTrackingProtectionNoticeRequestTracking,
              "TrackingProtectionNoticeRequestTracking",
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
+
+BASE_FEATURE(kPsRedesignAdPrivacyPage,
+             "PsRedesignAdPrivacyPage",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+const base::FeatureParam<bool> kPsRedesignAdPrivacyPageEnableToggles{
+    &kPsRedesignAdPrivacyPage, "enable-toggles", false};
+
+BASE_FEATURE(kTrackingProtectionReminder,
+             "TrackingProtectionReminder",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace privacy_sandbox

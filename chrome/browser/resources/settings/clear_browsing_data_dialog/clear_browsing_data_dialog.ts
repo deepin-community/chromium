@@ -21,9 +21,10 @@ import '../settings_shared.css.js';
 
 import type {SyncBrowserProxy, SyncStatus} from '/shared/settings/people_page/sync_browser_proxy.js';
 import {StatusAction, SyncBrowserProxyImpl} from '/shared/settings/people_page/sync_browser_proxy.js';
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
+import type {CrTabsElement} from 'chrome://resources/cr_elements/cr_tabs/cr_tabs.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
@@ -64,7 +65,8 @@ export interface SettingsClearBrowsingDataDialogElement {
     cookiesCheckbox: SettingsCheckboxElement,
     cookiesCheckboxBasic: SettingsCheckboxElement,
     clearBrowsingDataDialog: CrDialogElement,
-    tabs: IronPagesElement,
+    pages: IronPagesElement,
+    tabs: CrTabsElement,
   };
 }
 
@@ -419,12 +421,12 @@ export class SettingsClearBrowsingDataDialogElement extends
   private updateClearButtonState_() {
     // on-select-item-changed gets called with undefined during a tab change.
     // https://github.com/PolymerElements/iron-selector/issues/95
-    const tab = this.$.tabs.selectedItem;
-    if (!tab) {
+    const page = this.$.pages.selectedItem;
+    if (!page) {
       return;
     }
     this.clearButtonDisabled_ =
-        this.getSelectedDataTypes_(tab as HTMLElement).length === 0;
+        this.getSelectedDataTypes_(page as HTMLElement).length === 0;
   }
 
   /**
@@ -522,8 +524,8 @@ export class SettingsClearBrowsingDataDialogElement extends
   /**
    * @return A list of selected data types.
    */
-  private getSelectedDataTypes_(tab: HTMLElement): string[] {
-    const checkboxes = tab.querySelectorAll('settings-checkbox');
+  private getSelectedDataTypes_(page: HTMLElement): string[] {
+    const checkboxes = page.querySelectorAll('settings-checkbox');
     const dataTypes: string[] = [];
     checkboxes.forEach((checkbox) => {
       if (checkbox.checked && !checkbox.hidden) {
@@ -533,8 +535,36 @@ export class SettingsClearBrowsingDataDialogElement extends
     return dataTypes;
   }
 
+  private getTimeRangeDropdownForCurrentPage_() {
+    const page = this.$.pages.selectedItem as HTMLElement;
+    const dropdownMenu =
+        page.querySelector<SettingsDropdownMenuElement>('.time-range-select');
+    assert(dropdownMenu);
+    return dropdownMenu;
+  }
+
+  // TODO(crbug.com/1487530): Remove this after CbdTimeframeRequired finishes.
+  /** Highlight the time period dropdown in case no selection was made. */
+  private validateSelectedTimeRange_(): boolean {
+    const dropdownMenu = this.getTimeRangeDropdownForCurrentPage_();
+    const timePeriod = Number(dropdownMenu.getSelectedValue());
+    if (timePeriod !== TimePeriodExperiment.NOT_SELECTED) {
+      return true;
+    }
+    // No time period is selected: the time period dropdown gets highlighted,
+    // and no clearing should happen.
+    dropdownMenu.classList.add('dropdown-error');
+    // Move the focus to the dropdown to indicate the change to a11y users.
+    dropdownMenu.focus();
+    return false;
+  }
+
   /** Clears browsing data and maybe shows a history notice. */
   private async clearBrowsingData_() {
+    if (!this.validateSelectedTimeRange_()) {
+      return;
+    }
+
     this.clearingInProgress_ = true;
     this.clearingDataAlertString_ = loadTimeData.getString('clearingData');
 
@@ -551,21 +581,19 @@ export class SettingsClearBrowsingDataDialogElement extends
             'settings-dropdown-menu[no-set-pref]')
         .forEach(dropdown => dropdown.sendPrefChange());
 
-    const tab = this.$.tabs.selectedItem as HTMLElement;
-    const dataTypes = this.getSelectedDataTypes_(tab);
-    const dropdownMenu =
-        tab.querySelector<SettingsDropdownMenuElement>('.time-range-select');
-    assert(dropdownMenu);
-    const timePeriod = dropdownMenu.pref!.value;
+    const page = this.$.pages.selectedItem as HTMLElement;
+    const dataTypes = this.getSelectedDataTypes_(page);
+    const dropdownMenu = this.getTimeRangeDropdownForCurrentPage_();
 
-    if (tab.id === 'basic-tab') {
+    if (page.id === 'basic-tab') {
       chrome.metricsPrivate.recordUserAction('ClearBrowsingData_BasicTab');
     } else {
       chrome.metricsPrivate.recordUserAction('ClearBrowsingData_AdvancedTab');
     }
 
     const {showHistoryNotice, showPasswordsNotice} =
-        await this.browserProxy_.clearBrowsingData(dataTypes, timePeriod);
+        await this.browserProxy_.clearBrowsingData(
+            dataTypes, dropdownMenu.pref!.value);
     this.clearingInProgress_ = false;
     getAnnouncerInstance().announce(loadTimeData.getString('clearedData'));
     this.showHistoryDeletionDialog_ = showHistoryNotice;
@@ -582,6 +610,11 @@ export class SettingsClearBrowsingDataDialogElement extends
     if (this.$.clearBrowsingDataDialog.open) {
       closeDialog(this.$.clearBrowsingDataDialog, isLastDialog);
     }
+  }
+
+  private onTimeRangeChange_() {
+    const dropdownMenu = this.getTimeRangeDropdownForCurrentPage_();
+    dropdownMenu.classList.remove('dropdown-error');
   }
 
   private onCancelClick_() {

@@ -30,6 +30,7 @@
 
 #include "base/allocator/partition_allocator/src/partition_alloc/oom.h"
 #include "base/debug/crash_logging.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/ranges/algorithm.h"
 #include "base/task/single_thread_task_runner.h"
@@ -41,20 +42,28 @@
 #include "third_party/blink/renderer/platform/bindings/active_script_wrappable_base.h"
 #include "third_party/blink/renderer/platform/bindings/dom_data_store.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
+#include "third_party/blink/renderer/platform/bindings/script_regexp.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/thread_debugger.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
+#include "third_party/blink/renderer/platform/bindings/v8_histogram_accumulator.h"
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
 #include "third_party/blink/renderer/platform/bindings/v8_private_property.h"
 #include "third_party/blink/renderer/platform/bindings/v8_value_cache.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/thread_state_scopes.h"
+#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/leak_annotations.h"
 
 namespace blink {
 
+BASE_FEATURE(kTaskAttributionInfrastructureDisabledForTesting,
+             "TaskAttributionInfrastructureDisabledForTesting",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 namespace {
+
 void AddCrashKey(v8::CrashKeyId id, const std::string& value) {
   using base::debug::AllocateCrashKeyString;
   using base::debug::CrashKeySize;
@@ -92,6 +101,10 @@ void AddCrashKey(v8::CrashKeyId id, const std::string& value) {
       break;
   }
 }
+
+V8PerIsolateData::TaskAttributionTrackerFactoryPtr
+    task_attribution_tracker_factory = nullptr;
+
 }  // namespace
 
 static void BeforeCallEnteredCallback(v8::Isolate* isolate) {
@@ -145,6 +158,12 @@ V8PerIsolateData::V8PerIsolateData(
     main_world_ =
         DOMWrapperWorld::Create(GetIsolate(), DOMWrapperWorld::WorldType::kMain,
                                 /*is_default_world_of_isolate=*/true);
+    if (!base::FeatureList::IsEnabled(
+            kTaskAttributionInfrastructureDisabledForTesting)) {
+      CHECK(task_attribution_tracker_factory);
+      task_attribution_tracker_ =
+          task_attribution_tracker_factory(GetIsolate());
+    }
   }
 }
 
@@ -397,6 +416,21 @@ V8PerIsolateData::CanvasResourceTracker() {
   return canvas_resource_tracker_;
 }
 
+void V8PerIsolateData::SetPasswordRegexp(ScriptRegexp* password_regexp) {
+  password_regexp_ = password_regexp;
+}
+
+ScriptRegexp* V8PerIsolateData::GetPasswordRegexp() {
+  return password_regexp_;
+}
+
+void V8PerIsolateData::SetTaskAttributionTrackerFactory(
+    TaskAttributionTrackerFactoryPtr factory) {
+  CHECK(!task_attribution_tracker_factory);
+  CHECK(IsMainThread());
+  task_attribution_tracker_factory = factory;
+}
+
 void* CreateHistogram(const char* name, int min, int max, size_t buckets) {
   // Each histogram has an implicit '0' bucket (for underflow), so we can always
   // bump the minimum to 1.
@@ -411,14 +445,16 @@ void* CreateHistogram(const char* name, int min, int max, size_t buckets) {
 
   const std::string histogram_name =
       Platform::Current()->GetNameForHistogram(name);
-  return base::Histogram::FactoryGet(
+  base::HistogramBase* histogram = base::Histogram::FactoryGet(
       histogram_name, min, max, static_cast<uint32_t>(buckets),
       base::Histogram::kUmaTargetedHistogramFlag);
+
+  return V8HistogramAccumulator::GetInstance()->RegisterHistogram(
+      histogram, histogram_name);
 }
 
 void AddHistogramSample(void* hist, int sample) {
-  auto* histogram = static_cast<base::HistogramBase*>(hist);
-  histogram->Add(sample);
+  V8HistogramAccumulator::GetInstance()->AddSample(hist, sample);
 }
 
 }  // namespace blink

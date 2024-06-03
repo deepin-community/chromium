@@ -10,10 +10,10 @@
 #include <limits>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/check.h"
 #include "base/compiler_specific.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -214,7 +214,7 @@ void ExpireHistoryBackend::DeleteURLs(const std::vector<GURL>& urls,
     size_t total_visits = visits_to_delete.size();
     if (!end_time.is_null() && !end_time.is_max()) {
       // Remove all items that should not be deleted from `visits_to_delete`.
-      base::EraseIf(visits_to_delete,
+      std::erase_if(visits_to_delete,
                     [=](auto& v) { return v.visit_time > end_time; });
     }
     DeleteVisitRelatedInfo(visits_to_delete, &effects);
@@ -434,11 +434,13 @@ void ExpireHistoryBackend::BroadcastNotifications(
         effects->modified_urls,
         /*is_from_expiration=*/type == DELETION_EXPIRED);
   }
-  if (!effects->deleted_urls.empty() || time_range.IsValid()) {
-    notifier_->NotifyURLsDeleted(DeletionInfo(
+  if (!effects->deleted_urls.empty() || !effects->deleted_visit_ids_.empty() ||
+      time_range.IsValid()) {
+    notifier_->NotifyDeletions(DeletionInfo(
         time_range, type == DELETION_EXPIRED, deletion_reason,
-        std::move(effects->deleted_urls), std::move(effects->deleted_favicons),
-        std::move(restrict_urls)));
+        std::move(effects->deleted_urls),
+        std::move(effects->deleted_visit_ids_),
+        std::move(effects->deleted_favicons), std::move(restrict_urls)));
   }
 }
 
@@ -466,6 +468,9 @@ void ExpireHistoryBackend::DeleteVisitRelatedInfo(const VisitVector& visits,
   for (const auto& visit : visits) {
     // Delete the visit itself.
     main_db_->DeleteVisit(visit);
+
+    // Add the deleted visit to the affected visit list.
+    effects->deleted_visit_ids_.insert(visit.visit_id);
 
     // Add the URL row to the affected URL list.
     if (!effects->affected_urls.count(visit.url_id)) {

@@ -11,7 +11,6 @@
 #include "base/path_service.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
-#include "chrome/browser/pdf/pdf_frame_util.h"
 #include "chrome/browser/pdf/test_pdf_viewer_stream_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -104,7 +103,9 @@ bool PDFExtensionTestBase::PdfIsExpectedToLoad(const std::string& pdf_file) {
 // there, since the PdfScriptingApi relies on doing this as well.
 testing::AssertionResult PDFExtensionTestBase::LoadPdf(const GURL& url) {
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-  return EnsurePDFHasLoadedWithValidFrameTree();
+  return EnsureFullPagePDFHasLoadedWithValidFrameTree(
+      GetActiveWebContents(),
+      /*allow_multiple_frames=*/false);
 }
 
 // Same as LoadPDF(), but loads into a new tab.
@@ -113,7 +114,22 @@ testing::AssertionResult PDFExtensionTestBase::LoadPdfInNewTab(
   EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
       browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-  return EnsurePDFHasLoadedWithValidFrameTree();
+  return EnsureFullPagePDFHasLoadedWithValidFrameTree(GetActiveWebContents());
+}
+
+testing::AssertionResult PDFExtensionTestBase::LoadPdfInFirstChild(
+    const GURL& url) {
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  return EnsurePDFHasLoadedInFirstChildWithValidFrameTree(
+      GetActiveWebContents());
+}
+
+testing::AssertionResult PDFExtensionTestBase::LoadPdfAllowMultipleFrames(
+    const GURL& url) {
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  return EnsureFullPagePDFHasLoadedWithValidFrameTree(
+      GetActiveWebContents(),
+      /*allow_multiple_frames=*/true);
 }
 
 // Same as LoadPdf(), but also returns a pointer to the `MimeHandlerViewGuest`
@@ -136,32 +152,70 @@ MimeHandlerViewGuest* PDFExtensionTestBase::LoadPdfInNewTabGetMimeHandlerView(
   return GetOnlyMimeHandlerView(GetActiveWebContents());
 }
 
-void PDFExtensionTestBase::TestGetSelectedTextReply(const GURL& url,
-                                                    bool expect_success) {
-  MimeHandlerViewGuest* guest = LoadPdfGetMimeHandlerView(url);
-  ASSERT_TRUE(guest);
+content::RenderFrameHost* PDFExtensionTestBase::LoadPdfGetExtensionHost(
+    const GURL& url) {
+  if (!LoadPdf(url)) {
+    ADD_FAILURE() << "Failed to load PDF";
+    return nullptr;
+  }
 
-  // Reach into the guest and hook into it such that it posts back a 'flush'
-  // message after every getSelectedTextReply message sent.
-  ASSERT_TRUE(content::ExecJs(guest->GetGuestMainFrame(),
+  return GetOnlyPdfExtensionHostEnsureValid();
+}
+
+content::RenderFrameHost* PDFExtensionTestBase::LoadPdfInNewTabGetExtensionHost(
+    const GURL& url) {
+  if (!LoadPdfInNewTab(url)) {
+    ADD_FAILURE() << "Failed to load PDF";
+    return nullptr;
+  }
+
+  return GetOnlyPdfExtensionHostEnsureValid();
+}
+
+content::RenderFrameHost*
+PDFExtensionTestBase::LoadPdfInFirstChildGetExtensionHost(const GURL& url) {
+  if (!LoadPdfInFirstChild(url)) {
+    ADD_FAILURE() << "Failed to load PDF";
+    return nullptr;
+  }
+
+  std::vector<content::RenderFrameHost*> extension_hosts =
+      pdf_extension_test_util::GetPdfExtensionHosts(GetActiveWebContents());
+  if (extension_hosts.empty()) {
+    return nullptr;
+  }
+
+  return extension_hosts[0];
+}
+
+void PDFExtensionTestBase::TestGetSelectedTextReply(
+    content::RenderFrameHost* extension_host,
+    bool expect_success) {
+  static constexpr char kGetSelectedTextReplyScript[] = R"(
+    new Promise(resolve => {
+      window.addEventListener('message', function(event) {
+        if (event.data == 'flush') {
+          resolve(false);
+        } else if (event.data.type == 'getSelectedTextReply') {
+          resolve(true);
+        }
+      });
+      document.getElementsByTagName("embed")[0].postMessage(
+        {type: 'getSelectedText'});
+    })
+  )";
+
+  // Reach into the extension host and hook into it such that it posts back a
+  // 'flush' message after every getSelectedTextReply message sent.
+  ASSERT_TRUE(content::ExecJs(extension_host,
                               "viewer.overrideSendScriptingMessageForTest();"));
 
   // Add an event listener for flush messages and request the selected text.
-  // If we get a flush message without receiving getSelectedText we know that
+  // If there's a flush message received but not a getSelectedText message, then
   // the message didn't come through.
-  ASSERT_EQ(
-      expect_success,
-      content::EvalJs(GetActiveWebContents(),
-                      "new Promise(resolve => {"
-                      "  window.addEventListener('message', function(event) {"
-                      "    if (event.data == 'flush')"
-                      "      resolve(false);"
-                      "    if (event.data.type == 'getSelectedTextReply')"
-                      "      resolve(true);"
-                      "  });"
-                      "  document.getElementsByTagName('embed')[0].postMessage("
-                      "      {type: 'getSelectedText'});"
-                      "});"));
+  EXPECT_EQ(expect_success,
+            content::EvalJs(GetEmbedderWebContents()->GetPrimaryMainFrame(),
+                            kGetSelectedTextReplyScript));
 }
 
 WebContents* PDFExtensionTestBase::GetActiveWebContents() {
@@ -207,13 +261,58 @@ void PDFExtensionTestBase::CreateTestPdfViewerStreamManager() {
           browser()->tab_strip_model()->GetActiveWebContents());
 }
 
-content::RenderFrameHost* PDFExtensionTestBase::GetPluginFrame(
-    MimeHandlerViewGuest* guest) const {
-  return pdf_frame_util::FindPdfChildFrame(guest->GetGuestMainFrame());
+content::RenderFrameHost*
+PDFExtensionTestBase::GetOnlyPdfExtensionHostEnsureValid() {
+  auto* web_contents = GetActiveWebContents();
+  content::RenderFrameHost* extension_host =
+      pdf_extension_test_util::GetOnlyPdfExtensionHost(web_contents);
+
+  if (!UseOopif()) {
+    auto* guest_view = GetGuestViewManager()->GetLastGuestViewCreated();
+    if (!guest_view) {
+      return nullptr;
+    }
+    EXPECT_EQ(guest_view->GetGuestMainFrame(), extension_host);
+    EXPECT_NE(web_contents->GetPrimaryMainFrame(), extension_host);
+  }
+  return extension_host;
 }
 
 int PDFExtensionTestBase::CountPDFProcesses() {
   return pdf_extension_test_util::CountPdfPluginProcesses(browser());
+}
+
+testing::AssertionResult
+PDFExtensionTestBase::EnsureFullPagePDFHasLoadedWithValidFrameTree(
+    content::WebContents* contents,
+    bool allow_multiple_frames) {
+  testing::AssertionResult result = testing::AssertionFailure();
+  if (UseOopif()) {
+    auto* manager = GetTestPdfViewerStreamManager(contents);
+    content::RenderFrameHost* embedder_host = contents->GetPrimaryMainFrame();
+    result = allow_multiple_frames
+                 ? manager->WaitUntilPdfLoadedAllowMultipleFrames(embedder_host)
+                 : manager->WaitUntilPdfLoaded(embedder_host);
+  } else {
+    result = pdf_extension_test_util::EnsurePDFHasLoaded(contents);
+  }
+
+  ValidateFrameTree(contents);
+
+  return result;
+}
+
+testing::AssertionResult
+PDFExtensionTestBase::EnsurePDFHasLoadedInFirstChildWithValidFrameTree(
+    content::WebContents* contents) {
+  testing::AssertionResult result =
+      UseOopif() ? GetTestPdfViewerStreamManager(contents)
+                       ->WaitUntilPdfLoadedInFirstChild()
+                 : pdf_extension_test_util::EnsurePDFHasLoaded(contents);
+
+  ValidateFrameTree(contents);
+
+  return result;
 }
 
 void PDFExtensionTestBase::SimulateMouseClickAt(
@@ -263,14 +362,7 @@ std::vector<base::test::FeatureRef> PDFExtensionTestBase::GetDisabledFeatures()
   return disabled;
 }
 
-testing::AssertionResult
-PDFExtensionTestBase::EnsurePDFHasLoadedWithValidFrameTree() {
-  content::WebContents* contents = GetActiveWebContents();
-  testing::AssertionResult result =
-      UseOopif() ? GetTestPdfViewerStreamManager(contents)->WaitUntilPdfLoaded(
-                       contents->GetPrimaryMainFrame())
-                 : pdf_extension_test_util::EnsurePDFHasLoaded(contents);
-
+void PDFExtensionTestBase::ValidateFrameTree(content::WebContents* contents) {
   // Ensure the frame tree contains a PDF extension host and a PDF plugin frame.
   EXPECT_TRUE(pdf_extension_test_util::GetOnlyPdfExtensionHost(contents));
   EXPECT_TRUE(pdf_extension_test_util::GetOnlyPdfPluginFrame(contents));
@@ -280,6 +372,4 @@ PDFExtensionTestBase::EnsurePDFHasLoadedWithValidFrameTree() {
   if (!UseOopif()) {
     EXPECT_TRUE(GetOnlyMimeHandlerView(contents));
   }
-
-  return result;
 }

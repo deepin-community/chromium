@@ -15,7 +15,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
 #include "base/version.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
@@ -24,34 +23,38 @@
 #include "url/gurl.h"
 
 class Profile;
-class PrefService;
 
 namespace content {
 class WebContents;
 }  // namespace content
 
+namespace webapps {
+class WebAppUrlLoader;
+enum class WebAppUrlLoaderResult;
+}  // namespace webapps
+
 namespace web_app {
 
 enum class IconsDownloadedResult;
 class IsolatedWebAppResponseReader;
+class IsolatedWebAppStorageLocation;
 class IsolatedWebAppResponseReaderFactory;
+class IwaSourceWithMode;
+class IwaSourceWithModeAndFileOp;
 class UnusableSwbnFileError;
 class WebAppDataRetriever;
-class WebAppUrlLoader;
-enum class WebAppUrlLoaderResult;
-
 // Copies the file being installed to the profile directory.
 // On success returns a new owned location in the callback.
-void CopyLocationToProfileDirectory(
+void UpdateBundlePathAndCreateStorageLocation(
     const base::FilePath& profile_dir,
-    const IsolatedWebAppLocation& location,
-    base::OnceCallback<
-        void(base::expected<IsolatedWebAppLocation, std::string>)> callback);
+    const IwaSourceWithModeAndFileOp& source,
+    base::OnceCallback<void(
+        base::expected<IsolatedWebAppStorageLocation, std::string>)> callback);
 
 // Removes the IWA's randomly named directory in the profile directory.
 // Calls the closure on complete.
 void CleanupLocationIfOwned(const base::FilePath& profile_dir,
-                            const IsolatedWebAppLocation& location,
+                            const IsolatedWebAppStorageLocation& location,
                             base::OnceClosure closure);
 
 // This is a helper class that contains methods which are shared between both
@@ -59,7 +62,7 @@ void CleanupLocationIfOwned(const base::FilePath& profile_dir,
 class IsolatedWebAppInstallCommandHelper {
  public:
   static std::unique_ptr<IsolatedWebAppResponseReaderFactory>
-  CreateDefaultResponseReaderFactory(const PrefService& prefs);
+  CreateDefaultResponseReaderFactory(Profile& profile);
 
   static std::unique_ptr<content::WebContents> CreateIsolatedWebAppWebContents(
       Profile& profile);
@@ -77,16 +80,16 @@ class IsolatedWebAppInstallCommandHelper {
       const IsolatedWebAppInstallCommandHelper&) = delete;
 
   void CheckTrustAndSignatures(
-      const IsolatedWebAppLocation& location,
+      const IwaSourceWithMode& location,
       Profile* profile,
       base::OnceCallback<void(base::expected<void, std::string>)> callback);
 
   void CreateStoragePartitionIfNotPresent(Profile& profile);
 
   void LoadInstallUrl(
-      const IsolatedWebAppLocation& location,
+      const IwaSourceWithMode& source,
       content::WebContents& web_contents,
-      WebAppUrlLoader& url_loader,
+      webapps::WebAppUrlLoader& url_loader,
       base::OnceCallback<void(base::expected<void, std::string>)> callback);
 
   struct ManifestAndUrl {
@@ -122,6 +125,7 @@ class IsolatedWebAppInstallCommandHelper {
  private:
   void CheckTrustAndSignaturesOfBundle(
       const base::FilePath& path,
+      bool dev_mode,
       base::OnceCallback<void(base::expected<void, std::string>)> callback);
 
   void OnTrustAndSignaturesOfBundleChecked(
@@ -131,7 +135,7 @@ class IsolatedWebAppInstallCommandHelper {
 
   void OnLoadInstallUrl(
       base::OnceCallback<void(base::expected<void, std::string>)> callback,
-      WebAppUrlLoaderResult result);
+      webapps::WebAppUrlLoaderResult result);
 
   void OnCheckInstallabilityAndRetrieveManifest(
       base::OnceCallback<void(base::expected<ManifestAndUrl, std::string>)>

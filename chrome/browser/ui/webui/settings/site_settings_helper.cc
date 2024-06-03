@@ -8,6 +8,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
@@ -31,6 +32,7 @@
 #include "chrome/browser/serial/serial_chooser_context.h"
 #include "chrome/browser/serial/serial_chooser_context_factory.h"
 #include "chrome/browser/subresource_filter/subresource_filter_profile_context_factory.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/url_identity.h"
 #include "chrome/browser/usb/usb_chooser_context.h"
 #include "chrome/browser/usb/usb_chooser_context_factory.h"
@@ -140,6 +142,10 @@ const ContentSettingsTypeNameEntry kContentSettingsTypeGroupNames[] = {
     {ContentSettingsType::CAPTURED_SURFACE_CONTROL, "captured-surface-control"},
     {ContentSettingsType::WEB_PRINTING, "web-printing"},
     {ContentSettingsType::SPEAKER_SELECTION, "speaker-selection"},
+    {ContentSettingsType::AUTOMATIC_FULLSCREEN, "automatic-fullscreen"},
+    {ContentSettingsType::KEYBOARD_LOCK, "keyboard-lock"},
+    {ContentSettingsType::POINTER_LOCK, "pointer-lock"},
+    {ContentSettingsType::TRACKING_PROTECTION, "tracking-protection"},
 
     // Add new content settings here if a corresponding Javascript string
     // representation for it is not required, for example if the content setting
@@ -193,7 +199,7 @@ const ContentSettingsTypeNameEntry kContentSettingsTypeGroupNames[] = {
     {ContentSettingsType::DEPRECATED_PPAPI_BROKER, nullptr},
     {ContentSettingsType::REVOKED_UNUSED_SITE_PERMISSIONS, nullptr},
     {ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS, nullptr},
-    // TODO(crbug.com/1408520): Update JavaScript string representation when
+    // TODO(crbug.com/40253587): Update JavaScript string representation when
     // desktop UI is implemented.
     {ContentSettingsType::FEDERATED_IDENTITY_AUTO_REAUTHN_PERMISSION, nullptr},
     {ContentSettingsType::FEDERATED_IDENTITY_IDENTITY_PROVIDER_REGISTRATION,
@@ -208,20 +214,23 @@ const ContentSettingsTypeNameEntry kContentSettingsTypeGroupNames[] = {
     {ContentSettingsType::FILE_SYSTEM_ACCESS_EXTENDED_PERMISSION, nullptr},
     {ContentSettingsType::TPCD_HEURISTICS_GRANTS, nullptr},
     {ContentSettingsType::FILE_SYSTEM_ACCESS_RESTORE_PERMISSION, nullptr},
-    // TODO(crbug.com/1464851): Update name once UI design is done.
+    // TODO(crbug.com/40275778): Update name once UI design is done.
     {ContentSettingsType::SMART_CARD_GUARD, nullptr},
     {ContentSettingsType::SMART_CARD_DATA, nullptr},
     {ContentSettingsType::TOP_LEVEL_TPCD_TRIAL, nullptr},
-    // TODO(crbug.com/1501130): Add WebUI for Automatic Fullscreen.
-    {ContentSettingsType::AUTOMATIC_FULLSCREEN, nullptr},
     {ContentSettingsType::SUB_APP_INSTALLATION_PROMPTS, nullptr},
+    {ContentSettingsType::DIRECT_SOCKETS, nullptr},
+    {ContentSettingsType::REVOKED_ABUSIVE_NOTIFICATION_PERMISSIONS, nullptr},
+    {ContentSettingsType::TOP_LEVEL_TPCD_ORIGIN_TRIAL, nullptr},
 };
 
-static_assert(std::size(kContentSettingsTypeGroupNames) ==
-                  // ContentSettingsType starts at -1, so add 1 here.
-                  static_cast<int32_t>(ContentSettingsType::NUM_TYPES) + 1,
-              "kContentSettingsTypeGroupNames should have "
-              "CONTENT_SETTINGS_NUM_TYPES elements");
+static_assert(
+    std::size(kContentSettingsTypeGroupNames) ==
+        // Add one since the sequence is kMinValue = -1, 0, ..., kMaxValue
+        1 + static_cast<int32_t>(ContentSettingsType::kMaxValue) -
+            static_cast<int32_t>(ContentSettingsType::kMinValue),
+    "kContentSettingsTypeGroupNames should have the correct number "
+    "of elements");
 
 struct SiteSettingSourceStringMapping {
   SiteSettingSource source;
@@ -509,7 +518,9 @@ base::StringPiece ContentSettingsTypeToGroupName(ContentSettingsType type) {
   return base::StringPiece();
 }
 
-const std::vector<ContentSettingsType>& GetVisiblePermissionCategories() {
+std::vector<ContentSettingsType> GetVisiblePermissionCategories(
+    const std::string& origin,
+    Profile* profile) {
   // First build the list of permissions that will be shown regardless of
   // `origin`. Some categories such as COOKIES store their data in a custom way,
   // so are not included here.
@@ -587,10 +598,40 @@ const std::vector<ContentSettingsType>& GetVisiblePermissionCategories() {
       base_types->push_back(ContentSettingsType::SPEAKER_SELECTION);
     }
 
+    if (base::FeatureList::IsEnabled(
+            features::kCapturedSurfaceControlKillswitch) &&
+        base::FeatureList::IsEnabled(
+            features::kCapturedSurfaceControlStickyPermissions)) {
+      base_types->push_back(ContentSettingsType::CAPTURED_SURFACE_CONTROL);
+    }
+
+    if (base::FeatureList::IsEnabled(features::kKeyboardAndPointerLockPrompt)) {
+      base_types->push_back(ContentSettingsType::KEYBOARD_LOCK);
+      base_types->push_back(ContentSettingsType::POINTER_LOCK);
+    }
+
     initialized = true;
   }
 
-  return *base_types;
+  // The permission categories below are only shown for certain origins.
+  std::vector<ContentSettingsType> types_for_origin = *base_types;
+  if (base::FeatureList::IsEnabled(
+          features::kAutomaticFullscreenContentSetting)) {
+    // Show for non-origin-specific lists, IWAs, and non-default values.
+    if (origin.empty() || GURL(origin).SchemeIs(chrome::kIsolatedAppScheme)) {
+      types_for_origin.push_back(ContentSettingsType::AUTOMATIC_FULLSCREEN);
+    } else if (profile) {
+      std::string source;
+      GetContentSettingForOrigin(
+          profile, HostContentSettingsMapFactory::GetForProfile(profile),
+          GURL(origin), ContentSettingsType::AUTOMATIC_FULLSCREEN, &source);
+      if (source != SiteSettingSourceToString(SiteSettingSource::kDefault)) {
+        types_for_origin.push_back(ContentSettingsType::AUTOMATIC_FULLSCREEN);
+      }
+    }
+  }
+
+  return types_for_origin;
 }
 
 std::string SiteSettingSourceToString(const SiteSettingSource source) {
@@ -852,8 +893,12 @@ void GetRawExceptionsForContentSettingsType(
 
     // Off-the-record HostContentSettingsMap contains incognito content settings
     // as well as normal content settings. Here, we use the incognito settings
-    // only.
-    if (map->IsOffTheRecord() && !setting.incognito) {
+    // only, excluding policy-source exceptions as policies cannot specify
+    // incognito-only exceptions, meaning these are necesssarily duplicates.
+    if (map->IsOffTheRecord() &&
+        (!setting.incognito ||
+         setting.source ==
+             SiteSettingSourceToString(SiteSettingSource::kPolicy))) {
       continue;
     }
 
@@ -872,7 +917,7 @@ void GetRawExceptionsForContentSettingsType(
     auto content_setting = setting.GetContentSetting();
     // There is no user-facing concept of SESSION_ONLY cookie exceptions that
     // use secondary patterns. These are instead presented as ALLOW.
-    // TODO(crbug.com/1404436): Perform a one time migration of the actual
+    // TODO(crbug.com/40251893): Perform a one time migration of the actual
     // content settings when the extension API no-longer allows them to be
     // created.
     if (type == ContentSettingsType::COOKIES &&
@@ -1087,7 +1132,7 @@ ContentSetting GetContentSettingForOrigin(Profile* profile,
       CalculateSiteSettingSource(profile, content_type, origin, info, result));
 
   if (info.metadata.session_model() ==
-      content_settings::SessionModel::OneTime) {
+      content_settings::mojom::SessionModel::ONE_TIME) {
     DCHECK(
         permissions::PermissionUtil::CanPermissionBeAllowedOnce(content_type));
     DCHECK_EQ(result.status, PermissionStatus::GRANTED);
@@ -1103,7 +1148,7 @@ GetSingleOriginExceptionsForContentType(HostContentSettingsMap* map,
   ContentSettingsForOneType entries = map->GetSettingsForOneType(content_type);
   // Exclude any entries that are allowlisted or don't represent a single
   // top-frame origin.
-  base::EraseIf(entries, [](const ContentSettingPatternSource& e) {
+  std::erase_if(entries, [](const ContentSettingPatternSource& e) {
     return !content_settings::PatternAppliesToSingleOrigin(
                e.primary_pattern, e.secondary_pattern) ||
            IsFromWebUIAllowlistSource(e);

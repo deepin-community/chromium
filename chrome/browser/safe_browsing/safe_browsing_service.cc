@@ -61,6 +61,7 @@
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/browser/safe_browsing_metrics_collector.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/safe_browsing_policy_handler.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/safebrowsing_constants.h"
 #include "components/unified_consent/pref_names.h"
@@ -116,6 +117,40 @@ void PopulateDownloadWarningActions(download::DownloadItem* download,
       "SafeBrowsing.ClientSafeBrowsingReport.DownloadWarningActionSize",
       report->download_warning_actions_size());
 }
+
+std::unique_ptr<ClientSafeBrowsingReportRequest> CreateDownloadReport(
+    download::DownloadItem* download,
+    ClientSafeBrowsingReportRequest::ReportType report_type,
+    bool did_proceed,
+    std::optional<bool> show_download_in_folder) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  Profile* profile = Profile::FromBrowserContext(
+      content::DownloadItemUtils::GetBrowserContext(download));
+  auto report = std::make_unique<ClientSafeBrowsingReportRequest>();
+  report->set_type(report_type);
+  report->set_download_verdict(
+      DownloadProtectionService::GetDownloadProtectionVerdict(download));
+  report->set_url(download->GetURL().spec());
+  report->set_did_proceed(did_proceed);
+  if (show_download_in_folder.has_value()) {
+    report->set_show_download_in_folder(show_download_in_folder.value());
+  }
+  std::string token = DownloadProtectionService::GetDownloadPingToken(download);
+  if (!token.empty()) {
+    report->set_token(std::move(token));
+  }
+  if (IsExtendedReportingEnabled(*profile->GetPrefs())) {
+    PopulateDownloadWarningActions(download, report.get());
+    base::Time warning_first_shown_time =
+        DownloadItemWarningData::WarningFirstShownTime(download);
+    if (!warning_first_shown_time.is_null() &&
+        base::FeatureList::IsEnabled(kDownloadReportWithoutUserDecision)) {
+      report->set_warning_shown_timestamp_msec(
+          warning_first_shown_time.InMillisecondsSinceUnixEpoch());
+    }
+  }
+  return report;
+}
 #endif
 
 void OnGotCookies(
@@ -147,6 +182,16 @@ base::FilePath SafeBrowsingService::GetBaseFilename() {
   bool result = base::PathService::Get(chrome::DIR_USER_DATA, &path);
   DCHECK(result);
   return path.Append(safe_browsing::kSafeBrowsingBaseFilename);
+}
+
+// static
+bool SafeBrowsingService::IsUserEligibleForESBPromo(Profile* profile) {
+  if (IsSafeBrowsingPolicyManaged(*profile->GetPrefs()) ||
+      profile->IsOffTheRecord()) {
+    return false;
+  }
+  return GetSafeBrowsingState(*profile->GetPrefs()) ==
+         SafeBrowsingState::STANDARD_PROTECTION;
 }
 
 SafeBrowsingService::SafeBrowsingService()
@@ -232,6 +277,10 @@ scoped_refptr<network::SharedURLLoaderFactory>
 SafeBrowsingService::GetURLLoaderFactory(
     content::BrowserContext* browser_context) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (url_loader_factory_for_testing_) {
+    return url_loader_factory_for_testing_;
+  }
+
   NetworkContextService* service =
       NetworkContextServiceFactory::GetForBrowserContext(browser_context);
   if (!service) {
@@ -336,64 +385,22 @@ void SafeBrowsingService::SetDatabaseManagerForTest(
   services_delegate_->SetDatabaseManagerForTest(database_manager);
 }
 
-void SafeBrowsingService::StartOnIOThread(
-    std::unique_ptr<network::PendingSharedURLLoaderFactory>
-        browser_url_loader_factory) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  if (enabled_) {
-    return;
-  }
-
-  enabled_ = true;
-
-  V4ProtocolConfig v4_config = GetV4ProtocolConfig();
-
-  services_delegate_->StartOnSBThread(
-      network::SharedURLLoaderFactory::Create(
-          std::move(browser_url_loader_factory)),
-      v4_config);
-}
-
-void SafeBrowsingService::StopOnIOThread(bool shutdown) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  services_delegate_->StopOnSBThread(shutdown);
-
-  enabled_ = false;
-}
-
 void SafeBrowsingService::Start() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  if (base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)) {
-    if (!enabled_) {
-      enabled_ = true;
-      services_delegate_->StartOnSBThread(
-          g_browser_process->shared_url_loader_factory(),
-          GetV4ProtocolConfig());
-    }
-  } else {
-    content::GetIOThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            &SafeBrowsingService::StartOnIOThread, this,
-            std::make_unique<network::CrossThreadPendingSharedURLLoaderFactory>(
-                g_browser_process->shared_url_loader_factory())));
+  if (!enabled_) {
+    enabled_ = true;
+    services_delegate_->StartOnSBThread(
+        g_browser_process->shared_url_loader_factory(), GetV4ProtocolConfig());
   }
 }
 
 void SafeBrowsingService::Stop(bool shutdown) {
   ui_manager_->Stop(shutdown);
 
-  if (base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)) {
-    services_delegate_->StopOnSBThread(shutdown);
+  services_delegate_->StopOnSBThread(shutdown);
 
-    enabled_ = false;
-  } else {
-    content::GetIOThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(&SafeBrowsingService::StopOnIOThread, this, shutdown));
-  }
+  enabled_ = false;
 }
 
 void SafeBrowsingService::OnProfileAdded(Profile* profile) {
@@ -529,27 +536,32 @@ bool SafeBrowsingService::SendDownloadReport(
     bool did_proceed,
     std::optional<bool> show_download_in_folder) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  auto report = CreateDownloadReport(download, report_type, did_proceed,
+                                     show_download_in_folder);
   Profile* profile = Profile::FromBrowserContext(
       content::DownloadItemUtils::GetBrowserContext(download));
-  auto report = std::make_unique<ClientSafeBrowsingReportRequest>();
-  report->set_type(report_type);
-  report->set_download_verdict(
-      DownloadProtectionService::GetDownloadProtectionVerdict(download));
-  report->set_url(download->GetURL().spec());
-  report->set_did_proceed(did_proceed);
-  if (show_download_in_folder) {
-    report->set_show_download_in_folder(show_download_in_folder.value());
-  }
-  std::string token = DownloadProtectionService::GetDownloadPingToken(download);
-  if (!token.empty()) {
-    report->set_token(token);
-  }
-  if (IsExtendedReportingEnabled(*profile->GetPrefs())) {
-    PopulateDownloadWarningActions(download, report.get());
-  }
   return ChromePingManagerFactory::GetForBrowserContext(profile)
              ->ReportThreatDetails(std::move(report)) ==
          PingManager::ReportThreatDetailsResult::SUCCESS;
+}
+
+bool SafeBrowsingService::PersistDownloadReportAndSendOnNextStartup(
+    download::DownloadItem* download,
+    ClientSafeBrowsingReportRequest::ReportType report_type,
+    bool did_proceed,
+    std::optional<bool> show_download_in_folder) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  auto report = CreateDownloadReport(download, report_type, did_proceed,
+                                     show_download_in_folder);
+  Profile* profile = Profile::FromBrowserContext(
+      content::DownloadItemUtils::GetBrowserContext(download));
+  PingManager::PersistThreatDetailsResult result =
+      ChromePingManagerFactory::GetForBrowserContext(profile)
+          ->PersistThreatDetailsAndReportOnNextStartup(std::move(report));
+  base::UmaHistogramEnumeration(
+      "SafeBrowsing.ClientSafeBrowsingReport.PersistDownloadReportResult",
+      result);
+  return result == PingManager::PersistThreatDetailsResult::kPersistTaskPosted;
 }
 
 bool SafeBrowsingService::SendPhishyInteractionsReport(
@@ -694,7 +706,7 @@ bool SafeBrowsingService::IsURLAllowlisted(
   resource.url = url;
   resource.original_url = url;
   resource.is_subresource = false;
-  resource.threat_type = SB_THREAT_TYPE_URL_PHISHING;
+  resource.threat_type = SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
   const content::GlobalRenderFrameHostId primary_main_frame_id =
       primary_main_frame->GetGlobalId();
   resource.render_process_id = primary_main_frame_id.child_id;

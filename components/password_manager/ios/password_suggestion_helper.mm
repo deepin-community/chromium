@@ -96,8 +96,8 @@ enum class FormExtractionStatus {
 
   _completion([_fillDataProvider
       areSuggestionsAvailableForFrameId:self.frameId
-                         formRendererId:_query.uniqueFormID
-                        fieldRendererId:_query.uniqueFieldID
+                         formRendererId:_query.formRendererID
+                        fieldRendererId:_query.fieldRendererID
                         isPasswordField:_isPasswordField]);
   _completion = nil;
 }
@@ -146,16 +146,18 @@ enum class FormExtractionStatus {
 
   NSMutableArray<FormSuggestion*>* results = [NSMutableArray array];
 
-  if (fillData->IsSuggestionsAvailable(
-          formQuery.uniqueFormID, formQuery.uniqueFieldID, isPasswordField)) {
+  if (fillData->IsSuggestionsAvailable(formQuery.formRendererID,
+                                       formQuery.fieldRendererID,
+                                       isPasswordField)) {
     const password_manager::FormInfo* formInfo = fillData->GetFormInfo(
-        formQuery.uniqueFormID, formQuery.uniqueFieldID, isPasswordField);
+        formQuery.formRendererID, formQuery.fieldRendererID, isPasswordField);
     bool is_single_username_form = formInfo && formInfo->username_element_id &&
                                    !formInfo->password_element_id;
 
     std::vector<password_manager::UsernameAndRealm> usernameAndRealms =
-        fillData->RetrieveSuggestions(formQuery.uniqueFormID,
-                                      formQuery.uniqueFieldID, isPasswordField);
+        fillData->RetrieveSuggestions(formQuery.formRendererID,
+                                      formQuery.fieldRendererID,
+                                      isPasswordField);
 
     for (const auto& usernameAndRealm : usernameAndRealms) {
       NSString* username = SysUTF16ToNSString(usernameAndRealm.username);
@@ -264,7 +266,9 @@ enum class FormExtractionStatus {
                       forSecurityOrigin:(const GURL&)origin {
   DCHECK(_webState.get());
   [self fillDataForFrameId:frameId]->Add(
-      formData, IsCrossOriginIframe(_webState.get(), isMainFrame, origin));
+      formData, [self shouldAlwaysPopulateRealmForFrame:frameId
+                                            isMainFrame:isMainFrame
+                                      forSecurityOrigin:origin]);
 
   // "attachListenersForBottomSheet" is used to add event listeners
   // to fields which must trigger a specific behavior. In this case,
@@ -301,7 +305,7 @@ enum class FormExtractionStatus {
 
   autofill::FormStructure* form_structure =
       driver->GetAutofillManager().FindCachedFormById(
-          {driver->GetFrameToken(), formQuery.uniqueFormID});
+          {driver->GetFrameToken(), formQuery.formRendererID});
   if (!form_structure) {
     return YES;
   }
@@ -309,7 +313,7 @@ enum class FormExtractionStatus {
   const auto& fields = form_structure->fields();
   auto itEnd = fields.end();
   auto it = std::find_if(fields.begin(), itEnd, [&](auto& field) {
-    return formQuery.uniqueFieldID == field->renderer_id;
+    return formQuery.fieldRendererID == field->renderer_id();
   });
   if (it == itEnd) {
     return YES;
@@ -343,6 +347,29 @@ enum class FormExtractionStatus {
   password_manager::PasswordManagerJavaScriptFeature* feature =
       password_manager::PasswordManagerJavaScriptFeature::GetInstance();
   return feature->GetWebFramesManager(_webState.get())->GetFrameWithId(frameId);
+}
+
+// Returns whether to add the form's url as the Credential's realm if the realm
+// is not specified.
+- (bool)shouldAlwaysPopulateRealmForFrame:(const std::string&)frameId
+                              isMainFrame:(BOOL)isMainFrame
+                        forSecurityOrigin:(const GURL&)origin {
+  CHECK(_webState.get());
+  if (IsCrossOriginIframe(_webState.get(), isMainFrame, origin)) {
+    return true;
+  }
+
+  web::WebFrame* frame = [self frameWithId:frameId];
+  if (!frame) {
+    return false;
+  }
+
+  auto* driver = autofill::AutofillDriverIOS::FromWebStateAndWebFrame(
+      _webState.get(), frame);
+  if (!driver) {
+    return false;
+  }
+  return driver->GetAutofillClient().ShouldFormatForLargeKeyboardAccessory();
 }
 
 // Completes all the pending form queries that were queued for the frame that

@@ -9,13 +9,6 @@
 """
 
 load(
-    ":cuda_configure.bzl",
-    "enable_cuda",
-    "make_copy_dir_rule",
-    "make_copy_files_rule",
-    "to_list_of_strings",
-)
-load(
     "//third_party/remote_config:common.bzl",
     "config_repo_label",
     "err_out",
@@ -28,6 +21,13 @@ load(
     "raw_exec",
     "realpath",
     "which",
+)
+load(
+    ":cuda_configure.bzl",
+    "enable_cuda",
+    "make_copy_dir_rule",
+    "make_copy_files_rule",
+    "to_list_of_strings",
 )
 
 _GCC_HOST_COMPILER_PATH = "GCC_HOST_COMPILER_PATH"
@@ -819,6 +819,7 @@ _ENVIRONS = [
     _GCC_HOST_COMPILER_PATH,
     _GCC_HOST_COMPILER_PREFIX,
     "TF_NEED_ROCM",
+    "TF_NEED_CUDA",  # Needed by the `if_gpu_is_configured` macro
     _ROCM_TOOLKIT_PATH,
     _TF_ROCM_AMDGPU_TARGETS,
 ]

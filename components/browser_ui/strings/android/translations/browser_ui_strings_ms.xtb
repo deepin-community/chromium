@@ -94,12 +94,12 @@
 <translation id="2501278716633472235">Kembali</translation>
 <translation id="2546283357679194313">Kuki dan data tapak</translation>
 <translation id="2550801787432930915">Kad penurunan harga</translation>
-<translation id="2569468611847789653">{COOKIE_COUNT,plural, =1{1 kuki disekat}other{# kuki disekat}}</translation>
 <translation id="2570922361219980984">Akses lokasi turut dimatikan untuk peranti ini. Hidupkannya dalam <ph name="BEGIN_LINK" />Tetapan Android<ph name="END_LINK" />.</translation>
 <translation id="257931822824936280">Dikembangkan - klik untuk meruntuhkan.</translation>
 <translation id="2586657967955657006">Papan Keratan</translation>
 <translation id="2597457036804169544">Jangan gunakan tema gelap pada laman</translation>
 <translation id="2606760465469169465">Sahkan secara automatik</translation>
+<translation id="2613007545732217283"><ph name="HOST_NAME" /> <ph name="SEPARATOR" /> <ph name="RECENCY" /></translation>
 <translation id="2621115761605608342">Benarkan JavaScript untuk tapak tertentu.</translation>
 <translation id="2653659639078652383">Serah</translation>
 <translation id="2677748264148917807">Tinggalkan</translation>
@@ -122,7 +122,6 @@
 <translation id="2979365474350987274">Kuki pihak ketiga adalah terhad</translation>
 <translation id="3008272652534848354">Tetapkan semula kebenaran</translation>
 <translation id="301521992641321250">Disekat secara automatik</translation>
-<translation id="3025010840409371499"><ph name="RECENCY" /> <ph name="SEPARATOR" /> <ph name="HOST_NAME" /></translation>
 <translation id="3069226013421428034">Benarkan log masuk pihak ketiga untuk laman tertentu.</translation>
 <translation id="3082992102194421695">{COUNT,plural, =1{Tamat tempoh esok}other{Tamat tempoh dalam masa # hari}}</translation>
 <translation id="310297983047869047">Slaid sebelumnya</translation>
@@ -177,6 +176,7 @@
 <translation id="3895926599014793903">Zum didaya paksa</translation>
 <translation id="3908288065506437185">Sekat kuki pihak ketiga dalam mod Inkognito</translation>
 <translation id="3918378745482005425">Sesetengah ciri mungkin tidak berfungsi. Laman yang berkaitan masih boleh menggunakan kuki pihak ketiga.</translation>
+<translation id="3933121352599513978">Kuncupkan permintaan yang tidak dikehendaki (disyorkan)</translation>
 <translation id="3955193568934677022">Benarkan tapak untuk memainkan kandungan yang dilindungi (disyorkan)</translation>
 <translation id="3967822245660637423">Muat turun selesai</translation>
 <translation id="3974105241379491420">Laman boleh meminta untuk menggunakan maklumat yang disimpan tentang anda</translation>
@@ -199,6 +199,7 @@
 <translation id="429312253194641664">Tapak sedang memainkan media</translation>
 <translation id="42981349822642051">Kembangkan</translation>
 <translation id="4336566011000459927">Chrome akan mengehadkan kuki lagi hari ini</translation>
+<translation id="4336836404251800362"><ph name="RECENCY" /> <ph name="SEPARATOR" /> Tab terakhir anda</translation>
 <translation id="4338831206024587507">Semua laman di bawah <ph name="DOMAIN" /></translation>
 <translation id="4402755511846832236">Sekat tapak daripada mengetahui waktu anda menggunakan peranti ini dengan aktif</translation>
 <translation id="4412992751769744546">Benarkan kuki pihak ketiga</translation>
@@ -289,6 +290,7 @@
 <translation id="5853982612236235577">Apabila dihidupkan, laman dapat meminta untuk menghantar pemberitahuan. Apabila dimatikan, laman tidak dapat menghantar pemberitahuan.</translation>
 <translation id="5860033963881614850">Dimatikan</translation>
 <translation id="5876056640971328065">Jeda video</translation>
+<translation id="5877248419911025165">Kuncupkan semua permintaan</translation>
 <translation id="5884085660368669834">Pilihan laman</translation>
 <translation id="5887687176710214216">Terakhir dilawati semalam</translation>
 <translation id="5916664084637901428">Hidupkan</translation>
@@ -345,6 +347,7 @@
 <translation id="6612358246767739896">Kandungan yang dilindungi</translation>
 <translation id="662080504995468778">Kekal di sini</translation>
 <translation id="6653342741369270081">Tekan butang kembali untuk keluar daripada skrin penuh.</translation>
+<translation id="6670377348676659110">{TILE_COUNT,plural, =1{Sembunyikan teruskan dengan tab ini}other{Sembunyikan teruskan dengan tab ini}}</translation>
 <translation id="6689172468748959065">Foto profil</translation>
 <translation id="6697925417670533197">Muat turun aktif</translation>
 <translation id="6722828510648505498">Sekat gesaan log masuk daripada perkhidmatan identiti.</translation>
@@ -367,6 +370,7 @@
 <translation id="702275896380648118">Laman ini menentukan perkara yang anda sukai dan kemudian mencadangkan iklan kepada laman lain. Laman ini juga mendapat topik iklan anda daripada Chrome untuk memaparkan iklan yang lebih berkaitan kepada anda.</translation>
 <translation id="7053983685419859001">Sekat</translation>
 <translation id="7066151586745993502">{NUM_SELECTED,plural, =1{1 dipilih}other{# dipilih}}</translation>
+<translation id="708014373017851679">'<ph name="APP_NAME" />' sudah lapuk. Sila kemas kinikan apl.</translation>
 <translation id="7087918508125750058"><ph name="ITEM_COUNT" /> dipilih. Pilihan tersedia berhampiran bahagian atas skrin</translation>
 <translation id="7141896414559753902">Sekat tapak daripada memaparkan tetingkap timbul dan ubah hala (disyorkan)</translation>
 <translation id="7176368934862295254"><ph name="KILOBYTES" /> KB</translation>
@@ -455,7 +459,6 @@
 <translation id="8441146129660941386">Cari ke belakang</translation>
 <translation id="8444433999583714703">Untuk membolehkan <ph name="APP_NAME" /> mengakses lokasi anda, hidupkan juga lokasi dalam <ph name="BEGIN_LINK" />Tetapan Android<ph name="END_LINK" />.</translation>
 <translation id="8447861592752582886">Batalkan kebenaran peranti</translation>
-<translation id="8451050538944905715">{NUM_SELECTED,plural, =1{1 kuki sedang digunakan}other{# kuki sedang digunakan}}</translation>
 <translation id="8487700953926739672">Tersedia di luar talian</translation>
 <translation id="848952951823693243">Sentiasa minta laman mudah alih</translation>
 <translation id="8499083585497694743">Nyahredamkan mikrofon</translation>
@@ -483,7 +486,6 @@
 <translation id="8803526663383843427">Apabila dihidupkan</translation>
 <translation id="8805385115381080995">Penyemakan imbas akan menjadi lebih pantas kerana laman kurang berkemungkinan untuk meminta anda mengesahkan anda orang sebenar</translation>
 <translation id="8816026460808729765">Sekat tapak daripada mengakses penderia</translation>
-<translation id="8843699287283948910">Sembunyikan tab daripada peranti lain</translation>
 <translation id="8847988622838149491">USB</translation>
 <translation id="8874790741333031443">Cuba berikan kebenaran sementara untuk kuki pihak ketiga yang boleh mengurangkan perlindungan penyemakan imbas tetapi ciri laman lebih berkemungkinan untuk berfungsi seperti yang dijangka.</translation>
 <translation id="8889294078294184559">Sementara anda terus menyemak imbas, laman boleh menyemak dengan Chrome dan membuat pengesahan dengan laman yang telah anda lawati sebelum ini bahawa anda berkemungkinan merupakan orang yang sebenar</translation>
@@ -496,6 +498,7 @@
 <translation id="8959122750345127698">Tidak dapat mencapai navigasi: <ph name="URL" /></translation>
 <translation id="8986362086234534611">Lupa</translation>
 <translation id="8990043154272859344">Anda akan dilog keluar daripada semua laman</translation>
+<translation id="8993853206419610596">Kembangkan semua permintaan</translation>
 <translation id="9002538116239926534">Apabila dihidupkan, laman dapat menyimpan data pada peranti anda. Apabila dimatikan, laman tidak dapat menyimpan data pada peranti anda.</translation>
 <translation id="9011903857143958461"><ph name="SITE_NAME" /> dibenarkan</translation>
 <translation id="9019902583201351841">Diurus oleh ibu bapa anda</translation>

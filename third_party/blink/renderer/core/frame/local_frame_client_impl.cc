@@ -36,6 +36,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/types/optional_util.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/type_converter.h"
@@ -428,14 +429,15 @@ void LocalFrameClientImpl::DidFinishSameDocumentNavigation(
       WebFrameWidgetImpl* frame_widget = web_frame_->FrameWidgetImpl();
       // The outermost mainframe must have a frame widget.
       CHECK(frame_widget);
-      if (base::FeatureList::IsEnabled(
-              features::
-                  kIncrementLocalSurfaceIdForMainframeSameDocNavigation)) {
+      if (RuntimeEnabledFeatures::
+              IncrementLocalSurfaceIdForMainframeSameDocNavigationEnabled()) {
         frame_widget->RequestNewLocalSurfaceId();
       }
       frame_widget->NotifyPresentationTime(WTF::BindOnce(
-          [](base::TimeTicks start, base::TimeTicks finish) {
-            base::TimeDelta duration = finish - start;
+          [](base::TimeTicks start,
+             const viz::FrameTimingDetails& frame_timing_details) {
+            base::TimeDelta duration =
+                frame_timing_details.presentation_feedback.timestamp - start;
             base::UmaHistogramTimes(
                 "Navigation."
                 "MainframeSameDocumentNavigationCommitToPresentFirstFrame",
@@ -561,17 +563,17 @@ void LocalFrameClientImpl::BeginNavigation(
     const std::optional<Impression>& impression,
     const LocalFrameToken* initiator_frame_token,
     std::unique_ptr<SourceLocation> source_location,
-    mojo::PendingRemote<mojom::blink::PolicyContainerHostKeepAliveHandle>
-        initiator_policy_container_keep_alive_handle,
+    mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
+        initiator_navigation_state_keep_alive_handle,
     bool is_container_initiated,
     bool is_fullscreen_requested) {
   if (!web_frame_->Client())
     return;
 
-  // |initiator_frame_token| and |initiator_policy_container_keep_alive_handle|
+  // |initiator_frame_token| and |initiator_navigation_state_keep_alive_handle|
   // should either be both specified or both null.
   DCHECK(!initiator_frame_token ==
-         !initiator_policy_container_keep_alive_handle);
+         !initiator_navigation_state_keep_alive_handle);
 
   auto navigation_info = std::make_unique<WebNavigationInfo>();
   navigation_info->url_request.CopyFrom(WrappedResourceRequest(request));
@@ -591,8 +593,8 @@ void LocalFrameClientImpl::BeginNavigation(
   navigation_info->input_start = input_start_time;
   navigation_info->initiator_frame_token =
       base::OptionalFromPtr(initiator_frame_token);
-  navigation_info->initiator_policy_container_keep_alive_handle =
-      std::move(initiator_policy_container_keep_alive_handle);
+  navigation_info->initiator_navigation_state_keep_alive_handle =
+      std::move(initiator_navigation_state_keep_alive_handle);
   LocalFrame* origin_frame =
       origin_window ? origin_window->GetFrame() : nullptr;
   if (origin_frame) {
@@ -603,15 +605,15 @@ void LocalFrameClientImpl::BeginNavigation(
           origin_frame->GetLocalFrameToken();
     }
     // Similarly, many navigation paths do not pass an
-    // |initiator_policy_container_keep_alive_handle|.
-    if (!navigation_info->initiator_policy_container_keep_alive_handle) {
-      navigation_info->initiator_policy_container_keep_alive_handle =
-          origin_window->GetPolicyContainer()->IssueKeepAliveHandle();
+    // |initiator_navigation_state_keep_alive_handle|.
+    if (!navigation_info->initiator_navigation_state_keep_alive_handle) {
+      navigation_info->initiator_navigation_state_keep_alive_handle =
+          origin_frame->IssueKeepAliveHandle();
     }
   } else {
     // TODO(https://crbug.com/1173409 and https://crbug.com/1059959): Check that
     // we always pass an |initiator_frame_token| and an
-    // |initiator_policy_container_keep_alive_handle| if |origin_window| is not
+    // |initiator_navigation_state_keep_alive_handle| if |origin_window| is not
     // set.
   }
 
@@ -782,13 +784,14 @@ void LocalFrameClientImpl::DidChangePerformanceTiming() {
 
 void LocalFrameClientImpl::DidObserveUserInteraction(
     base::TimeTicks max_event_start,
-    base::TimeTicks max_event_end,
     base::TimeTicks max_event_queued_main_thread,
+    base::TimeTicks max_event_commit_finish,
+    base::TimeTicks max_event_end,
     UserInteractionType interaction_type,
     uint64_t interaction_offset) {
   web_frame_->Client()->DidObserveUserInteraction(
-      max_event_start, max_event_end, max_event_queued_main_thread,
-      interaction_type, interaction_offset);
+      max_event_start, max_event_queued_main_thread, max_event_commit_finish,
+      max_event_end, interaction_type, interaction_offset);
 }
 
 void LocalFrameClientImpl::DidChangeCpuTiming(base::TimeDelta time) {
@@ -1050,10 +1053,6 @@ LocalFrameClientImpl::GetBrowserInterfaceBroker() {
 AssociatedInterfaceProvider*
 LocalFrameClientImpl::GetRemoteNavigationAssociatedInterfaces() {
   return web_frame_->Client()->GetRemoteNavigationAssociatedInterfaces();
-}
-
-void LocalFrameClientImpl::AnnotatedRegionsChanged() {
-  web_frame_->Client()->DraggableRegionsChanged();
 }
 
 base::UnguessableToken LocalFrameClientImpl::GetDevToolsFrameToken() const {

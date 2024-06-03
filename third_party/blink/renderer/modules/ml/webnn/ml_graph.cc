@@ -96,7 +96,7 @@ const HashMap<String, MLGraph::ResourceInfo>& MLGraph::GetOutputResourcesInfo()
 void MLGraph::Compute(ScopedMLTrace scoped_trace,
                       const MLNamedArrayBufferViews& inputs,
                       const MLNamedArrayBufferViews& outputs,
-                      ScriptPromiseResolver* resolver,
+                      ScriptPromiseResolver<MLComputeResult>* resolver,
                       ExceptionState& exception_state) {
   // The MLGraph object should be initialized before computing.
   DCHECK(resources_info_initialized_);
@@ -105,14 +105,12 @@ void MLGraph::Compute(ScopedMLTrace scoped_trace,
   String error_message;
   if (!ValidateNamedArrayBufferViews(inputs, input_resources_info_,
                                      error_message)) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kDataError, "Invalid inputs: " + error_message));
+    resolver->RejectWithTypeError("Invalid inputs: " + error_message);
     return;
   }
   if (!ValidateNamedArrayBufferViews(outputs, output_resources_info_,
                                      error_message)) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kDataError, "Invalid outputs: " + error_message));
+    resolver->RejectWithTypeError("Invalid outputs: " + error_message);
     return;
   }
 
@@ -123,11 +121,10 @@ void MLGraph::Compute(ScopedMLTrace scoped_trace,
 
 void MLGraph::Build(ScopedMLTrace scoped_trace,
                     const MLNamedOperands& named_outputs,
-                    ScriptPromiseResolver* resolver) {
+                    ScriptPromiseResolver<MLGraph>* resolver) {
   String error_message;
   if (!ValidateAndInitializeResourcesInfo(named_outputs, error_message)) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kDataError, error_message));
+    resolver->RejectWithTypeError(error_message);
     return;
   }
   BuildImpl(std::move(scoped_trace), named_outputs, resolver);
@@ -156,7 +153,7 @@ bool MLGraph::ValidateAndInitializeResourcesInfo(
     const auto& name = output.first;
     const auto& operand = output.second;
     // Validate whether it is an output operand.
-    if (operand->Kind() != MLOperand::OperandKind::kOutput) {
+    if (operand->Kind() != webnn::mojom::blink::Operand::Kind::kOutput) {
       error_message = String::Format(
           "The operand with name \"%s\" is not an output operand.",
           name.Utf8().c_str());
@@ -181,7 +178,7 @@ bool MLGraph::ValidateAndInitializeResourcesInfo(
     // Enumerate the current operator's input operands.
     for (const auto& operand : current_operator->Inputs()) {
       switch (operand->Kind()) {
-        case MLOperand::OperandKind::kOutput:
+        case webnn::mojom::blink::Operand::Kind::kOutput:
           DCHECK(operand->Operator());
           // If the operand is an output operand and its dependent operator is
           // not visited, mark the dependent operator is visited and enqueue
@@ -191,7 +188,7 @@ bool MLGraph::ValidateAndInitializeResourcesInfo(
             operators_queue.push_back(operand->Operator());
           }
           break;
-        case MLOperand::OperandKind::kInput:
+        case webnn::mojom::blink::Operand::Kind::kInput:
           // If the operand has been validated, it doesn't need to be verified
           // multiple times.
           if (visited_input_operands.Contains(operand)) {
@@ -212,7 +209,7 @@ bool MLGraph::ValidateAndInitializeResourcesInfo(
               ResourceInfo({.data_type = operand->DataType(),
                             .byte_length = operand->ByteLength()}));
           break;
-        case MLOperand::OperandKind::kConstant:
+        case webnn::mojom::blink::Operand::Kind::kConstant:
           // If the operand has been validated, it doesn't need to be verified
           // multiple times.
           if (visited_input_operands.Contains(operand)) {

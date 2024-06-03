@@ -24,7 +24,6 @@
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/gpu_fence.h"
@@ -199,16 +198,6 @@ void OpenXrRenderLoop::GetFrameData(
   }
 }
 
-void OpenXrRenderLoop::RequestOverlay(
-    mojo::PendingReceiver<mojom::ImmersiveOverlay> receiver) {
-  overlay_receiver_.reset();
-  overlay_receiver_.Bind(std::move(receiver));
-
-  // WebXR is visible and overlay hidden by default until the overlay overrides
-  // this.
-  SetOverlayAndWebXRVisibility(false, true);
-}
-
 void OpenXrRenderLoop::RequestSession(
     base::RepeatingCallback<void(mojom::XRVisibilityState)>
         on_visibility_state_changed,
@@ -337,7 +326,9 @@ void OpenXrRenderLoop::StartRuntimeFinish(
     TRACE_EVENT_INSTANT0("xr", "Failed to start runtime",
                          TRACE_EVENT_SCOPE_THREAD);
     main_thread_task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), false, nullptr));
+        FROM_HERE,
+        base::BindOnce(std::move(callback), false, nullptr,
+                       mojo::PendingRemote<mojom::ImmersiveOverlay>()));
     return;
   }
 
@@ -394,8 +385,14 @@ void OpenXrRenderLoop::StartRuntimeFinish(
       openxr_->PickEnvironmentBlendModeForSession(options->mode);
   session->interaction_mode = device::mojom::XRInteractionMode::kWorldSpace;
 
+  mojo::PendingRemote<mojom::ImmersiveOverlay> overlay_remote;
+
+  overlay_receiver_.reset();
+  overlay_remote = overlay_receiver_.BindNewPipeAndPassRemote();
+
   main_thread_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true, std::move(session)));
+      FROM_HERE, base::BindOnce(std::move(callback), true, std::move(session),
+                                std::move(overlay_remote)));
   is_presenting_ = true;
 
   graphics_binding_->SetOverlayAndWebXrVisibility(overlay_visible_,
@@ -541,7 +538,7 @@ void OpenXrRenderLoop::UpdateLayerBounds(int16_t frame_id,
 
 void OpenXrRenderLoop::SubmitOverlayTexture(
     int16_t frame_id,
-    mojo::PlatformHandle texture_handle,
+    gfx::GpuMemoryBufferHandle texture,
     const gpu::SyncToken& sync_token,
     const gfx::RectF& left_bounds,
     const gfx::RectF& right_bounds,
@@ -560,7 +557,7 @@ void OpenXrRenderLoop::SubmitOverlayTexture(
 
   pending_frame_->waiting_for_overlay_ = false;
 
-  graphics_binding_->SetOverlayTexture(std::move(texture_handle), sync_token,
+  graphics_binding_->SetOverlayTexture(std::move(texture), sync_token,
                                        left_bounds, right_bounds);
   pending_frame_->overlay_submitted_ = true;
 
@@ -646,7 +643,8 @@ mojom::XRFrameDataPtr OpenXrRenderLoop::GetNextFrameData() {
   // graphics bindings so that this isn't necessary here.
   const auto& swap_chain_info = graphics_binding_->GetActiveSwapchainImage();
   if (swap_chain_info.shared_image) {
-    frame_data->buffer_holder = swap_chain_info.GetMailboxHolder();
+    frame_data->buffer_shared_image = swap_chain_info.shared_image->Export();
+    frame_data->buffer_sync_token = swap_chain_info.sync_token;
   }
 
   frame_data->time_delta =
@@ -704,8 +702,6 @@ void OpenXrRenderLoop::StartRuntime(
   DCHECK(instance_ != XR_NULL_HANDLE);
   DCHECK(!openxr_);
 
-  // Since we own the graphics_binding_ Unretained is safe here. Since this
-  // callback needs to return a value, it cannot be bound to a weak ptr.
   graphics_binding_ = platform_helper_->GetGraphicsBinding();
 
   if (!graphics_binding_) {
@@ -781,8 +777,8 @@ void OpenXrRenderLoop::OnOpenXrSessionStarted(
 
 void OpenXrRenderLoop::StopRuntime() {
   openxr_ = nullptr;
-  // Need to destroy the graphics binding *after* the OpenXrApiWrapper, which
-  // depends on it; but *before* the texture helper on which it depends.
+  // Need to destroy the graphics binding after the OpenXrApiWrapper, which
+  // depends on it.
   graphics_binding_.reset();
   context_provider_.reset();
 }

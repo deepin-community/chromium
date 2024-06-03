@@ -18,6 +18,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
+#include "cc/metrics/frame_sequence_metrics.h"
 #include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_installer.h"
 #include "chrome/browser/ash/crosapi/browser_manager.h"
@@ -1074,7 +1075,7 @@ class AutotestPrivateSetOverviewModeStateFunction : public ExtensionFunction {
   void OnOverviewModeChanged(bool for_start, bool finished);
 };
 
-// TODO(crbug.com/1275410): Replace this by introducing
+// TODO(crbug.com/40207057): Replace this by introducing
 // autotestPrivate.setVirtualKeyboardVisibilityIfEnabled().
 class AutotestPrivateShowVirtualKeyboardIfEnabledFunction
     : public ExtensionFunction {

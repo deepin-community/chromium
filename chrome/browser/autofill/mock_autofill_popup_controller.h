@@ -54,7 +54,7 @@ class MockAutofillPopupController : public AutofillPopupController {
 
   // AutofillPopupController:
   MOCK_METHOD(void, OnSuggestionsChanged, (), (override));
-  MOCK_METHOD(void, AcceptSuggestion, (int, base::TimeTicks), (override));
+  MOCK_METHOD(void, AcceptSuggestion, (int), (override));
   MOCK_METHOD(void, PerformButtonActionForSuggestion, (int), (override));
   MOCK_METHOD(std::optional<AutofillClient::PopupScreenLocation>,
               GetPopupScreenLocation,
@@ -105,6 +105,20 @@ class MockAutofillPopupController : public AutofillPopupController {
                AutoselectFirstSuggestion autoselect_first_suggestion),
               (override));
   MOCK_METHOD(void, HideSubPopup, (), (override));
+  MOCK_METHOD(void,
+              Show,
+              (std::vector<Suggestion>,
+               AutofillSuggestionTriggerSource,
+               AutoselectFirstSuggestion),
+              (override));
+  MOCK_METHOD(void, DisableThresholdForTesting, (bool), (override));
+  MOCK_METHOD(void, KeepPopupOpenForTesting, (), (override));
+  MOCK_METHOD(void,
+              UpdateDataListValues,
+              (base::span<const SelectOption>),
+              (override));
+  MOCK_METHOD(void, PinView, (), (override));
+
   void set_suggestions(const std::vector<PopupItemId>& ids) {
     suggestions_.clear();
 

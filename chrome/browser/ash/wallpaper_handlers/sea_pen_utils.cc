@@ -8,6 +8,7 @@
 
 #include "ash/webui/common/mojom/sea_pen.mojom.h"
 #include "base/logging.h"
+#include "base/strings/stringprintf.h"
 #include "chrome/browser/ash/wallpaper_handlers/sea_pen_utils_generated.h"
 #include "components/manta/proto/manta.pb.h"
 #include "ui/display/display.h"
@@ -41,15 +42,47 @@ gfx::Size GetLargestDisplaySizeLandscape() {
   return largest_size;
 }
 
-bool IsValidOutput(manta::proto::OutputData output,
+bool IsValidOutput(const manta::proto::OutputData& output,
                    const std::string_view source) {
   if (!output.has_generation_seed()) {
     LOG(WARNING) << "Manta output data missing id for " << source;
     return false;
   }
-  if (!output.has_image() || !output.image().has_serialized_bytes()) {
+  if (!output.has_image() || !output.image().has_serialized_bytes() ||
+      output.image().serialized_bytes().empty()) {
     LOG(WARNING) << "Manta output data missing image for" << source;
     return false;
+  }
+  return true;
+}
+
+bool IsValidTemplateQuery(
+    const ash::personalization_app::mojom::SeaPenTemplateQueryPtr& query) {
+  const auto query_id = query->id;
+  const auto query_options = query->options;
+  if (!TemplateToChipSet().contains(query_id)) {
+    LOG(WARNING) << "Template id not found.";
+    return false;
+  }
+
+  const auto chip_set = TemplateToChipSet().find(query_id)->second;
+  if (chip_set.size() != query_options.size()) {
+    LOG(WARNING) << "The chip size does not match the expected chip size.";
+    return false;
+  }
+
+  for (const auto& [query_chip, query_option] : query_options) {
+    if (!chip_set.contains(query_chip)) {
+      // The query chip is not in the template's chip set.
+      LOG(WARNING) << "Chip id is not found.";
+      return false;
+    }
+    const auto available_options = ChipToOptionSet().find(query_chip)->second;
+    if (!available_options.contains(query_option)) {
+      // The query's option is not an allowed option.
+      LOG(WARNING) << "Option id not found.";
+      return false;
+    }
   }
   return true;
 }
@@ -74,10 +107,14 @@ manta::proto::Request CreateMantaRequest(
       request_config.set_generation_seed(*generation_seed);
     }
 
-    manta::proto::ImageDimensions& image_dimensions =
-        *request_config.mutable_image_dimensions();
-    image_dimensions.set_width(size.width());
-    image_dimensions.set_height(size.height());
+    // Ignore image_dimensions for CHROMEOS_VC_BACKGROUNDS, since
+    // CHROMEOS_VC_BACKGROUNDS returns with default size.
+    if (feature_name != manta::proto::FeatureName::CHROMEOS_VC_BACKGROUNDS) {
+      manta::proto::ImageDimensions& image_dimensions =
+          *request_config.mutable_image_dimensions();
+      image_dimensions.set_width(size.width());
+      image_dimensions.set_height(size.height());
+    }
 
     request_config.set_num_outputs(num_outputs);
   }
@@ -96,6 +133,34 @@ manta::proto::Request CreateMantaRequest(
     }
   }
   return request;
+}
+
+std::string GetFeedbackText(
+    const ash::personalization_app::mojom::SeaPenTemplateQueryPtr& query,
+    const ash::personalization_app::mojom::SeaPenFeedbackMetadataPtr&
+        metadata) {
+  if (!IsValidTemplateQuery(query)) {
+    return "";
+  }
+
+  std::string feedback_text;
+  base::StringAppendF(&feedback_text, "%s %s: %s\n",
+                      metadata->log_id.starts_with("VcBackground")
+                          ? "#VCBackground"
+                          : "#AIWallpaper",
+                      metadata->is_positive ? "Positive" : "Negative",
+                      query->user_visible_query->text.c_str());
+  base::StringAppendF(&feedback_text, "template: %s\n",
+                      metadata->log_id.c_str());
+  base::StringAppendF(&feedback_text, "options: ");
+  for (const auto& [chip, option] : query->options) {
+    base::StringAppendF(&feedback_text, "(%s, %s)",
+                        TemplateChipToString(chip).c_str(),
+                        TemplateOptionToString(option).c_str());
+  }
+  base::StringAppendF(&feedback_text, "\ngeneration_seed: %u\n",
+                      metadata->generation_seed);
+  return feedback_text;
 }
 
 }  // namespace wallpaper_handlers

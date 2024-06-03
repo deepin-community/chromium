@@ -157,7 +157,7 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
 
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        {syncer::kSyncWebauthnCredentials, device::kWebAuthnNewPasskeyUI},
+        {syncer::kSyncWebauthnCredentials},
         /*disabled_features=*/{
             // Disable this feature explicitly, as it can cause unexpected email
             // fields to be parsed in these tests.
@@ -259,7 +259,7 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
     // Interact with the username field until the popup shows up. This has the
     // effect of waiting for the browser to send the renderer the password
     // information, and waiting for the UI to render.
-    base::WeakPtr<autofill::AutofillPopupControllerImpl> popup_controller;
+    base::WeakPtr<autofill::AutofillPopupController> popup_controller;
     while (!popup_controller) {
       content::SimulateMouseClickOrTapElementWithId(web_contents, "username");
       popup_controller = autofill_client->popup_controller_for_testing();
@@ -287,8 +287,7 @@ class WebAuthnAutofillIntegrationTest : public CertVerifierBrowserTest {
 
     // Click the credential.
     popup_controller->DisableThresholdForTesting(true);
-    popup_controller->AcceptSuggestion(suggestion_index,
-                                       base::TimeTicks::Now());
+    popup_controller->AcceptSuggestion(suggestion_index);
     std::string result;
     ASSERT_TRUE(message_queue.WaitForMessage(&result));
     EXPECT_EQ(result, "\"webauthn: OK\"");
@@ -462,7 +461,7 @@ IN_PROC_BROWSER_TEST_F(WebAuthnDevtoolsAutofillIntegrationTest, GPMPasskeys) {
   // Interact with the username field until the popup shows up. This has the
   // effect of waiting for the browser to send the renderer the password
   // information, and waiting for the UI to render.
-  base::WeakPtr<autofill::AutofillPopupControllerImpl> popup_controller;
+  base::WeakPtr<autofill::AutofillPopupController> popup_controller;
   while (!popup_controller) {
     content::SimulateMouseClickOrTapElementWithId(web_contents, "username");
     popup_controller = autofill_client->popup_controller_for_testing();
@@ -491,11 +490,16 @@ IN_PROC_BROWSER_TEST_F(WebAuthnDevtoolsAutofillIntegrationTest, GPMPasskeys) {
 
   // Click the credential.
   popup_controller->DisableThresholdForTesting(true);
-  popup_controller->AcceptSuggestion(suggestion_index, base::TimeTicks::Now());
+  popup_controller->AcceptSuggestion(suggestion_index);
   std::string result;
   ASSERT_TRUE(message_queue.WaitForMessage(&result));
   EXPECT_EQ(result, "\"webauthn: OK\"");
 
+  // Tapping a GPM passkey will not automatically hide the popup
+  // because the enclave might still be loading. Manually hide the
+  // popup so that the autofill client can be destroyed, avoiding
+  // a DCHECK on test tear down.
+  autofill_client->HideAutofillPopup(autofill::PopupHidingReason::kTabGone);
   // The tracker outlives the test. Clean up the device_info to avoid flakiness.
   tracker->Remove(&device_info);
 }
@@ -521,7 +525,7 @@ IN_PROC_BROWSER_TEST_F(WebAuthnDevtoolsAutofillIntegrationTest,
   // Interact with the username field until the popup shows up. This has the
   // effect of waiting for the browser to send the renderer the password
   // information, and waiting for the UI to render.
-  base::WeakPtr<autofill::AutofillPopupControllerImpl> popup_controller;
+  base::WeakPtr<autofill::AutofillPopupController> popup_controller;
   while (!popup_controller) {
     content::SimulateMouseClickOrTapElementWithId(web_contents, "username");
     popup_controller = autofill_client->popup_controller_for_testing();
@@ -569,11 +573,16 @@ IN_PROC_BROWSER_TEST_F(WebAuthnDevtoolsAutofillIntegrationTest,
 
   // Click the credential.
   popup_controller->DisableThresholdForTesting(true);
-  popup_controller->AcceptSuggestion(suggestion_index, base::TimeTicks::Now());
+  popup_controller->AcceptSuggestion(suggestion_index);
   std::string result;
   ASSERT_TRUE(message_queue.WaitForMessage(&result));
   EXPECT_EQ(result, "\"webauthn: OK\"");
 
+  // Tapping a GPM passkey will not automatically hide the popup
+  // because the enclave might still be loading. Manually hide the
+  // popup so that the autofill client can be destroyed, avoiding
+  // a DCHECK on test tear down.
+  autofill_client->HideAutofillPopup(autofill::PopupHidingReason::kTabGone);
   // The tracker outlives the test. Clean up the device_info to avoid flakiness.
   tracker->Remove(&device_info);
 }

@@ -158,12 +158,6 @@ const char* FFmpegGlue::GetAllowedVideoDecoders() {
   // This should match the configured lists in //third_party/ffmpeg.
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
     std::vector<std::string> allowed_decoders;
-    if (base::FeatureList::IsEnabled(kTheoraVideoCodec)) {
-      allowed_decoders.push_back("theora");
-    }
-    if (base::FeatureList::IsEnabled(kFFmpegDecodeOpaqueVP8)) {
-      allowed_decoders.push_back("vp8");
-    }
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
     allowed_decoders.push_back("h264");
 #if BUILDFLAG(IS_CHROMEOS)
@@ -187,10 +181,21 @@ bool FFmpegGlue::OpenContext(bool is_local_file) {
   // destruction path to avoid double frees.
   open_called_ = true;
 
+  // We need to set the WAV decoder max size to what it had previously been set
+  // to. The auto-selectable max size ends up at 64k, which is larger than the
+  // read size from a MultiBufferDataSource, causing demuxer init to never
+  // complete.
+  AVDictionary* options = nullptr;
+  av_dict_set(&options, "max_size", "4096", 0);
+
   // By passing nullptr for the filename (second parameter) we are telling
   // FFmpeg to use the AVIO context we setup from the AVFormatContext structure.
   const int ret =
-      avformat_open_input(&format_context_, nullptr, nullptr, nullptr);
+      avformat_open_input(&format_context_, nullptr, nullptr, &options);
+
+  if (options) {
+    av_dict_free(&options);
+  }
 
   // If FFmpeg can't identify the file, read the first 8k and attempt to guess
   // at the container type ourselves. This way we can track emergent formats.

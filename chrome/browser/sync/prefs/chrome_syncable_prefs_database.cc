@@ -4,8 +4,9 @@
 
 #include "chrome/browser/sync/prefs/chrome_syncable_prefs_database.h"
 
+#include <string_view>
+
 #include "base/containers/fixed_flat_map.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/promos/promos_pref_names.h"
 #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_prefs.h"
@@ -16,7 +17,6 @@
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "components/privacy_sandbox/tracking_protection_prefs.h"
 #include "components/spellcheck/browser/pref_names.h"
-#include "components/supervised_user/core/common/buildflags.h"
 #include "components/sync/base/model_type.h"
 #include "components/sync_preferences/syncable_prefs_database.h"
 #include "components/translate/core/browser/translate_prefs.h"
@@ -34,10 +34,8 @@
 #include "ui/events/ash/pref_names.h"
 #endif
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "extensions/browser/pref_names.h"
-#endif
-#if BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(ENABLE_SUPERVISED_USERS)
 #include "components/supervised_user/core/common/pref_names.h"
+#include "extensions/browser/pref_names.h"
 #endif
 
 namespace browser_sync {
@@ -220,7 +218,7 @@ enum {
   // kPageColors = 100162, (no longer synced)
   kPerformanceTracingEnabled = 100163,
   kPluginsAlwaysOpenPdfExternally = 100164,
-  kPrivacySandboxApisEnabled = 100165,
+  // kPrivacySandboxApisEnabled = 100165, (deprecated)
   kPrivacySandboxRelatedWebsiteSetsEnabled = 100166,
   // kPrivacySandboxManuallyControlled = 100167, (deprecated)
   kPromptForDownload = 100168,
@@ -326,6 +324,15 @@ enum {
   kAccessibilityFaceGazeCursorSpeedRight = 100266,
   kAccessibilityFaceGazeCursorSmoothing = 100267,
   kAccessibilityFaceGazeCursorUseAcceleration = 100268,
+  kFingerprintingProtectionEnabled = 100269,
+  kAccessibilityFaceGazeGesturesToMacros = 100270,
+  kAccessibilityFaceGazeGesturesToConfidence = 100271,
+  kShelfContainerAppPinRolls = 100272,
+  kProfileContentSettingsExceptionsTrackingProtection = 100273,
+  kProfileContentSettingsPartitionedExceptionsTrackingProtection = 100274,
+  kProfileDefaultContentSettingValuesTrackingProtection = 100275,
+  kShowForwardButton = 100276,
+  kAccessibilityMagnifierFollowsSts = 100277,
   // See components/sync_preferences/README.md about adding new entries here.
   // vvvvv IMPORTANT! vvvvv
   // Note to the reviewer: IT IS YOUR RESPONSIBILITY to ensure that new syncable
@@ -337,7 +344,7 @@ enum {
 
 // Non-iOS specific list of syncable preferences.
 constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
-    base::StringPiece,
+    std::string_view,
     sync_preferences::SyncablePrefMetadata>({
 #if BUILDFLAG(IS_ANDROID)
     {language::prefs::kAppLanguagePromptShown,
@@ -473,6 +480,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kShowHomeButton, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {prefs::kShowForwardButton,
+     {syncable_prefs_ids::kShowForwardButton, syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
     {prefs::kSidePanelCompanionEntryPinnedToToolbar,
      {syncable_prefs_ids::kSidePanelCompanionEntryPinnedToToolbar,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -492,12 +503,12 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
 #endif
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS) && BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS)
     {prefs::kSupervisedUserApprovedExtensions,
      {syncable_prefs_ids::kSupervisedUserApprovedExtensions,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS) && BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 #if BUILDFLAG(IS_MAC)
     {prefs::kShowFullscreenToolbar,
      {syncable_prefs_ids::kShowFullscreenToolbar, syncer::PREFERENCES,
@@ -568,6 +579,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       sync_preferences::MergeBehavior::kNone}},
     {ash::prefs::kAccessibilityScreenMagnifierFocusFollowingEnabled,
      {syncable_prefs_ids::kAccessibilityScreenMagnifierFocusFollowingEnabled,
+      syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
+    {ash::prefs::kAccessibilityMagnifierFollowsSts,
+     {syncable_prefs_ids::kAccessibilityMagnifierFollowsSts,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
     {ash::prefs::kAccessibilityScreenMagnifierMouseFollowingMode,
@@ -1092,6 +1107,18 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kAccessibilityFaceGazeCursorUseAcceleration,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {ash::prefs::kAccessibilityFaceGazeGesturesToMacros,
+     {syncable_prefs_ids::kAccessibilityFaceGazeGesturesToMacros,
+      syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kMergeableDict}},
+    {ash::prefs::kAccessibilityFaceGazeGesturesToConfidence,
+     {syncable_prefs_ids::kAccessibilityFaceGazeGesturesToConfidence,
+      syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kMergeableDict}},
+    {prefs::kShelfContainerAppPinRolls,
+     {syncable_prefs_ids::kShelfContainerAppPinRolls, syncer::OS_PREFERENCES,
+      sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kMergeableListWithRewriteOnUpdate}},
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
     {performance_manager::user_tuning::prefs::kTabDiscardingExceptions,
      {syncable_prefs_ids::kTabDiscardingExceptions, syncer::PREFERENCES,
@@ -1181,10 +1208,6 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kPluginsAlwaysOpenPdfExternally, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kPrivacySandboxApisEnabled,
-     {syncable_prefs_ids::kPrivacySandboxApisEnabled, syncer::PREFERENCES,
-      sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
     {prefs::kPrivacySandboxRelatedWebsiteSetsEnabled,
      {syncable_prefs_ids::kPrivacySandboxRelatedWebsiteSetsEnabled,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -1272,6 +1295,11 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
       sync_preferences::MergeBehavior::kMergeableDict}},
+    {"profile.content_settings.exceptions.tracking_protection",
+     {syncable_prefs_ids::kProfileContentSettingsExceptionsTrackingProtection,
+      syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
+      sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.content_settings.exceptions.window_placement",
      {syncable_prefs_ids::kProfileContentSettingsExceptionsWindowPlacement,
       syncer::PREFERENCES,
@@ -1327,6 +1355,12 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
       sync_preferences::MergeBehavior::kMergeableDict}},
+    {"profile.content_settings.partitioned_exceptions.tracking_protection",
+     {syncable_prefs_ids::
+          kProfileContentSettingsPartitionedExceptionsTrackingProtection,
+      syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
+      sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.content_settings.partitioned_exceptions.window_placement",
      {syncable_prefs_ids::
           kProfileContentSettingsPartitionedExceptionsWindowPlacement,
@@ -1371,6 +1405,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kProfileDefaultContentSettingValuesPopups,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {"profile.default_content_setting_values.tracking_protection",
+     {syncable_prefs_ids::kProfileDefaultContentSettingValuesTrackingProtection,
+      syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.default_content_setting_values.window_placement",
      {syncable_prefs_ids::kProfileDefaultContentSettingValuesWindowPlacement,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -1406,6 +1444,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kIpProtectionEnabled, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {prefs::kFingerprintingProtectionEnabled,
+     {syncable_prefs_ids::kFingerprintingProtectionEnabled, syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
     {prefs::kHttpsFirstModeIncognito,
      {syncable_prefs_ids::kHttpsFirstModeIncognito, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
@@ -1417,7 +1459,7 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
 std::optional<sync_preferences::SyncablePrefMetadata>
 ChromeSyncablePrefsDatabase::GetSyncablePrefMetadata(
     const std::string& pref_name) const {
-  const auto* it = kChromeSyncablePrefsAllowlist.find(pref_name);
+  const auto it = kChromeSyncablePrefsAllowlist.find(pref_name);
   if (it != kChromeSyncablePrefsAllowlist.end()) {
     DCHECK(!common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name)
                 .has_value());
@@ -1427,9 +1469,9 @@ ChromeSyncablePrefsDatabase::GetSyncablePrefMetadata(
   return common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name);
 }
 
-std::map<base::StringPiece, sync_preferences::SyncablePrefMetadata>
+std::map<std::string_view, sync_preferences::SyncablePrefMetadata>
 ChromeSyncablePrefsDatabase::GetAllSyncablePrefsForTest() const {
-  std::map<base::StringPiece, sync_preferences::SyncablePrefMetadata>
+  std::map<std::string_view, sync_preferences::SyncablePrefMetadata>
       syncable_prefs;
   base::ranges::copy(kChromeSyncablePrefsAllowlist,
                      std::inserter(syncable_prefs, syncable_prefs.end()));

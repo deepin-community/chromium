@@ -29,6 +29,14 @@
 #include "components/sync/service/sync_service.h"
 #include "net/cert/cert_status_flags.h"
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_CHROMEOS)
+#include "base/i18n/rtl.h"
+#include "components/password_manager/core/browser/password_cross_domain_confirmation_popup_controller.h"
+#include "ui/gfx/geometry/rect_f.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+        // BUILDFLAG(IS_CHROMEOS)
+
 class PrefService;
 
 namespace affiliations {
@@ -135,7 +143,7 @@ class PasswordManagerClient {
   // the presence of SSL errors on a page. |url| describes the URL to fill the
   // password for. It is not necessary the URL of the current page but can be a
   // URL of a proxy or subframe.
-  // TODO(crbug.com/1071842): This method's name is misleading as it also
+  // TODO(crbug.com/40685327): This method's name is misleading as it also
   // determines whether saving prompts should be shown.
   virtual bool IsFillingEnabled(const GURL& url) const;
 
@@ -210,6 +218,9 @@ class PasswordManagerClient {
       bool is_webauthn_form);
 #endif
 
+  virtual bool CanUseBiometricAuthForFilling(
+      device_reauth::DeviceAuthenticator* authenticator);
+
   // Returns a pointer to a DeviceAuthenticator. Might be null if
   // BiometricAuthentication is not available for a given platform.
   virtual std::unique_ptr<device_reauth::DeviceAuthenticator>
@@ -268,8 +279,7 @@ class PasswordManagerClient {
   // Currently only implemented on Android.
   virtual void UpdateCredentialCache(
       const url::Origin& origin,
-      const std::vector<raw_ptr<const PasswordForm, VectorExperimental>>&
-          best_matches,
+      base::span<const PasswordForm> best_matches,
       bool is_blocklisted);
 
   // Called when a password is saved in an automated fashion. Embedder may
@@ -287,8 +297,7 @@ class PasswordManagerClient {
   // implementation is a noop. |was_autofilled_on_pageload| contains information
   // if password form was autofilled on pageload.
   virtual void PasswordWasAutofilled(
-      const std::vector<raw_ptr<const PasswordForm, VectorExperimental>>&
-          best_matches,
+      base::span<const PasswordForm> best_matches,
       const url::Origin& origin,
       const std::vector<raw_ptr<const PasswordForm, VectorExperimental>>*
           federated_matches,
@@ -493,6 +502,18 @@ class PasswordManagerClient {
 
   // Refreshes password manager settings stored in prefs.
   virtual void RefreshPasswordManagerSettingsIfNeeded() const;
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_CHROMEOS)
+  // Creates and show the cross domain confirmation popup.
+  virtual std::unique_ptr<PasswordCrossDomainConfirmationPopupController>
+  ShowCrossDomainConfirmationPopup(const gfx::RectF& element_bounds,
+                                   base::i18n::TextDirection text_direction,
+                                   const GURL& domain,
+                                   const std::u16string& password_origin,
+                                   base::OnceClosure confirmation_callback) = 0;
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+        // BUILDFLAG(IS_CHROMEOS)
 };
 
 }  // namespace password_manager

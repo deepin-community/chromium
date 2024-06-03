@@ -243,8 +243,7 @@ void BookmarkManagerPrivateEventRouter::DispatchEvent(
 
 void BookmarkManagerPrivateEventRouter::BookmarkModelChanged() {}
 
-void BookmarkManagerPrivateEventRouter::BookmarkModelBeingDeleted(
-    BookmarkModel* model) {
+void BookmarkManagerPrivateEventRouter::BookmarkModelBeingDeleted() {
   bookmark_model_ = nullptr;
 }
 
@@ -374,8 +373,9 @@ ExtensionFunction::ResponseValue ClipboardBookmarkManagerFunction::CopyOrCut(
     return Error(bookmark_keys::kModifyManagedError);
   if (cut && HasPermanentNodes(nodes))
     return Error(bookmark_keys::kModifySpecialError);
-  bookmarks::CopyToClipboard(
-      model, nodes, cut, bookmarks::metrics::BookmarkEditSource::kExtension);
+  bookmarks::CopyToClipboard(model, nodes, cut,
+                             bookmarks::metrics::BookmarkEditSource::kExtension,
+                             GetProfile()->IsOffTheRecord());
   return NoArguments();
 }
 

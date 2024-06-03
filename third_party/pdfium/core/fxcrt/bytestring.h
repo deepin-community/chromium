@@ -18,13 +18,13 @@
 #include <optional>
 #include <utility>
 
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_string_wrappers.h"
 #include "core/fxcrt/retain_ptr.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/string_data_template.h"
 #include "core/fxcrt/string_template.h"
 #include "core/fxcrt/string_view_template.h"
-#include "third_party/base/check.h"
 
 namespace fxcrt {
 
@@ -108,17 +108,10 @@ class ByteString : public StringTemplate<char> {
   void MakeLower();
   void MakeUpper();
 
-  void Trim();
-  void Trim(char target);
-  void Trim(ByteStringView targets);
-
-  void TrimLeft();
-  void TrimLeft(char target);
-  void TrimLeft(ByteStringView targets);
-
-  void TrimRight();
-  void TrimRight(char target);
-  void TrimRight(ByteStringView targets);
+  // Remove a canonical set of characters from the string.
+  void TrimWhitespace();
+  void TrimWhitespaceBack();
+  void TrimWhitespaceFront();
 
   uint32_t GetID() const { return AsStringView().GetID(); }
 

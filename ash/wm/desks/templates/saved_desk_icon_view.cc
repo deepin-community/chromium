@@ -91,7 +91,10 @@ gfx::Size SavedDeskIconView::CalculatePreferredSize() const {
   // is to have a minimum width.
   width += count_label_
                ? std::max(kIconViewSize,
-                          count_label_->CalculatePreferredSize().width())
+                          count_label_
+                              ->CalculatePreferredSize(
+                                  views::SizeBounds(count_label_->width(), {}))
+                              .width())
                : 0;
 
   return gfx::Size(width, kIconViewSize);
@@ -208,7 +211,8 @@ void SavedDeskRegularIconView::CreateChildViews(
 
   icon_view_->GetViewAccessibility().SetRole(ax::mojom::Role::kImage);
   if (!app_title.empty())
-    icon_view_->GetViewAccessibility().OverrideName(app_title);
+    icon_view_->GetViewAccessibility().SetName(app_title,
+                                               ax::mojom::NameFrom::kAttribute);
 
   // PWAs (e.g. Messages) should use icon identifier as they share the same app
   // id as Chrome and would return short name for app id as "Chromium" (see

@@ -61,6 +61,7 @@ void SetupChip(views::LabelButton* chip, bool first) {
   views::InstallRoundRectHighlightPathGenerator(chip, gfx::Insets(1),
                                                 kChipCornerRadius);
   chip->SetNotifyEnterExitOnChild(true);
+  chip->SetTooltipText(chip->GetText());
 }
 
 void SetupOverflowIcon(views::ImageButton* overflow_icon, bool left) {
@@ -97,7 +98,7 @@ FocusModeChipCarousel::FocusModeChipCarousel(
       views::ScrollView::ScrollBarMode::kHiddenButEnabled);
   scroll_view_->SetDrawOverflowIndicator(false);
   scroll_view_->SetPaintToLayer();
-  scroll_view_->SetBackgroundColor(absl::nullopt);
+  scroll_view_->SetBackgroundColor(std::nullopt);
 
   scroll_contents_ =
       scroll_view_->SetContents(std::make_unique<views::FlexLayoutView>());

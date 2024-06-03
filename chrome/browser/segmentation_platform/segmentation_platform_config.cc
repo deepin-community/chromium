@@ -5,8 +5,9 @@
 #include "chrome/browser/segmentation_platform/segmentation_platform_config.h"
 
 #include <memory>
+#include <string_view>
+#include <vector>
 
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
@@ -35,7 +36,6 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
-#include "chrome/browser/feature_guide/notifications/feature_notification_guide_service.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/segmentation_platform/default_model/chrome_start_model_android_v2.h"
 #include "components/commerce/core/commerce_feature_list.h"
@@ -190,7 +190,7 @@ std::vector<std::unique_ptr<Config>> GetSegmentationPlatformConfig(
     configs.emplace_back(GetConfigForDesktopNtpModule());
   }
 
-  base::EraseIf(configs, [](const auto& config) { return !config.get(); });
+  std::erase_if(configs, [](const auto& config) { return !config.get(); });
 
   AppendConfigsFromExperiments(configs);
   return configs;
@@ -225,8 +225,8 @@ void AppendConfigsFromExperiments(
 FieldTrialRegisterImpl::FieldTrialRegisterImpl() = default;
 FieldTrialRegisterImpl::~FieldTrialRegisterImpl() = default;
 
-void FieldTrialRegisterImpl::RegisterFieldTrial(base::StringPiece trial_name,
-                                                base::StringPiece group_name) {
+void FieldTrialRegisterImpl::RegisterFieldTrial(std::string_view trial_name,
+                                                std::string_view group_name) {
   // The register method is called early in startup once the platform is
   // initialized. So, in most cases the client will register the field trial
   // before uploading the first UMA log of the current session. We do not want
@@ -245,7 +245,7 @@ void FieldTrialRegisterImpl::RegisterFieldTrial(base::StringPiece trial_name,
 }
 
 void FieldTrialRegisterImpl::RegisterSubsegmentFieldTrialIfNeeded(
-    base::StringPiece trial_name,
+    std::string_view trial_name,
     SegmentId segment_id,
     int subsegment_rank) {
   std::optional<std::string> group_name;

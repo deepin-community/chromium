@@ -382,12 +382,6 @@ struct packetmath_boolean_mask_ops_notcomplex_test<
   }
 };
 
-// Packet16b representing bool does not support ptrue, pandnot or pcmp_eq, since
-// the scalar path (for some compilers) compute the bitwise and with 0x1 of the
-// results to keep the value in [0,1].
-template <>
-void packetmath_boolean_mask_ops<bool, internal::packet_traits<bool>::type>() {}
-
 template <typename Scalar, typename Packet, typename EnableIf = void>
 struct packetmath_minus_zero_add_test {
   static void run() {}
@@ -538,7 +532,7 @@ void packetmath() {
   CHECK_CWISE2_IF(PacketTraits::HasMul, REF_MUL, internal::pmul);
   CHECK_CWISE2_IF(PacketTraits::HasDiv, REF_DIV, internal::pdiv);
 
-  CHECK_CWISE1_IF(PacketTraits::HasNegate, internal::negate, internal::pnegate);
+  CHECK_CWISE1_IF(PacketTraits::HasNegate, test::negate, internal::pnegate);
   CHECK_CWISE1_IF(PacketTraits::HasReciprocal, REF_RECIPROCAL, internal::preciprocal);
   CHECK_CWISE1(numext::conj, internal::pconj);
   CHECK_CWISE1_IF(PacketTraits::HasSign, numext::sign, internal::psign);
@@ -662,11 +656,11 @@ void packetmath() {
   {
     for (int i = 0; i < PacketSize; ++i) {
       // "if" mask
-      unsigned char v = internal::random<bool>() ? 0xff : 0;
-      char* bytes = (char*)(data1 + i);
-      for (int k = 0; k < int(sizeof(Scalar)); ++k) {
-        bytes[k] = v;
-      }
+      // Note: it's UB to load 0xFF directly into a `bool`.
+      uint8_t v =
+          internal::random<bool>() ? (std::is_same<Scalar, bool>::value ? static_cast<uint8_t>(true) : 0xff) : 0;
+      // Avoid strict aliasing violation by using memset.
+      memset(static_cast<void*>(data1 + i), v, sizeof(Scalar));
       // "then" packet
       data1[i + PacketSize] = internal::random<Scalar>();
       // "else" packet
@@ -1141,7 +1135,7 @@ void packetmath_real() {
 
       data1[0] = -Scalar(0.);
       h.store(data2, internal::psin(h.load(data1)));
-      VERIFY(internal::biteq(data2[0], data1[0]));
+      VERIFY(test::biteq(data2[0], data1[0]));
       h.store(data2, internal::pcos(h.load(data1)));
       VERIFY_IS_EQUAL(data2[0], Scalar(1));
     }
@@ -1220,6 +1214,15 @@ void packetmath_notcomplex() {
   CHECK_CWISE2_IF(PacketTraits::HasMin, propagate_number_min, internal::pmin<PropagateNumbers>);
   CHECK_CWISE2_IF(PacketTraits::HasMax, propagate_number_max, internal::pmax<PropagateNumbers>);
   CHECK_CWISE1(numext::abs, internal::pabs);
+  // Vectorized versions may give a different result in the case of signed int overflow,
+  // which is undefined behavior (e.g. NEON).
+  // Also note that unsigned integers with size < sizeof(int) may be implicitly converted to a signed
+  // int, which can also trigger UB.
+  if (Eigen::NumTraits<Scalar>::IsInteger) {
+    for (int i = 0; i < 2 * PacketSize; ++i) {
+      data1[i] = data1[i] / Scalar(2);
+    }
+  }
   CHECK_CWISE2_IF(PacketTraits::HasAbsDiff, REF_ABS_DIFF, internal::pabsdiff);
 
   ref[0] = data1[0];

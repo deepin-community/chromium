@@ -29,6 +29,7 @@
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
 #include "components/autofill/core/browser/metrics/form_events/form_event_logger_base.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
+#include "components/autofill/core/browser/validation.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
@@ -46,9 +47,6 @@ namespace {
 
 // Exponential bucket spacing for UKM event data.
 constexpr double kAutofillEventDataBucketSpacing = 2.0;
-
-// Overflow bucket for form user interactions
-constexpr int64_t kFormUserInteractionsOverflowBucket = 20;
 
 using autofill_metrics::FormGroupFillingStats;
 
@@ -122,6 +120,7 @@ enum FieldTypeGroupForMetrics {
   GROUP_ADDRESS_HOME_STREET_LOCATION_AND_LOCALITY = 43,
   GROUP_ADDRESS_HOME_STREET_LOCATION_AND_LANDMARK = 44,
   GROUP_ADDRESS_HOME_DEPENDENT_LOCALITY_AND_LANDMARK = 45,
+  GROUP_ADDRESS_HOME_HOUSE_NUMBER_AND_APT = 46,
   // Note: if adding an enum value here, run
   // tools/metrics/histograms/update_autofill_enums.py
   NUM_FIELD_TYPE_GROUPS_FOR_METRICS
@@ -192,6 +191,9 @@ int GetFieldTypeGroupPredictionQualityMetric(
         case ADDRESS_HOME_APT_NUM:
         case ADDRESS_HOME_APT_TYPE:
           group = GROUP_ADDRESS_HOME_APT_NUM;
+          break;
+        case ADDRESS_HOME_HOUSE_NUMBER_AND_APT:
+          group = GROUP_ADDRESS_HOME_HOUSE_NUMBER_AND_APT;
           break;
         case ADDRESS_HOME_STREET_ADDRESS:
           group = GROUP_STREET_ADDRESS;
@@ -507,8 +509,9 @@ FieldType GetActualFieldType(const FieldTypeSet& possible_types,
 // only_fill_when_focused set to true.
 bool DuplicatedFilling(const FormStructure& form, const AutofillField& field) {
   for (const auto& form_field : form) {
-    if (field.value == form_field->value && form_field->is_autofilled)
+    if (field.value() == form_field->value() && form_field->is_autofilled) {
       return true;
+    }
   }
   return false;
 }
@@ -1187,45 +1190,31 @@ void AutofillMetrics::LogOverallPredictionQualityMetrics(
       true /*log_rationalization_metrics*/);
 }
 
-// static
-void AutofillMetrics::LogEditedAutofilledFieldAtSubmissionDeprecated(
-    FormInteractionsUkmLogger* form_interactions_ukm_logger,
-    const FormStructure& form,
+void AutofillMetrics::LogEmailFieldPredictionMetrics(
     const AutofillField& field) {
-  const std::string aggregate_histogram =
-      "Autofill.EditedAutofilledFieldAtSubmission.Aggregate";
-  const std::string type_specific_histogram =
-      "Autofill.EditedAutofilledFieldAtSubmission.ByFieldType";
-
-  AutofilledFieldUserEditingStatusMetric editing_metric =
-      field.previously_autofilled()
-          ? AutofilledFieldUserEditingStatusMetric::AUTOFILLED_FIELD_WAS_EDITED
-          : AutofilledFieldUserEditingStatusMetric::
-                AUTOFILLED_FIELD_WAS_NOT_EDITED;
-
-  // Record the aggregated UMA statistics.
-  base::UmaHistogramEnumeration(aggregate_histogram, editing_metric);
-
-  // Record the type specific UMA statistics.
-  base::UmaHistogramSparse(type_specific_histogram,
-                           GetFieldTypeUserEditStatusMetric(
-                               field.Type().GetStorableType(), editing_metric));
-
-  // Record the UMA statistics spliced by the autocomplete attribute value.
-  FormType form_type = FieldTypeGroupToFormType(field.Type().group());
-  if (form_type == FormType::kAddressForm ||
-      form_type == FormType::kCreditCardForm) {
-    bool autocomplete_off = field.autocomplete_attribute == "off";
-    const std::string autocomplete_histogram = base::StrCat(
-        {"Autofill.Autocomplete.", autocomplete_off ? "Off" : "NotOff",
-         ".EditedAutofilledFieldAtSubmission.",
-         form_type == FormType::kAddressForm ? "Address" : "CreditCard"});
-    base::UmaHistogramEnumeration(autocomplete_histogram, editing_metric);
+  // If the field has no value, there is no need to record any of the metrics.
+  if (field.value().empty()) {
+    return;
   }
 
-  // If the field was edited, record the event to UKM.
-  // TODO(crbug.com/1368096): Recording of this metric is stopped and moved to
-  // the LogEditedAutofilledFieldAtSubmission method.
+  bool is_valid_email = IsValidEmailAddress(field.value());
+  bool is_email_prediction = field.Type().GetStorableType() == EMAIL_ADDRESS;
+
+  if (is_email_prediction) {
+    EmailPredictionConfusionMatrix prediction_precision =
+        is_valid_email ? EmailPredictionConfusionMatrix::kTruePositive
+                       : EmailPredictionConfusionMatrix::kFalsePositive;
+    base::UmaHistogramEnumeration(
+        "Autofill.EmailPredictionCorrectness.Precision", prediction_precision);
+  }
+
+  if (is_valid_email) {
+    EmailPredictionConfusionMatrix prediction_recall =
+        is_email_prediction ? EmailPredictionConfusionMatrix::kTruePositive
+                            : EmailPredictionConfusionMatrix::kFalseNegative;
+    base::UmaHistogramEnumeration("Autofill.EmailPredictionCorrectness.Recall",
+                                  prediction_recall);
+  }
 }
 
 // static
@@ -1277,108 +1266,6 @@ void AutofillMetrics::LogServerQueryMetric(ServerQueryMetric metric) {
   DCHECK_LT(metric, NUM_SERVER_QUERY_METRICS);
   UMA_HISTOGRAM_ENUMERATION("Autofill.ServerQueryResponse", metric,
                             NUM_SERVER_QUERY_METRICS);
-}
-
-// static
-void AutofillMetrics::LogUserHappinessMetric(
-    UserHappinessMetric metric,
-    FieldTypeGroup field_type_group,
-    security_state::SecurityLevel security_level,
-    uint32_t profile_form_bitmask) {
-  LogUserHappinessMetric(metric, {FieldTypeGroupToFormType(field_type_group)},
-                         security_level, profile_form_bitmask);
-}
-
-// static
-void AutofillMetrics::LogUserHappinessMetric(
-    UserHappinessMetric metric,
-    const DenseSet<FormType>& form_types,
-    security_state::SecurityLevel security_level,
-    uint32_t profile_form_bitmask) {
-  DCHECK_LT(metric, NUM_USER_HAPPINESS_METRICS);
-  UMA_HISTOGRAM_ENUMERATION("Autofill.UserHappiness", metric,
-                            NUM_USER_HAPPINESS_METRICS);
-  if (base::Contains(form_types, FormType::kCreditCardForm)) {
-    UMA_HISTOGRAM_ENUMERATION("Autofill.UserHappiness.CreditCard", metric,
-                              NUM_USER_HAPPINESS_METRICS);
-    LogUserHappinessBySecurityLevel(metric, FormType::kCreditCardForm,
-                                    security_level);
-  }
-  if (base::Contains(form_types, FormType::kAddressForm)) {
-    UMA_HISTOGRAM_ENUMERATION("Autofill.UserHappiness.Address", metric,
-                              NUM_USER_HAPPINESS_METRICS);
-    if (metric != AutofillMetrics::FORMS_LOADED) {
-      LogUserHappinessByProfileFormType(metric, profile_form_bitmask);
-    }
-    LogUserHappinessBySecurityLevel(metric, FormType::kAddressForm,
-                                    security_level);
-  }
-  if (base::Contains(form_types, FormType::kPasswordForm)) {
-    UMA_HISTOGRAM_ENUMERATION("Autofill.UserHappiness.Password", metric,
-                              NUM_USER_HAPPINESS_METRICS);
-    LogUserHappinessBySecurityLevel(metric, FormType::kPasswordForm,
-                                    security_level);
-  }
-  if (base::Contains(form_types, FormType::kUnknownFormType)) {
-    UMA_HISTOGRAM_ENUMERATION("Autofill.UserHappiness.Unknown", metric,
-                              NUM_USER_HAPPINESS_METRICS);
-    LogUserHappinessBySecurityLevel(metric, FormType::kUnknownFormType,
-                                    security_level);
-  }
-}
-
-// static
-void AutofillMetrics::LogUserHappinessBySecurityLevel(
-    UserHappinessMetric metric,
-    FormType form_type,
-    security_state::SecurityLevel security_level) {
-  if (security_level == security_state::SecurityLevel::SECURITY_LEVEL_COUNT) {
-    return;
-  }
-
-  std::string histogram_name = "Autofill.UserHappiness.";
-  switch (form_type) {
-    case FormType::kCreditCardForm:
-      histogram_name += "CreditCard";
-      break;
-
-    case FormType::kAddressForm:
-      histogram_name += "Address";
-      break;
-
-    case FormType::kPasswordForm:
-      histogram_name += "Password";
-      break;
-
-    case FormType::kUnknownFormType:
-      histogram_name += "Unknown";
-      break;
-
-    default:
-      NOTREACHED();
-      return;
-  }
-
-  base::UmaHistogramEnumeration(security_state::GetSecurityLevelHistogramName(
-                                    histogram_name, security_level),
-                                metric, NUM_USER_HAPPINESS_METRICS);
-}
-
-// static
-void AutofillMetrics::LogUserHappinessByProfileFormType(
-    UserHappinessMetric metric,
-    uint32_t profile_form_bitmask) {
-  base::UmaHistogramEnumeration(
-      "Autofill.UserHappiness.Address" +
-          data_util::GetSuffixForProfileFormType(profile_form_bitmask),
-      metric, NUM_USER_HAPPINESS_METRICS);
-
-  if (data_util::ContainsAddress(profile_form_bitmask) &&
-      (data_util::ContainsPhone(profile_form_bitmask) ||
-       data_util::ContainsEmail(profile_form_bitmask)))
-    base::UmaHistogramEnumeration(
-        "Autofill.UserHappiness.Address.AddressPlusContact", metric,
-        NUM_USER_HAPPINESS_METRICS);
 }
 
 // static
@@ -1636,12 +1523,6 @@ void AutofillMetrics::LogNumberOfCreditCardsDeletedForDisuse(size_t num_cards) {
 }
 
 // static
-void AutofillMetrics::LogHiddenOrPresentationalSelectFieldsFilled() {
-  UMA_HISTOGRAM_BOOLEAN("Autofill.HiddenOrPresentationalSelectFieldsFilled",
-                        true);
-}
-
-// static
 void AutofillMetrics::LogNumberOfProfilesAtAutofillableFormSubmission(
     size_t num_profiles) {
   UMA_HISTOGRAM_COUNTS_1M(
@@ -1656,11 +1537,6 @@ void AutofillMetrics::LogNumberOfAddressesSuppressedForDisuse(
 }
 
 // static
-void AutofillMetrics::LogAddressSuggestionsCount(size_t num_suggestions) {
-  UMA_HISTOGRAM_COUNTS_1M("Autofill.AddressSuggestionsCount", num_suggestions);
-}
-
-// static
 void AutofillMetrics::LogAutofillPopupHidingReason(PopupHidingReason reason) {
   base::UmaHistogramEnumeration("Autofill.PopupHidingReason", reason);
 }
@@ -1668,21 +1544,6 @@ void AutofillMetrics::LogAutofillPopupHidingReason(PopupHidingReason reason) {
 // static
 void AutofillMetrics::LogAutofillFormCleared() {
   base::RecordAction(base::UserMetricsAction("Autofill_ClearedForm"));
-}
-
-// static
-void AutofillMetrics::LogNumberOfEditedAutofilledFields(
-    size_t num_edited_autofilled_fields,
-    bool observed_submission) {
-  if (observed_submission) {
-    UMA_HISTOGRAM_COUNTS_1000(
-        "Autofill.NumberOfEditedAutofilledFieldsAtSubmission",
-        num_edited_autofilled_fields);
-  } else {
-    UMA_HISTOGRAM_COUNTS_1000(
-        "Autofill.NumberOfEditedAutofilledFieldsAtSubmission.NoSubmission",
-        num_edited_autofilled_fields);
-  }
 }
 
 void AutofillMetrics::LogSectioningMetrics(
@@ -1700,54 +1561,6 @@ void AutofillMetrics::LogSectioningMetrics(
 // static
 void AutofillMetrics::LogServerResponseHasDataForForm(bool has_data) {
   UMA_HISTOGRAM_BOOLEAN("Autofill.ServerResponseHasDataForForm", has_data);
-}
-
-// static
-void AutofillMetrics::LogAutofillFormSubmittedState(
-    AutofillFormSubmittedState state,
-    bool is_for_credit_card,
-    bool has_upi_vpa_field,
-    const DenseSet<FormType>& form_types,
-    const base::TimeTicks& form_parsed_timestamp,
-    FormSignature form_signature,
-    AutofillMetrics::FormInteractionsUkmLogger* form_interactions_ukm_logger,
-    const FormInteractionCounts& form_interaction_counts) {
-  UMA_HISTOGRAM_ENUMERATION("Autofill.FormSubmittedState", state,
-                            AUTOFILL_FORM_SUBMITTED_STATE_ENUM_SIZE);
-
-  switch (state) {
-    case NON_FILLABLE_FORM_OR_NEW_DATA:
-      base::RecordAction(
-          base::UserMetricsAction("Autofill_FormSubmitted_NonFillable"));
-      break;
-
-    case FILLABLE_FORM_AUTOFILLED_ALL:
-      base::RecordAction(
-          base::UserMetricsAction("Autofill_FormSubmitted_FilledAll"));
-      break;
-
-    case FILLABLE_FORM_AUTOFILLED_SOME:
-      base::RecordAction(
-          base::UserMetricsAction("Autofill_FormSubmitted_FilledSome"));
-      break;
-
-    case FILLABLE_FORM_AUTOFILLED_NONE_DID_SHOW_SUGGESTIONS:
-      base::RecordAction(base::UserMetricsAction(
-          "Autofill_FormSubmitted_FilledNone_SuggestionsShown"));
-      break;
-
-    case FILLABLE_FORM_AUTOFILLED_NONE_DID_NOT_SHOW_SUGGESTIONS:
-      base::RecordAction(base::UserMetricsAction(
-          "Autofill_FormSubmitted_FilledNone_SuggestionsNotShown"));
-      break;
-
-    default:
-      NOTREACHED();
-      break;
-  }
-  form_interactions_ukm_logger->LogFormSubmitted(
-      is_for_credit_card, has_upi_vpa_field, form_types, state,
-      form_parsed_timestamp, form_signature, form_interaction_counts);
 }
 
 // static
@@ -2031,27 +1844,22 @@ void AutofillMetrics::LogAutocompleteDaysSinceLastUse(size_t days) {
 }
 
 // static
-void AutofillMetrics::LogAutocompleteSuggestionAcceptedIndex(int index) {
-  base::UmaHistogramSparse("Autofill.SuggestionAcceptedIndex.Autocomplete",
-                           std::min(index, kMaxBucketsCount));
-  AutofillMetrics::Log(AutocompleteEvent::AUTOCOMPLETE_SUGGESTION_SELECTED);
-}
-
-// static
 void AutofillMetrics::OnAutocompleteSuggestionsShown() {
-  AutofillMetrics::Log(AutocompleteEvent::AUTOCOMPLETE_SUGGESTIONS_SHOWN);
+  AutofillMetrics::LogAutocompleteEvent(
+      AutocompleteEvent::AUTOCOMPLETE_SUGGESTIONS_SHOWN);
 }
 
 // static
 void AutofillMetrics::OnAutocompleteSuggestionDeleted(
     SingleEntryRemovalMethod removal_method) {
-  AutofillMetrics::Log(AutocompleteEvent::AUTOCOMPLETE_SUGGESTION_DELETED);
+  AutofillMetrics::LogAutocompleteEvent(
+      AutocompleteEvent::AUTOCOMPLETE_SUGGESTION_DELETED);
   base::UmaHistogramEnumeration(
       "Autofill.Autocomplete.SingleEntryRemovalMethod", removal_method);
 }
 
 // static
-void AutofillMetrics::Log(AutocompleteEvent event) {
+void AutofillMetrics::LogAutocompleteEvent(AutocompleteEvent event) {
   DCHECK_LT(event, AutocompleteEvent::NUM_AUTOCOMPLETE_EVENTS);
   base::UmaHistogramEnumeration("Autocomplete.Events2", event,
                                 NUM_AUTOCOMPLETE_EVENTS);
@@ -2512,7 +2320,7 @@ void AutofillMetrics::FormInteractionsUkmLogger::
       .SetFieldSessionIdentifier(
           AutofillMetrics::FieldGlobalIdToHash64Bit(field.global_id()))
       .SetFieldSignature(HashFieldSignature(field.GetFieldSignature()))
-      .SetFormControlType2(base::to_underlying(field.form_control_type))
+      .SetFormControlType2(base::to_underlying(field.form_control_type()))
       .SetAutocompleteState(base::to_underlying(autocomplete_state))
       .SetFieldLogEventCount(field_log_events.size());
 
@@ -2793,39 +2601,6 @@ const char* AutofillMetrics::GetMetricsSyncStateSuffix(
   }
 }
 
-void AutofillMetrics::FormInteractionsUkmLogger::LogFormSubmitted(
-    bool is_for_credit_card,
-    bool has_upi_vpa_field,
-    const DenseSet<FormType>& form_types,
-    AutofillFormSubmittedState state,
-    const base::TimeTicks& form_parsed_timestamp,
-    FormSignature form_signature,
-    const FormInteractionCounts& form_interaction_counts) {
-  if (!CanLog())
-    return;
-
-  ukm::builders::Autofill_FormSubmitted builder(GetSourceId());
-  builder.SetAutofillFormSubmittedState(static_cast<int>(state))
-      .SetIsForCreditCard(is_for_credit_card)
-      .SetHasUpiVpaField(has_upi_vpa_field)
-      .SetFormTypes(FormTypesToBitVector(form_types))
-      .SetFormSignature(HashFormSignature(form_signature))
-      .SetFormElementUserModifications(
-          std::min(form_interaction_counts.form_element_user_modifications,
-                   kFormUserInteractionsOverflowBucket))
-      .SetAutofillFills(std::min(form_interaction_counts.autofill_fills,
-                                 kFormUserInteractionsOverflowBucket));
-  if (form_parsed_timestamp.is_null())
-    DCHECK(state == NON_FILLABLE_FORM_OR_NEW_DATA ||
-           state == FILLABLE_FORM_AUTOFILLED_NONE_DID_NOT_SHOW_SUGGESTIONS)
-        << state;
-  else
-    builder.SetMillisecondsSinceFormParsed(
-        MillisecondsSinceFormParsed(form_parsed_timestamp));
-
-  builder.Record(ukm_recorder_);
-}
-
 void AutofillMetrics::FormInteractionsUkmLogger::LogKeyMetrics(
     const DenseSet<FormType>& form_types,
     bool data_to_fill_available,
@@ -2931,42 +2706,6 @@ void AutofillMetrics::LogWebOTPPhoneCollectionMetricStateUkm(
   ukm::builders::WebOTPImpact builder(source_id);
   builder.SetPhoneCollection(phone_collection_metric_state);
   builder.Record(recorder);
-}
-
-// static
-void AutofillMetrics::LogNumberOfAutofilledFieldsAtSubmission(
-    size_t number_of_accepted_fields,
-    size_t number_of_corrected_fields) {
-  base::UmaHistogramExactLinear(
-      "Autofill.NumberOfAutofilledFieldsAtSubmission.Total",
-      number_of_accepted_fields + number_of_corrected_fields, 50);
-  base::UmaHistogramExactLinear(
-      "Autofill.NumberOfAutofilledFieldsAtSubmission.Accepted",
-      number_of_accepted_fields, 50);
-  base::UmaHistogramExactLinear(
-      "Autofill.NumberOfAutofilledFieldsAtSubmission.Corrected",
-      number_of_corrected_fields, 50);
-}
-
-// static
-void AutofillMetrics::
-    LogNumberOfAutofilledFieldsWithAutocompleteUnrecognizedAtSubmission(
-        size_t number_of_accepted_fields,
-        size_t number_of_corrected_fields) {
-  base::UmaHistogramExactLinear(
-      "Autofill."
-      "NumberOfAutofilledFieldsWithAutocompleteUnrecognizedAtSubmission.Total",
-      number_of_accepted_fields + number_of_corrected_fields, 50);
-  base::UmaHistogramExactLinear(
-      "Autofill."
-      "NumberOfAutofilledFieldsWithAutocompleteUnrecognizedAtSubmission."
-      "Accepted",
-      number_of_accepted_fields, 50);
-  base::UmaHistogramExactLinear(
-      "Autofill."
-      "NumberOfAutofilledFieldsWithAutocompleteUnrecognizedAtSubmission."
-      "Corrected",
-      number_of_corrected_fields, 50);
 }
 
 void AutofillMetrics::LogVerificationStatusOfNameTokensOnProfileUsage(
@@ -3088,26 +2827,6 @@ void AutofillMetrics::LogAutocompletePredictionCollisionTypes(
       FieldType::MAX_VALID_FIELD_TYPE);
 }
 
-// static
-void AutofillMetrics::LogContextMenuImpressionsForField(
-    FieldType field_type,
-    AutocompleteState autocomplete_state) {
-  base::UmaHistogramEnumeration(
-      "Autofill.FieldContextMenuImpressions.ByAutocomplete",
-      autocomplete_state);
-  base::UmaHistogramSparse(
-      "Autofill.FieldContextMenuImpressions.ByAutofillType", field_type);
-}
-
-// static
-void AutofillMetrics::LogContextMenuImpressionsForForm(
-    int num_of_fields_with_context_menu_shown) {
-  base::UmaHistogramSparse(
-      "Autofill.FormContextMenuImpressions.ByNumberOfFields",
-      base::ranges::clamp(num_of_fields_with_context_menu_shown, 0,
-                          kMaxBucketsCount));
-}
-
 const std::string PaymentsRpcResultToMetricsSuffix(
     AutofillClient::PaymentsRpcResult result) {
   std::string result_suffix;
@@ -3191,7 +2910,7 @@ void AutofillMetrics::LogDeleteAddressProfileFromPopup() {
 
 // static
 void AutofillMetrics::LogDeleteAddressProfileFromKeyboardAccessory() {
-  // Only the "confirmed" bucket is recorded here, as the cancelation can only
+  // Only the "confirmed" bucket is recorded here, as the cancellation can only
   // be recorded from Java.
   base::UmaHistogramBoolean("Autofill.ProfileDeleted.KeyboardAccessory",
                             /*delete_confirmed=*/true);

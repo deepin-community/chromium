@@ -9,7 +9,6 @@
 
 #include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
@@ -40,9 +39,10 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 #include <fcntl.h>
 #include <io.h>
-#include <windows.h>
 #endif
 
 namespace content {
@@ -354,7 +354,7 @@ void DevToolsAgentHostImpl::DetachInternal(DevToolsSession* session) {
   DCHECK_EQ(session, session_owned.get());
   // Make sure we dispose session prior to reporting it to the host.
   session->Dispose();
-  base::Erase(sessions_, session);
+  std::erase(sessions_, session);
   session_by_client_.erase(session->GetClient());
   DetachSession(session);
   DevToolsManager* manager = DevToolsManager::GetInstance();

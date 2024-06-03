@@ -16,6 +16,7 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/safe_browsing/core/common/proto/realtimeapi.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 
 namespace policy {
@@ -65,7 +66,7 @@ class EventReportValidator {
       const std::string& expected_profile_username,
       const std::string& expected_profile_identifier,
       const std::string& expected_scan_id,
-      const absl::optional<std::string>& expected_content_transfer_method);
+      const std::optional<std::string>& expected_content_transfer_method);
 
   void ExpectSensitiveDataEvents(
       const std::string& expected_url,
@@ -82,7 +83,7 @@ class EventReportValidator {
       const std::string& expected_profile_username,
       const std::string& expected_profile_identifier,
       const std::vector<std::string>& expected_scan_ids,
-      const absl::optional<std::string>& expected_content_transfer_method);
+      const std::optional<std::string>& expected_content_transfer_method);
 
   void ExpectDangerousDeepScanningResultAndSensitiveDataEvent(
       const std::string& expected_url,
@@ -100,7 +101,7 @@ class EventReportValidator {
       const std::string& expected_profile_username,
       const std::string& expected_profile_identifier,
       const std::string& expected_scan_id,
-      const absl::optional<std::string>& expected_content_transfer_method);
+      const std::optional<std::string>& expected_content_transfer_method);
 
   void ExpectSensitiveDataEventAndDangerousDeepScanningResult(
       const std::string& expected_url,
@@ -133,7 +134,7 @@ class EventReportValidator {
       const std::string& expected_result,
       const std::string& expected_profile_username,
       const std::string& expected_profile_identifier,
-      const absl::optional<std::string>& expected_content_transfer_method);
+      const std::optional<std::string>& expected_content_transfer_method);
 
   void ExpectUnscannedFileEvents(
       const std::string& expected_url,
@@ -149,7 +150,7 @@ class EventReportValidator {
       const std::string& expected_result,
       const std::string& expected_profile_username,
       const std::string& expected_profile_identifier,
-      const absl::optional<std::string>& expected_content_transfer_method);
+      const std::optional<std::string>& expected_content_transfer_method);
 
   void ExpectDangerousDownloadEvent(
       const std::string& expected_url,
@@ -178,6 +179,13 @@ class EventReportValidator {
       const std::string& expected_profile_username,
       const std::string& expected_profile_identifier);
 
+  void ExpectURLFilteringInterstitialEvent(
+      const std::string& expected_url,
+      const std::string& expected_event_result,
+      const std::string& expected_profile_username,
+      const std::string& expected_profile_identifier,
+      safe_browsing::RTLookupResponse expected_rt_lookup_response);
+
   void ExpectNoReport();
 
   // Closure to run once all expected events are validated.
@@ -193,6 +201,10 @@ class EventReportValidator {
   void ValidateDlpRule(
       const base::Value::Dict* value,
       const ContentAnalysisResponse::Result::TriggeredRule& expected_rule);
+  void ValidateRTLookupResponse(const base::Value::Dict* value);
+  void ValidateThreatInfo(
+      const base::Value::Dict* value,
+      const safe_browsing::RTLookupResponse::ThreatInfo& expected_threat_info);
   void ValidateFilenameMappedAttributes(const base::Value::Dict* value);
   void ValidateField(const base::Value::Dict* value,
                      const std::string& field_key,
@@ -217,8 +229,8 @@ class EventReportValidator {
   std::optional<std::string> trigger_ = std::nullopt;
   std::optional<std::string> threat_type_ = std::nullopt;
   std::optional<std::string> unscanned_reason_ = std::nullopt;
-  absl::optional<std::string> content_transfer_method_ = absl::nullopt;
-  absl::optional<int64_t> content_size_ = absl::nullopt;
+  std::optional<std::string> content_transfer_method_ = std::nullopt;
+  std::optional<int64_t> content_size_ = std::nullopt;
   raw_ptr<const std::set<std::string>> mimetypes_ = nullptr;
   std::string username_;
   std::string profile_identifier_;
@@ -227,6 +239,9 @@ class EventReportValidator {
   std::optional<std::u16string> login_user_name_ = std::nullopt;
   std::optional<std::vector<std::pair<std::string, std::u16string>>>
       password_breach_identities_ = std::nullopt;
+  std::optional<std::string> url_filtering_event_result_ = std::nullopt;
+  std::optional<safe_browsing::RTLookupResponse> rt_lookup_response_ =
+      std::nullopt;
 
   // When multiple files generate events, we don't necessarily know in which
   // order they will be reported. As such, we use maps to ensure all of them

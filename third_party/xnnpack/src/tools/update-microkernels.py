@@ -24,6 +24,7 @@ ISA_LIST = frozenset({
   'avx512vbmi',
   'avx512vnni',
   'avx512vnnigfni',
+  'avx512amx',
   'avxvnni',
   'f16c',
   'fma',
@@ -52,7 +53,6 @@ ISA_LIST = frozenset({
   'wasmpshufb',
   'wasmsdot',
   'wasmsimd',
-  'xop',
 })
 
 ISA_MAP = {
@@ -78,6 +78,7 @@ ISA_TO_HEADER_MAP = {
   'avx512vbmi': 'immintrin.h',
   'avx512vnni': 'immintrin.h',
   'avx512vnnigfni': 'immintrin.h',
+  'avx512amx': 'immintrin.h',
   'avxvnni': 'immintrin.h',
   'f16c': 'immintrin.h',
   'fma3': 'immintrin.h',
@@ -99,7 +100,6 @@ ISA_TO_HEADER_MAP = {
   'ssse3': 'immintrin.h',
   'wasmrelaxedsimd': 'wasm_simd128.h',
   'wasmsimd': 'wasm_simd128.h',
-  'xop': 'xopintrin.h',
 }
 
 MICROKERNEL_NAME_REGEX = re.compile(

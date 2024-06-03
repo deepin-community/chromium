@@ -4,11 +4,12 @@
 
 #include "chrome/browser/shell_integration_win.h"
 
+#include <objbase.h>
+
 #include <shobjidl.h>
 #include <windows.h>
 
-#include <objbase.h>
-#include <propkey.h>  // Needs to come after shobjidl.h.
+#include <propkey.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <wrl/client.h>
@@ -360,7 +361,12 @@ class OpenSystemSettingsHelper {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     // Make sure all the registry watchers have fired.
     if (--registry_watcher_count_ == 0) {
-      ConcludeInteraction();
+      // Give the ui automation events time to get processed, before finishing
+      // the system settings interaction.
+      timer_.Start(
+          FROM_HERE, base::Seconds(5),
+          base::BindOnce(&OpenSystemSettingsHelper::ConcludeInteraction,
+                         weak_ptr_factory_.GetWeakPtr()));
     }
   }
 

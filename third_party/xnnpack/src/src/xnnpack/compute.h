@@ -215,6 +215,9 @@ struct packw_gemm_goi_context {
   // Stride, in bytes, between each group of packed weights.
   size_t gc_stride;
 
+  // Packing params passed to the packing microkernel.
+  const void *params;
+
   // Microkernel to preform packing.
   xnn_packw_gemm_goi_ukernel_fn packw_gemm_goi;
 };
@@ -308,6 +311,16 @@ struct gemm_context {
   size_t gc_stride;
   // Size, in bytes, of each element of C.
   uint32_t log2_csize;
+  // Number of batch dimensions in A, B, and C.
+  uint32_t num_batch_dims;
+  // Batch dimensions of the input A.
+  size_t batch_dims_a[XNN_MAX_TENSOR_DIMS];
+  // Batch dimensions of the input B.
+  size_t batch_dims_b[XNN_MAX_TENSOR_DIMS];
+  // Strides of each batch dimension of the output C.
+  size_t batch_strides_c[XNN_MAX_TENSOR_DIMS];
+  // The `mr` size of the current GEMM microkernel.
+  size_t mr;
   // GEMM microkernels.
   union {
     struct xnn_hmp_gemm_ukernel ukernel;
@@ -315,6 +328,8 @@ struct gemm_context {
   };
   // Parameters for dynamically quantized inputs.
   const struct xnn_qd8_quantization_params* quantization_params;
+  // Stride between each group of quantization params.
+  size_t gq_stride;
   // Parameters for fused GEMM.
   void* fused_params;
   // Parameters for fused activations.

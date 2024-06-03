@@ -799,7 +799,7 @@ bool ExtensionTabUtil::GetTabById(int tab_id,
           return;
         }
 
-        // TODO(https://crbug.com/1350676): tab_strip and tab_index are tied to
+        // TODO(crbug.com/40234240): tab_strip and tab_index are tied to
         // a specific window, and related APIs return WINDOW_ID_NONE for
         // prerendering-into-a-new-tab tabs as a tentaive solution. So these
         // values are set to be invalid here.
@@ -1148,11 +1148,6 @@ TabStripModel* ExtensionTabUtil::GetEditableTabStripModel(Browser* browser) {
 // static
 bool ExtensionTabUtil::TabIsInSavedTabGroup(content::WebContents* contents,
                                             TabStripModel* tab_strip_model) {
-  // If the feature is turned off, then the tab is not in a saved group.
-  if (!base::FeatureList::IsEnabled(features::kTabGroupsSave)) {
-    return false;
-  }
-
   // If the tab_strip_model is empty, find the contents in one of the browsers.
   if (!tab_strip_model) {
     CHECK(contents);
@@ -1165,8 +1160,9 @@ bool ExtensionTabUtil::TabIsInSavedTabGroup(content::WebContents* contents,
     tab_strip_model = browser->tab_strip_model();
   }
 
-  SavedTabGroupKeyedService* saved_tab_group_service =
-      SavedTabGroupServiceFactory::GetForProfile(tab_strip_model->profile());
+  tab_groups::SavedTabGroupKeyedService* saved_tab_group_service =
+      tab_groups::SavedTabGroupServiceFactory::GetForProfile(
+          tab_strip_model->profile());
 
   // If the service failed to start, then there are no saved tab groups.
   if (!saved_tab_group_service) {

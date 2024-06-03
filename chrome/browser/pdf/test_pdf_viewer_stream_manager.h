@@ -7,6 +7,7 @@
 
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/pdf/pdf_viewer_stream_manager.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -42,12 +43,21 @@ class TestPdfViewerStreamManager : public PdfViewerStreamManager {
   [[nodiscard]] testing::AssertionResult WaitUntilPdfLoaded(
       content::RenderFrameHost* embedder_host);
 
+  // Same as `WaitUntilPdfLoaded()`, but allows additional subframes under the
+  // PDF embedder host. There are some special cases where the PDF embedder may
+  // have additional subframes. See crbug.com/40671023.
+  [[nodiscard]] testing::AssertionResult WaitUntilPdfLoadedAllowMultipleFrames(
+      content::RenderFrameHost* embedder_host);
+
   // Same as `WaitUntilPdfLoaded()`, but the first child of the primary main
   // frame should be the embedder. This is a common case where an HTML page only
   // embeds a single PDF.
   [[nodiscard]] testing::AssertionResult WaitUntilPdfLoadedInFirstChild();
 
  private:
+  // Waits for all PDF frames in a single PDF load to finish navigating.
+  void WaitUntilPdfNavigationFinished(content::RenderFrameHost* embedder_host);
+
   base::OnceClosure on_pdf_loaded_;
 };
 
@@ -82,7 +92,7 @@ class TestPdfViewerStreamManagerFactory
  private:
   // Tracks managers this factory has created. It's safe to track raw pointers,
   // since the pointers are only for comparison and aren't dereferenced.
-  base::flat_set<PdfViewerStreamManager*> managers_;
+  base::flat_set<raw_ptr<PdfViewerStreamManager, CtnExperimental>> managers_;
 };
 
 }  // namespace pdf

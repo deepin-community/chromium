@@ -14,6 +14,7 @@
 #include "ash/public/cpp/window_properties.h"
 #include "ash/quick_pair/keyed_service/quick_pair_mediator.h"
 #include "ash/shell.h"
+#include "ash/system/mahi/fake_mahi_manager.h"
 #include "ash/system/video_conference/fake_video_conference_tray_controller.h"
 #include "ash/system/video_conference/video_conference_tray_controller.h"
 #include "base/check.h"
@@ -25,8 +26,6 @@
 #include "chrome/browser/ash/app_list/app_list_client_impl.h"
 #include "chrome/browser/ash/arc/util/arc_window_watcher.h"
 #include "chrome/browser/ash/crosapi/browser_util.h"
-#include "chrome/browser/ash/display/refresh_rate_controller.h"
-#include "chrome/browser/ash/game_mode/game_mode_controller.h"
 #include "chrome/browser/ash/geolocation/system_geolocation_source.h"
 #include "chrome/browser/ash/growth/campaigns_manager_client_impl.h"
 #include "chrome/browser/ash/growth/campaigns_manager_session.h"
@@ -81,12 +80,15 @@
 #include "chrome/browser/ui/views/select_file_dialog_extension_factory.h"
 #include "chrome/browser/ui/views/tabs/tab_scrubber_chromeos.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
+#include "chromeos/ash/components/display/refresh_rate_controller.h"
+#include "chromeos/ash/components/game_mode/game_mode_controller.h"
 #include "chromeos/ash/components/geolocation/simple_geolocation_provider.h"
 #include "chromeos/ash/components/heatmap/heatmap_palm_detector_impl.h"
 #include "chromeos/ash/components/network/network_connect.h"
 #include "chromeos/ash/components/network/portal_detector/network_portal_detector.h"
 #include "chromeos/ash/services/bluetooth_config/fast_pair_delegate.h"
 #include "chromeos/ash/services/bluetooth_config/in_process_instance.h"
+#include "chromeos/components/mahi/public/cpp/mahi_switches.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/core/session_manager_observer.h"
@@ -94,7 +96,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
-#include "services/device/public/cpp/geolocation/geolocation_manager.h"
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/events/ozone/evdev/heatmap_palm_detector.h"
@@ -205,11 +207,17 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
     }
   }
 
-  if (chromeos::features::IsMahiEnabled()) {
-    mahi_manager_impl_ = std::make_unique<ash::MahiManagerImpl>();
-  }
-
   ash_shell_init_ = std::make_unique<AshShellInit>();
+  ash::Shell::Get()
+      ->login_unlock_throughput_recorder()
+      ->post_login_deferred_task_runner()
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(
+                     &session_manager::SessionManager::
+                         HandleUserSessionStartUpTaskCompleted,
+                     // Safe because SessionManager singleton will be destroyed
+                     // after message loops stops.
+                     base::Unretained(session_manager::SessionManager::Get())));
 
   screen_orientation_delegate_ =
       std::make_unique<ScreenOrientationDelegateChromeos>();
@@ -315,12 +323,16 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
 
   ash::bluetooth_config::Initialize(delegate);
 
-  // Create geolocation manager
-  device::GeolocationManager::SetInstance(
-      ash::SystemGeolocationSource::CreateGeolocationManagerOnAsh());
+  // Create GeolocationSystemPermissionManager.
+  device::GeolocationSystemPermissionManager::SetInstance(
+      ash::SystemGeolocationSource::
+          CreateGeolocationSystemPermissionManagerOnAsh());
 
   ui::HeatmapPalmDetector::SetInstance(
       std::make_unique<ash::HeatmapPalmDetectorImpl>());
+
+  read_write_cards_manager_ =
+      std::make_unique<chromeos::ReadWriteCardsManagerImpl>();
 }
 
 void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
@@ -376,17 +388,24 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
   game_mode_controller_ = std::make_unique<game_mode::GameModeController>();
   refresh_rate_controller_ = std::make_unique<ash::RefreshRateController>(
       ash::Shell::Get()->display_configurator(), ash::PowerStatus::Get(),
-      game_mode_controller_.get(), force_throttle);
+      game_mode_controller_.get(),
+      ash::Shell::Get()->display_performance_mode_controller(), force_throttle);
 
   // Initialize TabScrubberChromeOS after the Ash Shell has been initialized.
   TabScrubberChromeOS::GetInstance();
-
-  read_write_cards_manager_ =
-      std::make_unique<chromeos::ReadWriteCardsManagerImpl>();
 }
 
 void ChromeBrowserMainExtraPartsAsh::PostBrowserStart() {
   mobile_data_notifications_ = std::make_unique<MobileDataNotifications>();
+
+  if (chromeos::features::IsMahiEnabled()) {
+    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+            chromeos::switches::kUseFakeMahiManager)) {
+      mahi_manager_ = std::make_unique<ash::FakeMahiManager>();
+    } else {
+      mahi_manager_ = std::make_unique<ash::MahiManagerImpl>();
+    }
+  }
 
   did_post_browser_start_ = true;
   if (post_browser_start_callback_) {
@@ -408,6 +427,7 @@ void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
   exo_parts_.reset();
 #endif
 
+  mahi_manager_.reset();
   mobile_data_notifications_.reset();
   chrome_shelf_controller_initializer_.reset();
   attestation_cleanup_manager_.reset();
@@ -440,7 +460,7 @@ void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
   app_access_notifier_.reset();
 
   // Initialized in PreProfileInit (which may not get called in some tests).
-  device::GeolocationManager::SetInstance(nullptr);
+  device::GeolocationSystemPermissionManager::SetInstance(nullptr);
   system_tray_client_.reset();
   session_controller_client_.reset();
   ime_controller_client_.reset();
@@ -452,8 +472,6 @@ void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
   // needs to be released before destroying the profile.
   app_list_client_.reset();
   ash_shell_init_.reset();
-
-  mahi_manager_impl_.reset();
 
   // These instances must be destructed after `ash_shell_init_`.
   video_conference_tray_controller_.reset();

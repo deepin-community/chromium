@@ -183,7 +183,9 @@ rtc_library("candidate") {
     "candidate.h",
   ]
   deps = [
+    "../p2p:p2p_constants",
     "../rtc_base:checks",
+    "../rtc_base:crc32",
     "../rtc_base:ip_address",
     "../rtc_base:logging",
     "../rtc_base:network_constants",
@@ -333,6 +335,7 @@ rtc_library("libjingle_peerconnection_api") {
     ":sequence_checker",
     ":turn_customizer",
     "../call:rtp_interfaces",
+    "../media:media_engine",
     "../p2p:connection",
     "../p2p:port_allocator",
     "../p2p:rtc_p2p",
@@ -371,7 +374,6 @@ rtc_library("libjingle_peerconnection_api") {
     # Basically, don't add stuff here. You might break sensitive downstream
     # targets like pnacl. API should not depend on anything outside of this
     # file, really. All these should arguably go away in time.
-    "../media:rtc_media_base",
     "../media:rtc_media_config",
     "../modules/audio_processing:audio_processing_statistics",
     "../rtc_base:checks",
@@ -583,7 +585,6 @@ rtc_source_set("peer_connection_quality_test_fixture_api") {
     ":track_id_stream_info_map",
     ":video_quality_analyzer_api",
     "../media:media_constants",
-    "../media:rtc_media_base",
     "../modules/audio_processing:api",
     "../rtc_base:checks",
     "../rtc_base:network",
@@ -726,8 +727,14 @@ rtc_library("create_frame_generator") {
     "../rtc_base:checks",
     "../system_wrappers",
     "../test:frame_generator_impl",
+    "environment",
+    "environment:environment_factory",
   ]
-  absl_deps = [ "//third_party/abseil-cpp/absl/types:optional" ]
+  absl_deps = [
+    "//third_party/abseil-cpp/absl/base:nullability",
+    "//third_party/abseil-cpp/absl/strings:string_view",
+    "//third_party/abseil-cpp/absl/types:optional",
+  ]
 }
 
 rtc_library("create_peer_connection_quality_test_frame_generator") {
@@ -955,6 +962,7 @@ rtc_library("neteq_simulator_api") {
     "test/neteq_simulator.cc",
     "test/neteq_simulator.h",
   ]
+  deps = [ "neteq:neteq_api" ]
 }
 
 rtc_source_set("function_view") {
@@ -1466,7 +1474,6 @@ if (rtc_include_tests) {
       "../rtc_base:gunit_helpers",
       "../rtc_base:platform_thread",
       "../rtc_base:rtc_event",
-      "../rtc_base:rtc_task_queue",
       "../rtc_base:ssl",
       "../rtc_base:task_queue_for_test",
       "../rtc_base/containers:flat_set",

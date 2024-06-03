@@ -25,6 +25,7 @@
 #include "third_party/blink/renderer/core/layout/svg/svg_layout_support.h"
 
 #include "third_party/blink/renderer/core/layout/geometry/transform_state.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_clipper.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_masker.h"
@@ -32,6 +33,7 @@
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_transformable_container.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_viewport_container.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_resources.h"
+#include "third_party/blink/renderer/core/paint/css_mask_painter.h"
 #include "third_party/blink/renderer/core/paint/outline_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
@@ -282,9 +284,9 @@ void SVGLayoutSupport::AdjustWithClipPathAndMask(
   if (LayoutSVGResourceClipper* clipper =
           GetSVGResourceAsType(*client, style.ClipPath()))
     visual_rect.Intersect(clipper->ResourceBoundingBox(object_bounding_box));
-  if (auto* masker = GetSVGResourceAsType<LayoutSVGResourceMasker>(
-          *client, style.MaskerResource())) {
-    visual_rect.Intersect(masker->ResourceBoundingBox(object_bounding_box, 1));
+  if (auto mask_bbox =
+          CSSMaskPainter::MaskBoundingBox(layout_object, PhysicalOffset())) {
+    visual_rect.Intersect(*mask_bbox);
   }
 }
 
@@ -362,7 +364,7 @@ bool SVGLayoutSupport::IsLayoutableTextNode(const LayoutObject* object) {
 
 bool SVGLayoutSupport::WillIsolateBlendingDescendantsForStyle(
     const ComputedStyle& style) {
-  return style.HasGroupingProperty(style.BoxReflect()) || style.HasMaskForSVG();
+  return style.HasGroupingProperty(style.BoxReflect()) || style.HasMask();
 }
 
 bool SVGLayoutSupport::WillIsolateBlendingDescendantsForObject(
@@ -375,7 +377,7 @@ bool SVGLayoutSupport::WillIsolateBlendingDescendantsForObject(
 }
 
 bool SVGLayoutSupport::IsIsolationRequired(const LayoutObject* object) {
-  if (object->StyleRef().HasMaskForSVG()) {
+  if (object->StyleRef().HasMask()) {
     return true;
   }
   return WillIsolateBlendingDescendantsForObject(object) &&

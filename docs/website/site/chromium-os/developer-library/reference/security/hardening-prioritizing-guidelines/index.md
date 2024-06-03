@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/reference
-  - Chromium OS > Developer Library > Reference
+  - ChromiumOS > Developer Library > Reference
 page_name: hardening-prioritizing-guidelines
 title: Prioritizing security hardening bugs
 ---
@@ -55,4 +55,4 @@ maintain it
 Using these factors you can approximate: priority = severity \* risk \*
 generality \* 1/cost (weighed with appropriate factors).
 
-[Security Severity Guidelines]: https://chromium.googlesource.com/chromiumos/docs/+/HEAD/security_severity_guidelines.md
+[Security Severity Guidelines]: https://www.chromium.org/chromium-os/developer-library/guides/bugs/security-severity-guidelines/

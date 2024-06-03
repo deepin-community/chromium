@@ -14,6 +14,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/arc/arc_util.h"
+#include "chrome/browser/ash/child_accounts/on_device_controls/app_controls_service_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_pref_names.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
@@ -23,6 +24,7 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/system_preferences/startup_section.h"
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/browser/ui/webui/webui_util.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/os_settings_resources.h"
@@ -42,6 +44,7 @@ using ::chromeos::settings::mojom::kAppDetailsSubpagePath;
 using ::chromeos::settings::mojom::kAppManagementSubpagePath;
 using ::chromeos::settings::mojom::kAppNotificationsManagerSubpagePath;
 using ::chromeos::settings::mojom::kAppNotificationsSubpagePath;
+using ::chromeos::settings::mojom::kAppParentalControlsSubpagePath;
 using ::chromeos::settings::mojom::kAppsSectionPath;
 using ::chromeos::settings::mojom::kArcVmUsbPreferencesSubpagePath;
 using ::chromeos::settings::mojom::kGooglePlayStoreSubpagePath;
@@ -304,8 +307,6 @@ void AddAppManagementStrings(content::WebUIDataSource* html_source) {
       {"appManagementIntentSettingsTitle",
        IDS_APP_MANAGEMENT_INTENT_SETTINGS_TITLE},
       {"appManagementIntentSharingOpenAppLabel",
-       IDS_APP_MANAGEMENT_INTENT_SHARING_APP_OPEN},
-      {"appManagementIntentSharingOpenAppLabel",
        kIsRevampEnabled ? IDS_OS_SETTINGS_REVAMP_OPEN_IN_APP_TITLE
                         : IDS_APP_MANAGEMENT_INTENT_SHARING_APP_OPEN},
       {"appManagementIntentSharingOpenBrowserLabel",
@@ -455,7 +456,7 @@ AppsSection::AppsSection(Profile* profile,
     UpdateAndroidSearchTags();
   }
 
-  if (content::IsolatedWebAppsPolicy::AreIsolatedWebAppsEnabled(profile)) {
+  if (web_app::IsIwaUnmanagedInstallEnabled(profile)) {
     updater.AddSearchTags(GetManageIsolatedWebAppsSearchConcepts());
     updater.AddSearchTags(GetTurnOnIsolatedWebAppsSearchConcepts());
   }
@@ -513,6 +514,9 @@ void AppsSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       {"enableIsolatedWebAppsToggleLabel",
        IDS_SETTINGS_ENABLE_ISOLATED_WEB_APPS_LABEL},
       {"appManagementAppLanguageLabel", IDS_APP_MANAGEMENT_APP_LANGUAGE_LABEL},
+      {"appParentalControlsTitle", IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_LABEL},
+      {"appParentalControlsSubtitle",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_SUBLABEL},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
@@ -539,20 +543,21 @@ void AppsSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
   html_source->AddBoolean(
       "showOsSettingsAppNotificationsRow",
       base::FeatureList::IsEnabled(features::kOsSettingsAppNotificationsPage));
-  html_source->AddBoolean(
-      "showOsSettingsAppBadgingToggle",
-      base::FeatureList::IsEnabled(features::kOsSettingsAppBadgingToggle));
   html_source->AddBoolean("isArcVmEnabled", arc::IsArcVmEnabled());
 
-  // TODO(crbug.com/1481737): Double check that this is the correct feature
-  // check.
-  html_source->AddBoolean(
-      "showManageIsolatedWebAppsRow",
-      content::IsolatedWebAppsPolicy::AreIsolatedWebAppsEnabled(profile()));
+  html_source->AddBoolean("showManageIsolatedWebAppsRow",
+                          web_app::IsIwaUnmanagedInstallEnabled(profile()));
   html_source->AddString(
       "isolatedWebAppsDescription",
       l10n_util::GetStringFUTF16(IDS_SETTINGS_ISOLATED_WEB_APPS_DESCRIPTION,
                                  chrome::kIsolatedWebAppsLearnMoreUrl));
+
+  html_source->AddBoolean("privacyHubAppPermissionsV2Enabled",
+                          features::IsCrosPrivacyHubAppPermissionsV2Enabled());
+
+  html_source->AddBoolean("isAppParentalControlsFeatureAvailable",
+                          on_device_controls::AppControlsServiceFactory::
+                              IsOnDeviceAppControlsAvailable(profile()));
 
   AddAppManagementStrings(html_source);
   AddGuestOsStrings(html_source);
@@ -691,6 +696,13 @@ void AppsSection::RegisterHierarchy(HierarchyGenerator* generator) const {
       mojom::SearchResultIcon::kGooglePlay,
       mojom::SearchResultDefaultRank::kMedium,
       mojom::kArcVmUsbPreferencesSubpagePath);
+
+  // On-device parental controls for apps
+  generator->RegisterTopLevelSubpage(
+      IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_LABEL,
+      mojom::Subpage::kAppParentalControls, mojom::SearchResultIcon::kAppsGrid,
+      mojom::SearchResultDefaultRank::kMedium,
+      mojom::kAppParentalControlsSubpagePath);
 
   // Startup subsection exists only when OsSettingsRevampWayfinding is disabled.
   if (startup_subsection_) {
@@ -837,9 +849,7 @@ void AppsSection::OnQuietModeChanged(bool in_quiet_mode) {
   if (kIsRevampEnabled) {
     updater.AddSearchTags(GetAppNotificationsManagerSearchConcepts());
   }
-  if (features::IsOsSettingsAppBadgingToggleEnabled()) {
-    updater.AddSearchTags(GetAppBadgingSearchConcepts());
-  }
+  updater.AddSearchTags(GetAppBadgingSearchConcepts());
 
   if (!MessageCenterAsh::Get()->IsQuietMode()) {
     updater.AddSearchTags(GetTurnOnAppNotificationSearchConcepts());

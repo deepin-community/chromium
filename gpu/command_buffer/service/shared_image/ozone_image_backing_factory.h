@@ -6,6 +6,7 @@
 #define GPU_COMMAND_BUFFER_SERVICE_SHARED_IMAGE_OZONE_IMAGE_BACKING_FACTORY_H_
 
 #include <optional>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
@@ -23,8 +24,9 @@ class SharedContextState;
 class GPU_GLES2_EXPORT OzoneImageBackingFactory
     : public SharedImageBackingFactory {
  public:
-  explicit OzoneImageBackingFactory(SharedContextState* shared_context_state,
-                                    const GpuDriverBugWorkarounds& workarounds);
+  explicit OzoneImageBackingFactory(
+      scoped_refptr<SharedContextState> shared_context_state,
+      const GpuDriverBugWorkarounds& workarounds);
 
   ~OzoneImageBackingFactory() override;
 
@@ -50,6 +52,7 @@ class GPU_GLES2_EXPORT OzoneImageBackingFactory
       SkAlphaType alpha_type,
       uint32_t usage,
       std::string debug_label,
+      bool is_thread_safe,
       base::span<const uint8_t> pixel_data) override;
 
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
@@ -96,13 +99,15 @@ class GPU_GLES2_EXPORT OzoneImageBackingFactory
                    GrContextType gr_context_type,
                    base::span<const uint8_t> pixel_data) override;
 
+  SharedImageBackingType GetBackingType() override;
+
  private:
   bool CanImportNativePixmapToVulkan();
   bool CanVulkanSynchronizeGpuFence();
   bool CanImportNativePixmapToWebGPU();
   bool CanWebGPUSynchronizeGpuFence();
 
-  const raw_ptr<SharedContextState> shared_context_state_;
+  const scoped_refptr<SharedContextState> shared_context_state_;
   const GpuDriverBugWorkarounds workarounds_;
 
   // This method optionally takes BufferUsage as a parameter.

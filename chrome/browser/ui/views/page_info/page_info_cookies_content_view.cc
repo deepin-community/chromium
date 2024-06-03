@@ -11,7 +11,6 @@
 #include "components/content_settings/browser/ui/cookie_controls_util.h"
 #include "components/content_settings/core/common/cookie_blocking_3pcd_status.h"
 #include "components/content_settings/core/common/cookie_controls_enforcement.h"
-#include "components/content_settings/core/common/cookie_controls_status.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/strings/grit/components_strings.h"
@@ -283,8 +282,10 @@ void PageInfoCookiesContentView::SetThirdPartyCookiesInfo(
   // Set the preferred width of the label wrapper to the title width. It ensures
   // that the title isn't truncated and it prevents the container expanding to
   // try to fit the description (which should be wrapped).
-  const int title_width =
-      third_party_cookies_title_->GetPreferredSize().width();
+  const int title_width = third_party_cookies_title_
+                              ->GetPreferredSize(views::SizeBounds(
+                                  third_party_cookies_title_->width(), {}))
+                              .width();
   third_party_cookies_label_wrapper_->SetPreferredSize(gfx::Size(
       title_width,
       third_party_cookies_label_wrapper_->GetHeightForWidth(title_width)));

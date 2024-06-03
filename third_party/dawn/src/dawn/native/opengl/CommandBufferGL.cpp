@@ -260,6 +260,20 @@ class BindGroupTracker : public BindGroupTrackerBase<false, uint64_t> {
     }
 
   private:
+    void BindSamplerAtIndex(const OpenGLFunctions& gl, SamplerBase* s, GLuint samplerIndex) {
+        Sampler* sampler = ToBackend(s);
+
+        for (PipelineGL::SamplerUnit unit : mPipeline->GetTextureUnitsForSampler(samplerIndex)) {
+            // Only use filtering for certain texture units, because int
+            // and uint texture are only complete without filtering
+            if (unit.shouldUseFiltering) {
+                gl.BindSampler(unit.unit, sampler->GetFilteringHandle());
+            } else {
+                gl.BindSampler(unit.unit, sampler->GetNonFilteringHandle());
+            }
+        }
+    }
+
     void ApplyBindGroup(const OpenGLFunctions& gl,
                         BindGroupIndex groupIndex,
                         BindGroupBase* group,
@@ -270,7 +284,7 @@ class BindGroupTracker : public BindGroupTrackerBase<false, uint64_t> {
              ++bindingIndex) {
             const BindingInfo& bindingInfo = group->GetLayout()->GetBindingInfo(bindingIndex);
 
-            if (std::holds_alternative<TextureBindingLayout>(bindingInfo.bindingLayout)) {
+            if (std::holds_alternative<TextureBindingInfo>(bindingInfo.bindingLayout)) {
                 TextureView* view = ToBackend(group->GetBindingAsTextureView(bindingIndex));
                 view->CopyIfNeeded();
             }
@@ -281,7 +295,7 @@ class BindGroupTracker : public BindGroupTrackerBase<false, uint64_t> {
             const BindingInfo& bindingInfo = group->GetLayout()->GetBindingInfo(bindingIndex);
             MatchVariant(
                 bindingInfo.bindingLayout,
-                [&](const BufferBindingLayout& layout) {
+                [&](const BufferBindingInfo& layout) {
                     BufferBinding binding = group->GetBindingAsBufferBinding(bindingIndex);
                     GLuint buffer = ToBackend(binding.buffer)->GetHandle();
                     GLuint index = indices[bindingIndex];
@@ -308,22 +322,14 @@ class BindGroupTracker : public BindGroupTrackerBase<false, uint64_t> {
 
                     gl.BindBufferRange(target, index, buffer, offset, binding.size);
                 },
-                [&](const SamplerBindingLayout&) {
-                    Sampler* sampler = ToBackend(group->GetBindingAsSampler(bindingIndex));
-                    GLuint samplerIndex = indices[bindingIndex];
-
-                    for (PipelineGL::SamplerUnit unit :
-                         mPipeline->GetTextureUnitsForSampler(samplerIndex)) {
-                        // Only use filtering for certain texture units, because int
-                        // and uint texture are only complete without filtering
-                        if (unit.shouldUseFiltering) {
-                            gl.BindSampler(unit.unit, sampler->GetFilteringHandle());
-                        } else {
-                            gl.BindSampler(unit.unit, sampler->GetNonFilteringHandle());
-                        }
-                    }
+                [&](const StaticSamplerHolderBindingLayout& layout) {
+                    BindSamplerAtIndex(gl, layout.sampler.Get(), indices[bindingIndex]);
                 },
-                [&](const TextureBindingLayout&) {
+                [&](const SamplerBindingLayout&) {
+                    BindSamplerAtIndex(gl, group->GetBindingAsSampler(bindingIndex),
+                                       indices[bindingIndex]);
+                },
+                [&](const TextureBindingInfo&) {
                     TextureView* view = ToBackend(group->GetBindingAsTextureView(bindingIndex));
                     GLuint handle = view->GetHandle();
                     GLenum target = view->GetGLTarget();
@@ -363,7 +369,7 @@ class BindGroupTracker : public BindGroupTrackerBase<false, uint64_t> {
                     // internal uniform buffer.
                     UpdateTextureBuiltinsUniformData(gl, view, groupIndex, bindingIndex);
                 },
-                [&](const StorageTextureBindingLayout& layout) {
+                [&](const StorageTextureBindingInfo& layout) {
                     TextureView* view = ToBackend(group->GetBindingAsTextureView(bindingIndex));
                     Texture* texture = ToBackend(view->GetTexture());
                     GLuint handle = texture->GetHandle();
@@ -1140,19 +1146,26 @@ MaybeError CommandBuffer::ExecuteRenderPass(BeginRenderPassCmd* renderPass) {
                 vertexStateBufferBindingTracker.Apply(gl);
                 bindGroupTracker.Apply(gl);
 
+                const auto topology = lastPipeline->GetGLPrimitiveTopology();
+                if (topology == GL_LINE_STRIP || topology == GL_TRIANGLE_STRIP) {
+                    gl.Enable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+                } else {
+                    gl.Disable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+                }
+
                 if (lastPipeline->UsesInstanceIndex()) {
                     gl.Uniform1ui(PipelineLayout::PushConstantLocation::FirstInstance,
                                   draw->firstInstance);
                 }
                 if (gl.DrawElementsInstancedBaseVertexBaseInstanceANGLE) {
                     gl.DrawElementsInstancedBaseVertexBaseInstanceANGLE(
-                        lastPipeline->GetGLPrimitiveTopology(), draw->indexCount, indexBufferFormat,
+                        topology, draw->indexCount, indexBufferFormat,
                         reinterpret_cast<void*>(draw->firstIndex * indexFormatSize +
                                                 indexBufferBaseOffset),
                         draw->instanceCount, draw->baseVertex, draw->firstInstance);
                 } else if (draw->firstInstance > 0) {
                     gl.DrawElementsInstancedBaseVertexBaseInstance(
-                        lastPipeline->GetGLPrimitiveTopology(), draw->indexCount, indexBufferFormat,
+                        topology, draw->indexCount, indexBufferFormat,
                         reinterpret_cast<void*>(draw->firstIndex * indexFormatSize +
                                                 indexBufferBaseOffset),
                         draw->instanceCount, draw->baseVertex, draw->firstInstance);
@@ -1160,16 +1173,14 @@ MaybeError CommandBuffer::ExecuteRenderPass(BeginRenderPassCmd* renderPass) {
                     // This branch is only needed on OpenGL < 4.2; ES < 3.2
                     if (draw->baseVertex != 0) {
                         gl.DrawElementsInstancedBaseVertex(
-                            lastPipeline->GetGLPrimitiveTopology(), draw->indexCount,
-                            indexBufferFormat,
+                            topology, draw->indexCount, indexBufferFormat,
                             reinterpret_cast<void*>(draw->firstIndex * indexFormatSize +
                                                     indexBufferBaseOffset),
                             draw->instanceCount, draw->baseVertex);
                     } else {
                         // This branch is only needed on OpenGL < 3.2; ES < 3.2
                         gl.DrawElementsInstanced(
-                            lastPipeline->GetGLPrimitiveTopology(), draw->indexCount,
-                            indexBufferFormat,
+                            topology, draw->indexCount, indexBufferFormat,
                             reinterpret_cast<void*>(draw->firstIndex * indexFormatSize +
                                                     indexBufferBaseOffset),
                             draw->instanceCount);
@@ -1209,9 +1220,16 @@ MaybeError CommandBuffer::ExecuteRenderPass(BeginRenderPassCmd* renderPass) {
                 Buffer* indirectBuffer = ToBackend(draw->indirectBuffer.Get());
                 DAWN_ASSERT(indirectBuffer != nullptr);
 
+                const auto topology = lastPipeline->GetGLPrimitiveTopology();
+                if (topology == GL_LINE_STRIP || topology == GL_TRIANGLE_STRIP) {
+                    gl.Enable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+                } else {
+                    gl.Disable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+                }
+
                 gl.BindBuffer(GL_DRAW_INDIRECT_BUFFER, indirectBuffer->GetHandle());
                 gl.DrawElementsIndirect(
-                    lastPipeline->GetGLPrimitiveTopology(), indexBufferFormat,
+                    topology, indexBufferFormat,
                     reinterpret_cast<void*>(static_cast<intptr_t>(draw->indirectOffset)));
                 indirectBuffer->TrackUsage();
                 break;

@@ -17,7 +17,9 @@
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
+#include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/csp/csp_directive_list.h"
@@ -124,6 +126,15 @@ double ComputeSizeLossFunction(const PhysicalSize& requested_size,
                        std::max(requested_area, allowed_area));
 
   return wasted_area_fraction + resolution_penalty;
+}
+
+std::optional<WTF::AtomicString> ConvertEventTypeToFencedEventType(
+    const WTF::String& event_type) {
+  if (!CanNotifyEventTypeAcrossFence(event_type.Ascii())) {
+    return std::nullopt;
+  }
+
+  return event_type_names::kFencedtreeclick;
 }
 
 }  // namespace
@@ -249,9 +260,6 @@ bool HTMLFencedFrameElement::canLoadOpaqueURL(ScriptState* script_state) {
   ExecutionContext* context = ExecutionContext::From(script_state);
   DCHECK(frame_to_check && context);
 
-  ContentSecurityPolicy* csp = context->GetContentSecurityPolicy();
-  DCHECK(csp);
-
   // "A fenced frame tree of one mode cannot contain a child fenced frame of
   // another mode."
   // See: https://github.com/WICG/fenced-frame/blob/master/explainer/modes.md
@@ -290,26 +298,10 @@ bool HTMLFencedFrameElement::canLoadOpaqueURL(ScriptState* script_state) {
   // piggy-back off of the ancestor_or_self_has_cspee bit being sent from the
   // browser (which is sent at commit time) since it doesn't know about all the
   // CSP headers yet.
-  for (const auto& policy : csp->GetParsedPolicies()) {
-    CSPOperativeDirective directive = CSPDirectiveListOperativeDirective(
-        *policy, CSPDirectiveName::FencedFrameSrc);
-    if (directive.type != CSPDirectiveName::Unknown) {
-      // "*" urls will cause the allow_star flag to set
-      if (directive.source_list->allow_star) {
-        continue;
-      }
-
-      // Check for "https:" or "https://*:*"
-      bool found_matching_source = false;
-      for (const auto& source : directive.source_list->sources) {
-        if (source->scheme == url::kHttpsScheme && source->host == "") {
-          found_matching_source = true;
-          break;
-        }
-      }
-      if (!found_matching_source)
-        return false;
-    }
+  ContentSecurityPolicy* csp = context->GetContentSecurityPolicy();
+  DCHECK(csp);
+  if (!csp->AllowFencedFrameOpaqueURL()) {
+    return false;
   }
 
   return true;
@@ -809,6 +801,16 @@ void HTMLFencedFrameElement::OnResize(const PhysicalRect& content_rect) {
     DCHECK(!frozen_frame_size_);
     FreezeFrameSize(content_rect_->size, /*should_coerce_size=*/true);
   }
+}
+
+void HTMLFencedFrameElement::DispatchFencedEvent(
+    const WTF::String& event_type) {
+  std::optional<WTF::AtomicString> fenced_event_type =
+      ConvertEventTypeToFencedEventType(event_type);
+  CHECK(fenced_event_type.has_value());
+  // Note: This method sets isTrusted = true on the event object, to indicate
+  // that the event was dispatched by the browser.
+  DispatchEvent(*Event::CreateFenced(*fenced_event_type));
 }
 
 // START HTMLFencedFrameElement::FencedFrameDelegate

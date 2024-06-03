@@ -97,6 +97,10 @@ void RecordUpdateStages(const base::TimeDelta check_time,
   RecordFinalizeTime(finalize_time);
 }
 
+void RecordUpdateCheckTimeout(bool timeout) {
+  base::UmaHistogramBoolean("OOBE.UpdateScreen.CheckTimeout", timeout);
+}
+
 }  // namespace
 
 // static
@@ -297,6 +301,9 @@ void UpdateScreen::DelayErrorMessage() {
 
 void UpdateScreen::UpdateInfoChanged(
     const VersionUpdater::UpdateInfo& update_info) {
+  if (is_hidden()) {
+    return;
+  }
   const update_engine::StatusResult& status = update_info.status;
   hide_progress_on_exit_ = false;
   has_critical_update_ =
@@ -315,7 +322,11 @@ void UpdateScreen::UpdateInfoChanged(
     WizardController::default_controller()
         ->quick_start_controller()
         ->PrepareForUpdate();
+    did_prepare_quick_start_for_update_ = true;
     view_->SetUpdateState(UpdateView::UIState::kUpdateInProgress);
+    // Set that critical update applied in OOBE.
+    g_browser_process->local_state()->SetBoolean(
+        prefs::kOobeCriticalUpdateCompleted, true);
     wait_reboot_timer_.Start(FROM_HERE, wait_before_reboot_time_,
                              version_updater_.get(),
                              &VersionUpdater::RebootAfterUpdate);
@@ -380,6 +391,7 @@ void UpdateScreen::UpdateInfoChanged(
         WizardController::default_controller()
             ->quick_start_controller()
             ->PrepareForUpdate();
+        did_prepare_quick_start_for_update_ = true;
       }
       break;
     case update_engine::Operation::VERIFYING:
@@ -447,6 +459,14 @@ void UpdateScreen::UpdateInfoChanged(
 }
 
 void UpdateScreen::FinishExitUpdate(Result result) {
+  if (did_prepare_quick_start_for_update_) {
+    WizardController::default_controller()
+        ->quick_start_controller()
+        ->ResumeSessionAfterCancelledUpdate();
+  }
+
+  RecordUpdateCheckTimeout(result == Result::UPDATE_CHECK_TIMEOUT);
+
   if (!start_update_stage_.is_null() && check_time_.is_zero()) {
     check_time_ = tick_clock_->NowTicks() - start_update_stage_;
     RecordCheckTime(check_time_);

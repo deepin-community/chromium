@@ -13,6 +13,7 @@
 #include "base/feature_list.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
+#include "base/time/default_clock.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
 #include "components/content_settings/core/common/content_settings_rules.h"
@@ -32,7 +33,7 @@ class RuleIteratorImpl : public RuleIterator {
  public:
   RuleIteratorImpl(const Iterator& current_rule,
                    const Iterator& rule_end,
-                   scoped_refptr<RefCountedAutoLock> auto_lock,
+                   std::unique_ptr<base::AutoLock> auto_lock,
                    base::AutoReset<bool> iterating)
       : current_rule_(current_rule),
         rule_end_(rule_end),
@@ -55,7 +56,7 @@ class RuleIteratorImpl : public RuleIterator {
  private:
   Iterator current_rule_;
   Iterator rule_end_;
-  scoped_refptr<RefCountedAutoLock> auto_lock_;
+  std::unique_ptr<base::AutoLock> auto_lock_;
   base::AutoReset<bool> iterating_;
 };
 
@@ -67,8 +68,7 @@ std::unique_ptr<RuleIterator> OriginValueMap::GetRuleIterator(
   // must be passed to the |RuleIteratorImpl| in a locked state, so that nobody
   // can access |entries_| after |find()| but before the |RuleIteratorImpl| is
   // created.
-  scoped_refptr<RefCountedAutoLock> auto_lock =
-      MakeRefCounted<RefCountedAutoLock>(lock_);
+  auto auto_lock = std::make_unique<base::AutoLock>(lock_);
   if (base::FeatureList::IsEnabled(features::kIndexedHostContentSettingsMap)) {
     auto it = entry_index().find(content_type);
     if (it == entry_index().end()) {
@@ -118,7 +118,7 @@ std::unique_ptr<Rule> OriginValueMap::GetRule(
           entry.first.secondary_pattern.Matches(secondary_url) &&
           (base::FeatureList::IsEnabled(
                content_settings::features::kActiveContentSettingExpiry) ||
-           !entry.second.metadata.IsExpired())) {
+           !entry.second.metadata.IsExpired(clock_))) {
         result = &entry;
         break;
       }
@@ -161,13 +161,17 @@ std::vector<ContentSettingsType> OriginValueMap::types() const {
   return result;
 }
 
-OriginValueMap::OriginValueMap() {
+OriginValueMap::OriginValueMap(base::Clock* clock) : clock_(clock) {
+  DCHECK(clock);
   if (base::FeatureList::IsEnabled(features::kIndexedHostContentSettingsMap)) {
     entries_ = EntryIndex();
   } else {
     entries_ = EntryMap();
   }
 }
+
+OriginValueMap::OriginValueMap()
+    : OriginValueMap(base::DefaultClock::GetInstance()) {}
 
 OriginValueMap::~OriginValueMap() = default;
 
@@ -218,8 +222,9 @@ bool OriginValueMap::SetValue(
   CHECK_NE(ContentSettingsType::DEFAULT, content_type);
 
   if (base::FeatureList::IsEnabled(features::kIndexedHostContentSettingsMap)) {
-    return entry_index()[content_type].SetValue(
-        primary_pattern, secondary_pattern, std::move(value), metadata);
+    return get_index(content_type)
+        .SetValue(primary_pattern, secondary_pattern, std::move(value),
+                  metadata);
   } else {
     SortedPatternPair patterns(primary_pattern, secondary_pattern);
     ValueEntry* entry = &entry_map()[content_type][patterns];
@@ -238,8 +243,15 @@ bool OriginValueMap::DeleteValue(
     ContentSettingsType content_type) {
   CHECK(!iterating_);
   if (base::FeatureList::IsEnabled(features::kIndexedHostContentSettingsMap)) {
-    return entry_index()[content_type].DeleteValue(primary_pattern,
-                                                   secondary_pattern);
+    auto it = entry_index().find(content_type);
+    if (it == entry_index().end()) {
+      return false;
+    }
+    bool result = it->second.DeleteValue(primary_pattern, secondary_pattern);
+    if (it->second.empty()) {
+      entry_index().erase(it);
+    }
+    return result;
   } else {
     SortedPatternPair patterns(primary_pattern, secondary_pattern);
     auto it = entry_map().find(content_type);
@@ -273,4 +285,13 @@ void OriginValueMap::clear() {
   }
 }
 
+void OriginValueMap::SetClockForTesting(base::Clock* clock) {
+  clock_ = clock;
+  if (base::FeatureList::IsEnabled(features::kIndexedHostContentSettingsMap)) {
+    base::AutoLock lock(lock_);
+    for (auto& index : entry_index()) {
+      index.second.SetClockForTesting(clock);  // IN-TEST
+    }
+  }
+}
 }  // namespace content_settings

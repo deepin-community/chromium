@@ -19,7 +19,6 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/content_settings/browser/ui/cookie_controls_util.h"
 #include "components/content_settings/core/common/cookie_blocking_3pcd_status.h"
-#include "components/content_settings/core/common/cookie_controls_status.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/favicon/core/favicon_service.h"
 #include "content/public/browser/navigation_controller.h"
@@ -92,8 +91,7 @@ void CookieControlsBubbleViewController::OnUserClosedContentView() {
     return;
   }
 
-  web_contents_->GetController().SetNeedsReload();
-  web_contents_->GetController().LoadIfNecessary();
+  web_contents_->GetController().Reload(content::ReloadType::NORMAL, true);
 
   SwitchToReloadingView();
 }
@@ -177,7 +175,6 @@ CookieControlsBubbleViewController::~CookieControlsBubbleViewController() =
     default;
 
 void CookieControlsBubbleViewController::OnStatusChanged(
-    CookieControlsStatus status,
     bool controls_visible,
     bool protections_on,
     CookieControlsEnforcement enforcement,
@@ -224,11 +221,6 @@ void CookieControlsBubbleViewController::OnStatusChanged(
           bubble_view_->GetContentView()->SetEnforcedIconVisible(true);
       break;
   }
-}
-
-void CookieControlsBubbleViewController::OnBreakageConfidenceLevelChanged(
-    CookieControlsBreakageConfidenceLevel level) {
-  // TODO(1446230): Implement OnBreakageConfidenceLevelChanged.
 }
 
 void CookieControlsBubbleViewController::

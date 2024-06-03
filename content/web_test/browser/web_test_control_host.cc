@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "content/web_test/browser/web_test_control_host.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
 
 #include <stddef.h>
@@ -13,6 +15,7 @@
 #include <queue>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -446,7 +449,7 @@ void WebTestResultPrinter::PrintEncodedBinaryData(
   *output_ << "Content-Transfer-Encoding: base64\n";
 
   std::string data_base64 = base::Base64Encode(
-      base::StringPiece(reinterpret_cast<const char*>(&data[0]), data.size()));
+      std::string_view(reinterpret_cast<const char*>(&data[0]), data.size()));
 
   *output_ << "Content-Length: " << data_base64.length() << "\n";
   output_->write(data_base64.c_str(), data_base64.length());
@@ -624,9 +627,23 @@ void WebTestControlHost::PrepareForWebTest(const TestInfo& test_info) {
   HandleNewRenderFrameHost(main_window_->web_contents()->GetPrimaryMainFrame());
 
   if (is_devtools_protocol_test) {
+    std::string log;
+    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kInspectorProtocolLog)) {
+      base::FilePath log_path =
+          base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+              switches::kInspectorProtocolLog);
+      base::ScopedAllowBlockingForTesting allow_blocking;
+      if (!base::ReadFileToString(log_path, &log)) {
+        printer_->AddErrorMessage(base::StringPrintf(
+            "FAIL: Failed to read the inspector-protocol-log file %s",
+            log_path.AsUTF8Unsafe().c_str()));
+      }
+    }
+
     devtools_protocol_test_bindings_ =
         std::make_unique<DevToolsProtocolTestBindings>(
-            main_window_->web_contents());
+            main_window_->web_contents(), log);
   }
 
   // We don't go down the normal system path of focusing RenderWidgetHostView
@@ -721,7 +738,8 @@ void WebTestControlHost::ResetBrowserAfterWebTest() {
   pixel_dump_.reset();
   actual_pixel_hash_ = "";
   waiting_for_pixel_results_ = false;
-  composite_all_frames_node_queue_ = std::queue<Node*>();
+  composite_all_frames_node_queue_ =
+      std::queue<raw_ptr<Node, CtnExperimental>>();
   composite_all_frames_node_storage_.clear();
   next_pointer_lock_action_ = NextPointerLockAction::kWillSucceed;
 
@@ -729,10 +747,12 @@ void WebTestControlHost::ResetBrowserAfterWebTest() {
   SetBluetoothManualChooser(false);
   SetDatabaseQuota(content::kDefaultDatabaseQuota);
 
+  ShellBrowserContext* browser_context =
+      ShellContentBrowserClient::Get()->browser_context();
+  browser_context->ResetFederatedPermissionContext();
+
   // Delete all cookies, Attribution Reporting data and Aggregation service data
   {
-    BrowserContext* browser_context =
-        ShellContentBrowserClient::Get()->browser_context();
     StoragePartition* storage_partition =
         browser_context->GetDefaultStoragePartition();
     storage_partition->GetCookieManagerForBrowserProcess()->DeleteCookies(
@@ -797,8 +817,10 @@ void WebTestControlHost::OverrideWebkitPrefs(
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kForceHighContrast)) {
+    prefs->in_forced_colors = true;
     prefs->preferred_contrast = blink::mojom::PreferredContrast::kMore;
   } else {
+    prefs->in_forced_colors = false;
     prefs->preferred_contrast = blink::mojom::PreferredContrast::kNoPreference;
   }
 }
@@ -1196,8 +1218,11 @@ void WebTestControlHost::HandleNewRenderFrameHost(RenderFrameHost* frame) {
   if (test_phase_ != DURING_TEST)
     return;
 
+  // Consider a prerender as main window as well since it may be activated to
+  // become the main window.
   const bool main_window =
-      FrameTreeNode::From(frame)->frame_tree().is_primary() &&
+      (FrameTreeNode::From(frame)->frame_tree().is_primary() ||
+       FrameTreeNode::From(frame)->frame_tree().is_prerendering()) &&
       WebContents::FromRenderFrameHost(frame) == main_window_->web_contents();
 
   RenderProcessHost* process_host = frame->GetProcess();
@@ -1873,6 +1898,25 @@ void WebTestControlHost::SetMainWindowHidden(bool hidden) {
     main_window_->web_contents()->WasHidden();
   else
     main_window_->web_contents()->WasShown();
+}
+
+void WebTestControlHost::SetFrameWindowHidden(
+    const blink::LocalFrameToken& frame_token,
+    bool hidden) {
+  if (hidden) {
+    GetWebContentsFromCurrentContext(frame_token)->WasHidden();
+  } else {
+    GetWebContentsFromCurrentContext(frame_token)->WasShown();
+  }
+}
+
+WebContents* WebTestControlHost::GetWebContentsFromCurrentContext(
+    const blink::LocalFrameToken& frame_token) {
+  const int render_process_id = receiver_bindings_.current_context();
+  auto* rfh =
+      RenderFrameHostImpl::FromFrameToken(render_process_id, frame_token);
+  CHECK(rfh);
+  return WebContents::FromRenderFrameHost(rfh);
 }
 
 void WebTestControlHost::CheckForLeakedWindows() {

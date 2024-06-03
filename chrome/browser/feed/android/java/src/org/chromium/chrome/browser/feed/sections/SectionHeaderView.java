@@ -215,13 +215,12 @@ public class SectionHeaderView extends LinearLayout {
             // Add 20dp padding at each sides for the SectionHeaderView.
             int lateralPadding =
                     getResources().getDimensionPixelSize(R.dimen.feed_header_menu_end_margin);
-            mContent.setPadding(lateralPadding, 0, lateralPadding, 0);
+            mContent.setPadding(lateralPadding, 0, 0, 0);
             MarginLayoutParams contentMarginLayoutParams =
                     (MarginLayoutParams) mContent.getLayoutParams();
             contentMarginLayoutParams.topMargin =
                     getResources().getDimensionPixelSize(R.dimen.feed_header_top_margin);
 
-            mMenuView.setImageResource(R.drawable.gs_settings_gear_24dp);
             MarginLayoutParams marginLayoutParams =
                     (MarginLayoutParams) mMenuView.getLayoutParams();
             marginLayoutParams.width =
@@ -548,21 +547,6 @@ public class SectionHeaderView extends LinearLayout {
                                     mContent.setClipToPadding(true);
                                 })
                         .setHighlightParams(params)
-                        .build());
-    }
-
-    /** Shows an IPH on the feed section header title. */
-    public void showHeaderIph(UserEducationHelper helper) {
-        helper.requestShowIPH(
-                new IPHCommandBuilder(
-                                getContext().getResources(),
-                                FeatureConstants
-                                        .FEATURE_NOTIFICATION_GUIDE_NTP_SUGGESTION_CARD_HELP_BUBBLE_FEATURE,
-                                R.string
-                                        .feature_notification_guide_tooltip_message_ntp_suggestion_card,
-                                R.string
-                                        .feature_notification_guide_tooltip_message_ntp_suggestion_card)
-                        .setAnchorView(mTitleView)
                         .build());
     }
 

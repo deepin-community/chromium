@@ -57,6 +57,7 @@ limitations under the License.
 #include "tensorflow/core/tfrt/runtime/work_queue_interface.h"
 #include "tensorflow/core/tfrt/utils/tfrt_graph_execution_state.h"
 #include "tsl/concurrency/ref_count.h"
+#include "tsl/lib/monitoring/sampler.h"
 #include "tsl/platform/thread_annotations.h"
 #include "tfrt/bef/bef_buffer.h"  // from @tf_runtime
 #include "tfrt/bef_executor/bef_file.h"  // from @tf_runtime
@@ -157,7 +158,8 @@ class GraphExecutor {
                       mlir::OwningOpRef<mlir::ModuleOp> tfrt_mlir,
                       std::shared_ptr<ExecutableContext> executable_context,
                       std::optional<StreamCallbackId> stream_callback_id,
-                      bool is_restore, FunctionLibraryDefinition flib_def);
+                      bool is_restore, FunctionLibraryDefinition flib_def,
+                      tsl::monitoring::SamplerCell* latency_sampler);
 
     // Returns this instance's CostRecorder if it is time to update costs,
     // else returns nullptr. Only allows one non-null return value at a time
@@ -193,6 +195,7 @@ class GraphExecutor {
         const {
       return pflr_;
     }
+    tsl::monitoring::SamplerCell* latency_sampler() { return latency_sampler_; }
 
    private:
     std::string name_;
@@ -231,6 +234,7 @@ class GraphExecutor {
     bool is_restore_;
     FunctionLibraryDefinition flib_def_;
     ProcessFunctionLibraryRuntime pflr_;
+    tsl::monitoring::SamplerCell* latency_sampler_;
   };
 
   // A subgraph constructed by specifying input/output tensors.

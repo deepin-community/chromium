@@ -5,6 +5,7 @@
 #include "services/network/public/cpp/resource_request.h"
 
 #include "base/strings/string_number_conversions.h"
+#include "base/trace_event/typed_macros.h"
 #include "base/types/optional_util.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/load_flags.h"
@@ -147,6 +148,7 @@ ResourceRequest::TrustedParams::TrustedParams(const TrustedParams& other) {
 
 ResourceRequest::TrustedParams& ResourceRequest::TrustedParams::operator=(
     const TrustedParams& other) {
+  TRACE_EVENT("loading", "ResourceRequest::TrustedParams.copy");
   isolation_info = other.isolation_info;
   disable_secure_dns = other.disable_secure_dns;
   has_user_activation = other.has_user_activation;
@@ -172,6 +174,10 @@ ResourceRequest::TrustedParams& ResourceRequest::TrustedParams::operator=(
           other.shared_dictionary_observer));
   return *this;
 }
+
+ResourceRequest::TrustedParams::TrustedParams(TrustedParams&& other) = default;
+ResourceRequest::TrustedParams& ResourceRequest::TrustedParams::operator=(
+    TrustedParams&& other) = default;
 
 bool ResourceRequest::TrustedParams::EqualsForTesting(
     const TrustedParams& other) const {
@@ -241,7 +247,14 @@ ResourceRequest::ResourceRequest(const base::Location& location)
 #else
 ResourceRequest::ResourceRequest() = default;
 #endif
-ResourceRequest::ResourceRequest(const ResourceRequest& request) = default;
+ResourceRequest::ResourceRequest(const ResourceRequest& request) {
+  TRACE_EVENT("loading", "ResourceRequest::ResourceRequest.copy_constructor");
+  *this = request;
+}
+ResourceRequest& ResourceRequest::operator=(const ResourceRequest& other) =
+    default;
+ResourceRequest::ResourceRequest(ResourceRequest&& other) = default;
+ResourceRequest& ResourceRequest::operator=(ResourceRequest&& other) = default;
 ResourceRequest::~ResourceRequest() = default;
 
 bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {

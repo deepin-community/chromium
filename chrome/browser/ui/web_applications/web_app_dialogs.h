@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -131,7 +132,7 @@ void ShowWebAppFileLaunchDialog(const std::vector<base::FilePath>& file_paths,
 void SetAutoAcceptWebAppDialogForTesting(bool auto_accept,
                                          bool auto_open_in_window);
 
-// Sets an override title for the installation.
+// Sets an override title for the Create Shortcut confirmation view.
 void SetOverrideTitleForTesting(const char* title_to_use);
 
 // Describes the state of in-product-help being shown to the user.
@@ -149,7 +150,16 @@ enum class PwaInProductHelpState {
 // |callback| is called when install bubble closed.
 // |iph_state| records whether PWA install iph is shown before Install bubble is
 // shown.
-void ShowPWAInstallBubble(
+void ShowSimpleInstallDialogForWebApps(
+    content::WebContents* web_contents,
+    std::unique_ptr<WebAppInstallInfo> web_app_info,
+    std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
+    AppInstallationAcceptanceCallback callback,
+    PwaInProductHelpState iph_state = PwaInProductHelpState::kNotShown);
+
+// Shows the PWA install dialog for apps that are not installable, AKA, DIY
+// apps.
+void ShowDiyAppInstallDialog(
     content::WebContents* web_contents,
     std::unique_ptr<WebAppInstallInfo> web_app_info,
     std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker,
@@ -167,9 +177,17 @@ void ShowWebAppDetailedInstallDialog(
     std::vector<webapps::Screenshot> screenshots,
     PwaInProductHelpState iph_state = PwaInProductHelpState::kNotShown);
 
-// Sets whether |ShowPWAInstallBubble| should accept immediately without any
-// user interaction.
+// Sets whether |ShowSimpleInstallDialogForWebApps| should accept immediately
+// without any user interaction.
 void SetAutoAcceptPWAInstallConfirmationForTesting(bool auto_accept);
+
+// Sets whether |ShowDiyInstallDialogForWebApps| should accept immediately
+// without any user interaction.
+void SetAutoAcceptDiyAppsInstallDialogForTesting(bool auto_accept);
+
+// Sets whether the bubble should close when it is not in an active window
+// during testing.
+base::AutoReset<bool> SetDontCloseOnDeactivateForTesting();
 
 // Shows the Isolated Web App manual install wizard.
 IsolatedWebAppInstallerCoordinator* LaunchIsolatedWebAppInstaller(

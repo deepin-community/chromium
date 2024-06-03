@@ -10,7 +10,7 @@ namespace storage {
 
 BASE_FEATURE(kDefaultBucketUsesRelaxedDurability,
              "DefaultBucketUsesRelaxedDurability",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BucketInfo::BucketInfo(BucketId bucket_id,
                        blink::StorageKey storage_key,
@@ -32,7 +32,7 @@ BucketInfo::BucketInfo(BucketId bucket_id,
   // `BucketInitParams::ForDefaultBucket`, and then persisted in the
   // quota database. The easiest way to override that in a reversible manner (in
   // case of the flag being flipped on and off) is here.
-  // TODO(crbug.com/965883): migrate the quota db, update `BucketInitParams`,
+  // TODO(crbug.com/40628577): migrate the quota db, update `BucketInitParams`,
   // and remove this.
   if (base::FeatureList::IsEnabled(
           storage::kDefaultBucketUsesRelaxedDurability) &&

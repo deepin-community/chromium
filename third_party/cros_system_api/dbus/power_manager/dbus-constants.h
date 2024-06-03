@@ -17,6 +17,7 @@ const char kSetScreenBrightnessMethod[] = "SetScreenBrightness";
 const char kDecreaseScreenBrightnessMethod[] = "DecreaseScreenBrightness";
 const char kIncreaseScreenBrightnessMethod[] = "IncreaseScreenBrightness";
 const char kGetScreenBrightnessPercentMethod[] = "GetScreenBrightnessPercent";
+const char kHasKeyboardBacklightMethod[] = "HasKeyboardBacklight";
 const char kGetKeyboardBrightnessPercentMethod[] =
     "GetKeyboardBrightnessPercent";
 const char kSetKeyboardBrightnessMethod[] = "SetKeyboardBrightness";
@@ -65,6 +66,9 @@ const char kGetExternalDisplayALSBrightnessMethod[] =
     "GetExternalDisplayALSBrightness";
 const char kGetBatterySaverModeState[] = "GetBatterySaverModeState";
 const char kSetBatterySaverModeState[] = "SetBatterySaverModeState";
+const char kHasAmbientLightSensorMethod[] = "HasAmbientLightSensor";
+const char kSetAmbientLightSensorEnabledMethod[] =
+    "SetAmbientLightSensorEnabled";
 
 // Signals emitted by powerd.
 const char kScreenBrightnessChangedSignal[] = "ScreenBrightnessChanged";
@@ -75,7 +79,6 @@ const char kBatteryStatePollSignal[] = "BatteryStatePoll";
 const char kSuspendImminentSignal[] = "SuspendImminent";
 const char kDarkSuspendImminentSignal[] = "DarkSuspendImminent";
 const char kSuspendDoneSignal[] = "SuspendDone";
-const char kHibernateResumeReadySignal[] = "HibernateResumeReady";
 const char kInputEventSignal[] = "InputEvent";
 const char kIdleActionImminentSignal[] = "IdleActionImminent";
 const char kIdleActionDeferredSignal[] = "IdleActionDeferred";
@@ -87,6 +90,8 @@ const char kLidClosedSignal[] = "LidClosed";
 const char kLidOpenedSignal[] = "LidOpened";
 const char kThermalEventSignal[] = "ThermalEvent";
 const char kBatterySaverModeStateChanged[] = "BatterySaverModeStateChanged";
+const char kAmbientLightSensorEnabledChangedSignal[] =
+    "AmbientLightSensorEnabledChanged";
 
 // Values
 const int kBrightnessTransitionGradual = 1;

@@ -38,10 +38,6 @@ class PrintCompositeClient
   PrintCompositeClient& operator=(const PrintCompositeClient&) = delete;
   ~PrintCompositeClient() override;
 
-  // Determine the document format type to be generated when compositing full
-  // document.
-  static mojom::PrintCompositor::DocumentType GetDocumentType();
-
   // content::WebContentsObserver
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
 
@@ -137,7 +133,8 @@ class PrintCompositeClient
   // Returns the created composite request.
   mojom::PrintCompositor* CreateCompositeRequest(
       int cookie,
-      content::RenderFrameHost* initiator_frame);
+      content::RenderFrameHost* initiator_frame,
+      mojom::PrintCompositor::DocumentType document_type);
 
   // Remove the existing composite request.
   void RemoveCompositeRequest(int cookie);
@@ -171,10 +168,12 @@ class PrintCompositeClient
   raw_ptr<content::RenderFrameHost> initiator_frame_ = nullptr;
 
   // Stores the pending subframes for the composited document.
-  base::flat_set<content::RenderFrameHost*> pending_subframes_;
+  base::flat_set<raw_ptr<content::RenderFrameHost, CtnExperimental>>
+      pending_subframes_;
 
   // Stores the printed subframes for the composited document.
-  base::flat_set<content::RenderFrameHost*> printed_subframes_;
+  base::flat_set<raw_ptr<content::RenderFrameHost, CtnExperimental>>
+      printed_subframes_;
 
   struct RequestedSubFrame {
     RequestedSubFrame(content::GlobalRenderFrameHostId rfh_id,

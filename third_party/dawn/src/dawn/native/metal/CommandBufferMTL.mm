@@ -573,7 +573,7 @@ class BindGroupTracker : public BindGroupTrackerBase<true, uint64_t> {
 
             MatchVariant(
                 bindingInfo.bindingLayout,
-                [&](const BufferBindingLayout& layout) {
+                [&](const BufferBindingInfo& layout) {
                     const BufferBinding& binding = group->GetBindingAsBufferBinding(bindingIndex);
                     ToBackend(binding.buffer)->TrackUsage();
                     const id<MTLBuffer> buffer = ToBackend(binding.buffer)->GetMTLBuffer();
@@ -624,7 +624,13 @@ class BindGroupTracker : public BindGroupTrackerBase<true, uint64_t> {
                                          atIndex:computeIndex];
                     }
                 },
-                [&](const TextureBindingLayout&) {
+                [&](const StaticSamplerHolderBindingLayout&) {
+                    // Static samplers are handled in the frontend.
+                    // TODO(crbug.com/dawn/2482): Implement static samplers in the
+                    // Metal backend.
+                    DAWN_UNREACHABLE();
+                },
+                [&](const TextureBindingInfo&) {
                     auto textureView = ToBackend(group->GetBindingAsTextureView(bindingIndex));
                     if (hasVertStage) {
                         [render setVertexTexture:textureView->GetMTLTexture() atIndex:vertIndex];
@@ -636,7 +642,7 @@ class BindGroupTracker : public BindGroupTrackerBase<true, uint64_t> {
                         [compute setTexture:textureView->GetMTLTexture() atIndex:computeIndex];
                     }
                 },
-                [&](const StorageTextureBindingLayout&) {
+                [&](const StorageTextureBindingInfo&) {
                     auto textureView = ToBackend(group->GetBindingAsTextureView(bindingIndex));
                     if (hasVertStage) {
                         [render setVertexTexture:textureView->GetMTLTexture() atIndex:vertIndex];

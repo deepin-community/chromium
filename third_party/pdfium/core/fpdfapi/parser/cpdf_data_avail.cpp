@@ -25,13 +25,13 @@
 #include "core/fpdfapi/parser/cpdf_syntax_parser.h"
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "core/fxcrt/autorestorer.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_safe_types.h"
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/stl_util.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/notreached.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 namespace {
 
@@ -195,9 +195,7 @@ bool CPDF_DataAvail::CheckAndLoadAllXref() {
       return false;
   }
 
-  if (!m_parser.LoadAllCrossRefTable(
-          m_pCrossRefAvail->last_crossref_offset()) &&
-      !m_parser.LoadAllCrossRefStream(
+  if (!m_parser.LoadAllCrossRefTablesAndStreams(
           m_pCrossRefAvail->last_crossref_offset())) {
     m_internalStatus = InternalStatus::kLoadAllFile;
     return false;
@@ -686,7 +684,7 @@ bool CPDF_DataAvail::CheckPageNode(const CPDF_DataAvail::PageNode& pageNode,
 }
 
 bool CPDF_DataAvail::LoadDocPage(uint32_t dwPage) {
-  int iPage = pdfium::base::checked_cast<int>(dwPage);
+  int iPage = pdfium::checked_cast<int>(dwPage);
   if (m_pDocument->GetPageCount() <= iPage ||
       m_pDocument->IsPageLoaded(iPage)) {
     m_internalStatus = InternalStatus::kDone;
@@ -798,7 +796,7 @@ CPDF_DataAvail::DocAvailStatus CPDF_DataAvail::IsPageAvail(
   if (!m_pDocument)
     return kDataError;
 
-  const int iPage = pdfium::base::checked_cast<int>(dwPage);
+  const int iPage = pdfium::checked_cast<int>(dwPage);
   if (iPage >= m_pDocument->GetPageCount()) {
     // This is XFA page.
     return kDataAvailable;
@@ -999,7 +997,7 @@ CPDF_DataAvail::DocFormStatus CPDF_DataAvail::CheckAcroForm() {
 }
 
 bool CPDF_DataAvail::ValidatePage(uint32_t dwPage) const {
-  int iPage = pdfium::base::checked_cast<int>(dwPage);
+  int iPage = pdfium::checked_cast<int>(dwPage);
   RetainPtr<const CPDF_Dictionary> pPageDict =
       m_pDocument->GetPageDictionary(iPage);
   if (!pPageDict)

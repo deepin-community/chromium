@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/types/expected.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/isolated_web_apps/error/unusable_swbn_file_error.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_validator.h"
 #include "chrome/browser/web_applications/isolated_web_apps/signed_web_bundle_reader.h"
@@ -22,8 +23,10 @@ void MockIsolatedWebAppResponseReader::Close(base::OnceClosure callback) {
 }
 
 FakeResponseReaderFactory::FakeResponseReaderFactory(
+    Profile& profile,
     base::expected<void, UnusableSwbnFileError> bundle_status)
     : IsolatedWebAppResponseReaderFactory(
+          profile,
           nullptr,
           base::BindRepeating(
               []() -> std::unique_ptr<
@@ -37,10 +40,11 @@ FakeResponseReaderFactory::~FakeResponseReaderFactory() = default;
 void FakeResponseReaderFactory::CreateResponseReader(
     const base::FilePath& web_bundle_path,
     const web_package::SignedWebBundleId& web_bundle_id,
-    bool skip_signature_verification,
+    IsolatedWebAppResponseReaderFactory::Flags flags,
     Callback callback) {
   // Signatures _must_ be verified during installation.
-  CHECK(!skip_signature_verification);
+  CHECK(!flags.Has(
+      IsolatedWebAppResponseReaderFactory::Flag::kSkipSignatureVerification));
   if (!bundle_status_.has_value()) {
     std::move(callback).Run(base::unexpected(bundle_status_.error()));
   } else {

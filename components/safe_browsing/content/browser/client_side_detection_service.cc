@@ -111,7 +111,22 @@ ClientSideDetectionService::ClientSideDetectionService(
       prefs::kSafeBrowsingScoutReportingEnabled,
       base::BindRepeating(&ClientSideDetectionService::OnPrefsUpdated,
                           base::Unretained(this)));
-  // Do an initial check of the prefs.
+
+  // If we fail to load the report times, we will not know how many pings the
+  // user has sent already. In this case, we will assume the user has sent
+  // enough pings and skip the phishing URL check.
+  // TODO: (andysjlim): clean up the ifs and logs if the uma never logs false.
+  if (LoadPhishingReportTimesFromPrefs()) {
+    skip_phishing_request_check_ = false;
+    base::UmaHistogramBoolean(
+        "SBClientPhishing.LoadReportTimesFromPrefAtServiceCreationSuccessful",
+        true);
+  } else {
+    base::UmaHistogramBoolean(
+        "SBClientPhishing.LoadReportTimesFromPrefAtServiceCreationSuccessful",
+        false);
+  }
+  //  Do an initial check of the prefs.
   OnPrefsUpdated();
 }
 
@@ -154,7 +169,7 @@ void ClientSideDetectionService::OnPrefsUpdated() {
     for (auto& client_phishing_report : client_phishing_reports_) {
       ClientPhishingReportInfo* info = client_phishing_report.second.get();
       if (!info->callback.is_null()) {
-        std::move(info->callback).Run(info->phishing_url, false);
+        std::move(info->callback).Run(info->phishing_url, false, std::nullopt);
       }
     }
     client_phishing_reports_.clear();
@@ -198,12 +213,16 @@ void ClientSideDetectionService::OnURLLoaderComplete(
   if (response_body) {
     data = std::move(*response_body.get());
   }
-  int response_code = 0;
+  std::optional<net::HttpStatusCode> response_code = std::nullopt;
   if (url_loader->ResponseInfo() && url_loader->ResponseInfo()->headers) {
-    response_code = url_loader->ResponseInfo()->headers->response_code();
+    response_code = static_cast<net::HttpStatusCode>(
+        url_loader->ResponseInfo()->headers->response_code());
   }
-  RecordHttpResponseOrErrorCode("SBClientPhishing.NetworkResult",
-                                url_loader->NetError(), response_code);
+  if (response_code.has_value()) {
+    RecordHttpResponseOrErrorCode("SBClientPhishing.NetworkResult",
+                                  url_loader->NetError(),
+                                  response_code.value());
+  }
 
   DCHECK(base::Contains(client_phishing_reports_, url_loader));
   HandlePhishingVerdict(url_loader, url_loader->GetFinalURL(),
@@ -240,7 +259,7 @@ void ClientSideDetectionService::StartClientReportPhishingRequest(
 
   if (!enabled_) {
     if (!callback.is_null()) {
-      std::move(callback).Run(GURL(request->url()), false);
+      std::move(callback).Run(GURL(request->url()), false, std::nullopt);
     }
     return;
   }
@@ -299,6 +318,11 @@ void ClientSideDetectionService::StartClientReportPhishingRequest(
   resource_request->url = GetClientReportUrl(kClientReportPhishingUrl);
   resource_request->method = "POST";
   resource_request->load_flags = net::LOAD_DISABLE_CACHE;
+
+  // Record that we made a request. Logged before the request is made
+  // to ensure it gets recorded.
+  AddPhishingReport(base::Time::Now());
+
   auto loader = network::SimpleURLLoader::Create(std::move(resource_request),
                                                  traffic_annotation);
   loader->AttachStringForUpload(request_data, "application/octet-stream");
@@ -315,9 +339,6 @@ void ClientSideDetectionService::StartClientReportPhishingRequest(
   info->phishing_url = GURL(request->url());
   client_phishing_reports_[loader_ptr] = std::move(info);
 
-  // Record that we made a request
-  AddPhishingReport(base::Time::Now());
-
   // The following is to log this ClientPhishingRequest on any open
   // chrome://safe-browsing pages. If no such page is open, the request is
   // dropped and the |request| object deleted.
@@ -332,7 +353,7 @@ void ClientSideDetectionService::HandlePhishingVerdict(
     network::SimpleURLLoader* source,
     const GURL& url,
     int net_error,
-    int response_code,
+    std::optional<net::HttpStatusCode> response_code,
     const std::string& data) {
   ClientPhishingResponse response;
   std::unique_ptr<ClientPhishingReportInfo> info =
@@ -340,8 +361,8 @@ void ClientSideDetectionService::HandlePhishingVerdict(
   client_phishing_reports_.erase(source);
 
   bool is_phishing = false;
-  if (net_error == net::OK && net::HTTP_OK == response_code &&
-      response.ParseFromString(data)) {
+  if (net_error == net::OK && response_code.has_value() &&
+      net::HTTP_OK == response_code.value() && response.ParseFromString(data)) {
     // Cache response, possibly flushing an old one.
     cache_[info->phishing_url] =
         base::WrapUnique(new CacheState(response.phishy(), base::Time::Now()));
@@ -355,14 +376,13 @@ void ClientSideDetectionService::HandlePhishingVerdict(
                      std::make_unique<ClientPhishingResponse>(response)));
 
   if (!info->callback.is_null()) {
-    std::move(info->callback).Run(info->phishing_url, is_phishing);
+    if (response_code.has_value() && response_code.value() == 0) {
+      response_code = std::nullopt;
+    }
+
+    std::move(info->callback)
+        .Run(info->phishing_url, is_phishing, response_code);
   }
-}
-
-bool ClientSideDetectionService::IsInCache(const GURL& url) {
-  UpdateCache();
-
-  return cache_.find(url) != cache_.end();
 }
 
 bool ClientSideDetectionService::GetValidCachedResult(const GURL& url,
@@ -413,15 +433,23 @@ void ClientSideDetectionService::UpdateCache() {
   }
 }
 
-bool ClientSideDetectionService::OverPhishingReportLimit() {
+bool ClientSideDetectionService::AtPhishingReportLimit() {
+  base::UmaHistogramBoolean("SBClientPhishing.SkipPhishingRequestCheck",
+                            skip_phishing_request_check_);
+  // If |skip_phishing_request_check_| is true, that means we failed to load the
+  // report times from prefs before from class initialization.
+  if (skip_phishing_request_check_) {
+    return true;
+  }
+
   // `delegate_` and prefs can be null in unit tests.
   if (base::FeatureList::IsEnabled(kSafeBrowsingDailyPhishingReportsLimit) &&
       (delegate_ && delegate_->GetPrefs()) &&
       IsEnhancedProtectionEnabled(*delegate_->GetPrefs())) {
-    return GetPhishingNumReports() >
+    return GetPhishingNumReports() >=
            kSafeBrowsingDailyPhishingReportsLimitESB.Get();
   }
-  return GetPhishingNumReports() > kMaxReportsPerInterval;
+  return GetPhishingNumReports() >= kMaxReportsPerInterval;
 }
 
 int ClientSideDetectionService::GetPhishingNumReports() {
@@ -440,6 +468,8 @@ void ClientSideDetectionService::AddPhishingReport(base::Time timestamp) {
   }
 
   if (!delegate_ || !delegate_->GetPrefs()) {
+    base::UmaHistogramBoolean("SBClientPhishing.AddPhishingReportSuccessful",
+                              false);
     return;
   }
 
@@ -449,11 +479,14 @@ void ClientSideDetectionService::AddPhishingReport(base::Time timestamp) {
   }
   delegate_->GetPrefs()->SetList(prefs::kSafeBrowsingCsdPingTimestamps,
                                  std::move(time_list));
+  base::UmaHistogramBoolean("SBClientPhishing.AddPhishingReportSuccessful",
+                            true);
 }
 
-void ClientSideDetectionService::LoadPhishingReportTimesFromPrefs() {
+bool ClientSideDetectionService::LoadPhishingReportTimesFromPrefs() {
+  // delegate and prefs can be null in unit tests.
   if (!delegate_ || !delegate_->GetPrefs()) {
-    return;
+    return false;
   }
 
   phishing_report_times_.clear();
@@ -462,6 +495,8 @@ void ClientSideDetectionService::LoadPhishingReportTimesFromPrefs() {
     phishing_report_times_.push_back(
         base::Time::FromSecondsSinceUnixEpoch(timestamp.GetDouble()));
   }
+
+  return true;
 }
 
 // static
@@ -672,6 +707,10 @@ bool ClientSideDetectionService::IsModelAvailable() {
 
   return client_side_phishing_model_ &&
          client_side_phishing_model_->IsEnabled();
+}
+
+int ClientSideDetectionService::GetTriggerModelVersion() {
+  return trigger_model_version_;
 }
 
 bool ClientSideDetectionService::HasImageEmbeddingModel() {

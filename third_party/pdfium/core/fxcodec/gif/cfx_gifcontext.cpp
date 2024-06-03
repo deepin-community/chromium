@@ -325,8 +325,8 @@ uint32_t CFX_GifContext::GetAvailInput() const {
   if (!input_buffer_)
     return 0;
 
-  return pdfium::base::checked_cast<uint32_t>(input_buffer_->GetSize() -
-                                              input_buffer_->GetPosition());
+  return pdfium::checked_cast<uint32_t>(input_buffer_->GetSize() -
+                                        input_buffer_->GetPosition());
 }
 
 bool CFX_GifContext::ReadAllOrNone(uint8_t* dest, uint32_t size) {
@@ -334,7 +334,11 @@ bool CFX_GifContext::ReadAllOrNone(uint8_t* dest, uint32_t size) {
     return false;
 
   size_t read_marker = input_buffer_->GetPosition();
-  size_t read = input_buffer_->ReadBlock({dest, size});
+
+  // SAFETY: caller ensures `dest` points to `size` bytes, as enforced via
+  // UNSAFE_BUFFER_USAGE for method declaration in header.
+  auto read_span = UNSAFE_BUFFERS(pdfium::make_span(dest, size));
+  size_t read = input_buffer_->ReadBlock(read_span);
   if (read < size) {
     input_buffer_->Seek(read_marker);
     return false;
@@ -372,7 +376,7 @@ GifDecoder::Status CFX_GifContext::ReadLogicalScreenDescriptor() {
     std::vector<CFX_GifPalette> palette(palette_count);
     auto bytes = pdfium::as_writable_bytes(pdfium::make_span(palette));
     if (!ReadAllOrNone(bytes.data(),
-                       pdfium::base::checked_cast<uint32_t>(bytes.size()))) {
+                       pdfium::checked_cast<uint32_t>(bytes.size()))) {
       // Roll back the read for the LSD
       input_buffer_->Seek(read_marker);
       return GifDecoder::Status::kUnfinished;
@@ -472,7 +476,7 @@ GifDecoder::Status CFX_GifContext::DecodeImageInfo() {
     std::vector<CFX_GifPalette> loc_pal(loc_pal_count);
     auto bytes = pdfium::as_writable_bytes(pdfium::make_span(loc_pal));
     if (!ReadAllOrNone(bytes.data(),
-                       pdfium::base::checked_cast<uint32_t>(bytes.size()))) {
+                       pdfium::checked_cast<uint32_t>(bytes.size()))) {
       input_buffer_->Seek(read_marker);
       return GifDecoder::Status::kUnfinished;
     }

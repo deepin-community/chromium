@@ -28,7 +28,6 @@
 
 #include "third_party/blink/renderer/core/html/canvas/image_data.h"
 
-#include "base/sys_byteorder.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_image_bitmap_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_float32array_uint16array_uint8clampedarray.h"
@@ -289,14 +288,15 @@ ImageData* ImageData::CreateForTest(const gfx::Size& size,
                                          storage_format);
 }
 
-ScriptPromise ImageData::CreateImageBitmap(ScriptState* script_state,
-                                           std::optional<gfx::Rect> crop_rect,
-                                           const ImageBitmapOptions* options,
-                                           ExceptionState& exception_state) {
+ScriptPromise<ImageBitmap> ImageData::CreateImageBitmap(
+    ScriptState* script_state,
+    std::optional<gfx::Rect> crop_rect,
+    const ImageBitmapOptions* options,
+    ExceptionState& exception_state) {
   if (IsBufferBaseDetached()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "The source data has been detached.");
-    return ScriptPromise();
+    return ScriptPromise<ImageBitmap>();
   }
   return ImageBitmapSource::FulfillImageBitmap(
       script_state, MakeGarbageCollected<ImageBitmap>(this, crop_rect, options),

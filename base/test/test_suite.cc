@@ -9,10 +9,9 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/tagging.h"
 #include "base/at_exit.h"
 #include "base/base_paths.h"
 #include "base/base_switches.h"
@@ -37,7 +36,7 @@
 #include "base/process/memory.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/gtest_xml_unittest_result_printer.h"
@@ -54,6 +53,8 @@
 #include "base/time/time.h"
 #include "base/tracing_buildflags.h"
 #include "build/build_config.h"
+#include "partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/tagging.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
@@ -169,11 +170,13 @@ class FeatureListScopedToEachTest : public testing::EmptyTestEventListener {
     // TestFeatureForBrowserTest1 and TestFeatureForBrowserTest2 used in
     // ContentBrowserTestScopedFeatureListTest to ensure ScopedFeatureList keeps
     // features from command line.
+    // TestBlinkFeatureDefault is used in RuntimeEnabledFeaturesTest to test a
+    // behavior with OverrideState::OVERIDE_USE_DEFAULT.
     std::string enabled =
         command_line->GetSwitchValueASCII(switches::kEnableFeatures);
     std::string disabled =
         command_line->GetSwitchValueASCII(switches::kDisableFeatures);
-    enabled += ",TestFeatureForBrowserTest1";
+    enabled += ",TestFeatureForBrowserTest1,*TestBlinkFeatureDefault";
     disabled += ",TestFeatureForBrowserTest2";
     scoped_feature_list_.InitFromCommandLine(enabled, disabled);
 
@@ -337,6 +340,31 @@ void AbortHandler(int signal) {
 }
 #endif
 
+#if GTEST_HAS_DEATH_TEST
+// Returns a friendly message to tell developers how to see the stack traces for
+// unexpected crashes in death test child processes. Since death tests generate
+// stack traces as a consequence of their expected crashes and stack traces are
+// expensive to compute, stack traces in death test child processes are
+// suppressed unless `--with-stack-traces` is on the command line.
+std::string GetStackTraceMessage() {
+  // When Google Test launches a "threadsafe" death test's child proc, it uses
+  // `--gtest_filter` to convey the test to be run. It appendeds it to the end
+  // of the command line, so Chromium's `CommandLine` will preserve only the
+  // value of interest.
+  auto filter_switch =
+      CommandLine::ForCurrentProcess()->GetSwitchValueNative("gtest_filter");
+  return StrCat({"Stack trace suppressed; retry with `--",
+                 switches::kWithDeathTestStackTraces, " --gtest_filter=",
+#if BUILDFLAG(IS_WIN)
+                 WideToUTF8(filter_switch)
+#else
+                 filter_switch
+#endif
+                     ,
+                 "`."});
+}
+#endif  // GTEST_HAS_DEATH_TEST
+
 }  // namespace
 
 int RunUnitTestsUsingBaseTestSuite(int argc, char** argv) {
@@ -441,8 +469,8 @@ void TestSuite::DisableCheckForLeakedGlobals() {
 
 void TestSuite::UnitTestAssertHandler(const char* file,
                                       int line,
-                                      const StringPiece summary,
-                                      const StringPiece stack_trace) {
+                                      const std::string_view summary,
+                                      const std::string_view stack_trace) {
 #if BUILDFLAG(IS_ANDROID)
   // Correlating test stdio with logcat can be difficult, so we emit this
   // helpful little hint about what was running.  Only do this for Android
@@ -503,6 +531,21 @@ void TestSuite::Initialize() {
   DCHECK(!is_initialized_);
 
   InitializeFromCommandLine(&argc_, argv_);
+
+#if GTEST_HAS_DEATH_TEST
+  if (::testing::internal::InDeathTestChild() &&
+      !CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWithDeathTestStackTraces)) {
+    // For death tests using the "threadsafe" style (which includes all such
+    // tests on Windows and Fuchsia, and is the default for all Chromium tests
+    // on all platforms except Android; see `PreInitialize`),
+    //
+    // For more information, see
+    // https://github.com/google/googletest/blob/main/docs/advanced.md#death-test-styles.
+    debug::StackTrace::SuppressStackTracesWithMessageForTesting(
+        GetStackTraceMessage());
+  }
+#endif
 
   // Logging must be initialized before any thread has a chance to call logging
   // functions.
@@ -612,10 +655,6 @@ void TestSuite::Initialize() {
 }
 
 void TestSuite::InitializeFromCommandLine(int* argc, char** argv) {
-#if GTEST_HAS_DEATH_TEST
-  internal::SetInDeathTestChildFn(&::testing::internal::InDeathTestChild);
-#endif
-
   // CommandLine::Init() is called earlier from PreInitialize().
   testing::InitGoogleTest(argc, argv);
   testing::InitGoogleMock(argc, argv);
@@ -631,6 +670,11 @@ int TestSuite::RunAllTests() {
 
 void TestSuite::Shutdown() {
   DCHECK(is_initialized_);
+#if GTEST_HAS_DEATH_TEST
+  if (::testing::internal::InDeathTestChild()) {
+    debug::StackTrace::SuppressStackTracesWithMessageForTesting({});
+  }
+#endif
   debug::StopProfiling();
 }
 

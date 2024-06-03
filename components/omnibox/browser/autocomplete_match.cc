@@ -4,8 +4,9 @@
 
 #include "components/omnibox/browser/autocomplete_match.h"
 
+#include <vector>
+
 #include "base/check_op.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "base/i18n/case_conversion.h"
@@ -30,6 +31,7 @@
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/document_provider.h"
+#include "components/omnibox/browser/omnibox_feature_configs.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/search_engines/search_engine_type.h"
@@ -48,6 +50,9 @@
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
 #include "components/vector_icons/vector_icons.h"     // nogncheck
 #endif
+
+constexpr bool kIsDesktop = !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS);
+constexpr bool kIsAndroid = BUILDFLAG(IS_ANDROID);
 
 namespace {
 
@@ -129,8 +134,7 @@ int GetDeduplicationProviderPreferenceScore(
       {AutocompleteProvider::TYPE_BOOKMARK, 1},
       // Don't let bookmarks override builtins, as that interferes with
       // starter pack matches when user has bookmarked their destination.
-      {AutocompleteProvider::TYPE_BUILTIN,
-       OmniboxFieldTrial::IsKeywordModeRefreshEnabled() ? 1 : 0},
+      {AutocompleteProvider::TYPE_BUILTIN, kIsDesktop ? 1 : 0},
       // Prefer non-shorcut matches over shortcuts, the latter of which may
       // have stale or missing URL titles (the latter from what-you-typed
       // matches).
@@ -296,6 +300,7 @@ AutocompleteMatch::AutocompleteMatch(const AutocompleteMatch& match)
       suggestion_group_id(match.suggestion_group_id),
       swap_contents_and_description(match.swap_contents_and_description),
       answer(match.answer),
+      answer_template(match.answer_template),
       transition(match.transition),
       type(match.type),
       suggest_type(match.suggest_type),
@@ -361,6 +366,7 @@ AutocompleteMatch& AutocompleteMatch::operator=(
   swap_contents_and_description =
       std::move(match.swap_contents_and_description);
   answer = std::move(match.answer);
+  answer_template = std::move(match.answer_template);
   transition = std::move(match.transition);
   type = std::move(match.type);
   suggest_type = std::move(match.suggest_type);
@@ -429,6 +435,7 @@ AutocompleteMatch& AutocompleteMatch::operator=(
   suggestion_group_id = match.suggestion_group_id;
   swap_contents_and_description = match.swap_contents_and_description;
   answer = match.answer;
+  answer_template = match.answer_template;
   transition = match.transition;
   type = match.type;
   suggest_type = match.suggest_type;
@@ -474,7 +481,8 @@ AutocompleteMatch& AutocompleteMatch::operator=(
 
 #if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !BUILDFLAG(IS_IOS)
 // static
-const gfx::VectorIcon& AutocompleteMatch::AnswerTypeToAnswerIcon(int type) {
+const gfx::VectorIcon& AutocompleteMatch::AnswerTypeToAnswerIconDeprecated(
+    int type) {
   const bool use_chrome_refresh_icons =
       OmniboxFieldTrial::IsChromeRefreshSuggestIconsEnabled();
   switch (static_cast<SuggestionAnswer::AnswerType>(type)) {
@@ -504,6 +512,38 @@ const gfx::VectorIcon& AutocompleteMatch::AnswerTypeToAnswerIcon(int type) {
   }
 }
 
+// static
+const gfx::VectorIcon& AutocompleteMatch::AnswerTypeToAnswerIcon(
+    omnibox::RichAnswerTemplate::AnswerType type) {
+  const bool use_chrome_refresh_icons =
+      OmniboxFieldTrial::IsChromeRefreshSuggestIconsEnabled();
+  switch (type) {
+    case omnibox::RichAnswerTemplate::DICTIONARY:
+      return use_chrome_refresh_icons
+                 ? omnibox::kAnswerDictionaryChromeRefreshIcon
+                 : omnibox::kAnswerDictionaryIcon;
+    case omnibox::RichAnswerTemplate::FINANCE:
+      return use_chrome_refresh_icons ? omnibox::kAnswerFinanceChromeRefreshIcon
+                                      : omnibox::kAnswerFinanceIcon;
+    case omnibox::RichAnswerTemplate::SUNRISE_SUNSET:
+      return use_chrome_refresh_icons ? omnibox::kAnswerSunriseChromeRefreshIcon
+                                      : omnibox::kAnswerSunriseIcon;
+    case omnibox::RichAnswerTemplate::TRANSLATION:
+      return use_chrome_refresh_icons
+                 ? omnibox::kAnswerTranslationChromeRefreshIcon
+                 : omnibox::kAnswerTranslationIcon;
+    case omnibox::RichAnswerTemplate::WHEN_IS:
+      return use_chrome_refresh_icons ? omnibox::kAnswerWhenIsChromeRefreshIcon
+                                      : omnibox::kAnswerWhenIsIcon;
+    case omnibox::RichAnswerTemplate::CURRENCY:
+      return use_chrome_refresh_icons
+                 ? omnibox::kAnswerCurrencyChromeRefreshIcon
+                 : omnibox::kAnswerCurrencyIcon;
+    default:
+      return omnibox::kAnswerDefaultIcon;
+  }
+}
+
 const gfx::VectorIcon& AutocompleteMatch::GetVectorIcon(
     bool is_bookmark,
     const TemplateURL* turl) const {
@@ -512,8 +552,12 @@ const gfx::VectorIcon& AutocompleteMatch::GetVectorIcon(
   if (is_bookmark)
     return use_chrome_refresh_icons ? omnibox::kBookmarkChromeRefreshIcon
                                     : omnibox::kBookmarkIcon;
-  if (answer.has_value())
-    return AnswerTypeToAnswerIcon(answer->type());
+  if (omnibox_feature_configs::SuggestionAnswerMigration::Get().enabled &&
+      answer_template.has_value()) {
+    return AnswerTypeToAnswerIcon(answer_template->answer_type());
+  } else if (answer.has_value()) {
+    return AnswerTypeToAnswerIconDeprecated(answer->type());
+  }
 
   switch (type) {
     case Type::URL_WHAT_YOU_TYPED:
@@ -653,7 +697,7 @@ bool AutocompleteMatch::MoreRelevant(const AutocompleteMatch& match1,
 // static
 bool AutocompleteMatch::BetterDuplicate(const AutocompleteMatch& match1,
                                         const AutocompleteMatch& match2) {
-  if (OmniboxFieldTrial::IsKeywordModeRefreshEnabled()) {
+  if (kIsDesktop) {
     // Prefer starter pack matches.
     if (match1.type == AutocompleteMatchType::STARTER_PACK &&
         match2.type != AutocompleteMatchType::STARTER_PACK) {
@@ -848,11 +892,15 @@ bool AutocompleteMatch::IsStarterPackType(Type type) {
   return type == AutocompleteMatchType::STARTER_PACK;
 }
 
-// static
-bool AutocompleteMatch::ShouldBeSkippedForGroupBySearchVsUrl(Type type) {
+bool AutocompleteMatch::IsClipboardType(Type type) {
   return type == AutocompleteMatchType::CLIPBOARD_URL ||
          type == AutocompleteMatchType::CLIPBOARD_TEXT ||
-         type == AutocompleteMatchType::CLIPBOARD_IMAGE ||
+         type == AutocompleteMatchType::CLIPBOARD_IMAGE;
+}
+
+// static
+bool AutocompleteMatch::ShouldBeSkippedForGroupBySearchVsUrl(Type type) {
+  return IsClipboardType(type) ||
          type == AutocompleteMatchType::TILE_NAVSUGGEST ||
          type == AutocompleteMatchType::TILE_MOST_VISITED_SITE ||
          type == AutocompleteMatchType::TILE_REPEATABLE_QUERY ||
@@ -1183,6 +1231,11 @@ TemplateURL* AutocompleteMatch::GetTemplateURL(
 }
 
 GURL AutocompleteMatch::ImageUrl() const {
+  if (omnibox_feature_configs::SuggestionAnswerMigration::Get().enabled &&
+      answer_template.has_value()) {
+    CHECK_GT(answer_template->answers_size(), 0);
+    return GURL(answer_template->answers(0).image().url());
+  }
   return answer ? answer->image_url() : image_url;
 }
 
@@ -1336,7 +1389,8 @@ AutocompleteMatch::GetOmniboxEventResultType(int action_index) const {
     case AutocompleteMatchType::NUM_TYPES:
       break;
   }
-  NOTREACHED();
+  DUMP_WILL_BE_NOTREACHED_NORETURN()
+      << "Unknown AutocompleteMatchType: " << type;
   return OmniboxEventProto::Suggestion::UNKNOWN_RESULT_TYPE;
 }
 
@@ -1362,6 +1416,39 @@ bool AutocompleteMatch::IsOnDeviceSearchSuggestion() const {
       (provider &&
        provider->type() == AutocompleteProvider::TYPE_ON_DEVICE_HEAD);
   return from_on_device_provider && subtypes.contains(271);
+}
+
+int AutocompleteMatch::GetSortingOrder() const {
+  if (IsStarterPackType(type)) {
+    return 0;
+  }
+
+  if constexpr (kIsAndroid) {
+    if (IsClipboardType(type)) {
+      return 0;
+    }
+  }
+
+#if !BUILDFLAG(IS_IOS)
+  // Group history cluster suggestions with searches.
+  if (type == AutocompleteMatchType::HISTORY_CLUSTER) {
+    return 2;
+  }
+#endif  // !BUILDFLAG(IS_IOS)
+  if (IsSearchType(type)) {
+    return 2;
+  }
+  // Group boosted shortcuts above searches.
+  if (omnibox_feature_configs::ShortcutBoosting::Get().group_with_searches &&
+      shortcut_boosted) {
+    return 1;
+  }
+  // IPH message always appears at the bottom of the Omnibox, after all other
+  // suggestions.
+  if (type == AutocompleteMatchType::NULL_RESULT_MESSAGE) {
+    return 4;
+  }
+  return 3;
 }
 
 bool AutocompleteMatch::IsUrlScoringEligible() const {
@@ -1418,7 +1505,7 @@ void AutocompleteMatch::FilterAndSortActionsInSuggest() {
   // Collect all Actions in Suggest.
   omnibox::ActionInfo::ActionType remove_action_type =
       OmniboxFieldTrial::kActionsInSuggestRemoveActionTypes.Get();
-  base::EraseIf(actions, [&actions_in_suggest_to_reinsert, remove_action_type](
+  std::erase_if(actions, [&actions_in_suggest_to_reinsert, remove_action_type](
                              const scoped_refptr<OmniboxAction>& action) {
     auto* ais = OmniboxActionInSuggest::FromAction(action.get());
     if (ais != nullptr && ais->Type() != remove_action_type) {
@@ -1459,14 +1546,21 @@ AutocompleteMatch::GetMatchWithContentsAndDescriptionPossiblySwapped() const {
 }
 
 void AutocompleteMatch::SetAllowedToBeDefault(const AutocompleteInput& input) {
-  if (IsEmptyAutocompletion())
-    allowed_to_be_default_match = true;
-  else if (input.prevent_inline_autocomplete())
+  if (input.text().starts_with('@') && type != Type::SEARCH_WHAT_YOU_TYPED) {
+    // @ inputs are very special. The only kind of match that can be default is
+    // a search-what-you-typed sentinel suggestion, so as to not distract from
+    // the starter pack suggestions. Note: There may be some edge cases to
+    // consider if more providers are updated to use of this method; then we
+    // may want to avoid applying this rule when in keyword mode.
     allowed_to_be_default_match = false;
-  else if (input.text().empty() ||
-           !base::IsUnicodeWhitespace(input.text().back()))
+  } else if (IsEmptyAutocompletion()) {
     allowed_to_be_default_match = true;
-  else {
+  } else if (input.prevent_inline_autocomplete()) {
+    allowed_to_be_default_match = false;
+  } else if (input.text().empty() ||
+             !base::IsUnicodeWhitespace(input.text().back())) {
+    allowed_to_be_default_match = true;
+  } else {
     // If we've reached here, the input ends in trailing whitespace. If the
     // trailing whitespace prefixes |inline_autocompletion|, then allow the
     // match to be default and remove the whitespace from

@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_image.h"
 
 #include "third_party/blink/renderer/core/html/media/media_element_parser_helpers.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/intrinsic_sizing_info.h"
 #include "third_party/blink/renderer/core/layout/layout_image_resource.h"
@@ -86,11 +87,12 @@ gfx::SizeF LayoutSVGImage::CalculateObjectSize() const {
   NOT_DESTROYED();
 
   const SVGViewportResolver viewport_resolver(*this);
-  gfx::Vector2dF style_size =
-      VectorForLengthPair(StyleRef().UsedWidth(), StyleRef().UsedHeight(),
-                          viewport_resolver, StyleRef());
-  bool width_is_auto = style_size.x() < 0 || StyleRef().UsedWidth().IsAuto();
-  bool height_is_auto = style_size.y() < 0 || StyleRef().UsedHeight().IsAuto();
+  gfx::Vector2dF style_size = VectorForLengthPair(
+      StyleRef().Width(), StyleRef().Height(), viewport_resolver, StyleRef());
+  // TODO(https://crbug.com/313072): This needs a bit of work to support
+  // intrinsic keywords, calc-size(), etc. values for width and height.
+  bool width_is_auto = style_size.x() < 0 || StyleRef().Width().IsAuto();
+  bool height_is_auto = style_size.y() < 0 || StyleRef().Height().IsAuto();
   if (!width_is_auto && !height_is_auto)
     return gfx::SizeF(style_size.x(), style_size.y());
 
@@ -145,7 +147,7 @@ bool LayoutSVGImage::UpdateBoundingBox() {
   return old_object_bounding_box != object_bounding_box_;
 }
 
-void LayoutSVGImage::UpdateLayout() {
+void LayoutSVGImage::UpdateSVGLayout() {
   NOT_DESTROYED();
   DCHECK(NeedsLayout());
 

@@ -59,6 +59,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
+#include "chrome/browser/ash/file_manager/volume.h"
 #endif
 
 namespace web_app {
@@ -526,6 +527,7 @@ IN_PROC_BROWSER_TEST_P(WebAppFileHandlingIconBrowserTest, Basic) {
   const GURL app_url(
       embedded_test_server()->GetURL("/web_app_file_handling/icons_app.html"));
   const webapps::AppId app_id = InstallWebAppFromManifest(browser(), app_url);
+  ASSERT_FALSE(app_id.empty());
   auto* provider = WebAppProvider::GetForTest(browser()->profile());
   const WebApp* web_app = provider->registrar_unsafe().GetAppById(app_id);
   ASSERT_TRUE(web_app);
@@ -540,7 +542,7 @@ IN_PROC_BROWSER_TEST_P(WebAppFileHandlingIconBrowserTest, Basic) {
   }
 }
 
-// TODO(crbug.com/1218210): add more tests.
+// TODO(crbug.com/40185556): add more tests.
 
 INSTANTIATE_TEST_SUITE_P(, WebAppFileHandlingIconBrowserTest, testing::Bool());
 

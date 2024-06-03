@@ -88,7 +88,7 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
     const editorConfig = [
       CodeMirror.javascript.javascriptLanguage,
       TextEditor.Config.baseConfiguration(oldCondition || ''),
-      TextEditor.Config.closeBrackets,
+      TextEditor.Config.closeBrackets.instance(),
       TextEditor.Config.autocompletion.instance(),
       CodeMirror.EditorView.lineWrapping,
       TextEditor.Config.showCompletionHint,
@@ -105,7 +105,7 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
     this.element.tabIndex = -1;
 
     this.element.classList.add('sources-edit-breakpoint-dialog');
-    this.element.setAttribute('jslog', `${VisualLogging.pane('edit-breakpoint')}`);
+    this.element.setAttribute('jslog', `${VisualLogging.dialog('edit-breakpoint')}`);
     const header = this.contentElement.createChild('div', 'dialog-header');
     const toolbar = new UI.Toolbar.Toolbar('source-frame-breakpoint-toolbar', header);
     toolbar.appendText(`Line ${editorLineNumber + 1}:`);

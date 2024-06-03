@@ -104,6 +104,8 @@ class SafetyCheckMediator {
     /** Handles the password check. Contains the logic for both UPM and non-UPM password check. */
     private PasswordCheckController mPasswordCheckController;
 
+    private PasswordManagerHelper mPasswordManagerHelper;
+
     private ObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
 
     /** Callbacks and related objects to show the checking state for at least 1 second. */
@@ -197,6 +199,7 @@ class SafetyCheckMediator {
             SyncConsentActivityLauncher signinLauncher,
             SyncService syncService,
             PrefService prefService,
+            PasswordManagerHelper passwordManagerHelper,
             ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier) {
         this(
                 safetyCheckModel,
@@ -210,7 +213,8 @@ class SafetyCheckMediator {
                 prefService,
                 new Handler(),
                 new PasswordStoreBridge(),
-                new PasswordCheckControllerFactory());
+                new PasswordCheckControllerFactory(),
+                passwordManagerHelper);
         mModalDialogManagerSupplier = modalDialogManagerSupplier;
     }
 
@@ -227,6 +231,7 @@ class SafetyCheckMediator {
             PrefService prefService,
             PasswordStoreBridge passwordStoreBridge,
             PasswordCheckControllerFactory passwordCheckControllerFactory,
+            PasswordManagerHelper passwordManagerHelper,
             Handler handler,
             ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier) {
         this(
@@ -241,7 +246,8 @@ class SafetyCheckMediator {
                 prefService,
                 handler,
                 passwordStoreBridge,
-                passwordCheckControllerFactory);
+                passwordCheckControllerFactory,
+                passwordManagerHelper);
         mModalDialogManagerSupplier = modalDialogManagerSupplier;
     }
 
@@ -257,7 +263,8 @@ class SafetyCheckMediator {
             PrefService prefService,
             Handler handler,
             PasswordStoreBridge passwordStoreBridge,
-            PasswordCheckControllerFactory passwordCheckControllerFactory) {
+            PasswordCheckControllerFactory passwordCheckControllerFactory,
+            PasswordManagerHelper passwordManagerHelper) {
         mSafetyCheckModel = safetyCheckModel;
         mPasswordsCheckAccountStorageModel = passwordsCheckAccountModel;
         mPasswordsCheckLocalStorageModel = passwordsCheckLocalModel;
@@ -270,7 +277,12 @@ class SafetyCheckMediator {
         mPreferenceManager = ChromeSharedPreferences.getInstance();
         mPasswordCheckController =
                 passwordCheckControllerFactory.create(
-                        syncService, prefService, passwordStoreBridge, settingsLauncher);
+                        syncService,
+                        prefService,
+                        passwordStoreBridge,
+                        settingsLauncher,
+                        passwordManagerHelper);
+        mPasswordManagerHelper = passwordManagerHelper;
         // Set the listener for clicking the updates element.
         mSafetyCheckModel.set(
                 SafetyCheckProperties.UPDATES_CLICK_LISTENER,
@@ -355,7 +367,7 @@ class SafetyCheckMediator {
             // credentials will expectedly fail and display an error message. This error is
             // designed to be only shown when user explicitly runs the check (or it was ran
             // recently). For this case, breached credential fetch is skipped.
-            if (PasswordManagerHelper.canUseUpm()
+            if (mPasswordManagerHelper.canUseUpm()
                     && PasswordManagerBackendSupportHelper.getInstance().isUpdateNeeded()) {
                 setPasswordsState(mPasswordsCheckAccountStorageModel, PasswordsState.UNCHECKED);
                 setPasswordsState(mPasswordsCheckLocalStorageModel, PasswordsState.UNCHECKED);
@@ -551,7 +563,22 @@ class SafetyCheckMediator {
         @PasswordsState
         int state = passwordsCheckModel.get(PasswordsCheckPreferenceProperties.PASSWORDS_STATE);
         Preference.OnPreferenceClickListener listener = null;
-        if (state == PasswordsState.SIGNED_OUT) {
+        if (state == PasswordsState.UNCHECKED) {
+            listener =
+                    (p) -> {
+                        String account =
+                                getAccountNameForPasswordStorageType(
+                                        passwordStorageType, mSyncService);
+                        mPasswordManagerHelper.showPasswordSettings(
+                                p.getContext(),
+                                ManagePasswordsReferrer.SAFETY_CHECK,
+                                mSettingsLauncher,
+                                mModalDialogManagerSupplier,
+                                /* managePasskeys= */ false,
+                                account);
+                        return true;
+                    };
+        } else if (state == PasswordsState.SIGNED_OUT) {
             listener =
                     (p) -> {
                         // Open the sign in page.
@@ -569,17 +596,16 @@ class SafetyCheckMediator {
                                 SafetyCheckInteractions.PASSWORDS_MANAGE,
                                 SafetyCheckInteractions.MAX_VALUE + 1);
                         // Open the Password Check UI.
-                        if (!PasswordManagerHelper.canUseUpm()) {
+                        if (!mPasswordManagerHelper.canUseUpm()) {
                             PasswordCheckFactory.getOrCreate(mSettingsLauncher)
                                     .showUi(p.getContext(), PasswordCheckReferrer.SAFETY_CHECK);
                         } else {
                             String account =
                                     getAccountNameForPasswordStorageType(
                                             passwordStorageType, mSyncService);
-                            PasswordManagerHelper.showPasswordCheckup(
+                            mPasswordManagerHelper.showPasswordCheckup(
                                     p.getContext(),
                                     PasswordCheckReferrer.SAFETY_CHECK,
-                                    mSyncService,
                                     mModalDialogManagerSupplier,
                                     account);
                         }
@@ -589,18 +615,6 @@ class SafetyCheckMediator {
             listener =
                     (p) -> {
                         PasswordManagerHelper.launchGmsUpdate(p.getContext());
-                        return true;
-                    };
-        } else {
-            listener =
-                    (p) -> {
-                        PasswordManagerHelper.showPasswordSettings(
-                                p.getContext(),
-                                ManagePasswordsReferrer.SAFETY_CHECK,
-                                mSettingsLauncher,
-                                mSyncService,
-                                mModalDialogManagerSupplier,
-                                /* managePasskeys= */ false);
                         return true;
                     };
         }

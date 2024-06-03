@@ -83,6 +83,7 @@
 #include "third_party/blink/renderer/core/inspector/inspector_history.h"
 #include "third_party/blink/renderer/core/inspector/resolve_node.h"
 #include "third_party/blink/renderer/core/inspector/v8_inspector_string.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -223,6 +224,10 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::ScrollbarTrackPiece;
     case kPseudoIdScrollbarCorner:
       return protocol::DOM::PseudoTypeEnum::ScrollbarCorner;
+    case kPseudoIdScrollMarker:
+      return protocol::DOM::PseudoTypeEnum::ScrollMarker;
+    case kPseudoIdScrollMarkers:
+      return protocol::DOM::PseudoTypeEnum::ScrollMarkers;
     case kPseudoIdResizer:
       return protocol::DOM::PseudoTypeEnum::Resizer;
     case kPseudoIdInputListButton:
@@ -239,6 +244,7 @@ protocol::DOM::PseudoType InspectorDOMAgent::ProtocolPseudoElementType(
       return protocol::DOM::PseudoTypeEnum::ViewTransitionOld;
     case kAfterLastInternalPseudoId:
     case kPseudoIdNone:
+    case kPseudoIdInvalid:
       CHECK(false);
       return "";
   }
@@ -1639,29 +1645,29 @@ protocol::Response InspectorDOMAgent::getContainerForNode(
   if (!response.IsSuccess())
     return response;
 
-  PhysicalAxes physical = kPhysicalAxisNone;
+  PhysicalAxes physical = kPhysicalAxesNone;
   // TODO(crbug.com/1378237): Need to keep the broken behavior of querying the
   // inline-axis by default to avoid even worse behavior before devtools-
-  // frontend catches up. Change value here to kLogicalAxisNone.
-  LogicalAxes logical = kLogicalAxisInline;
+  // frontend catches up. Change value here to kLogicalAxesNone.
+  LogicalAxes logical = kLogicalAxesInline;
 
   if (physical_axes.has_value()) {
     if (physical_axes.value() == protocol::DOM::PhysicalAxesEnum::Horizontal) {
-      physical = kPhysicalAxisHorizontal;
+      physical = kPhysicalAxesHorizontal;
     } else if (physical_axes.value() ==
                protocol::DOM::PhysicalAxesEnum::Vertical) {
-      physical = kPhysicalAxisVertical;
+      physical = kPhysicalAxesVertical;
     } else if (physical_axes.value() == protocol::DOM::PhysicalAxesEnum::Both) {
-      physical = kPhysicalAxisBoth;
+      physical = kPhysicalAxesBoth;
     }
   }
   if (logical_axes.has_value()) {
     if (logical_axes.value() == protocol::DOM::LogicalAxesEnum::Inline) {
-      logical = kLogicalAxisInline;
+      logical = kLogicalAxesInline;
     } else if (logical_axes.value() == protocol::DOM::LogicalAxesEnum::Block) {
-      logical = kLogicalAxisBlock;
+      logical = kLogicalAxesBlock;
     } else if (logical_axes.value() == protocol::DOM::LogicalAxesEnum::Both) {
-      logical = kLogicalAxisBoth;
+      logical = kLogicalAxesBoth;
     }
   }
 
@@ -1765,12 +1771,12 @@ String InspectorDOMAgent::DocumentBaseURLString(Document* document) {
 // static
 protocol::DOM::ShadowRootType InspectorDOMAgent::GetShadowRootType(
     ShadowRoot* shadow_root) {
-  switch (shadow_root->GetType()) {
-    case ShadowRootType::kUserAgent:
+  switch (shadow_root->GetMode()) {
+    case ShadowRootMode::kUserAgent:
       return protocol::DOM::ShadowRootTypeEnum::UserAgent;
-    case ShadowRootType::kOpen:
+    case ShadowRootMode::kOpen:
       return protocol::DOM::ShadowRootTypeEnum::Open;
-    case ShadowRootType::kClosed:
+    case ShadowRootMode::kClosed:
       return protocol::DOM::ShadowRootTypeEnum::Closed;
   }
   NOTREACHED();

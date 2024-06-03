@@ -4,7 +4,7 @@
 """Definitions of builders in the chromium.android.fyi builder group."""
 
 load("//lib/builder_config.star", "builder_config")
-load("//lib/builders.star", "os", "reclient")
+load("//lib/builders.star", "os", "reclient", "siso")
 load("//lib/ci.star", "ci")
 load("//lib/consoles.star", "consoles")
 load("//lib/gn_args.star", "gn_args")
@@ -23,6 +23,12 @@ ci.defaults.set(
     reclient_jobs = reclient.jobs.DEFAULT,
     service_account = ci.DEFAULT_SERVICE_ACCOUNT,
     shadow_service_account = ci.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_configs = ["builder"],
+    siso_enable_cloud_profiler = True,
+    siso_enable_cloud_trace = True,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = reclient.jobs.DEFAULT,
 )
 
 consoles.console_view(
@@ -486,27 +492,41 @@ ci.builder(
 )
 
 ci.builder(
-    name = "android-webview-13-x64-dbg-hostside",
+    name = "android-mte-arm64-rel",
     description_html = (
-        "This temporary builder/tester runs WebView host-driven CTS.<br/>" +
-        "This builder should be removed after adding the test suite to" +
-        "android-12-x64-rel required CQ builder. b/267730567."
+        "Run chromium tests with MTE SYNC mode enabled on Android."
     ),
-    builder_spec = builder_config.copy_from("ci/Android x64 Builder All Targets (dbg)"),
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = ["android"],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "android",
+            apply_configs = ["mb"],
+            build_config = builder_config.build_config.RELEASE,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(config = "main_builder"),
+        build_gs_bucket = "chromium-android-archive",
+        run_tests_serially = True,
+    ),
     gn_args = gn_args.config(
         configs = [
             "android_builder",
-            "debug_static_builder",
+            "release_builder",
             "reclient",
-            "x64",
-            "webview_trichrome",
-            "webview_shell",
+            "minimal_symbols",
+            "arm64",
+            "strip_debug_info",
+            "full_mte",
         ],
     ),
     console_view_entry = consoles.console_view_entry(
-        category = "builder|x86",
-        short_name = "64",
+        category = "builder|arm64",
+        short_name = "mte",
     ),
-    contact_team_email = "woa-engprod@google.com",
-    execution_timeout = 7 * time.hour,
+    contact_team_email = "chrome-mte@google.com",
+    execution_timeout = 20 * time.hour,
 )

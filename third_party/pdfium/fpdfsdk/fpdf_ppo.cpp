@@ -31,6 +31,7 @@
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
 #include "core/fpdfapi/parser/cpdf_string.h"
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_string_wrappers.h"
 #include "core/fxcrt/retain_ptr.h"
@@ -38,7 +39,6 @@
 #include "core/fxcrt/unowned_ptr.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
 #include "public/cpp/fpdf_scopers.h"
-#include "third_party/base/check.h"
 
 struct XObjectContext {
   UnownedPtr<CPDF_Document> dest_doc;
@@ -640,7 +640,7 @@ RetainPtr<CPDF_Stream> CPDF_NPageToOneExporter::MakeXObjectFromPageRaw(
       pAcc->LoadAllDataFiltered();
       bsSrcContentStream = ByteString(pAcc->GetSpan());
     }
-    pNewXObject->SetDataAndRemoveFilter(bsSrcContentStream.raw_span());
+    pNewXObject->SetDataAndRemoveFilter(bsSrcContentStream.unsigned_span());
   }
   return pNewXObject;
 }
@@ -681,7 +681,7 @@ void CPDF_NPageToOneExporter::FinishPage(
 
   auto pStream =
       dest()->NewIndirect<CPDF_Stream>(dest()->New<CPDF_Dictionary>());
-  pStream->SetData(bsContent.raw_span());
+  pStream->SetData(bsContent.unsigned_span());
   pDestPageDict->SetNewFor<CPDF_Reference>(pdfium::page_object::kContents,
                                            dest(), pStream->GetObjNum());
 }

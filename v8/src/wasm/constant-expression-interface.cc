@@ -105,7 +105,8 @@ void ConstantExpressionInterface::RefNull(FullDecoder* decoder, ValueType type,
                                           Value* result) {
   if (!generate_value()) return;
   result->runtime_value =
-      WasmValue(type == kWasmExternRef || type == kWasmNullExternRef
+      WasmValue((IsSubtypeOf(type, kWasmExternRef, decoder->module_) ||
+                 IsSubtypeOf(type, kWasmExnRef, decoder->module_))
                     ? Handle<Object>::cast(isolate_->factory()->null_value())
                     : Handle<Object>::cast(isolate_->factory()->wasm_null()),
                 type);
@@ -120,10 +121,9 @@ void ConstantExpressionInterface::RefFunc(FullDecoder* decoder,
   }
   if (!generate_value()) return;
   ValueType type = ValueType::Ref(module_->functions[function_index].sig_index);
-  Handle<WasmInternalFunction> internal =
-      WasmTrustedInstanceData::GetOrCreateWasmInternalFunction(
-          isolate_, trusted_instance_data_, function_index);
-  result->runtime_value = WasmValue(internal, type);
+  Handle<WasmFuncRef> func_ref = WasmTrustedInstanceData::GetOrCreateFuncRef(
+      isolate_, trusted_instance_data_, function_index);
+  result->runtime_value = WasmValue(func_ref, type);
 }
 
 void ConstantExpressionInterface::GlobalGet(FullDecoder* decoder, Value* result,
@@ -202,7 +202,7 @@ WasmValue DefaultValueForType(ValueType type, Isolate* isolate) {
     case kRefNull:
       return WasmValue(
           type == kWasmExternRef || type == kWasmNullExternRef ||
-                  type == kWasmExnRef
+                  type == kWasmExnRef || type == kWasmNullExnRef
               ? Handle<Object>::cast(isolate->factory()->null_value())
               : Handle<Object>::cast(isolate->factory()->wasm_null()),
           type);
@@ -356,8 +356,14 @@ void ConstantExpressionInterface::RefI31(FullDecoder* decoder,
   // For 32-bit Smi builds, set the topmost bit to sign-extend the second bit.
   // This way, interpretation in JS (if this value escapes there) will be the
   // same as i31.get_s.
-  intptr_t shifted =
-      static_cast<intptr_t>(raw << (kSmiTagSize + kSmiShiftSize + 1)) >> 1;
+  static_assert((SmiValuesAre31Bits() ^ SmiValuesAre32Bits()) == 1);
+  intptr_t shifted;
+  if constexpr (SmiValuesAre31Bits()) {
+    shifted = raw << (kSmiTagSize + kSmiShiftSize);
+  } else {
+    shifted =
+        static_cast<intptr_t>(raw << (kSmiTagSize + kSmiShiftSize + 1)) >> 1;
+  }
   result->runtime_value = WasmValue(handle(Tagged<Smi>(shifted), isolate_),
                                     wasm::kWasmI31Ref.AsNonNull());
 }

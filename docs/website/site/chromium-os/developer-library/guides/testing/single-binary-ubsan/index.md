@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/guides
-  - Chromium OS > Developer Library > Guides
+  - ChromiumOS > Developer Library > Guides
 page_name: single-binary-ubsan
 title: Running a single binary with UBSAN
 ---

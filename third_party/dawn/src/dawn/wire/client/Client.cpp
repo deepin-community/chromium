@@ -60,6 +60,11 @@ Client::Client(CommandSerializer* serializer, MemoryTransferService* memoryTrans
 }
 
 Client::~Client() {
+    // Transition all event managers to ClientDropped state.
+    for (auto& [_, eventManager] : mEventManagers) {
+        eventManager->TransitionTo(EventManager::State::ClientDropped);
+    }
+
     DestroyAllObjects();
 }
 
@@ -99,15 +104,8 @@ ReservedTexture Client::ReserveTexture(WGPUDevice device, const WGPUTextureDescr
 
     ReservedTexture result;
     result.texture = ToAPI(texture);
-    result.reservation.id = texture->GetWireId();
-    result.reservation.generation = texture->GetWireGeneration();
-    result.reservation.deviceId = FromAPI(device)->GetWireId();
-    result.reservation.deviceGeneration = FromAPI(device)->GetWireGeneration();
-    // TODO(dawn:2021) Remove setting of deprecated fields once Chromium is updated.
-    result.id = texture->GetWireId();
-    result.generation = texture->GetWireGeneration();
-    result.deviceId = FromAPI(device)->GetWireId();
-    result.deviceGeneration = FromAPI(device)->GetWireGeneration();
+    result.handle = texture->GetWireHandle();
+    result.deviceHandle = FromAPI(device)->GetWireHandle();
     return result;
 }
 
@@ -117,20 +115,8 @@ ReservedSwapChain Client::ReserveSwapChain(WGPUDevice device,
 
     ReservedSwapChain result;
     result.swapchain = ToAPI(swapChain);
-    result.reservation.id = swapChain->GetWireId();
-    result.reservation.generation = swapChain->GetWireGeneration();
-    result.reservation.deviceId = FromAPI(device)->GetWireId();
-    result.reservation.deviceGeneration = FromAPI(device)->GetWireGeneration();
-    return result;
-}
-
-ReservedDevice Client::ReserveDevice(WGPUInstance instance) {
-    Device* device = Make<Device>(FromAPI(instance)->GetEventManagerHandle(), nullptr);
-
-    ReservedDevice result;
-    result.device = ToAPI(device);
-    result.reservation.id = device->GetWireId();
-    result.reservation.generation = device->GetWireGeneration();
+    result.handle = swapChain->GetWireHandle();
+    result.deviceHandle = FromAPI(device)->GetWireHandle();
     return result;
 }
 
@@ -143,13 +129,11 @@ ReservedInstance Client::ReserveInstance(const WGPUInstanceDescriptor* descripto
     }
 
     // Reserve an EventManager for the given instance and make the association in the map.
-    mEventManagers.emplace(ObjectHandle(instance->GetWireId(), instance->GetWireGeneration()),
-                           std::make_unique<EventManager>());
+    mEventManagers.emplace(instance->GetWireHandle(), std::make_unique<EventManager>());
 
     ReservedInstance result;
     result.instance = ToAPI(instance);
-    result.reservation.id = instance->GetWireId();
-    result.reservation.generation = instance->GetWireGeneration();
+    result.handle = instance->GetWireHandle();
     return result;
 }
 
@@ -179,6 +163,11 @@ void Client::Disconnect() {
     mDisconnected = true;
     mSerializer = ChunkedCommandSerializer(NoopCommandSerializer::GetInstance());
 
+    // Transition all event managers to ClientDropped state.
+    for (auto& [_, eventManager] : mEventManagers) {
+        eventManager->TransitionTo(EventManager::State::ClientDropped);
+    }
+
     auto& deviceList = mObjects[ObjectType::Device];
     {
         for (LinkNode<ObjectBase>* device = deviceList.head(); device != deviceList.end();
@@ -192,11 +181,6 @@ void Client::Disconnect() {
              object = object->next()) {
             object->value()->CancelCallbacksForDisconnect();
         }
-    }
-
-    // Transition all event managers to ClientDropped state.
-    for (auto& [_, eventManager] : mEventManagers) {
-        eventManager->TransitionTo(EventManager::State::ClientDropped);
     }
 }
 

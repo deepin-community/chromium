@@ -20,6 +20,8 @@ class Config {
     this.useMouseAcceleration = false;
     /** @type {?Map<string, number>} */
     this.speeds = null;
+    /** @type {number} */
+    this.repeatDelayMs = -1;
   }
 
   /**
@@ -75,6 +77,14 @@ class Config {
    */
   withSpeeds(up, down, left, right) {
     this.speeds = {up, down, left, right};
+    return this;
+  }
+
+  /**
+   * @param {number} repeatDelayMs
+   */
+  withRepeatDelayMs(repeatDelayMs) {
+    this.repeatDelayMs = repeatDelayMs;
     return this;
   }
 }
@@ -152,6 +162,7 @@ FaceGazeTestBase = class extends E2ETestBase {
     assertNotNullNorUndefined(accessibilityCommon);
     assertNotNullNorUndefined(FaceGaze);
     assertNotNullNorUndefined(FacialGesture);
+    assertNotNullNorUndefined(GestureHandler);
     assertNotNullNorUndefined(MediapipeFacialGesture);
     assertNotNullNorUndefined(FacialGesturesToMediapipeGestures);
     assertNotNullNorUndefined(MouseController);
@@ -200,13 +211,21 @@ FaceGazeTestBase = class extends E2ETestBase {
     }
 
     if (config.gestureToMacroName) {
-      faceGaze.gestureHandler_.gestureToMacroName_ =
-          new Map(config.gestureToMacroName);
+      const gestureToMacroName = {};
+      for (const [gesture, macroName] of config.gestureToMacroName) {
+        gestureToMacroName[gesture] = macroName;
+      }
+      await this.setPref(
+          GestureHandler.GESTURE_TO_MACRO_PREF, gestureToMacroName);
     }
 
     if (config.gestureToConfidence) {
-      faceGaze.gestureHandler_.gestureToConfidence_ =
-          new Map(config.gestureToConfidence);
+      const gestureToConfidence = {};
+      for (const [gesture, confidence] of config.gestureToConfidence) {
+        gestureToConfidence[gesture] = confidence * 100;
+      }
+      await this.setPref(
+          GestureHandler.GESTURE_TO_CONFIDENCE_PREF, gestureToConfidence);
     }
 
     if (config.bufferSize !== -1) {
@@ -219,6 +238,10 @@ FaceGazeTestBase = class extends E2ETestBase {
       await this.setPref(MouseController.PREF_SPD_DOWN, config.speeds.down);
       await this.setPref(MouseController.PREF_SPD_LEFT, config.speeds.left);
       await this.setPref(MouseController.PREF_SPD_RIGHT, config.speeds.right);
+    }
+
+    if (config.repeatDelayMs > 0) {
+      faceGaze.gestureHandler_.repeatDelayMs_ = config.repeatDelayMs;
     }
 
     await this.setPref(
@@ -251,5 +274,10 @@ FaceGazeTestBase = class extends E2ETestBase {
       // Manually trigger the mouse interval one time.
       this.triggerMouseControllerInterval();
     }
+  }
+
+  /** Clears the timestamps at which gestures were last recognized. */
+  clearGestureLastRecognizedTime() {
+    this.getFaceGaze().gestureHandler_.gestureLastRecognized_.clear();
   }
 };

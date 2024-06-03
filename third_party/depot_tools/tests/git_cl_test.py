@@ -2548,6 +2548,19 @@ class TestGitCl(unittest.TestCase):
         cl = self._test_gerrit_ensure_authenticated_common(auth={})
         self.assertIsNone(cl.EnsureAuthenticated(force=False))
 
+    def test_gerrit_ensure_authenticated_sso(self):
+        self.mockGit.config['remote.origin.url'] = 'sso://repo'
+
+        mock.patch(
+            'git_cl.gerrit_util.CookiesAuthenticator',
+            CookiesAuthenticatorMockFactory(hosts_with_creds={})).start()
+
+        cl = git_cl.Changelist()
+        cl.branch = 'main'
+        cl.branchref = 'refs/heads/main'
+        cl.lookedup_issue = True
+        self.assertIsNone(cl.EnsureAuthenticated(force=False))
+
     def test_gerrit_ensure_authenticated_bearer_token(self):
         cl = self._test_gerrit_ensure_authenticated_common(
             auth={
@@ -2559,11 +2572,11 @@ class TestGitCl(unittest.TestCase):
             'chromium.googlesource.com')
         self.assertTrue('Bearer' in header)
 
-    def test_gerrit_ensure_authenticated_non_https(self):
+    def test_gerrit_ensure_authenticated_non_https_sso(self):
         self.mockGit.config['remote.origin.url'] = 'custom-scheme://repo'
         self.calls = [
             (('logging.warning',
-              'Ignoring branch %(branch)s with non-https/sso remote '
+              'Ignoring branch %(branch)s with non-https remote '
               '%(remote)s', {
                   'branch': 'main',
                   'remote': 'custom-scheme://repo'
@@ -4255,6 +4268,13 @@ class CMDTestCaseBase(unittest.TestCase):
 
 
 class CMDPresubmitTestCase(CMDTestCaseBase):
+    _RUN_HOOK_RETURN = {
+        'errors': [],
+        'more_cc': [],
+        'notifications': [],
+        'warnings': []
+    }
+
     def setUp(self):
         super(CMDPresubmitTestCase, self).setUp()
         mock.patch('git_cl.Changelist.GetCommonAncestorWithUpstream',
@@ -4263,7 +4283,8 @@ class CMDPresubmitTestCase(CMDTestCaseBase):
                    return_value='fetch description').start()
         mock.patch('git_cl._create_description_from_log',
                    return_value='get description').start()
-        mock.patch('git_cl.Changelist.RunHook').start()
+        mock.patch('git_cl.Changelist.RunHook',
+                   return_value=self._RUN_HOOK_RETURN).start()
 
     def testDefaultCase(self):
         self.assertEqual(0, git_cl.main(['presubmit']))
@@ -4326,6 +4347,12 @@ class CMDPresubmitTestCase(CMDTestCaseBase):
             files=None,
             resultdb=True,
             realm='chromium:public')
+
+    @mock.patch('git_cl.write_json')
+    def testJson(self, mock_write_json):
+        self.assertEqual(0, git_cl.main(['presubmit', '--json', 'file.json']))
+        mock_write_json.assert_called_once_with('file.json',
+                                                self._RUN_HOOK_RETURN)
 
 
 class CMDTryResultsTestCase(CMDTestCaseBase):

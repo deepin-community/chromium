@@ -8,10 +8,11 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -33,7 +34,7 @@ namespace autofill {
 
 namespace {
 
-base::span<const MatchPatternRef> GetMatchPatterns(base::StringPiece name,
+base::span<const MatchPatternRef> GetMatchPatterns(std::string_view name,
                                                    ParsingContext& context) {
   return GetMatchPatterns(name, context.page_language, context.pattern_source);
 }
@@ -80,6 +81,9 @@ std::unique_ptr<FormFieldParser> CreditCardFieldParser::Parse(
   size_t saved_cursor = scanner->SaveCursor();
   int nb_unknown_fields = 0;
   bool cardholder_name_match_has_low_confidence = false;
+
+  base::span<const MatchPatternRef> card_number_patterns =
+      GetMatchPatterns(CREDIT_CARD_NUMBER, context);
 
   base::span<const MatchPatternRef> name_on_card_patterns =
       GetMatchPatterns("NAME_ON_CARD", context);
@@ -192,13 +196,12 @@ std::unique_ptr<FormFieldParser> CreditCardFieldParser::Parse(
       }
     }
 
-    // TODO(crbug.com/591816): Make sure parsing cc-numbers of type password
+    // TODO(crbug.com/41242238): Make sure parsing cc-numbers of type password
     // doesn't have bad side effects.
     raw_ptr<AutofillField> current_number_field;
-    base::span<const MatchPatternRef> patterns =
-        GetMatchPatterns(CREDIT_CARD_NUMBER, context);
     if (ParseFieldSpecifics(context, scanner, kCardNumberRe, kMatchNumTelAndPwd,
-                            patterns, &current_number_field, "kCardNumberRe")) {
+                            card_number_patterns, &current_number_field,
+                            "kCardNumberRe")) {
       credit_card_field->numbers_.push_back(current_number_field.get());
       nb_unknown_fields = 0;
       continue;
@@ -284,7 +287,7 @@ bool CreditCardFieldParser::LikelyCardMonthSelectField(
 
   AutofillField* field = scanner->Cursor();
   if (!MatchesFormControlType(
-          field->form_control_type,
+          field->form_control_type(),
           {FormControlType::kSelectOne, FormControlType::kSelectList,
            FormControlType::kInputSearch})) {
     return false;
@@ -318,7 +321,7 @@ bool CreditCardFieldParser::LikelyCardYearSelectField(
 
   AutofillField* field = scanner->Cursor();
   if (!MatchesFormControlType(
-          field->form_control_type,
+          field->form_control_type(),
           {FormControlType::kSelectOne, FormControlType::kSelectList,
            FormControlType::kInputSearch})) {
     return false;
@@ -379,9 +382,9 @@ bool CreditCardFieldParser::LikelyCardYearSelectField(
     if (base::Contains(field->options, u"2", option_projection)) {
       return false;
     }
-    auto is_substring = [](base::StringPiece16 option,
-                           base::StringPiece16 year_needle) {
-      return option.find(year_needle) != base::StringPiece16::npos;
+    auto is_substring = [](std::u16string_view option,
+                           std::u16string_view year_needle) {
+      return option.find(year_needle) != std::u16string_view::npos;
     };
     return base::ranges::search(field->options, year_needles, is_substring,
                                 option_projection) != field->options.end();
@@ -399,7 +402,7 @@ bool CreditCardFieldParser::LikelyCardTypeSelectField(
   AutofillField* field = scanner->Cursor();
 
   if (!MatchesFormControlType(
-          field->form_control_type,
+          field->form_control_type(),
           {FormControlType::kSelectOne, FormControlType::kSelectList,
            FormControlType::kInputSearch})) {
     return false;
@@ -530,7 +533,7 @@ void CreditCardFieldParser::AddClassifications(
 bool CreditCardFieldParser::ParseExpirationDate(ParsingContext& context,
                                                 AutofillScanner* scanner) {
   if (!expiration_date_ &&
-      scanner->Cursor()->form_control_type == FormControlType::kInputMonth) {
+      scanner->Cursor()->form_control_type() == FormControlType::kInputMonth) {
     expiration_date_ = scanner->Cursor();
     expiration_month_ = nullptr;
     expiration_year_ = nullptr;
@@ -590,7 +593,7 @@ bool CreditCardFieldParser::ParseExpirationDate(ParsingContext& context,
   std::u16string year_regex =
       base::FeatureList::IsEnabled(
           features::kAutofillEnableExpirationDateImprovements)
-          ? u"^(yy|yyyy|aa|aaaa)$"
+          ? u"^(yy|yyyy|aa|aaaa|jj|jjjj)$"
           : u"^(yy|yyyy)$";
   base::span<const MatchPatternRef> year_pattern =
       base::FeatureList::IsEnabled(
@@ -617,6 +620,8 @@ bool CreditCardFieldParser::ParseExpirationDate(ParsingContext& context,
     return false;
 
   // Try to look for a 2-digit year expiration date.
+  // If you add new languages, also update other places labeled with
+  // [EXP_DATE_FORMAT].
   base::span<const MatchPatternRef> cc_exp_2digit_year_patterns =
       GetMatchPatterns(CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR, context);
   if (ParseFieldSpecifics(context, scanner, kExpirationDate2DigitYearRe,
@@ -628,6 +633,8 @@ bool CreditCardFieldParser::ParseExpirationDate(ParsingContext& context,
   }
 
   // Try to look for a generic expiration date field. (2 or 4 digit year)
+  // If you add new languages, also update other places labeled with
+  // [EXP_DATE_FORMAT].
   base::span<const MatchPatternRef> cc_exp_date_patterns =
       GetMatchPatterns("CREDIT_CARD_EXP_DATE", context);
   if (ParseFieldSpecifics(context, scanner, kExpirationDateRe, kMatchCCType,
@@ -645,6 +652,8 @@ bool CreditCardFieldParser::ParseExpirationDate(ParsingContext& context,
   }
 
   // Try to look for a 4-digit year expiration date.
+  // If you add new languages, also update other places labeled with
+  // [EXP_DATE_FORMAT].
   base::span<const MatchPatternRef> cc_exp_date_4_digit_year_patterns =
       GetMatchPatterns(CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR, context);
   if (FieldCanFitDataForFieldType(current_field_max_length,
@@ -677,6 +686,8 @@ FieldType CreditCardFieldParser::DetermineExpirationYearType(
     if (field.max_length == 2) {
       return CREDIT_CARD_EXP_2_DIGIT_YEAR;
     }
+    // If you add new languages, also update other places labeled with
+    // [EXP_DATE_FORMAT].
     static constexpr char16_t kYYYYRegex[] = u"yyyy|aaaa|jjjj";
     if (MatchesRegex<kYYYYRegex>(field.placeholder, nullptr) ||
         MatchesRegex<kYYYYRegex>(field.label, nullptr)) {
@@ -757,8 +768,8 @@ FieldType CreditCardFieldParser::GetExpirationYearType() const {
     // it's practically always chosen from the select options. The default for
     // text elements was chosen base on statistics from server side
     // classifications (go/iqwtu).
-    // Keep this in sync with
-    // FormStructureRationalizer::RationalizeAutocompleteAttributes.
+    // If you add new languages, also update other places labeled with
+    // [EXP_DATE_FORMAT].
     return DetermineExpirationYearType(
         *expiration_year_,
         /*fallback_type=*/CREDIT_CARD_EXP_4_DIGIT_YEAR,
@@ -790,9 +801,11 @@ CreditCardFieldParser::DetermineExpirationDateFormat(
   bool matches = false;
   if (base::FeatureList::IsEnabled(
           features::kAutofillEnableExpirationDateImprovements)) {
-    // TODO(crbug/1326244): We should use a language specific regex.
+    // TODO(crbug.com/40225734): We should use a language specific regex.
+    // If you add new languages, also update other places labeled with
+    // [EXP_DATE_FORMAT].
     static constexpr char16_t kFormatRegex[] =
-        u"mm(\\s?[/-]?\\s?)?(y{2,4}|a{2,4})";
+        u"mm(\\s?[/-]?\\s?)?(y{2,4}|a{2,4}|j{2,4})";
     //       ^^^^ opt white space
     //           ^^^^^ opt separator
     //                ^^^ opt white space
@@ -825,7 +838,7 @@ CreditCardFieldParser::DetermineExpirationDateFormat(
     separator_candidates.emplace_back(separator);
 
     // Fallback: The matching separator with padding whitespace trimmed.
-    base::StringPiece16 trimmed_separator =
+    std::u16string_view trimmed_separator =
         base::TrimWhitespace(separator, base::TRIM_ALL);
     if (trimmed_separator != separator) {
       separator_candidates.emplace_back(trimmed_separator);
@@ -861,7 +874,7 @@ CreditCardFieldParser::DetermineExpirationDateFormat(
       type_length(server_hint)};
   // Now erase all zeros that indicate that some of the three cases above did
   // not lead to a hint.
-  base::Erase(year_length_candidates, kInvalid);
+  std::erase(year_length_candidates, kInvalid);
 
   // If we don't have any concrete hints from the server or the matched date
   // pattern, we leave `year_length_candidates` empty (instead of always adding

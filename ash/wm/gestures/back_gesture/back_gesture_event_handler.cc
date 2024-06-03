@@ -29,6 +29,7 @@
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_event.h"
 #include "base/containers/contains.h"
+#include "base/debug/crash_logging.h"
 #include "base/i18n/rtl.h"
 #include "base/metrics/user_metrics.h"
 #include "chromeos/ui/base/window_properties.h"
@@ -151,18 +152,20 @@ void ActivateUnderneathWindowInSplitViewMode(
              chromeos::OrientationType::kLandscapeSecondary) {
     ActivateWindow(dragged_from_splitview_divider ? left_window : right_window);
   } else {
-    if (left_window && split_view_controller
-                           ->GetSnappedWindowBoundsInScreen(
-                               SnapPosition::kPrimary,
-                               /*window_for_minimum_size=*/nullptr,
-                               chromeos::kDefaultSnapRatio)
-                           .Contains(location)) {
+    if (left_window &&
+        split_view_controller
+            ->GetSnappedWindowBoundsInScreen(
+                SnapPosition::kPrimary,
+                /*window_for_minimum_size=*/nullptr,
+                chromeos::kDefaultSnapRatio, /*account_for_divider_width=*/true)
+            .Contains(location)) {
       ActivateWindow(left_window);
     } else if (right_window && split_view_controller
                                    ->GetSnappedWindowBoundsInScreen(
                                        SnapPosition::kSecondary,
                                        /*window_for_minimum_size=*/nullptr,
-                                       chromeos::kDefaultSnapRatio)
+                                       chromeos::kDefaultSnapRatio,
+                                       /*account_for_divider_width=*/true)
                                    .Contains(location)) {
       ActivateWindow(right_window);
     } else if (split_view_controller->split_view_divider()
@@ -355,6 +358,11 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
       // with large enough velocity. Note, complete can be different actions
       // while in different scenarios, but always fading out the affordance at
       // the end.
+      SCOPED_CRASH_KEY_BOOL("286590216", "back_gesture_affordance_1",
+                            back_gesture_affordance_ != nullptr);
+      SCOPED_CRASH_KEY_BOOL("286590216", "going_back_started_1",
+                            going_back_started_);
+      SCOPED_CRASH_KEY_NUMBER("286590216", "event.type", event->type());
       if (back_gesture_affordance_->IsActivated() ||
           (event->type() == ui::ET_SCROLL_FLING_START &&
            event->details().velocity_x() >= kFlingVelocityForGoingBack)) {
@@ -417,6 +425,10 @@ bool BackGestureEventHandler::MaybeHandleBackGesture(
             }
           }
         }
+        SCOPED_CRASH_KEY_BOOL("286590216", "back_gesture_affordance_2",
+                              back_gesture_affordance_ != nullptr);
+        SCOPED_CRASH_KEY_BOOL("286590216", "going_back_started_2",
+                              going_back_started_);
         back_gesture_affordance_->Complete();
       } else {
         back_gesture_affordance_->Abort();

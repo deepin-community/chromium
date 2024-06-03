@@ -279,7 +279,7 @@ void OutputPresenterGL::ScheduleOverlayPlane(
   // macOS it is a CALayeroverlay.
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_OZONE)
 #if BUILDFLAG(IS_OZONE)
-  // TODO(crbug.com/1366808): Add ScopedOverlayAccess::GetOverlayImage() that
+  // TODO(crbug.com/40239878): Add ScopedOverlayAccess::GetOverlayImage() that
   // works on all platforms.
   gl::OverlayImage overlay_image = access ? access->GetNativePixmap() : nullptr;
 #elif BUILDFLAG(IS_ANDROID)
@@ -335,6 +335,7 @@ void OutputPresenterGL::ScheduleOverlayPlane(
             overlay_plane_candidate.color_space,
             overlay_plane_candidate.hdr_metadata, overlay_plane_candidate.color,
             overlay_plane_candidate.is_solid_color,
+            overlay_plane_candidate.is_root_render_pass,
             overlay_plane_candidate.clip_rect));
   }
 #elif BUILDFLAG(IS_APPLE)
@@ -368,6 +369,9 @@ void OutputPresenterGL::SetCALayerErrorCode(
   ca_layer_error_code_ = ca_layer_error_code;
 }
 
+void OutputPresenterGL::SetMaxPendingSwaps(int max_pending_swaps) {
+  presenter_->SetMaxPendingSwaps(max_pending_swaps);
+}
 #endif
 
 }  // namespace viz

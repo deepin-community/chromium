@@ -143,13 +143,12 @@ void NetworkPortalDetectorImpl::RequestCaptivePortalDetection() {
   auto* handler = NetworkHandler::Get()->network_state_handler();
   const NetworkState* default_network = handler->DefaultNetwork();
   if (!default_network) {
+    NET_LOG(DEBUG) << "RequestCaptivePortalDetection(): No default network";
     return;
   }
   if (default_network->IsOnline()) {
-    // If shill has identified the default network as 'online', only proxy
-    // authentication may have changed. Since a probe is inexpensive,
-    // schedule a detection attempt rather than attempt accurate bookkeeping.
-    ScheduleAttempt();
+    // Network is online, no detection necessary.
+    NET_LOG(DEBUG) << "RequestCaptivePortalDetection(): Network is online";
     return;
   }
   // Otherwise request shill portal detection.
@@ -205,9 +204,7 @@ void NetworkPortalDetectorImpl::PortalStateChanged(
       }
       return;
     case NetworkState::PortalState::kPortalSuspected:
-      // Shill result was inconclusive.
-      ScheduleAttempt();
-      return;
+      [[fallthrough]];
     case NetworkState::PortalState::kPortal:
       default_portal_status_ = CAPTIVE_PORTAL_STATUS_PORTAL;
       return;
@@ -219,11 +216,6 @@ void NetworkPortalDetectorImpl::PortalStateChanged(
       } else {
         default_portal_status_ = CAPTIVE_PORTAL_STATUS_OFFLINE;
       }
-      return;
-    case NetworkState::PortalState::kProxyAuthRequired:
-      // This may happen if a global proxy is applied. Run Chrome detection
-      // to verify.
-      ScheduleAttempt();
       return;
   }
 }
@@ -255,6 +247,12 @@ void NetworkPortalDetectorImpl::ScheduleAttempt(const base::TimeDelta& delay) {
 
   if (!is_idle()) {
     NET_LOG(EVENT) << "ScheduleAttempt(): Attempt already running, restarting.";
+    if (state_ == STATE_CHECKING_FOR_PORTAL) {
+      // When a new attempt is scheduled, cancel any pending attempt to avoid
+      // a DCHECK in CaptivePortalDetector when an attempt is started before
+      // the current attempt completes. See b/327072851 for details.
+      captive_portal_detector_->Cancel();
+    }
   }
 
   attempt_task_.Cancel();
@@ -338,7 +336,6 @@ void NetworkPortalDetectorImpl::OnAttemptCompleted(
       // TODO(b/207069182): Handle each state correctly.
       case NetworkState::PortalState::kPortalSuspected:
       case NetworkState::PortalState::kPortal:
-      case NetworkState::PortalState::kProxyAuthRequired:
       case NetworkState::PortalState::kNoInternet:
         shill_is_captive_portal = true;
         break;
@@ -377,8 +374,8 @@ void NetworkPortalDetectorImpl::OnAttemptCompleted(
   NET_LOG(EVENT) << "NetworkPortalDetector: AttemptCompleted: id="
                  << NetworkGuidId(default_network_id_) << ", result="
                  << captive_portal::CaptivePortalResultToString(result)
-                 << ", status=" << status
-                 << ", response_code=" << response_code;
+                 << ", status=" << status << ", response_code=" << response_code
+                 << ", content_length=" << results.content_length.value_or(-1);
 
   base::UmaHistogramEnumeration("Network.NetworkPortalDetectorResult", status);
   NetworkState::NetworkTechnologyType type =
@@ -437,9 +434,7 @@ void NetworkPortalDetectorImpl::DetectionCompleted(
         portal_state = NetworkState::PortalState::kPortal;
         break;
       case CAPTIVE_PORTAL_STATUS_PROXY_AUTH_REQUIRED:
-        // This case unused and largely orthogonal to captive portal detection.
-        // PortalState::kProxyAuthRequired should probably be deprecated.
-        // See b/207069182 and b/321958601 for details.
+        // This case is unused and is orthogonal to captive portal detection.
         portal_state = NetworkState::PortalState::kUnknown;
         break;
     }

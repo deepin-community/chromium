@@ -81,7 +81,7 @@ namespace {
 std::optional<ImageProcessor::PortConfig> VideoFrameLayoutToPortConfig(
     const VideoFrameLayout& layout,
     const gfx::Rect& visible_rect,
-    const std::vector<VideoFrame::StorageType>& preferred_storage_types) {
+    VideoFrame::StorageType storage_type) {
   auto fourcc =
       Fourcc::FromVideoPixelFormat(layout.format(), !layout.is_multi_planar());
   if (!fourcc) {
@@ -91,7 +91,7 @@ std::optional<ImageProcessor::PortConfig> VideoFrameLayoutToPortConfig(
   }
   return ImageProcessor::PortConfig(*fourcc, layout.coded_size(),
                                     layout.planes(), visible_rect,
-                                    preferred_storage_types);
+                                    storage_type);
 }
 
 // Create Layout from |layout| with is_multi_planar = true.
@@ -284,8 +284,7 @@ void V4L2VideoEncodeAccelerator::InitializeTask(const Config& config) {
   encoder_state_ = kInitialized;
 
   native_input_mode_ =
-      config.storage_type.value_or(Config::StorageType::kShmem) ==
-      Config::StorageType::kGpuMemoryBuffer;
+      config.storage_type == Config::StorageType::kGpuMemoryBuffer;
 
   input_queue_ = device_->GetQueue(V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
   output_queue_ = device_->GetQueue(V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
@@ -380,11 +379,8 @@ void V4L2VideoEncodeAccelerator::InitializeTask(const Config& config) {
     return;
   }
 
-  RequestEncodingParametersChangeTask(
-      config.bitrate,
-      config.initial_framerate.value_or(
-          VideoEncodeAccelerator::kDefaultFramerate),
-      std::nullopt);
+  RequestEncodingParametersChangeTask(config.bitrate, config.framerate,
+                                      std::nullopt);
 
   // input_frame_size_ is the size of input_config of |image_processor_|.
   // On native_input_mode_, since the passed size in RequireBitstreamBuffers()
@@ -434,7 +430,7 @@ bool V4L2VideoEncodeAccelerator::CreateImageProcessor(
       native_input_mode_ ? VideoFrame::STORAGE_GPU_MEMORY_BUFFER
                          : VideoFrame::STORAGE_SHMEM;
   auto input_config = VideoFrameLayoutToPortConfig(
-      *ip_input_layout, input_visible_rect, {input_storage_type});
+      *ip_input_layout, input_visible_rect, input_storage_type);
   if (!input_config) {
     LOG(ERROR) << "Failed to create ImageProcessor input config";
     return false;
@@ -455,7 +451,7 @@ bool V4L2VideoEncodeAccelerator::CreateImageProcessor(
   }
   auto output_config =
       VideoFrameLayoutToPortConfig(*output_layout, output_visible_rect,
-                                   {VideoFrame::STORAGE_GPU_MEMORY_BUFFER});
+                                   VideoFrame::STORAGE_GPU_MEMORY_BUFFER);
   if (!output_config) {
     LOG(ERROR) << "Failed to create ImageProcessor output config";
     return false;
@@ -510,7 +506,7 @@ bool V4L2VideoEncodeAccelerator::AllocateImageProcessorOutputBuffers(
   const ImageProcessor::PortConfig& output_config =
       image_processor_->output_config();
   for (size_t i = 0; i < count; i++) {
-    switch (output_config.storage_type()) {
+    switch (output_config.storage_type) {
       case VideoFrame::STORAGE_GPU_MEMORY_BUFFER:
         image_processor_output_buffers_[i] = CreateGpuMemoryBufferVideoFrame(
             output_config.fourcc.ToVideoPixelFormat(), output_config.size,
@@ -520,7 +516,7 @@ bool V4L2VideoEncodeAccelerator::AllocateImageProcessorOutputBuffers(
         break;
       default:
         LOG(ERROR) << "Unsupported output storage type of image processor: "
-                   << output_config.storage_type();
+                   << output_config.storage_type;
         return false;
     }
     if (!image_processor_output_buffers_[i]) {
@@ -534,7 +530,7 @@ bool V4L2VideoEncodeAccelerator::AllocateImageProcessorOutputBuffers(
 bool V4L2VideoEncodeAccelerator::InitInputMemoryType(const Config& config) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(encoder_sequence_checker_);
   if (image_processor_) {
-    const auto storage_type = image_processor_->output_config().storage_type();
+    const auto storage_type = image_processor_->output_config().storage_type;
     if (storage_type == VideoFrame::STORAGE_GPU_MEMORY_BUFFER) {
       input_memory_type_ = V4L2_MEMORY_DMABUF;
     } else if (VideoFrame::IsStorageTypeMappable(storage_type)) {
@@ -545,7 +541,7 @@ bool V4L2VideoEncodeAccelerator::InitInputMemoryType(const Config& config) {
       return false;
     }
   } else {
-    switch (config.storage_type.value_or(Config::StorageType::kShmem)) {
+    switch (config.storage_type) {
       case Config::StorageType::kShmem:
         input_memory_type_ = V4L2_MEMORY_USERPTR;
         break;
@@ -971,28 +967,16 @@ void V4L2VideoEncodeAccelerator::InputImageProcessorTask() {
   TRACE_EVENT_NESTABLE_ASYNC_BEGIN1(
       "media,gpu", "V4L2VEA::ImageProcessor::Process",
       timestamp.InMicroseconds(), "timestamp", timestamp.InMicroseconds());
-  if (image_processor_->output_mode() == ImageProcessor::OutputMode::IMPORT) {
-    const auto& buf = image_processor_output_buffers_[output_buffer_index];
-    auto output_frame = VideoFrame::WrapVideoFrame(
-        buf, buf->format(), buf->visible_rect(), buf->natural_size());
-    if (!image_processor_->Process(
-            std::move(frame), std::move(output_frame),
-            base::BindOnce(&V4L2VideoEncodeAccelerator::FrameProcessed,
-                           weak_this_, force_keyframe, timestamp,
-                           output_buffer_index))) {
-      SetErrorState({EncoderStatus::Codes::kFormatConversionError,
-                     "Failed in ImageProcessor::Process"});
-      return;
-    }
-  } else {
-    if (!image_processor_->Process(
-            std::move(frame),
-            base::BindOnce(&V4L2VideoEncodeAccelerator::FrameProcessed,
-                           weak_this_, force_keyframe, timestamp))) {
-      SetErrorState({EncoderStatus::Codes::kFormatConversionError,
-                     "Failed in ImageProcessor::Process"});
-      return;
-    }
+  auto output_frame = image_processor_output_buffers_[output_buffer_index];
+
+  if (!image_processor_->Process(
+          std::move(frame), std::move(output_frame),
+          base::BindOnce(&V4L2VideoEncodeAccelerator::FrameProcessed,
+                         weak_this_, force_keyframe, timestamp,
+                         output_buffer_index))) {
+    SetErrorState({EncoderStatus::Codes::kFormatConversionError,
+                   "Failed in ImageProcessor::Process"});
+    return;
   }
 
   num_frames_in_image_processor_++;
@@ -1545,14 +1529,17 @@ bool V4L2VideoEncodeAccelerator::StopDevicePoll() {
   DVLOGF(3);
   DCHECK_CALLED_ON_VALID_SEQUENCE(encoder_sequence_checker_);
 
-  // Signal the DevicePollTask() to stop, and stop the device poll thread.
-  if (!device_->SetDevicePollInterrupt())
-    return false;
-  device_poll_thread_.Stop();
-  // Clear the interrupt now, to be sure.
-  if (!device_->ClearDevicePollInterrupt())
-    return false;
-
+  if (device_->IsValid()) {
+    // Signal the DevicePollTask() to stop, and stop the device poll thread.
+    if (!device_->SetDevicePollInterrupt()) {
+      return false;
+    }
+    device_poll_thread_.Stop();
+    // Clear the interrupt now, to be sure.
+    if (!device_->ClearDevicePollInterrupt()) {
+      return false;
+    }
+  }
   // Tegra driver cannot call Streamoff() when the stream is off, so we check
   // IsStreaming() first.
   if (input_queue_ && input_queue_->IsStreaming() && !input_queue_->Streamoff())
@@ -1961,8 +1948,7 @@ bool V4L2VideoEncodeAccelerator::InitControlsH264(const Config& config) {
   // Set H.264 output level from config. Use Level 4.0 as fallback default.
   uint8_t h264_level = config.h264_output_level.value_or(H264SPS::kLevelIDC4p0);
   constexpr int kH264MacroblockSizeInPixels = 16;
-  const uint32_t framerate = config.initial_framerate.value_or(
-      VideoEncodeAccelerator::kDefaultFramerate);
+  const uint32_t framerate = config.framerate;
   const uint32_t mb_width =
       base::bits::AlignUpDeprecatedDoNotUse(config.input_visible_size.width(),
                                             kH264MacroblockSizeInPixels) /
@@ -2043,8 +2029,11 @@ bool V4L2VideoEncodeAccelerator::InitControlsH264(const Config& config) {
                        {V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_H264_MAX_QP, 51)});
   // Don't set MIN_QP with other controls since it is not supported by
   // some devices and may prevent other controls from being set.
+  // The MIN_QP needed modification due to b/280853786
+  // The value 18 was tuned experimentally to let the test pass but
+  // to be close to the original one
   device_->SetExtCtrls(V4L2_CTRL_CLASS_MPEG,
-                       {V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_H264_MIN_QP, 24)});
+                       {V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_H264_MIN_QP, 18)});
   return true;
 }
 

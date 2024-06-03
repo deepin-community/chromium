@@ -1,1 +1,4 @@
-aluh@chromium.org
+file://chrome/browser/ash/extended_updates/OWNERS
+
+per-file *.mojom=set noparent
+per-file *.mojom=file://ipc/SECURITY_OWNERS

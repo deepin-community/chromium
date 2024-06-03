@@ -43,6 +43,7 @@
 #include "net/websockets/websocket_handshake_request_info.h"
 #include "net/websockets/websocket_handshake_response_info.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/ip_address_space_util.h"
 #include "services/network/throttling/throttling_controller.h"
 #include "services/network/throttling/throttling_network_interceptor.h"
 #include "services/network/websocket_factory.h"
@@ -142,6 +143,8 @@ class WebSocket::WebSocketEventHandler final
   // net::WebSocketEventInterface implementation
 
   void OnCreateURLRequest(net::URLRequest* url_request) override;
+  void OnURLRequestConnected(net::URLRequest* request,
+                             const net::TransportInfo& info) override;
   void OnAddChannelResponse(
       std::unique_ptr<net::WebSocketHandshakeResponseInfo> response,
       const std::string& selected_subprotocol,
@@ -196,6 +199,20 @@ void WebSocket::WebSocketEventHandler::OnCreateURLRequest(
   if (impl_->throttling_profile_id_) {
     impl_->frame_interceptor_ = std::make_unique<WebSocketInterceptor>(
         url_request->net_log().source().id, impl_->throttling_profile_id_);
+  }
+}
+
+void WebSocket::WebSocketEventHandler::OnURLRequestConnected(
+    net::URLRequest* request,
+    const net::TransportInfo& info) {
+  if (impl_->url_loader_network_observer_) {
+    mojom::IPAddressSpace ip_address_space =
+        TransportInfoToIPAddressSpace(info);
+    if (ip_address_space == network::mojom::IPAddressSpace::kLocal ||
+        ip_address_space == network::mojom::IPAddressSpace::kPrivate) {
+      impl_->url_loader_network_observer_->OnWebSocketConnectedToPrivateNetwork(
+          ip_address_space);
+    }
   }
 }
 
@@ -438,6 +455,7 @@ WebSocket::WebSocket(
       traffic_annotation_(traffic_annotation),
       origin_(std::move(origin)),
       site_for_cookies_(site_for_cookies),
+      isolation_info_(isolation_info),
       has_raw_headers_access_(has_raw_headers_access),
       writable_watcher_(FROM_HERE,
                         mojo::SimpleWatcher::ArmingPolicy::MANUAL,
@@ -552,6 +570,26 @@ bool WebSocket::AllowCookies(const GURL& url) const {
   }
   return net::StaticCookiePolicy(policy).CanAccessCookies(
              url, site_for_cookies_) == net::OK;
+}
+
+bool WebSocket::RevokeIfNonceMatches(const base::UnguessableToken& nonce) {
+  if (isolation_info_.nonce() != nonce) {
+    return false;
+  }
+
+  std::string message =
+      "This WebSocket is in a frame whose network access "
+      "is being revoked.";
+  DVLOG(3) << "WebSocketEventHandler::RevokeIfNonceMatches @"
+           << reinterpret_cast<void*>(this) << " " << message;
+  // OnAddChannelResponse may have already reset |impl_->handshake_client_| if
+  // the failure happened after a successful connection.
+  if (handshake_client_.is_bound()) {
+    handshake_client_->OnFailure(message, net::kWebSocketErrorGoingAway, -1);
+  }
+  client_.ResetWithReason(0, message);
+
+  return true;
 }
 
 int WebSocket::OnBeforeStartTransaction(
@@ -701,13 +739,12 @@ void WebSocket::SendDataFrame(base::span<const char>* payload) {
   DCHECK_GT(payload->size(), 0u);
   MojoResult begin_result;
   void* buffer;
-  uint32_t writable_size;
-  while ((writable_size = static_cast<uint32_t>(payload->size())) > 0 &&
+  size_t writable_size;
+  while ((writable_size = payload->size()) > 0 &&
          (begin_result = writable_->BeginWriteData(
               &buffer, &writable_size, MOJO_WRITE_DATA_FLAG_NONE)) ==
              MOJO_RESULT_OK) {
-    const uint32_t size_to_write =
-        std::min(writable_size, static_cast<uint32_t>(payload->size()));
+    const size_t size_to_write = std::min(writable_size, payload->size());
     DCHECK_GT(size_to_write, 0u);
 
     memcpy(buffer, payload->data(), size_to_write);
@@ -794,7 +831,7 @@ bool WebSocket::ReadAndSendFrameFromDataPipe(DataFrame* data_frame) {
     }
 
     const void* buffer = nullptr;
-    uint32_t readable_size = 0;
+    size_t readable_size = 0;
     const MojoResult begin_result = readable_->BeginReadData(
         &buffer, &readable_size, MOJO_READ_DATA_FLAG_NONE);
     if (begin_result == MOJO_RESULT_SHOULD_WAIT) {
@@ -822,7 +859,7 @@ bool WebSocket::ReadAndSendFrameFromDataPipe(DataFrame* data_frame) {
     if (message_under_reassembly_) {
       CHECK_GT(data_frame->data_length, bytes_reassembled_);
       const size_t bytes_to_copy =
-          std::min(static_cast<uint64_t>(readable_size),
+          std::min(base::strict_cast<uint64_t>(readable_size),
                    data_frame->data_length - bytes_reassembled_);
       memcpy(message_under_reassembly_->data() + bytes_reassembled_, buffer,
              bytes_to_copy);

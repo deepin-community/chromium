@@ -49,6 +49,7 @@
 #include "compiler/translator/tree_ops/RescopeGlobalVariables.h"
 #include "compiler/translator/tree_ops/RewritePixelLocalStorage.h"
 #include "compiler/translator/tree_ops/SeparateDeclarations.h"
+#include "compiler/translator/tree_ops/SeparateStructFromFunctionDeclarations.h"
 #include "compiler/translator/tree_ops/SimplifyLoopConditions.h"
 #include "compiler/translator/tree_ops/SplitSequenceOperator.h"
 #include "compiler/translator/tree_ops/glsl/RegenerateStructNames.h"
@@ -814,19 +815,13 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         parseContext.isExtensionEnabled(TExtension::APPLE_clip_distance))
     {
         bool isClipDistanceUsed = false;
-        if (!ValidateClipCullDistance(
-                root, &mDiagnostics, mResources.MaxCullDistances,
-                mResources.MaxCombinedClipAndCullDistances, &mClipDistanceSize, &mCullDistanceSize,
-                &mClipDistanceRedeclared, &mCullDistanceRedeclared, &isClipDistanceUsed))
+        if (!ValidateClipCullDistance(this, root, &mDiagnostics,
+                                      mResources.MaxCombinedClipAndCullDistances,
+                                      &mClipDistanceSize, &mCullDistanceSize, &isClipDistanceUsed))
         {
             return false;
         }
         mMetadataFlags[MetadataFlags::HasClipDistance] = isClipDistanceUsed;
-
-        if (!resizeClipAndCullDistanceBuiltins(root))
-        {
-            return false;
-        }
     }
 
     // Validate no barrier() after return before prunning it in |PruneNoOps()| below.
@@ -874,6 +869,11 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         !DeferGlobalInitializers(this, root, initializeLocalsAndGlobals, canUseLoopsToInitialize,
                                  highPrecisionSupported, forceDeferNonConstGlobalInitializers,
                                  &mSymbolTable))
+    {
+        return false;
+    }
+
+    if (!SeparateStructFromFunctionDeclarations(*this, *root))
     {
         return false;
     }
@@ -1036,7 +1036,7 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
 
     // Note that separate declarations need to be run before other AST transformations that
     // generate new statements from expressions.
-    if (!SeparateDeclarations(this, root, &getSymbolTable()))
+    if (!SeparateDeclarations(*this, *root))
     {
         return false;
     }
@@ -1058,6 +1058,11 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     }
 
     if (!RemoveArrayLengthMethod(this, root))
+    {
+        return false;
+    }
+    // Fold the expressions again, because |RemoveArrayLengthMethod| can introduce new constants.
+    if (!FoldExpressions(this, root, &mDiagnostics))
     {
         return false;
     }
@@ -1245,39 +1250,6 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         {
             return false;
         }
-    }
-
-    return true;
-}
-
-bool TCompiler::resizeClipAndCullDistanceBuiltins(TIntermBlock *root)
-{
-    auto resizeVariable = [=](const ImmutableString &name, uint32_t size, uint32_t maxSize) {
-        // Skip if the variable is not used or implicitly has the maximum size
-        if (size == 0 || size == maxSize)
-            return true;
-        ASSERT(size < maxSize);
-        const TVariable *builtInVar =
-            static_cast<const TVariable *>(mSymbolTable.findBuiltIn(name, getShaderVersion()));
-        TType *resizedType = new TType(builtInVar->getType());
-        resizedType->setArraySize(0, size);
-
-        TVariable *resizedVar =
-            new TVariable(&mSymbolTable, name, resizedType, SymbolType::BuiltIn);
-
-        return ReplaceVariable(this, root, builtInVar, resizedVar);
-    };
-
-    if (!mClipDistanceRedeclared && !resizeVariable(ImmutableString("gl_ClipDistance"),
-                                                    mClipDistanceSize, mResources.MaxClipDistances))
-    {
-        return false;
-    }
-
-    if (!mCullDistanceRedeclared && !resizeVariable(ImmutableString("gl_CullDistance"),
-                                                    mCullDistanceSize, mResources.MaxCullDistances))
-    {
-        return false;
     }
 
     return true;
@@ -1565,10 +1537,8 @@ void TCompiler::clearResults()
 
     mNumViews = -1;
 
-    mClipDistanceSize       = 0;
-    mCullDistanceSize       = 0;
-    mClipDistanceRedeclared = false;
-    mCullDistanceRedeclared = false;
+    mClipDistanceSize = 0;
+    mCullDistanceSize = 0;
 
     mGeometryShaderInputPrimitiveType  = EptUndefined;
     mGeometryShaderOutputPrimitiveType = EptUndefined;

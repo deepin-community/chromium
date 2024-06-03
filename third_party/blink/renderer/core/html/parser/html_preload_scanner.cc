@@ -31,6 +31,7 @@
 #include <optional>
 
 #include "base/task/sequenced_task_runner.h"
+#include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
@@ -1143,12 +1144,27 @@ std::unique_ptr<HTMLPreloadScanner> HTMLPreloadScanner::Create(
     }
   }
 
+  bool skip_preload_scan = IsSkipPreloadScanEnabled(&document);
+  if (skip_preload_scan) {
+    UseCounter::Count(document, WebFeature::kSkippedPreloadScanning);
+  }
+
   return std::make_unique<HTMLPreloadScanner>(
       std::make_unique<HTMLTokenizer>(options), document.Url(),
       std::make_unique<CachedDocumentParameters>(&document),
       std::make_unique<MediaValuesCached::MediaValuesCachedData>(document),
       scanner_type, /* script_token_scanner=*/nullptr, TakePreloadFn(),
-      locators);
+      locators, skip_preload_scan);
+}
+
+// static
+bool HTMLPreloadScanner::IsSkipPreloadScanEnabled(const Document* document) {
+  if (const auto* context = document->GetExecutionContext()) {
+    if (RuntimeEnabledFeatures::SkipPreloadScanningEnabled(context)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // static
@@ -1166,6 +1182,11 @@ HTMLPreloadScanner::BackgroundPtr HTMLPreloadScanner::CreateBackground(
     }
   }
 
+  bool skip_preload_scan = IsSkipPreloadScanEnabled(document);
+  if (skip_preload_scan) {
+    UseCounter::Count(document, WebFeature::kSkippedPreloadScanning);
+  }
+
   return BackgroundPtr(
       new HTMLPreloadScanner(
           std::make_unique<HTMLTokenizer>(options), document->Url(),
@@ -1173,7 +1194,7 @@ HTMLPreloadScanner::BackgroundPtr HTMLPreloadScanner::CreateBackground(
           std::make_unique<MediaValuesCached::MediaValuesCachedData>(*document),
           TokenPreloadScanner::ScannerType::kMainDocument,
           BackgroundHTMLScanner::ScriptTokenScanner::Create(parser),
-          std::move(take_preload), locators),
+          std::move(take_preload), locators, skip_preload_scan),
       Deleter{task_runner});
 }
 
@@ -1187,7 +1208,8 @@ HTMLPreloadScanner::HTMLPreloadScanner(
     std::unique_ptr<BackgroundHTMLScanner::ScriptTokenScanner>
         script_token_scanner,
     TakePreloadFn take_preload,
-    Vector<ElementLocator> locators)
+    Vector<ElementLocator> locators,
+    bool skip_preload_scanning)
     : scanner_(document_url,
                std::move(document_parameters),
                std::move(media_values_cached_data),
@@ -1195,11 +1217,21 @@ HTMLPreloadScanner::HTMLPreloadScanner(
                std::move(locators)),
       tokenizer_(std::move(tokenizer)),
       script_token_scanner_(std::move(script_token_scanner)),
-      take_preload_(std::move(take_preload)) {}
+      take_preload_(std::move(take_preload)),
+      skip_preload_scanning_(skip_preload_scanning) {
+  TRACE_EVENT_WITH_FLOW0("blink", "HTMLPreloadScanner::HTMLPreloadScanner",
+                         TRACE_ID_LOCAL(this), TRACE_EVENT_FLAG_FLOW_OUT);
+}
 
-HTMLPreloadScanner::~HTMLPreloadScanner() = default;
+HTMLPreloadScanner::~HTMLPreloadScanner() {
+  TRACE_EVENT_WITH_FLOW0("blink", "HTMLPreloadScanner::~HTMLPreloadScanner",
+                         TRACE_ID_LOCAL(this), TRACE_EVENT_FLAG_FLOW_IN);
+}
 
 void HTMLPreloadScanner::AppendToEnd(const SegmentedString& source) {
+  TRACE_EVENT_WITH_FLOW0("blink", "HTMLPreloadScanner::AppendToEnd",
+                         TRACE_ID_LOCAL(this),
+                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
   source_.Append(source);
 }
 
@@ -1207,8 +1239,15 @@ std::unique_ptr<PendingPreloadData> HTMLPreloadScanner::Scan(
     const KURL& starting_base_element_url) {
   auto pending_data = std::make_unique<PendingPreloadData>();
 
-  TRACE_EVENT1("blink", "HTMLPreloadScanner::scan", "source_length",
-               source_.length());
+  if (skip_preload_scanning_) {
+    // Skip PreloadScan origin trial is enabled.
+    return pending_data;
+  }
+
+  TRACE_EVENT_WITH_FLOW1("blink", "HTMLPreloadScanner::scan",
+                         TRACE_ID_LOCAL(this),
+                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT,
+                         "source_length", source_.length());
 
   // When we start scanning, our best prediction of the baseElementURL is the
   // real one!
@@ -1258,6 +1297,9 @@ std::unique_ptr<PendingPreloadData> HTMLPreloadScanner::Scan(
 void HTMLPreloadScanner::ScanInBackground(
     const String& source,
     const KURL& document_base_element_url) {
+  TRACE_EVENT_WITH_FLOW0("blink", "HTMLPreloadScanner::ScanInBackground",
+                         TRACE_ID_LOCAL(this),
+                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
   source_.Append(source);
   take_preload_.Run(Scan(document_base_element_url));
 }

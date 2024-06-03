@@ -131,9 +131,9 @@ class ZoneBuffer : public ZoneObject {
 
   size_t offset() const { return static_cast<size_t>(pos_ - buffer_); }
   size_t size() const { return static_cast<size_t>(pos_ - buffer_); }
-  const uint8_t* data() const { return buffer_; }
-  const uint8_t* begin() const { return buffer_; }
-  const uint8_t* end() const { return pos_; }
+  uint8_t* data() const { return buffer_; }
+  uint8_t* begin() const { return buffer_; }
+  uint8_t* end() const { return pos_; }
 
   void EnsureSpace(size_t size) {
     if ((pos_ + size) > end_) {
@@ -189,6 +189,7 @@ class V8_EXPORT_PRIVATE WasmFunctionBuilder : public ZoneObject {
   void EmitWithU32V(WasmOpcode opcode, uint32_t immediate);
   void EmitValueType(ValueType type);
   void EmitDirectCallIndex(uint32_t index);
+  void EmitFromInitializerExpression(const WasmInitExpr& init_expr);
   void SetName(base::Vector<const char> name);
   void AddAsmWasmOffset(size_t call_position, size_t to_number_position);
   void SetAsmFunctionStartPosition(size_t function_position);
@@ -351,6 +352,8 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   uint32_t AddTable(ValueType type, uint32_t min_size, uint32_t max_size);
   uint32_t AddTable(ValueType type, uint32_t min_size, uint32_t max_size,
                     WasmInitExpr init);
+  uint32_t AddMemory(uint32_t min_size);
+  uint32_t AddMemory(uint32_t min_size, uint32_t max_size);
   void MarkStartFunction(WasmFunctionBuilder* builder);
   void AddExport(base::Vector<const char> name, ImportExportKindCode kind,
                  uint32_t index);
@@ -360,9 +363,6 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   uint32_t AddExportedGlobal(ValueType type, bool mutability, WasmInitExpr init,
                              base::Vector<const char> name);
   void ExportImportedFunction(base::Vector<const char> name, int import_index);
-  void SetMinMemorySize(uint32_t value);
-  void SetMaxMemorySize(uint32_t value);
-  void SetHasSharedMemory();
 
   void StartRecursiveTypeGroup() {
     DCHECK_EQ(current_recursive_group_start_, -1);
@@ -424,6 +424,8 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
 
   int NumTables() { return static_cast<int>(tables_.size()); }
 
+  int NumGlobals() { return static_cast<int>(globals_.size()); }
+
   int NumImportedFunctions() {
     return static_cast<int>(function_imports_.size());
   }
@@ -433,6 +435,12 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
 
   const FunctionSig* GetTagType(int index) {
     return types_[tags_[index]].function_sig;
+  }
+
+  ValueType GetGlobalType(uint32_t index) const { return globals_[index].type; }
+
+  bool IsMutableGlobal(uint32_t index) const {
+    return globals_[index].mutability;
   }
 
  private:
@@ -445,6 +453,7 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   struct WasmGlobalImport {
     base::Vector<const char> module;
     base::Vector<const char> name;
+    // TODO(manoskouk): Extend to full value type.
     ValueTypeCode type_code;
     bool mutability;
   };
@@ -469,6 +478,13 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
     base::Optional<WasmInitExpr> init;
   };
 
+  struct WasmMemory {
+    uint32_t min_size;
+    uint32_t max_size;
+    bool has_max_size;
+    bool is_shared;
+  };
+
   struct WasmDataSegment {
     ZoneVector<uint8_t> data;
     uint32_t dest;
@@ -483,6 +499,7 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   ZoneVector<WasmExport> exports_;
   ZoneVector<WasmFunctionBuilder*> functions_;
   ZoneVector<WasmTable> tables_;
+  ZoneVector<WasmMemory> memories_;
   ZoneVector<WasmDataSegment> data_segments_;
   ZoneVector<WasmElemSegment> element_segments_;
   ZoneVector<WasmGlobal> globals_;
@@ -492,10 +509,6 @@ class V8_EXPORT_PRIVATE WasmModuleBuilder : public ZoneObject {
   // first index -> size
   ZoneUnorderedMap<uint32_t, uint32_t> recursive_groups_;
   int start_function_index_;
-  uint32_t min_memory_size_;
-  uint32_t max_memory_size_;
-  bool has_max_memory_size_;
-  bool has_shared_memory_;
 #if DEBUG
   // Once AddExportedImport is called, no more imports can be added.
   bool adding_imports_allowed_ = true;

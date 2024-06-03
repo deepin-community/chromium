@@ -65,7 +65,7 @@ const ShaderNode* PaintParamsKey::createNode(const ShaderCodeDictionary* dict,
     const int32_t index = (*currentIndex)++;
     const int32_t id = fData[index];
 
-    auto entry = dict->getEntry(id);
+    const ShaderSnippet* entry = dict->getEntry(id);
     if (!entry) {
         SKGPU_LOG_E("Unknown snippet ID in key: %d", id);
         return nullptr;
@@ -182,7 +182,7 @@ void PaintParamsKey::dump(const ShaderCodeDictionary* dict) const {
     const int keySize = SkTo<int>(fData.size());
 
     SkDebugf("--------------------------------------\n");
-    SkDebugf("PaintParamsKey (%d):\n", keySize);
+    SkDebugf("PaintParamsKey (keySize: %d):\n", keySize);
 
     int currentIndex = 0;
     while (currentIndex < keySize) {

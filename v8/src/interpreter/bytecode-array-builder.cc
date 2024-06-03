@@ -117,7 +117,7 @@ int BytecodeArrayBuilder::CheckBytecodeMatches(Tagged<BytecodeArray> bytecode) {
 #endif
 
 template <typename IsolateT>
-Handle<ByteArray> BytecodeArrayBuilder::ToSourcePositionTable(
+Handle<TrustedByteArray> BytecodeArrayBuilder::ToSourcePositionTable(
     IsolateT* isolate) {
   DCHECK(RemainderOfBlockIsDead());
 
@@ -125,10 +125,10 @@ Handle<ByteArray> BytecodeArrayBuilder::ToSourcePositionTable(
 }
 
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
-    Handle<ByteArray> BytecodeArrayBuilder::ToSourcePositionTable(
+    Handle<TrustedByteArray> BytecodeArrayBuilder::ToSourcePositionTable(
         Isolate* isolate);
 template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
-    Handle<ByteArray> BytecodeArrayBuilder::ToSourcePositionTable(
+    Handle<TrustedByteArray> BytecodeArrayBuilder::ToSourcePositionTable(
         LocalIsolate* isolate);
 
 BytecodeSourceInfo BytecodeArrayBuilder::CurrentSourcePosition(
@@ -326,6 +326,15 @@ class OperandHelper<OperandType::kRegOutTriple> {
                                     RegisterList reg_list) {
     DCHECK_EQ(3, reg_list.register_count());
     return builder->GetOutputRegisterListOperand(reg_list);
+  }
+};
+
+template <>
+class OperandHelper<OperandType::kRegInOut> {
+ public:
+  V8_INLINE static uint32_t Convert(BytecodeArrayBuilder* builder,
+                                    Register reg) {
+    return builder->GetInputOutputRegisterOperand(reg);
   }
 };
 
@@ -544,16 +553,16 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::CompareOperation(
     case Token::kEqStrict:
       OutputTestEqualStrict(reg, feedback_slot);
       break;
-    case Token::kLt:
+    case Token::kLessThan:
       OutputTestLessThan(reg, feedback_slot);
       break;
-    case Token::kGt:
+    case Token::kGreaterThan:
       OutputTestGreaterThan(reg, feedback_slot);
       break;
-    case Token::kLte:
+    case Token::kLessThanEq:
       OutputTestLessThanOrEqual(reg, feedback_slot);
       break;
-    case Token::kGte:
+    case Token::kGreaterThanEq:
       OutputTestGreaterThanOrEqual(reg, feedback_slot);
       break;
     case Token::kInstanceOf:
@@ -863,6 +872,14 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::LoadNamedPropertyFromSuper(
 BytecodeArrayBuilder& BytecodeArrayBuilder::LoadKeyedProperty(
     Register object, int feedback_slot) {
   OutputGetKeyedProperty(object, feedback_slot);
+  return *this;
+}
+
+BytecodeArrayBuilder& BytecodeArrayBuilder::LoadEnumeratedKeyedProperty(
+    Register object, Register enum_index, Register cache_type,
+    int feedback_slot) {
+  OutputGetEnumeratedKeyedProperty(object, enum_index, cache_type,
+                                   feedback_slot);
   return *this;
 }
 
@@ -1296,6 +1313,13 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::JumpIfJSReceiver(
   return *this;
 }
 
+BytecodeArrayBuilder& BytecodeArrayBuilder::JumpIfForInDone(
+    BytecodeLabel* label, Register index, Register cache_length) {
+  DCHECK(!label->is_bound());
+  OutputJumpIfForInDone(label, 0, index, cache_length);
+  return *this;
+}
+
 BytecodeArrayBuilder& BytecodeArrayBuilder::JumpLoop(
     BytecodeLoopHeader* loop_header, int loop_depth, int position,
     int feedback_slot) {
@@ -1391,12 +1415,6 @@ BytecodeArrayBuilder& BytecodeArrayBuilder::ForInPrepare(
     RegisterList cache_info_triple, int feedback_slot) {
   DCHECK_EQ(3, cache_info_triple.register_count());
   OutputForInPrepare(cache_info_triple, feedback_slot);
-  return *this;
-}
-
-BytecodeArrayBuilder& BytecodeArrayBuilder::ForInContinue(
-    Register index, Register cache_length) {
-  OutputForInContinue(index, cache_length);
   return *this;
 }
 
@@ -1662,6 +1680,15 @@ uint32_t BytecodeArrayBuilder::GetInputRegisterOperand(Register reg) {
 uint32_t BytecodeArrayBuilder::GetOutputRegisterOperand(Register reg) {
   DCHECK(RegisterIsValid(reg));
   if (register_optimizer_) register_optimizer_->PrepareOutputRegister(reg);
+  return static_cast<uint32_t>(reg.ToOperand());
+}
+
+uint32_t BytecodeArrayBuilder::GetInputOutputRegisterOperand(Register reg) {
+  DCHECK(RegisterIsValid(reg));
+  if (register_optimizer_) {
+    register_optimizer_->PrepareOutputRegister(reg);
+    DCHECK_EQ(reg, register_optimizer_->GetInputRegister(reg));
+  }
   return static_cast<uint32_t>(reg.ToOperand());
 }
 

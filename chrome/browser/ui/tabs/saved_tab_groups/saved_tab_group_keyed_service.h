@@ -18,6 +18,8 @@
 class Profile;
 class TabGroup;
 
+namespace tab_groups {
+
 // Serves to instantiate and own the SavedTabGroup infrastructure for the
 // browser.
 class SavedTabGroupKeyedService : public KeyedService,
@@ -42,9 +44,11 @@ class SavedTabGroupKeyedService : public KeyedService,
                            const tab_groups::TabGroupId local_group_id);
 
   // SavedTabGroupController
-  void OpenSavedTabGroupInBrowser(Browser* browser,
-                                  const base::Uuid& saved_group_guid) override;
-  void SaveGroup(const tab_groups::TabGroupId& group_id) override;
+  std::optional<tab_groups::TabGroupId> OpenSavedTabGroupInBrowser(
+      Browser* browser,
+      const base::Uuid saved_group_guid) override;
+  base::Uuid SaveGroup(const tab_groups::TabGroupId& group_id,
+                       bool is_pinned = false) override;
   void UnsaveGroup(const tab_groups::TabGroupId& group_id) override;
   void PauseTrackingLocalTabGroup(
       const tab_groups::TabGroupId& group_id) override;
@@ -100,6 +104,15 @@ class SavedTabGroupKeyedService : public KeyedService,
       const SavedTabGroup* const saved_group,
       const base::Uuid& saved_group_guid);
 
+  // Helper function that adds the opened tabs obtained from calling
+  // `GetWebContentsToTabGuidMappingForOpening` into a new tab group in the
+  // TabStrip.
+  tab_groups::TabGroupId AddOpenedTabsToGroup(
+      TabStripModel* const tab_strip_model_for_creation,
+      const std::map<content::WebContents*, base::Uuid>&
+          opened_web_contents_to_uuid,
+      const SavedTabGroup& saved_group);
+
   // Activates the first tab in saved group that is already opened when its
   // button is pressed, If active tab exists in saved group, only activates
   // window.
@@ -119,9 +132,6 @@ class SavedTabGroupKeyedService : public KeyedService,
 
   // Wrapper function that calls all metric recording functions.
   void RecordMetrics();
-
-  // Records the SavedTabGroup count and Tab count per SavedTabGroup.
-  void RecordSavedTabGroupMetrics();
 
   // Records the Unsaved TabGroup count and the Tab count per Unsaved TabGroup.
   void RecordTabGroupMetrics();
@@ -150,5 +160,7 @@ class SavedTabGroupKeyedService : public KeyedService,
   std::vector<std::pair<base::Uuid, tab_groups::TabGroupId>>
       saved_guid_to_local_group_id_mapping_;
 };
+
+}  // namespace tab_groups
 
 #endif  // CHROME_BROWSER_UI_TABS_SAVED_TAB_GROUPS_SAVED_TAB_GROUP_KEYED_SERVICE_H_

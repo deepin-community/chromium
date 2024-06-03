@@ -10,6 +10,7 @@
 #include "base/notreached.h"
 #include "build/build_config.h"
 #include "cc/base/features.h"
+#include "cc/input/browser_controls_offset_manager.h"
 #include "cc/input/scroll_elasticity_helper.h"
 #include "cc/input/scroll_utils.h"
 #include "cc/input/scrollbar_controller.h"
@@ -381,7 +382,7 @@ InputHandlerScrollResult InputHandler::ScrollUpdate(
   float scale_factor = ActiveTree().page_scale_factor_for_scroll();
   scroll_result.current_visual_offset.Scale(scale_factor);
 
-  if (!GetScrollTree().CanRealizeScrollsOnCompositor(scroll_node)) {
+  if (GetScrollTree().ShouldRealizeScrollsOnMain(scroll_node)) {
     scroll_result.needs_main_thread_repaint = true;
   }
 

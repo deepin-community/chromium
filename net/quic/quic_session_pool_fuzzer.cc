@@ -145,7 +145,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       env->net_log.net_log(), host_resolver.get(),
       env->ssl_config_service.get(), &socket_factory, &http_server_properties,
       env->cert_verifier.get(), &env->transport_security_state, nullptr,
-      nullptr, &env->crypto_client_stream_factory, &env->quic_context);
+      nullptr, nullptr, &env->crypto_client_stream_factory, &env->quic_context);
 
   QuicSessionRequest request(factory.get());
   TestCompletionCallback callback;
@@ -159,9 +159,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   request.Request(
       env->scheme_host_port, version, ProxyChain::Direct(),
-      TRAFFIC_ANNOTATION_FOR_TESTS, SessionUsage::kDestination,
-      PRIVACY_MODE_DISABLED, DEFAULT_PRIORITY, SocketTag(),
-      NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
+      TRAFFIC_ANNOTATION_FOR_TESTS, /*http_user_agent_settings=*/nullptr,
+      SessionUsage::kDestination, PRIVACY_MODE_DISABLED, DEFAULT_PRIORITY,
+      SocketTag(), NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
       /*require_dns_https_alpn=*/false, kCertVerifyFlags, GURL(kUrl),
       env->net_log, &net_error_details,
       /*failed_on_default_network_callback=*/CompletionOnceCallback(),

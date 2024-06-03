@@ -61,7 +61,6 @@
 #include "third_party/blink/public/platform/interface_registry.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/web_data.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url_request.h"
@@ -1012,7 +1011,14 @@ void TestWebFrameWidget::BindWidgetChannels(
   widget_host_ = CreateWidgetHost();
   widget_host_->BindWidgetHost(std::move(receiver), std::move(frame_receiver));
   mojo::Remote<mojom::blink::WidgetInputHandler> input_handler;
-  widget_remote->GetWidgetInputHandler(
+
+  mojo::PendingRemote<mojom::blink::RenderInputRouterClient> rir_client_remote;
+  // Setup RenderInputRouter mojo connections.
+  widget_remote->SetupRenderInputRouterConnections(
+      rir_client_remote.InitWithNewPipeAndPassReceiver());
+  widget_host_->BindRenderInputRouterInterfaces(std::move(rir_client_remote));
+
+  widget_host_->GetWidgetInputHandler(
       input_handler.BindNewPipeAndPassReceiver(),
       GetInputHandlerHost()->BindNewRemote());
 }
@@ -1101,6 +1107,18 @@ void TestWebFrameWidgetHost::BindWidgetHost(
         frame_receiver) {
   receiver_.Bind(std::move(receiver));
   frame_receiver_.Bind(std::move(frame_receiver));
+}
+
+void TestWebFrameWidgetHost::BindRenderInputRouterInterfaces(
+    mojo::PendingRemote<mojom::blink::RenderInputRouterClient> remote) {
+  client_remote_.reset();
+  client_remote_.Bind(std::move(remote));
+}
+
+void TestWebFrameWidgetHost::GetWidgetInputHandler(
+    mojo::PendingReceiver<mojom::blink::WidgetInputHandler> request,
+    mojo::PendingRemote<mojom::blink::WidgetInputHandlerHost> host) {
+  client_remote_->GetWidgetInputHandler(std::move(request), std::move(host));
 }
 
 mojo::PendingRemote<mojom::blink::WidgetInputHandlerHost>

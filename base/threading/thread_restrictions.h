@@ -14,8 +14,9 @@
 #include "build/build_config.h"
 
 #if DCHECK_IS_ON()
+#include <optional>
+
 #include "base/debug/stack_trace.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #endif
 
 // -----------------------------------------------------------------------------
@@ -175,6 +176,7 @@ class MojoUtils;
 }
 namespace system {
 class StatisticsProviderImpl;
+class ProcStatFile;
 }  // namespace system
 }  // namespace ash
 namespace audio {
@@ -360,6 +362,7 @@ class ProxyConfigServiceWin;
 class ScopedAllowBlockingForSettingGetter;
 namespace internal {
 class AddressTrackerLinux;
+class PemFileCertStore;
 }
 }  // namespace net
 namespace printing {
@@ -510,7 +513,7 @@ class BooleanWithStack {
 
  private:
   bool value_ = false;
-  absl::optional<debug::StackTrace> stack_;
+  std::optional<debug::StackTrace> stack_;
 };
 
 #else
@@ -586,6 +589,7 @@ class BASE_EXPORT [[maybe_unused, nodiscard]] ScopedAllowBlocking {
   friend class ash::StartupCustomizationDocument;  // http://crosbug.com/11103
   friend class ash::StartupUtils;
   friend class ash::converters::diagnostics::MojoUtils;  // http://b/322741627
+  friend class ash::system::ProcStatFile;
   friend class base::AdjustOOMScoreHelper;
   friend class base::ChromeOSVersionInfo;
   friend class base::Process;
@@ -630,6 +634,7 @@ class BASE_EXPORT [[maybe_unused, nodiscard]] ScopedAllowBlocking {
   friend class net::ProxyConfigServiceWin;  // http://crbug.com/61453
   friend class net::
       ScopedAllowBlockingForSettingGetter;  // http://crbug.com/69057
+  friend class net::internal::PemFileCertStore;
   friend class printing::LocalPrinterHandlerDefault;
   friend class printing::PrintBackendServiceManager;
   friend class printing::PrintPreviewUIUntrusted;

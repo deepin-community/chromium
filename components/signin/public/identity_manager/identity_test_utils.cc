@@ -15,6 +15,7 @@
 #include "build/chromeos_buildflags.h"
 #include "components/signin/internal/identity_manager/account_fetcher_service.h"
 #include "components/signin/internal/identity_manager/account_tracker_service.h"
+#include "components/signin/internal/identity_manager/fake_profile_oauth2_token_service.h"
 #include "components/signin/internal/identity_manager/gaia_cookie_manager_service.h"
 #include "components/signin/internal/identity_manager/primary_account_manager.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
@@ -71,7 +72,9 @@ void UpdateRefreshTokenForAccount(
     AccountTrackerService* account_tracker_service,
     IdentityManager* identity_manager,
     const CoreAccountId& account_id,
-    const std::string& new_token) {
+    const std::string& new_token,
+    signin_metrics::SourceForRefreshTokenOperation source =
+        signin_metrics::SourceForRefreshTokenOperation::kUnknown) {
   DCHECK_EQ(account_tracker_service->GetAccountInfo(account_id).account_id,
             account_id)
       << "To set the refresh token for an unknown account, use "
@@ -102,7 +105,7 @@ void UpdateRefreshTokenForAccount(
   } else
 #endif  // BUILDFLAG(IS_CHROMEOS)
   {
-    token_service->UpdateCredentials(account_id, new_token);
+    token_service->UpdateCredentials(account_id, new_token, source);
   }
 
   run_loop.Run();
@@ -261,6 +264,17 @@ CoreAccountInfo SetPrimaryAccount(IdentityManager* identity_manager,
                                   .Build(email));
 }
 
+void SetAutomaticIssueOfAccessTokens(IdentityManager* identity_manager,
+                                     bool grant) {
+  // Assumes that the given identity manager uses an underlying token service
+  // of type FakeProfileOAuth2TokenService.
+  CHECK(identity_manager->GetTokenService()
+            ->IsFakeProfileOAuth2TokenServiceForTesting());
+  static_cast<FakeProfileOAuth2TokenService*>(
+      identity_manager->GetTokenService())
+      ->set_auto_post_fetch_response_on_message_loop(grant);
+}
+
 void SetRefreshTokenForPrimaryAccount(IdentityManager* identity_manager,
                                       const std::string& token_value) {
   DCHECK(identity_manager->HasPrimaryAccount(ConsentLevel::kSignin));
@@ -270,12 +284,13 @@ void SetRefreshTokenForPrimaryAccount(IdentityManager* identity_manager,
 }
 
 void SetInvalidRefreshTokenForPrimaryAccount(
-    IdentityManager* identity_manager) {
+    IdentityManager* identity_manager,
+    signin_metrics::SourceForRefreshTokenOperation source) {
   DCHECK(identity_manager->HasPrimaryAccount(ConsentLevel::kSignin));
   CoreAccountId account_id =
       identity_manager->GetPrimaryAccountId(ConsentLevel::kSignin);
 
-  SetInvalidRefreshTokenForAccount(identity_manager, account_id);
+  SetInvalidRefreshTokenForAccount(identity_manager, account_id, source);
 }
 
 void RemoveRefreshTokenForPrimaryAccount(IdentityManager* identity_manager) {
@@ -322,8 +337,7 @@ void RevokeSyncConsent(IdentityManager* identity_manager) {
       },
       &run_loop));
   identity_manager->GetPrimaryAccountMutator()->RevokeSyncConsent(
-      signin_metrics::ProfileSignout::kTest,
-      signin_metrics::SignoutDelete::kIgnoreMetric);
+      signin_metrics::ProfileSignout::kTest);
   run_loop.Run();
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -350,8 +364,7 @@ void ClearPrimaryAccount(IdentityManager* identity_manager) {
       },
       &run_loop));
   identity_manager->GetPrimaryAccountMutator()->ClearPrimaryAccount(
-      signin_metrics::ProfileSignout::kTest,
-      signin_metrics::SignoutDelete::kIgnoreMetric);
+      signin_metrics::ProfileSignout::kTest);
 
   run_loop.Run();
 #endif
@@ -452,12 +465,14 @@ void SetRefreshTokenForAccount(IdentityManager* identity_manager,
           : token_value);
 }
 
-void SetInvalidRefreshTokenForAccount(IdentityManager* identity_manager,
-                                      const CoreAccountId& account_id) {
+void SetInvalidRefreshTokenForAccount(
+    IdentityManager* identity_manager,
+    const CoreAccountId& account_id,
+    signin_metrics::SourceForRefreshTokenOperation source) {
   UpdateRefreshTokenForAccount(identity_manager->GetTokenService(),
                                identity_manager->GetAccountTrackerService(),
                                identity_manager, account_id,
-                               GaiaConstants::kInvalidRefreshToken);
+                               GaiaConstants::kInvalidRefreshToken, source);
 }
 
 void RemoveRefreshTokenForAccount(IdentityManager* identity_manager,
@@ -536,7 +551,7 @@ void SetCookieAccounts(
   // Clears cached LIST_ACCOUNTS requests, so that the new request can trigger
   // the observers instead of being assumed as having an identical result as the
   // previous one.
-  // TODO(crbug.com/1457501): Investigate replacing this by
+  // TODO(crbug.com/40273636): Investigate replacing this by
   // `cookie_manager->ForceOnCookieChangeProcessing()`.
   cookie_manager->CancelAll();
   cookie_manager->ListAccounts(nullptr, nullptr);

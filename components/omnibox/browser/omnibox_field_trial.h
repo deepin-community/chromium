@@ -288,50 +288,8 @@ bool HUPSearchDatabase();
 // ---------------------------------------------------------
 // For UI experiments.
 
-// Returns true if the OmniboxActionsUISimplification feature is enabled.
-bool IsActionsUISimplificationEnabled();
-// Indicates whether to include changes that affect the NTP realbox.
-extern const base::FeatureParam<bool> kActionsUISimplificationIncludeRealbox;
-// Indicates whether to delete extra matches produced by splitting
-// actions out to become independent suggestions. Note, this will only
-// apply if `IsActionsUISimplificationEnabled` returns true and the
-// total number of matches exceeds the limit (i.e. there are extra matches).
-extern const base::FeatureParam<bool> kActionsUISimplificationTrimExtra;
-
-// Returns true if the OmniboxKeywordModeRefresh feature is enabled.
-bool IsKeywordModeRefreshEnabled();
-
-// Returns true if the fuzzy URL suggestions feature is enabled.
-bool IsFuzzyUrlSuggestionsEnabled();
-// Indicates whether fuzzy match behavior is counterfactual.
-extern const base::FeatureParam<bool> kFuzzyUrlSuggestionsCounterfactual;
-// Indicates whether to bypass fuzzy processing when `IsLowEndDevice` is true.
-extern const base::FeatureParam<bool> kFuzzyUrlSuggestionsLowEndBypass;
-// Indicates whether to support transpose edit operations in fuzzy search.
-extern const base::FeatureParam<bool> kFuzzyUrlSuggestionsTranspose;
-// The minimum length of input that will be checked for fuzzy URL
-// suggestions. Note, this is a threshold independent of the fuzzy
-// search tolerance schedule.
-extern const base::FeatureParam<int> kFuzzyUrlSuggestionsMinInputLength;
-
-// The *Penalty* parameters below provide control over how fuzzy matches
-// are penalized according to input length. The relevance from the source
-// match is reduced because the match is inexact (typo-corrected) but
-// when the input is very short, such corrections are more likely and
-// therefore confidence is lower. Hence the high penalty is applied
-// to the shortest inputs and the low is applied to longer inputs, with
-// a linear taper for input length to smooth the effect.
-
-// Highest penalty percentage that will be applied to fuzzy URL suggestions.
-extern const base::FeatureParam<int> kFuzzyUrlSuggestionsPenaltyHigh;
-// Lowest penalty percentage that will be applied to fuzzy URL suggestions.
-extern const base::FeatureParam<int> kFuzzyUrlSuggestionsPenaltyLow;
-// The number of input characters between where the high penalty will be
-// applied and where the low penalty will be applied.
-extern const base::FeatureParam<int> kFuzzyUrlSuggestionsPenaltyTaperLength;
-
 // On Device Suggestions feature and its helper functions.
-// TODO(crbug.com/1307005): clean up head suggest flags once crbug.com/1307005
+// TODO(crbug.com/40218594): clean up head suggest flags once crbug.com/1307005
 // no longer happens.
 bool IsOnDeviceHeadSuggestEnabledForIncognito();
 bool IsOnDeviceHeadSuggestEnabledForNonIncognito();
@@ -661,6 +619,12 @@ struct MLConfig {
   int mapped_search_blending_min{600};
   int mapped_search_blending_max{2800};
   int mapped_search_blending_grouping_threshold{1400};
+
+  // If true, ML scoring service will utilize in-memory ML score cache.
+  // Equivalent to omnibox::kMlUrlScoreCaching.
+  bool ml_url_score_caching{false};
+  // Maximum number of cached entries to store in the ML score cache.
+  int max_ml_score_cache_size{30};
 };
 
 // A testing utility class for overriding the current configuration returned
@@ -709,26 +673,15 @@ bool IsMlUrlScoringUnlimitedNumCandidatesEnabled();
 // Whether the URL scoring model is enabled.
 bool IsUrlScoringModelEnabled();
 
+// Whether ML URL score caching is enabled.
+bool IsMlUrlScoreCachingEnabled();
+
 // <- ML Relevance Scoring
 // ---------------------------------------------------------
 // Inspire Me ->
 
 // Specify number of additional Related and Trending queries appended to the
 // suggestion list, when the Inspire Me feature is enabled.
-constexpr base::FeatureParam<int> kInspireMeAdditionalRelatedQueries(
-    &omnibox::kInspireMe,
-    "AdditionalRelatedQueries",
-    0);
-
-constexpr base::FeatureParam<int> kInspireMeAdditionalTrendingQueries(
-    &omnibox::kInspireMe,
-    "AdditionalTrendingQueries",
-    0);
-
-constexpr base::FeatureParam<int> kInspireMePsuggestQueries(
-    &omnibox::kInspireMe,
-    "PersonalizedSuggestQueries",
-    20);
 
 constexpr base::FeatureParam<int> kQueryTilesCacheMaxAge(
     &omnibox::kQueryTilesInZPSOnNTP,
@@ -770,6 +723,21 @@ constexpr base::FeatureParam<omnibox::ActionInfo::ActionType>
         {},
         &kActionsInSuggestRemoveActionTypesVariants);
 
+constexpr base::FeatureParam<bool> kAnswerActionsShowAboveKeyboard(
+    &omnibox::kOmniboxAnswerActions,
+    "ShowAboveKeyboard",
+    false);
+
+constexpr base::FeatureParam<bool> kAnswerActionsShowIfUrlsPresent(
+    &omnibox::kOmniboxAnswerActions,
+    "ShowIfUrlsPresent",
+    false);
+
+constexpr base::FeatureParam<bool> kAnswerActionsShowRichCard(
+    &omnibox::kOmniboxAnswerActions,
+    "ShowRichCard",
+    false);
+
 // Controls the placement of Reviews and Call actions position.
 // false => Call, Directions, Reviews.
 // true  => Reviews, Directions, Call.
@@ -797,6 +765,11 @@ extern const base::FeatureParam<std::string> kGeminiUrlOverride;
 
 // Whether the expansion pack for the site search starter pack is enabled.
 bool IsStarterPackExpansionEnabled();
+
+// When true, enables an informational IPH message at the bottom of the Omnibox
+// directing users to certain starter pack engines.
+bool IsStarterPackIPHEnabled();
+
 // <- Site Search Starter Pack
 // ---------------------------------------------------------
 

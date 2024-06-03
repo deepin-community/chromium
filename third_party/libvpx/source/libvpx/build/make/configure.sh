@@ -444,8 +444,10 @@ EOF
     compile_result=$?
     if [ ${compile_result} -ne 0 ]; then
       log_echo "  disabling sve: arm_neon_sve_bridge.h not supported by compiler"
+      log_echo "  disabling sve2: arm_neon_sve_bridge.h not supported by compiler"
       disable_feature sve
-      RTCD_OPTIONS="${RTCD_OPTIONS}--disable-sve "
+      disable_feature sve2
+      RTCD_OPTIONS="${RTCD_OPTIONS}--disable-sve --disable-sve2 "
     fi
   fi
 }
@@ -1004,37 +1006,18 @@ EOF
   case ${toolchain} in
     arm*)
       soft_enable runtime_cpu_detect
-      # Arm ISA extensions are treated as supersets.
-      case ${tgt_isa} in
-        arm64|armv8)
-          for ext in ${ARCH_EXT_LIST_AARCH64}; do
-            # Disable higher order extensions to simplify dependencies.
-            if [ "$disable_exts" = "yes" ]; then
-              if ! disabled $ext; then
-                RTCD_OPTIONS="${RTCD_OPTIONS}--disable-${ext} "
-                disable_feature $ext
-              fi
-            elif disabled $ext; then
-              disable_exts="yes"
-            else
-              soft_enable $ext
-            fi
-          done
-          check_neon_sve_bridge_compiles
-          ;;
-        armv7|armv7s)
-          soft_enable neon
-          # Only enable neon_asm when neon is also enabled.
-          enabled neon && soft_enable neon_asm
-          # If someone tries to force it through, die.
-          if disabled neon && enabled neon_asm; then
-            die "Disabling neon while keeping neon-asm is not supported"
-          fi
-          ;;
-      esac
+
+      if [ ${tgt_isa} = "armv7" ] || [ ${tgt_isa} = "armv7s" ]; then
+        soft_enable neon
+        # Only enable neon_asm when neon is also enabled.
+        enabled neon && soft_enable neon_asm
+        # If someone tries to force it through, die.
+        if disabled neon && enabled neon_asm; then
+          die "Disabling neon while keeping neon-asm is not supported"
+        fi
+      fi
 
       asm_conversion_cmd="cat"
-
       case ${tgt_cc} in
         gcc)
           link_with_cc=gcc
@@ -1253,6 +1236,38 @@ EOF
           fi
           ;;
       esac
+
+      # AArch64 ISA extensions are treated as supersets.
+      if [ ${tgt_isa} = "arm64" ] || [ ${tgt_isa} = "armv8" ]; then
+        aarch64_arch_flag_neon="arch=armv8-a"
+        aarch64_arch_flag_neon_dotprod="arch=armv8.2-a+dotprod"
+        aarch64_arch_flag_neon_i8mm="arch=armv8.2-a+dotprod+i8mm"
+        aarch64_arch_flag_sve="arch=armv8.2-a+dotprod+i8mm+sve"
+        aarch64_arch_flag_sve2="arch=armv9-a+sve2"
+        for ext in ${ARCH_EXT_LIST_AARCH64}; do
+          if [ "$disable_exts" = "yes" ]; then
+            RTCD_OPTIONS="${RTCD_OPTIONS}--disable-${ext} "
+            soft_disable $ext
+          else
+            # Check the compiler supports the -march flag for the extension.
+            # This needs to happen after toolchain/OS inspection so we handle
+            # $CROSS etc correctly when checking for flags, else these will
+            # always fail.
+            flag="$(eval echo \$"aarch64_arch_flag_${ext}")"
+            check_gcc_machine_option "${flag}" "${ext}"
+            if ! enabled $ext; then
+              # Disable higher order extensions to simplify dependencies.
+              disable_exts="yes"
+              RTCD_OPTIONS="${RTCD_OPTIONS}--disable-${ext} "
+              soft_disable $ext
+            fi
+          fi
+        done
+        if enabled sve; then
+          check_neon_sve_bridge_compiles
+        fi
+      fi
+
       ;;
     mips*)
       link_with_cc=gcc

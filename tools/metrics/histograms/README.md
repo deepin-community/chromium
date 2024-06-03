@@ -419,24 +419,18 @@ new histograms don't turn out to have the properties the implementer wants,
 whether due to bugs in the implementation or simply an evolving understanding
 of what should be measured.
 
-#### How to choose expiry for histograms
-
-If you are adding a histogram to evaluate a feature launch, set an expiry date
-consistent with the expected feature launch date. Otherwise, we recommend
-choosing 3-6 months.
+#### Guidelines on expiry
 
 Here are some guidelines for common scenarios:
 
-*   If the listed owner moved to different project, find a new owner.
+*   If the listed owner moved to a different project, find a new owner.
 *   If neither the owner nor the team uses the histogram, remove it.
 *   If the histogram is not in use now, but might be useful in the far future,
     remove it.
 *   If the histogram is not in use now, but might be useful in the near
     future, pick ~3 months (also ~3 milestones) ahead.
-*   If the histogram is actively in use now and is useful in the short term,
-    pick 3-6 months (3-6 milestones) ahead.
-*   If the histogram is actively in use and seems useful for an indefinite time,
-    pick 1 year.
+*   Otherwise, pick an expiry that is reasonable for how long the metric should
+    be used, up to a year.
 
 We also have a tool that automatically extends expiry dates. The most frequently
 accessed histograms, currently 99%, have their expirations automatically
@@ -445,6 +439,20 @@ the [design
 doc](https://docs.google.com/document/d/1IEAeBF9UnYQMDfyh2gdvE7WlUKsfIXIZUw7qNoU89A4)
 of the program that does this.  The bottom line is: If the histogram is being
 checked, it should be extended without developer interaction.
+
+#### How to choose expiry for new histograms
+
+In general, set an expiry that is reasonable for how long the metric should
+be used, up to a year.
+
+Some common cases:
+
+*   When adding a histogram to evaluate a feature launch, set an expiry date
+    consistent with the expected feature launch date.
+*   If you expect the histogram to be useful for an indefinite time, set an
+    expiry date up to 1 year out. This gives a chance to re-evaluate whether
+    the histogram indeed proved to be useful.
+*   Otherwise, 3-6 months (3-6 milestones) is typically a good choice.
 
 #### How to extend an expired histogram {#extending}
 
@@ -539,6 +547,19 @@ histogram. Construct your tests using other means to validate your general
 logic, and only use
 [`HistogramTester`](https://cs.chromium.org/chromium/src/base/test/metrics/histogram_tester.h)
 to verify that the histogram values are being generated as you would expect.
+
+### Verify Enum and Variant Values
+
+If you have <enum> or <variant> entries that need to be updated to match code,
+you can use
+[HistogramEnumReader](https://cs.chromium.org/chromium/src/base/test/metrics/histogram_enum_reader.h)
+or
+[HistogramVariantsReader](https://cs.chromium.org/chromium/src/base/test/metrics/histogram_enum_reader.h)
+to read and verify the expected values in a unit test. This prevents a mismatch
+between code and histogram data from slipping through CQ.
+
+For an example, see
+[BrowserUserEducationServiceTest.CheckFeaturePromoHistograms](https://cs.chromium.org/chromium/src/chrome/browser/ui/views/user_education/browser_user_education_service_unittest.cc).
 
 ## Interpreting the Resulting Data
 
@@ -658,17 +679,29 @@ courtesy to ask them for approval.
 
 ### Components
 
-Histograms may be associated with components, which can help make sure that
+Histograms may be associated with a component, which can help make sure that
 histogram expiry bugs don't fall through the cracks.
 
-There are two ways in which components may be associated with a histogram. The
-first and recommended way is to add a tag to a histogram or histogram suffix,
-e.g. <component>UI&gt;Shell</component>. The second way is to specify an OWNERS
-file as a secondary owner for a histogram. If the OWNERS file has an adjacent
-DIR_METADATA file that contains a component, then that component is associated
-with the histogram. If there isn't a parallel DIR_METADATA file with such a
-component, but a parent directory has one, then the parent directory's component
-is used.
+A histogram is associated with the `buganizer_public` component listed in the
+DIR_METADATA file adjacent to the histograms.xml file if present.
+
+There are two other ways in which components may be associated with a
+histogram. The first way is to add a tag containing the component ID to a
+histogram or histogram suffix, e.g. <component>1456399</component>. The second
+way is to specify an OWNERS file as a secondary owner for a histogram. If the
+OWNERS file has an adjacent DIR_METADATA file that contains a
+`buganizer_public` component, then that component is associated with the
+histogram. If there isn't a parallel DIR_METADATA file with such a component,
+but an ancestor directory has one, then the ancestor directory's component is
+used.
+
+If more than one component is associated with a histogram, <component> tag is
+favored over adjacent DIR_METADATA file and over OWNERS file.
+
+**Note:** For non-Chromium Issue Tracker (ChromeOS Public Tracker or internal)
+components, make sure uma-tools@prod.google.com has access to create and
+update issues.
+
 
 ### Improvement Direction
 For some histograms, an increase or a decrease in the reported values can be

@@ -162,6 +162,7 @@ export class Textfield extends LitElement {
       --md-outlined-text-field-hover-supporting-text-color: var(--cros-sys-on_surface);
       --md-outlined-text-field-hover-input-text-color: var(--cros-sys-on_surface);
       --md-outlined-text-field-hover-state-layer-opacity: 0;
+      text-align: inherit;
       width: 100%;
     }
 

@@ -53,6 +53,7 @@
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/ax_tree_data.h"
 #include "ui/accessibility/platform/ax_fragment_root_win.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate_utils_win.h"
 #include "ui/accessibility/platform/ax_platform_node_textchildprovider_win.h"
@@ -660,6 +661,13 @@ void AXPlatformNodeWin::NotifyAccessibilityEvent(ax::mojom::Event event_type) {
     }
   }
 
+  // TODO(benjamin.beaudry): Uncomment DCHECK once https://crbug.com/331840469
+  // is fixed.
+  // DCHECK(event_type != ax::mojom::Event::kLiveRegionChanged ||
+  //        GetDelegate()->IsWebContent() || IsUIAControl())
+  //     << "For views, the LiveRegionChanged event should only be fired on
+  //     nodes that are UIA controls.";
+
   if (event_type == ax::mojom::Event::kValueChanged ||
       event_type == ax::mojom::Event::kLiveRegionCreated ||
       event_type == ax::mojom::Event::kLiveRegionChanged) {
@@ -728,7 +736,7 @@ void AXPlatformNodeWin::FireUiaTextEditTextChangedEvent(
     const gfx::Range& range,
     const std::wstring& active_composition_text,
     bool is_composition_committed) {
-  if (!::features::IsUiaProviderEnabled()) {
+  if (!AXPlatform::GetInstance().IsUiaProviderEnabled()) {
     return;
   }
 
@@ -906,17 +914,9 @@ AXPlatformNodeWin::UIARoleProperties AXPlatformNodeWin::GetUIARoleProperties() {
       return {UIALocalizationStrategy::kDeferToAriaRole, UIA_GroupControlTypeId,
               L"definition"};
 
-    case ax::mojom::Role::kDescriptionListDetail:
-      return {UIALocalizationStrategy::kDeferToAriaRole, UIA_TextControlTypeId,
-              L"description"};
-
     case ax::mojom::Role::kDescriptionList:
       return {UIALocalizationStrategy::kDeferToControlType,
               UIA_ListControlTypeId, L"list"};
-
-    case ax::mojom::Role::kDescriptionListTerm:
-      return {UIALocalizationStrategy::kDeferToControlType,
-              UIA_ListItemControlTypeId, L"listitem"};
 
     case ax::mojom::Role::kDesktop:
       return {UIALocalizationStrategy::kSupply, UIA_DocumentControlTypeId,
@@ -1458,6 +1458,8 @@ AXPlatformNodeWin::UIARoleProperties AXPlatformNodeWin::GetUIARoleProperties() {
       return {UIALocalizationStrategy::kSupply, UIA_PaneControlTypeId,
               L"region"};
 
+    case ax::mojom::Role::kDescriptionListTermDeprecated:
+    case ax::mojom::Role::kDescriptionListDetailDeprecated:
     case ax::mojom::Role::kPreDeprecated:
       NOTREACHED_NORETURN();
   }
@@ -2017,6 +2019,7 @@ IFACEMETHODIMP AXPlatformNodeWin::get_uniqueID(LONG* id) {
   // convention here and when we fire events via
   // ::NotifyWinEvent().
   *id = -GetUniqueId();
+  DCHECK(*id < 0);
   return S_OK;
 }
 
@@ -2781,9 +2784,15 @@ IFACEMETHODIMP AXPlatformNodeWin::GetItem(int row,
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_GRID_GETITEM);
   UIA_VALIDATE_CALL_1_ARG(result);
 
-  AXPlatformNodeBase* cell = GetTableCell(row, column);
-  if (!cell)
+  // While UIA is 0-based, aria is 1-based, so correct here.
+  AXPlatformNodeBase* cell = GetAriaTableCell(row + 1, column + 1);
+  if (!cell) {
+    cell = GetTableCell(row, column);
+  }
+
+  if (!cell) {
     return E_INVALIDARG;
+  }
 
   auto* node_win = static_cast<AXPlatformNodeWin*>(cell);
   node_win->AddRef();
@@ -4952,6 +4961,7 @@ IFACEMETHODIMP AXPlatformNodeWin::Navigate(
   WIN_ACCESSIBILITY_API_TRACE_EVENT("Navigate");
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_NAVIGATE);
   WIN_ACCESSIBILITY_API_PERF_HISTOGRAM(UMA_API_NAVIGATE);
+  WIN_ACCESSIBILITY_SOURCE_API_PERF_HISTOGRAM(UMA_API_NAVIGATE);
   UIA_VALIDATE_CALL_1_ARG(element_provider);
 
   *element_provider = nullptr;
@@ -5116,6 +5126,7 @@ IFACEMETHODIMP AXPlatformNodeWin::get_BoundingRectangle(
   WIN_ACCESSIBILITY_API_TRACE_EVENT("get_BoundingRectangle");
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_GET_BOUNDINGRECTANGLE);
   WIN_ACCESSIBILITY_API_PERF_HISTOGRAM(UMA_API_GET_BOUNDINGRECTANGLE);
+  WIN_ACCESSIBILITY_SOURCE_API_PERF_HISTOGRAM(UMA_API_GET_BOUNDINGRECTANGLE);
 
   UIA_VALIDATE_CALL_1_ARG(screen_physical_pixel_bounds);
 
@@ -5182,6 +5193,7 @@ IFACEMETHODIMP AXPlatformNodeWin::GetPatternProvider(PATTERNID pattern_id,
   WIN_ACCESSIBILITY_API_TRACE_EVENT("GetPatternProvider");
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_GET_PATTERN_PROVIDER);
   WIN_ACCESSIBILITY_API_PERF_HISTOGRAM(UMA_API_GET_PATTERN_PROVIDER);
+  WIN_ACCESSIBILITY_SOURCE_API_PERF_HISTOGRAM(UMA_API_GET_PATTERN_PROVIDER);
   NotifyAPIObserverForPatternRequest(pattern_id);
   return GetPatternProviderImpl(pattern_id, result);
 }
@@ -5205,6 +5217,7 @@ IFACEMETHODIMP AXPlatformNodeWin::GetPropertyValue(PROPERTYID property_id,
   WIN_ACCESSIBILITY_API_TRACE_EVENT("GetPropertyValue");
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_GET_PROPERTY_VALUE);
   WIN_ACCESSIBILITY_API_PERF_HISTOGRAM(UMA_API_GET_PROPERTY_VALUE);
+  WIN_ACCESSIBILITY_SOURCE_API_PERF_HISTOGRAM(UMA_API_GET_PROPERTY_VALUE);
 
   constexpr LONG kFirstKnownUiaPropertyId = UIA_RuntimeIdPropertyId;
   constexpr LONG kLastKnownUiaPropertyId = UIA_IsDialogPropertyId;
@@ -5246,12 +5259,17 @@ HRESULT AXPlatformNodeWin::GetPropertyValueImpl(PROPERTYID property_id,
       result->bstrVal = SysAllocString(GetUIARoleProperties().aria_role);
       break;
 
-    case UIA_AutomationIdPropertyId:
+    case UIA_AutomationIdPropertyId: {
+      // The kRootWebArea is the only element in a web page that cannot have
+      // an author provided id. In this case, we return a constant string
+      // that needs to be the same for all locales.
+      std::u16string automation_id = GetRole() == ax::mojom::Role::kRootWebArea
+                                         ? u"RootWebArea"
+                                         : GetDelegate()->GetAuthorUniqueId();
       V_VT(result) = VT_BSTR;
-      V_BSTR(result) =
-          SysAllocString(base::as_wcstr(GetDelegate()->GetAuthorUniqueId()));
+      V_BSTR(result) = SysAllocString(base::as_wcstr(automation_id));
       break;
-
+    }
     case UIA_ClassNamePropertyId:
       result->vt = VT_BSTR;
       GetStringAttributeAsBstr(ax::mojom::StringAttribute::kClassName,
@@ -6446,14 +6464,8 @@ int AXPlatformNodeWin::MSAARole() {
     case ax::mojom::Role::kDefinition:
       return ROLE_SYSTEM_GROUPING;
 
-    case ax::mojom::Role::kDescriptionListDetail:
-      return ROLE_SYSTEM_TEXT;
-
     case ax::mojom::Role::kDescriptionList:
       return ROLE_SYSTEM_LIST;
-
-    case ax::mojom::Role::kDescriptionListTerm:
-      return ROLE_SYSTEM_LISTITEM;
 
     case ax::mojom::Role::kDesktop:
       return ROLE_SYSTEM_PANE;
@@ -6874,6 +6886,8 @@ int AXPlatformNodeWin::MSAARole() {
     case ax::mojom::Role::kNone:
     case ax::mojom::Role::kUnknown:
       return ROLE_SYSTEM_PANE;
+    case ax::mojom::Role::kDescriptionListTermDeprecated:
+    case ax::mojom::Role::kDescriptionListDetailDeprecated:
     case ax::mojom::Role::kPreDeprecated:
       NOTREACHED_NORETURN();
   }
@@ -7006,12 +7020,6 @@ int32_t AXPlatformNodeWin::ComputeIA2Role() {
     case ax::mojom::Role::kDate:
     case ax::mojom::Role::kDateTime:
       ia2_role = IA2_ROLE_DATE_EDITOR;
-      break;
-    case ax::mojom::Role::kDefinition:
-      ia2_role = IA2_ROLE_PARAGRAPH;
-      break;
-    case ax::mojom::Role::kDescriptionListDetail:
-      ia2_role = IA2_ROLE_PARAGRAPH;
       break;
     case ax::mojom::Role::kDocPageFooter:
       ia2_role = IA2_ROLE_FOOTER;
@@ -7176,6 +7184,7 @@ int32_t AXPlatformNodeWin::ComputeIA2Role() {
     case ax::mojom::Role::kTime:
       ia2_role = IA2_ROLE_TEXT_FRAME;
       break;
+    case ax::mojom::Role::kDescriptionListDetailDeprecated:
     case ax::mojom::Role::kPreDeprecated:
       NOTREACHED_NORETURN();
     default:
@@ -7565,12 +7574,14 @@ bool AXPlatformNodeWin::IsUIAControl() const {
 
   // TODO(accessibility): This condition is very wide - it returns true for most
   // elements, except the ones that are explicitly invisible/ignored and not
-  // focusable. We might want to revisit this implementation to match the specs:
+  // focusable, and the ones that are expected to fire live region events. We
+  // might want to revisit this implementation to match the specs:
   // https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-treeoverview#control-view.
   //
   // Also, should we really have a different implementation for Views than for
   // web content?
-  return !(IsInvisibleOrIgnored() && !IsFocusable());
+  return !(IsInvisibleOrIgnored() && !IsFocusable()) ||
+         GetRole() == ax::mojom::Role::kStatus;
 }
 
 std::optional<LONG> AXPlatformNodeWin::ComputeUIALandmarkType() const {
@@ -7665,12 +7676,12 @@ bool AXPlatformNodeWin::ShouldHideChildrenForUIA() const {
 
 ULONG AXPlatformNodeWin::InternalAddRef() {
   // Instances of AXPlatformNodeWin hold a reference to themselves (acquired in
-  // `Create`; released in `Dispose`). When the refcount rises from 1 to 2,
-  // infer that the instance is being used for some COM-ish purpose; for
-  // example, being handed to an accessibility tool via a WM_GETOBJECT message
-  // handler.
+  // `Create`; released in `Dispose`). When the refcount rises from 1 to 2
+  // before the node has been disposed, infer that the instance is being used
+  // for some COM-ish purpose; for example, being handed to an accessibility
+  // tool via a WM_GETOBJECT message handler.
   const auto ref_count = SequenceAffineComObjectRoot::InternalAddRef();
-  if (ref_count == 2) {
+  if (delegate_ && ref_count == 2) {
     OnReferenced();
   }
   return ref_count;
@@ -7678,9 +7689,10 @@ ULONG AXPlatformNodeWin::InternalAddRef() {
 
 ULONG AXPlatformNodeWin::InternalRelease() {
   // As above, infer that the instance is no longer being used for some COM-ish
-  // purpose when the refcount drops back down from 2 to 1.
+  // purpose when the refcount drops back down to 1 (if it has yet to be
+  // disposed) or 0 (if it has been).
   const auto ref_count = SequenceAffineComObjectRoot::InternalRelease();
-  if (ref_count == 1) {
+  if (ref_count == (delegate_ ? 1 : 0)) {
     OnDereferenced();
   }
   return ref_count;
@@ -7928,7 +7940,7 @@ std::optional<DWORD> AXPlatformNodeWin::MojoEventToMSAAEvent(
 // static
 std::optional<EVENTID> AXPlatformNodeWin::MojoEventToUIAEvent(
     ax::mojom::Event event) {
-  if (!::features::IsUiaProviderEnabled()) {
+  if (!AXPlatform::GetInstance().IsUiaProviderEnabled()) {
     return std::nullopt;
   }
 
@@ -7961,7 +7973,7 @@ std::optional<EVENTID> AXPlatformNodeWin::MojoEventToUIAEvent(
 // static
 std::optional<PROPERTYID> AXPlatformNodeWin::MojoEventToUIAProperty(
     ax::mojom::Event event) {
-  if (!::features::IsUiaProviderEnabled()) {
+  if (!AXPlatform::GetInstance().IsUiaProviderEnabled()) {
     return std::nullopt;
   }
 

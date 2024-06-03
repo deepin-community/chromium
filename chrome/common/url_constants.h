@@ -414,6 +414,14 @@ inline constexpr char kPrivacyLearnMoreURL[] =
     "https://support.google.com/chrome?p=settings_privacy";
 #endif
 
+// "Chrome Settings" URL for Ad Topics page
+inline constexpr char kPrivacySandboxAdTopicsURL[] =
+    "chrome://settings/adPrivacy/interests";
+
+// "Chrome Settings" URL for Managing Topics page
+inline constexpr char kPrivacySandboxManageTopicsURL[] =
+    "chrome://settings/adPrivacy/interests/manage";
+
 // The URL for the Learn More link of the non-CWS bubble.
 inline constexpr char kRemoveNonCWSExtensionURL[] =
     "https://support.google.com/chrome?p=ui_remove_non_cws_extensions";
@@ -437,6 +445,10 @@ inline constexpr char16_t kSafeBrowsingInChromeHelpCenterURL[] =
 // The URL for Safe Browsing link in Safety Check page.
 inline constexpr char16_t kSafeBrowsingUseInChromeURL[] =
     u"https://support.google.com/chrome/answer/9890866";
+
+// "Learn more" URL for Safety Check page.
+inline constexpr char16_t kSafetyHubHelpCenterURL[] =
+    u"https://support.google.com/chrome?p=safety_check";
 
 // "Learn more" URL for safety tip bubble.
 inline constexpr char kSafetyTipHelpCenterURL[] =
@@ -478,6 +490,10 @@ inline constexpr char kSyncGoogleDashboardURL[] =
 // The URL for the "Learn more" page for sync setup on the personal stuff page.
 inline constexpr char16_t kSyncLearnMoreURL[] =
     u"https://support.google.com/chrome?p=settings_sign_in";
+
+// The URL for the "Learn more" page for Help me Write.
+inline constexpr char kComposeLearnMorePageURL[] =
+    "https://support.google.com/chrome?p=help_me_write";
 
 // The URL for the "Learn more" link in the enterprise disclaimer for managed
 // profile in the Signin Intercept bubble.
@@ -764,8 +780,8 @@ inline constexpr char kSpeakOnMuteDetectionLearnMoreURL[] =
 
 // The URL for the "Learn more" page for the geolocation area in the privacy
 // hub page.
-inline constexpr char kGeolocationAreaLearnMoreURL[] =
-    "https://support.google.com/chromebook?p=cpn_location_sharing";
+inline constexpr char kPrivacyHubGeolocationLearnMoreURL[] =
+    "https://support.google.com/chromebook/?p=manage_your_location";
 
 // The URL for the "Learn more" page for Suggested Content in the privacy page.
 inline constexpr char kSuggestedContentLearnMoreURL[] =
@@ -803,6 +819,11 @@ inline constexpr char kFingerprintLearnMoreURL[] =
 // devices.
 inline constexpr char kRecoveryLearnMoreURL[] =
     "https://support.google.com/chrome?p=local_data_recovery";
+
+// The URL for the learn more link about extended automatic updates for
+// ChromeOS devices.
+inline constexpr char16_t kDeviceExtendedUpdatesLearnMoreURL[] =
+    u"https://www.google.com/chromebook/autoupdates-opt-in/";
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if BUILDFLAG(IS_MAC)

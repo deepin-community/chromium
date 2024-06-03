@@ -105,8 +105,9 @@ SyncPrefs::SyncPrefs(PrefService* pref_service)
       base::BindRepeating(&SyncPrefs::OnSelectedTypesPrefChanged,
                           base::Unretained(this)));
 #if BUILDFLAG(IS_IOS)
-  // On iOS, in some situations, there is a dedicated opt-in for bookmarks and
-  // reading list.
+  // On iOS, in some situations, there was a dedicated opt-in for bookmarks and
+  // reading list. It's not used anymore with kReplaceSyncPromosWithSigninPromos
+  // enabled, except for a migration.
   pref_change_registrar_.Add(
       prefs::internal::kBookmarksAndReadingListAccountStorageOptIn,
       base::BindRepeating(&SyncPrefs::OnSelectedTypesPrefChanged,
@@ -220,6 +221,12 @@ bool SyncPrefs::IsInitialSyncFeatureSetupComplete() const {
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
+bool SyncPrefs::IsExplicitBrowserSignin() const {
+  return switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
+             switches::ExplicitBrowserSigninPhase::kFull) &&
+         pref_service_->GetBoolean(::prefs::kExplicitBrowserSignin);
+}
+
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
 void SyncPrefs::SetInitialSyncFeatureSetupComplete() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -267,18 +274,25 @@ UserSelectableTypeSet SyncPrefs::GetSelectedTypesForAccount(
                  type == UserSelectableType::kSharedTabGroupData) {
         // History, Tabs, and Shared Tab Group Data are disabled by default.
         type_enabled = false;
-      } else if (type == UserSelectableType::kPasswords) {
+      } else if (type == UserSelectableType::kPasswords ||
+                 type == UserSelectableType::kAutofill) {
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
         type_enabled = true;
 #else
-        // kPasswords is only on by default if there was an explicit sign in
-        // recordedand the `switches::kUnoDesktop` is enabled.
-        // Otherwise the type requires a dedicated opt-in. Note: If
-        // this changes, also update the migration logic in
+        // kPasswords and kAutofill are only on by default if there was an
+        // explicit sign in recorded and
+        // `IsExplicitBrowserSigninUIOnDesktopEnabled()` is true.
+        // Otherwise:
+        // - kPasswords requires a dedicated opt-in.
+        // - kAutofill cannot be enabled.
+        // Note: If this changes, also update the migration logic in
         // MigrateGlobalDataTypePrefsToAccount().
+        switches::ExplicitBrowserSigninPhase phase =
+            type == UserSelectableType::kPasswords
+                ? switches::ExplicitBrowserSigninPhase::kExperimental
+                : switches::ExplicitBrowserSigninPhase::kFull;
         type_enabled =
-            switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
-                switches::ExplicitBrowserSigninPhase::kExperimental) &&
+            switches::IsExplicitBrowserSigninUIOnDesktopEnabled(phase) &&
             pref_service_->GetBoolean(::prefs::kExplicitBrowserSignin);
 #endif
       } else if (type == UserSelectableType::kBookmarks ||
@@ -294,23 +308,14 @@ UserSelectableTypeSet SyncPrefs::GetSelectedTypesForAccount(
         // All other types are always enabled by default.
         type_enabled = true;
       }
-
-#if BUILDFLAG(IS_IOS)
-      // In transport-only mode, bookmarks and reading list require an
-      // additional opt-in.
-      // TODO(crbug.com/1440628): Cleanup the temporary behaviour of an
-      // additional opt in for Bookmarks and Reading Lists.
-      if ((type == UserSelectableType::kBookmarks ||
-           type == UserSelectableType::kReadingList) &&
-          !base::FeatureList::IsEnabled(kReplaceSyncPromosWithSignInPromos)) {
-        type_enabled &= pref_service_->GetBoolean(
-            prefs::internal::kBookmarksAndReadingListAccountStorageOptIn);
-      }
-#endif
     }
     if (type_enabled) {
       selected_types.Put(type);
     }
+  }
+
+  if (!password_sync_allowed_) {
+    selected_types.Remove(UserSelectableType::kPasswords);
   }
 
   return selected_types;
@@ -335,6 +340,10 @@ UserSelectableTypeSet SyncPrefs::GetSelectedTypesForSyncingUser() const {
     }
   }
 
+  if (!password_sync_allowed_) {
+    selected_types.Remove(UserSelectableType::kPasswords);
+  }
+
   return selected_types;
 }
 
@@ -348,6 +357,26 @@ bool SyncPrefs::IsTypeManagedByCustodian(UserSelectableType type) const {
   const char* pref_name = GetPrefNameForType(type);
   CHECK(pref_name);
   return pref_service_->IsPreferenceManagedByCustodian(pref_name);
+}
+
+bool SyncPrefs::IsTypeDisabledByUserForAccount(
+    const UserSelectableType type,
+    const signin::GaiaIdHash& gaia_id_hash) {
+  const char* pref_name = GetPrefNameForType(type);
+  DCHECK(pref_name);
+
+  const base::Value::Dict* account_settings =
+      pref_service_->GetDict(prefs::internal::kSelectedTypesPerAccount)
+          .FindDict(gaia_id_hash.ToBase64());
+  std::optional<bool> pref_value;
+  if (account_settings) {
+    pref_value = account_settings->FindBool(pref_name);
+  }
+
+  if (pref_value.has_value()) {
+    return !*pref_value;
+  }
+  return false;
 }
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -389,10 +418,8 @@ void SyncPrefs::SetSelectedTypesForSyncingUser(
     }
   }
 
-  // Payments integration might have changed, so report as true.
   for (SyncPrefObserver& observer : sync_pref_observers_) {
-    observer.OnSelectedTypesPrefChange(
-        /*payments_integration_enabled_changed=*/true);
+    observer.OnSelectedTypesPrefChange();
   }
 }
 
@@ -417,26 +444,6 @@ void SyncPrefs::KeepAccountSettingsPrefsOnlyForUsers(
       available_gaia_ids,
       prefs::internal::kSyncEncryptionBootstrapTokenPerAccount);
 }
-
-#if BUILDFLAG(IS_IOS)
-void SyncPrefs::SetBookmarksAndReadingListAccountStorageOptIn(bool value) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  pref_service_->SetBoolean(
-      prefs::internal::kBookmarksAndReadingListAccountStorageOptIn, value);
-}
-
-bool SyncPrefs::IsOptedInForBookmarksAndReadingListAccountStorageForTesting() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return pref_service_->GetBoolean(
-      prefs::internal::kBookmarksAndReadingListAccountStorageOptIn);
-}
-
-void SyncPrefs::ClearBookmarksAndReadingListAccountStorageOptIn() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  pref_service_->ClearPref(
-      prefs::internal::kBookmarksAndReadingListAccountStorageOptIn);
-}
-#endif  // BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 bool SyncPrefs::IsSyncFeatureDisabledViaDashboard() const {
@@ -499,9 +506,7 @@ void SyncPrefs::SetSelectedOsTypes(bool sync_all_os_types,
     }
   }
   for (SyncPrefObserver& observer : sync_pref_observers_) {
-    // Payments is a browser type (not an OS type) so can't have changed here.
-    observer.OnSelectedTypesPrefChange(
-        /*payments_integration_enabled_changed=*/false);
+    observer.OnSelectedTypesPrefChange();
   }
 }
 
@@ -669,6 +674,8 @@ const char* SyncPrefs::GetPrefNameForType(UserSelectableType type) {
       return prefs::internal::kSyncSharedTabGroupData;
     case UserSelectableType::kPayments:
       return prefs::internal::kSyncPayments;
+    case UserSelectableType::kCompare:
+      return prefs::internal::kSyncCompare;
   }
   NOTREACHED();
   return nullptr;
@@ -720,11 +727,6 @@ bool SyncPrefs::IsTypeSupportedInTransportMode(UserSelectableType type) {
       return base::FeatureList::IsEnabled(
           kEnablePasswordsAccountStorageForNonSyncingUsers);
     case UserSelectableType::kAutofill:
-      // Note that this logic may lead to kPayments being treated as supported
-      // (or even selected) while kAutofill isn't. This goes against the general
-      // practice that kPayments depends on kAutofill (when it comes to user
-      // choice).
-      // TODO(crbug.com/1435431): Update comment once the decoupling is removed.
       return base::FeatureList::IsEnabled(
           kSyncEnableContactInfoDataTypeInTransportMode);
     case UserSelectableType::kPayments:
@@ -733,6 +735,8 @@ bool SyncPrefs::IsTypeSupportedInTransportMode(UserSelectableType type) {
       return true;
     case UserSelectableType::kHistory:
     case UserSelectableType::kTabs:
+      return base::FeatureList::IsEnabled(kReplaceSyncPromosWithSignInPromos);
+    case UserSelectableType::kCompare:
       return base::FeatureList::IsEnabled(kReplaceSyncPromosWithSignInPromos);
     case syncer::UserSelectableType::kSharedTabGroupData:
       return base::FeatureList::IsEnabled(
@@ -765,13 +769,8 @@ void SyncPrefs::OnSelectedTypesPrefChanged(const std::string& pref_name) {
     return;
   }
 
-  // Note: If `kSelectedTypesPerAccount` gets changed, this potentially
-  // over-notifies that "payments integration enabled" may have changed.
-  bool payments_integration_enabled_changed =
-      pref_name == GetPrefNameForType(UserSelectableType::kPayments) ||
-      pref_name == prefs::internal::kSelectedTypesPerAccount;
   for (SyncPrefObserver& observer : sync_pref_observers_) {
-    observer.OnSelectedTypesPrefChange(payments_integration_enabled_changed);
+    observer.OnSelectedTypesPrefChange();
   }
 }
 
@@ -976,15 +975,6 @@ bool SyncPrefs::MaybeMigratePrefsForSyncToSigninPart2(
         update_selected_types_dict->EnsureDict(gaia_id_hash.ToBase64());
     account_settings->Set(GetPrefNameForType(UserSelectableType::kAutofill),
                           false);
-    if (!base::FeatureList::IsEnabled(
-            syncer::kSyncDecoupleAddressPaymentSettings)) {
-      // When the auto fill data type is updated, the payments should be updated
-      // too. Payments should not be enabled when auto fill data type disabled.
-      // TODO(crbug.com/1435431): This can be removed once kPayments is
-      // decoupled from kAutofill.
-      account_settings->Set(GetPrefNameForType(UserSelectableType::kPayments),
-                            false);
-    }
     return true;
   }
   return false;
@@ -1151,6 +1141,17 @@ void SyncPrefs::MarkPartialSyncToSigninMigrationFullyDone() {
       kMigratedPart1ButNot2) {
     pref_service_->SetInteger(kSyncToSigninMigrationState,
                               kMigratedPart2AndFullyDone);
+  }
+}
+
+void SyncPrefs::SetPasswordSyncAllowed(bool allowed) {
+  if (password_sync_allowed_ == allowed) {
+    return;
+  }
+
+  password_sync_allowed_ = allowed;
+  for (SyncPrefObserver& observer : sync_pref_observers_) {
+    observer.OnSelectedTypesPrefChange();
   }
 }
 

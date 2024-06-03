@@ -8,12 +8,12 @@
 
 #include <vector>
 
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/span.h"
 #include "fxjs/fxv8.h"
 #include "fxjs/js_resources.h"
 #include "fxjs/xfa/cfxjse_class.h"
 #include "fxjs/xfa/cfxjse_engine.h"
-#include "third_party/base/numerics/safe_conversions.h"
 #include "v8/include/cppgc/allocation.h"
 #include "v8/include/v8-object.h"
 #include "v8/include/v8-primitive.h"
@@ -128,8 +128,7 @@ void CJX_Tree::nodes(v8::Isolate* pIsolate,
                      bool bSetting,
                      XFA_Attribute eAttribute) {
   if (bSetting) {
-    WideString wsMessage = L"Unable to set ";
-    FXJSE_ThrowMessage(pIsolate, wsMessage.ToUTF8().AsStringView());
+    FXJSE_ThrowMessage(pIsolate, "Unable to set ");
     return;
   }
 
@@ -171,8 +170,8 @@ void CJX_Tree::index(v8::Isolate* pIsolate,
 
   CXFA_Node* pNode = GetXFANode();
   size_t iIndex = pNode ? pNode->GetIndexByName() : 0;
-  *pValue = fxv8::NewNumberHelper(pIsolate,
-                                  pdfium::base::checked_cast<int32_t>(iIndex));
+  *pValue =
+      fxv8::NewNumberHelper(pIsolate, pdfium::checked_cast<int32_t>(iIndex));
 }
 
 void CJX_Tree::classIndex(v8::Isolate* pIsolate,
@@ -186,8 +185,8 @@ void CJX_Tree::classIndex(v8::Isolate* pIsolate,
 
   CXFA_Node* pNode = GetXFANode();
   size_t iIndex = pNode ? pNode->GetIndexByClassName() : 0;
-  *pValue = fxv8::NewNumberHelper(pIsolate,
-                                  pdfium::base::checked_cast<int32_t>(iIndex));
+  *pValue =
+      fxv8::NewNumberHelper(pIsolate, pdfium::checked_cast<int32_t>(iIndex));
 }
 
 void CJX_Tree::somExpression(v8::Isolate* pIsolate,

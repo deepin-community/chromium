@@ -10,17 +10,22 @@ import './sea_pen_input_query_element.js';
 import './sea_pen_recent_wallpapers_element.js';
 import './sea_pen_template_query_element.js';
 import './sea_pen_templates_element.js';
-import './sea_pen_terms_of_service_dialog_element.js';
+import './sea_pen_introduction_dialog_element.js';
+import './sea_pen_toast_element.js';
 
 import {assert} from 'chrome://resources/js/assert.js';
 
 import {Query} from './constants.js';
 import {isSeaPenEnabled, isSeaPenTextInputEnabled} from './load_time_booleans.js';
-import {acceptSeaPenTermsOfService, getShouldShowSeaPenTermsOfServiceDialog} from './sea_pen_controller.js';
+import {setThumbnailResponseStatusCodeAction} from './sea_pen_actions.js';
+import {closeSeaPenIntroductionDialog, getShouldShowSeaPenIntroductionDialog} from './sea_pen_controller.js';
 import {SeaPenTemplateId} from './sea_pen_generated.mojom-webui.js';
 import {getSeaPenProvider} from './sea_pen_interface_provider.js';
+import {logSeaPenVisited} from './sea_pen_metrics_logger.js';
 import {getTemplate} from './sea_pen_router_element.html.js';
 import {WithSeaPenStore} from './sea_pen_store.js';
+import {SeaPenTemplateQueryElement} from './sea_pen_template_query_element.js';
+import {maybeDoPageTransition} from './transition.js';
 
 export enum SeaPenPaths {
   ROOT = '',
@@ -43,6 +48,7 @@ export class SeaPenRouterElement extends WithSeaPenStore {
   static get properties() {
     return {
       basePath: String,
+
       path_: String,
 
       query_: String,
@@ -55,7 +61,7 @@ export class SeaPenRouterElement extends WithSeaPenStore {
         observer: 'onRelativePathChanged_',
       },
 
-      showSeaPenTermsOfServiceDialog_: Boolean,
+      showSeaPenIntroductionDialog_: Boolean,
     };
   }
 
@@ -69,17 +75,18 @@ export class SeaPenRouterElement extends WithSeaPenStore {
   private query_: string;
   private queryParams_: SeaPenQueryParams;
   private relativePath_: string|null;
-  private showSeaPenTermsOfServiceDialog_: boolean;
+  private showSeaPenIntroductionDialog_: boolean;
 
   override connectedCallback() {
     assert(isSeaPenEnabled(), 'sea pen must be enabled');
     super.connectedCallback();
     instance = this;
-    this.watch<SeaPenRouterElement['showSeaPenTermsOfServiceDialog_']>(
-        'showSeaPenTermsOfServiceDialog_',
-        state => state.shouldShowSeaPenTermsOfServiceDialog);
+    this.watch<SeaPenRouterElement['showSeaPenIntroductionDialog_']>(
+        'showSeaPenIntroductionDialog_',
+        state => state.shouldShowSeaPenIntroductionDialog);
     this.updateFromStore();
-    this.fetchTermsOfServiceDialogStatus();
+    this.fetchIntroductionDialogStatus();
+    logSeaPenVisited();
   }
 
   override disconnectedCallback() {
@@ -88,13 +95,20 @@ export class SeaPenRouterElement extends WithSeaPenStore {
   }
 
   selectSeaPenTemplate(templateId: SeaPenTemplateId|Query) {
-    this.goToRoute(SeaPenPaths.ROOT, {seaPenTemplateId: templateId.toString()});
+    // resets the Sea Pen thumbnail response status code when switching
+    // template; otherwise, error state will remain in sea-pen-images element if
+    // it happens in the last query search.
+    this.dispatch(setThumbnailResponseStatusCodeAction(null));
+    this.goToRoute(
+        SeaPenPaths.RESULTS, {seaPenTemplateId: templateId.toString()});
   }
 
-  goToRoute(relativePath: SeaPenPaths, queryParams: SeaPenQueryParams = {}) {
+  async goToRoute(
+      relativePath: SeaPenPaths, queryParams: SeaPenQueryParams = {}) {
     assert(typeof this.basePath === 'string', 'basePath must be set');
-    this.setProperties(
-        {path_: this.basePath + relativePath, queryParams_: queryParams});
+    return maybeDoPageTransition(
+        () => this.setProperties(
+            {path_: this.basePath + relativePath, queryParams_: queryParams}));
   }
 
   /**
@@ -140,16 +154,13 @@ export class SeaPenRouterElement extends WithSeaPenStore {
 
   private shouldShowTextInputQuery_(
       relativePath: string|null, templateId: string|null): boolean {
-    return isSeaPenTextInputEnabled() &&
-        (relativePath === SeaPenPaths.ROOT ||
-         relativePath === SeaPenPaths.RESULTS) &&
+    return isSeaPenTextInputEnabled() && relativePath === SeaPenPaths.RESULTS &&
         templateId === 'Query';
   }
 
   private shouldShowTemplateQuery_(
       relativePath: string|null, templateId: string|null): boolean {
-    return (relativePath === SeaPenPaths.ROOT ||
-            relativePath === SeaPenPaths.RESULTS) &&
+    return relativePath === SeaPenPaths.RESULTS &&
         (!!templateId && templateId !== 'Query');
   }
 
@@ -167,6 +178,14 @@ export class SeaPenRouterElement extends WithSeaPenStore {
     return relativePath === SeaPenPaths.RESULTS;
   }
 
+  private onBottomContainerClicked_(): void {
+    // close the chip option selection if it is open (or selected chip state is
+    // set).
+    this.shadowRoot!
+        .querySelector<SeaPenTemplateQueryElement>('sea-pen-template-query')
+        ?.onOptionSelectionDone();
+  }
+
   private getTemplateIdFromQueryParams_(templateId: string): SeaPenTemplateId
       |Query {
     if (templateId === 'Query') {
@@ -175,13 +194,30 @@ export class SeaPenRouterElement extends WithSeaPenStore {
     return parseInt(templateId) as SeaPenTemplateId;
   }
 
-  private async fetchTermsOfServiceDialogStatus() {
-    await getShouldShowSeaPenTermsOfServiceDialog(
+  private async fetchIntroductionDialogStatus() {
+    await getShouldShowSeaPenIntroductionDialog(
         getSeaPenProvider(), this.getStore());
   }
 
-  private async onAcceptSeaPenTerms_() {
-    await acceptSeaPenTermsOfService(getSeaPenProvider(), this.getStore());
+  private async onCloseSeaPenIntroductionDialog_() {
+    await closeSeaPenIntroductionDialog(getSeaPenProvider(), this.getStore());
+    this.focusOnFirstTemplate_();
+  }
+
+  private onRecentImageDelete_() {
+    // focus on the first template if the deleted recent image is the only image
+    // or the last image of recent images list.
+    this.focusOnFirstTemplate_();
+  }
+
+  private focusOnFirstTemplate_() {
+    const seaPenTemplates =
+        this.shadowRoot!.querySelector<HTMLElement>('sea-pen-templates');
+    const firstTemplate =
+        seaPenTemplates!.shadowRoot!.querySelector<HTMLElement>(
+            '.sea-pen-template');
+    window.scrollTo(0, 0);
+    firstTemplate!.focus();
   }
 }
 

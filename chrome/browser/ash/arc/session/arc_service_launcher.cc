@@ -160,8 +160,6 @@ ArcServiceLauncher::ArcServiceLauncher(
       base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
     arc_disk_space_monitor_ = std::make_unique<ArcDiskSpaceMonitor>();
   }
-
-  session_manager_obs_.Observe(arc_session_manager_.get());
 }
 
 ArcServiceLauncher::~ArcServiceLauncher() {
@@ -302,9 +300,7 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     arc_net_host_impl->SetPrefService(profile->GetPrefs());
     arc_net_host_impl->SetCertManager(
         std::make_unique<CertManagerImpl>(profile));
-    if (ash::features::IsPasspointARCSupportEnabled()) {
-      arc_net_url_opener_ = std::make_unique<BrowserUrlOpenerImpl>();
-    }
+    arc_net_url_opener_ = std::make_unique<BrowserUrlOpenerImpl>();
   }
   ArcOemCryptoBridge::GetForBrowserContext(profile);
   ArcPaymentAppBridge::GetForBrowserContext(profile);
@@ -381,7 +377,6 @@ void ArcServiceLauncher::ResetForTesting() {
   // First destroy the internal states, then re-initialize them.
   // These are for workaround of singletonness DCHECK in their ctors/dtors.
   Shutdown();
-  session_manager_obs_.Reset();
   arc_session_manager_.reset();
 
   // No recreation of arc_service_manager. Pointers to its ArcBridgeService
@@ -390,11 +385,6 @@ void ArcServiceLauncher::ResetForTesting() {
   arc_session_manager_ = CreateArcSessionManager(
       arc_service_manager_->arc_bridge_service(), chrome::GetChannel(),
       scheduler_configuration_manager_);
-  session_manager_obs_.Observe(arc_session_manager_.get());
-}
-
-void ArcServiceLauncher::OnArcPlayStoreEnabledChanged(bool enabled) {
-  ash::ConfigureSwap(/*arc_enabled=*/enabled);
 }
 
 #if BUILDFLAG(USE_ARC_PROTECTED_MEDIA)

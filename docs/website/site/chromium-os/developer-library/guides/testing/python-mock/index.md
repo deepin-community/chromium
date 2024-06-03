@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/guides
-  - Chromium OS > Developer Library > Guides
+  - ChromiumOS > Developer Library > Guides
 page_name: python-mock
 title: Python unittest mocking
 ---

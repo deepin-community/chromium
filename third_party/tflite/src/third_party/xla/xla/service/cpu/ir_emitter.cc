@@ -164,7 +164,7 @@ void IrEmitter::EmitThreadLocalFunctionEpilogue(HloComputation* computation) {
   }
 }
 
-StatusOr<llvm::Function*> IrEmitter::EmitComputation(
+absl::StatusOr<llvm::Function*> IrEmitter::EmitComputation(
     HloComputation* computation, absl::string_view function_name_prefix,
     bool is_top_level_computation,
     absl::Span<HloInstruction* const> instruction_order,
@@ -1726,7 +1726,7 @@ IrEmitter::ShardedVectorType IrEmitter::CreateShardedVectorType(
   return sharded_vector_type;
 }
 
-StatusOr<IrEmitter::ShardedVector>
+absl::StatusOr<IrEmitter::ShardedVector>
 IrEmitter::EmitInnerLoopForVectorizedReduction(
     const ReductionGenerator& reduction_generator,
     const llvm_ir::IrArray::Index& output_index,
@@ -1826,7 +1826,7 @@ void IrEmitter::EmitShardedVectorStore(
   }
 }
 
-StatusOr<bool> IrEmitter::EmitVectorizedReduce(
+absl::StatusOr<bool> IrEmitter::EmitVectorizedReduce(
     HloInstruction* reduce, HloInstruction* arg, HloInstruction* init_value,
     absl::Span<const int64_t> dimensions, HloComputation* function,
     std::string* failure_reason) {
@@ -2821,7 +2821,7 @@ Status IrEmitter::HandleWhile(HloInstruction* xla_while) {
       [this, &xla_while](const Shape& /*subshape*/,
                          const ShapeIndex& index) -> Status {
         auto check = [this](const HloInstruction* a, const HloInstruction* b,
-                            const ShapeIndex& index) {
+                            const ShapeIndex& index) -> absl::Status {
           const BufferAllocation::Slice slice_a =
               assignment_.GetUniqueSlice(a, index).value();
           const BufferAllocation::Slice slice_b =
@@ -2899,7 +2899,7 @@ Status IrEmitter::HandleWhile(HloInstruction* xla_while) {
   return OkStatus();
 }
 
-StatusOr<bool> IrEmitter::EmitFastConcatenate(
+absl::StatusOr<bool> IrEmitter::EmitFastConcatenate(
     HloInstruction* concatenate, absl::Span<HloInstruction* const> operands,
     std::string* failure_reason) {
   if (ShouldEmitParallelLoopFor(*concatenate)) {

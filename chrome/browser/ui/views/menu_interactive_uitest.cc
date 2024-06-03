@@ -28,6 +28,7 @@
 #include "ui/views/controls/menu/submenu_view.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/test/ax_event_counter.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
@@ -127,7 +128,8 @@ class MenuControllerUITest : public InProcessBrowserTest {
   gfx::Point mouse_pos_;
 };
 
-IN_PROC_BROWSER_TEST_F(MenuControllerUITest, TestMouseOverShownMenu) {
+// TODO(crbug.com/40765889): Re-enable this test
+IN_PROC_BROWSER_TEST_F(MenuControllerUITest, DISABLED_TestMouseOverShownMenu) {
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
   content::ScopedAccessibilityModeOverride ax_mode_override(
       ui::kAXModeComplete);
@@ -142,9 +144,8 @@ IN_PROC_BROWSER_TEST_F(MenuControllerUITest, TestMouseOverShownMenu) {
 #endif
   widget->Init(std::move(params));
   widget->Show();
-  views::test::WidgetActivationWaiter waiter(widget, true);
   widget->Activate();
-  waiter.Wait();
+  views::test::WaitForWidgetActive(widget, true);
 
   // Create a focused test button, used to assert that it has accessibility
   // focus before and after menu item is active, but not during.
@@ -222,7 +223,7 @@ IN_PROC_BROWSER_TEST_F(MenuControllerUITest, TestMouseOverShownMenu) {
 #if BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(MenuControllerUITest, FocusOnOrphanMenu) {
   // This test is extremely flaky on WIN10_20H2, so disable.
-  // TODO(crbug.com/1225346) Investigate why it's so flaky on that version of
+  // TODO(crbug.com/40188371) Investigate why it's so flaky on that version of
   // Windows.
   if (base::win::OSInfo::GetInstance()->version() >=
       base::win::Version::WIN10_20H2) {

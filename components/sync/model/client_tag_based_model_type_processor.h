@@ -76,7 +76,7 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
   void UntrackEntityForClientTagHash(
       const ClientTagHash& client_tag_hash) override;
   std::vector<std::string> GetAllTrackedStorageKeys() const override;
-  bool IsEntityUnsynced(const std::string& storage_key) override;
+  bool IsEntityUnsynced(const std::string& storage_key) const override;
   base::Time GetEntityCreationTime(
       const std::string& storage_key) const override;
   base::Time GetEntityModificationTime(
@@ -186,7 +186,8 @@ class ClientTagBasedModelTypeProcessor : public ModelTypeProcessor,
   // enabled.
   std::optional<ModelError> OnIncrementalUpdateReceived(
       const sync_pb::ModelTypeState& type_state,
-      UpdateResponseDataList updates);
+      UpdateResponseDataList updates,
+      std::optional<sync_pb::GarbageCollectionDirective> gc_directive);
 
   // ModelTypeSyncBridge::GetData() callback for pending loading data upon
   // GetLocalChanges call.

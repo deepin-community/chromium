@@ -70,6 +70,8 @@ enum PseudoId : uint8_t {
   kPseudoIdBackdrop,
   kPseudoIdSelection,
   kPseudoIdScrollbar,
+  kPseudoIdScrollMarker,
+  kPseudoIdScrollMarkers,
   kPseudoIdTargetText,
   kPseudoIdHighlight,
   kPseudoIdSpellingError,
@@ -91,6 +93,7 @@ enum PseudoId : uint8_t {
   kPseudoIdInputListButton,
   // Special values follow:
   kAfterLastInternalPseudoId,
+  kPseudoIdInvalid,
   kFirstPublicPseudoId = kPseudoIdFirstLine,
   kLastTrackedPublicPseudoId = kPseudoIdGrammarError,
   kFirstInternalPseudoId = kPseudoIdFirstLineInherited,
@@ -489,6 +492,30 @@ enum class CompositingOperator : unsigned {
   kXOR,
   kPlusLighter
 };
+
+// https://drafts.csswg.org/css-anchor-position-1/#typedef-position-try-options-try-tactic
+enum class TryTactic : uint8_t {
+  kNone,
+  kFlipBlock,
+  kFlipInline,
+  kFlipStart,
+};
+
+// TODO(crbug.com/332933527): Support anchors-valid.
+static const size_t kPositionVisibilityBits = 2;
+enum class PositionVisibility : uint8_t {
+  kAlways = 0x0,
+  kAnchorsVisible = 0x1,
+  kNoOverflow = 0x2,
+};
+inline PositionVisibility operator|(PositionVisibility a,
+                                    PositionVisibility b) {
+  return PositionVisibility(int(a) | int(b));
+}
+inline PositionVisibility& operator|=(PositionVisibility& a,
+                                      PositionVisibility b) {
+  return a = a | b;
+}
 
 }  // namespace blink
 

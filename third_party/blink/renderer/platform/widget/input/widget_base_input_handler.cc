@@ -27,7 +27,6 @@
 #include "third_party/blink/public/common/input/web_pointer_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/renderer/platform/widget/input/ime_event_guard.h"
 #include "third_party/blink/renderer/platform/widget/widget_base.h"
@@ -249,7 +248,7 @@ class WidgetBaseInputHandler::HandlingState {
   // Whether the event we are handling is a touch start or move.
   bool touch_start_or_move_;
 
-  raw_ptr<HandlingState, ExperimentalRenderer> previous_state_;
+  raw_ptr<HandlingState> previous_state_;
   bool previous_was_handling_input_;
   base::WeakPtr<WidgetBaseInputHandler> input_handler_;
 };

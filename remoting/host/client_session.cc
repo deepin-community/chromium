@@ -7,9 +7,9 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include <optional>
 #include "base/command_line.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
@@ -20,6 +20,7 @@
 #include "build/build_config.h"
 #include "remoting/base/capabilities.h"
 #include "remoting/base/constants.h"
+#include "remoting/base/errors.h"
 #include "remoting/base/logging.h"
 #include "remoting/base/session_options.h"
 #include "remoting/host/action_executor.h"
@@ -56,6 +57,7 @@
 #include "remoting/protocol/session.h"
 #include "remoting/protocol/session_config.h"
 #include "remoting/protocol/video_frame_pump.h"
+#include "remoting/protocol/webrtc_video_stream.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
 
 #if defined(WEBRTC_USE_GIO)
@@ -65,14 +67,9 @@
 namespace {
 
 constexpr char kRtcLogTransferDataChannelPrefix[] = "rtc-log-transfer-";
-constexpr char kStreamName[] = "screen_stream";
 
 constexpr base::TimeDelta kDefaultBoostCaptureInterval = base::Milliseconds(5);
 constexpr base::TimeDelta kDefaultBoostDuration = base::Milliseconds(50);
-
-std::string StreamNameForId(webrtc::ScreenId id) {
-  return std::string(kStreamName) + "_" + base::NumberToString(id);
-}
 
 }  // namespace
 
@@ -513,7 +510,7 @@ void ClientSession::OnConnectionAuthenticated() {
     max_duration_timer_.Start(
         FROM_HERE, max_duration_,
         base::BindOnce(&ClientSession::DisconnectSession,
-                       base::Unretained(this), protocol::MAX_SESSION_LENGTH));
+                       base::Unretained(this), ErrorCode::MAX_SESSION_LENGTH));
   }
 
   // Notify EventHandler.
@@ -532,7 +529,7 @@ void ClientSession::OnConnectionAuthenticated() {
       client_session_control_weak_factory_.GetWeakPtr(),
       client_session_events_weak_factory_.GetWeakPtr(), options);
   if (!desktop_environment_) {
-    DisconnectSession(protocol::HOST_CONFIGURATION_ERROR);
+    DisconnectSession(ErrorCode::HOST_CONFIGURATION_ERROR);
     return;
   }
 
@@ -584,7 +581,8 @@ void ClientSession::CreateMediaStreams() {
   DCHECK(video_streams_.empty());
 
   auto video_stream = connection_->StartVideoStream(
-      kStreamName, desktop_environment_->CreateVideoCapturer());
+      webrtc::kFullDesktopScreenId,
+      desktop_environment_->CreateVideoCapturer(webrtc::kFullDesktopScreenId));
 
   // Create an AudioStream to pump audio from the capturer to the client.
   std::unique_ptr<protocol::AudioSource> audio_capturer =
@@ -625,13 +623,10 @@ void ClientSession::CreatePerMonitorVideoStreams() {
       continue;
     }
 
-    auto stream_name = StreamNameForId(id);
-
-    HOST_LOG << "Creating video stream: " << stream_name;
+    HOST_LOG << "Creating video stream for id " << id;
 
     auto video_stream = connection_->StartVideoStream(
-        stream_name, desktop_environment_->CreateVideoCapturer());
-    video_stream->SelectSource(id);
+        id, desktop_environment_->CreateVideoCapturer(id));
 
     // SetObserver(this) is not called on the new video-stream, because
     // per-monitor resizing should be handled by OnDesktopDisplayChanged()
@@ -718,7 +713,8 @@ void ClientSession::OnConnectionChannelsConnected() {
 void ClientSession::OnConnectionClosed(protocol::ErrorCode error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  HOST_LOG << "Client disconnected: " << client_jid_ << "; error = " << error;
+  HOST_LOG << "Client disconnected: " << client_jid_
+           << "; error = " << ErrorCodeToString(error);
 
   // Ignore any further callbacks.
   client_session_control_weak_factory_.InvalidateWeakPtrs();
@@ -796,7 +792,7 @@ void ClientSession::OnLocalKeyPressed(uint32_t usb_keycode) {
   if (is_local && desktop_environment_options_.terminate_upon_input()) {
     LOG(WARNING)
         << "Disconnecting CRD session because local input was detected.";
-    DisconnectSession(protocol::OK);
+    DisconnectSession(ErrorCode::OK);
   }
 }
 
@@ -808,7 +804,7 @@ void ClientSession::OnLocalPointerMoved(const webrtc::DesktopVector& position,
     if (desktop_environment_options_.terminate_upon_input()) {
       LOG(WARNING)
           << "Disconnecting CRD session because local input was detected.";
-      DisconnectSession(protocol::OK);
+      DisconnectSession(ErrorCode::OK);
     } else {
       desktop_and_cursor_composer_notifier_.OnLocalInput();
     }
@@ -1160,7 +1156,8 @@ void ClientSession::OnDesktopDisplayChanged(
     video_track = layout.add_video_track();
     video_track->CopyFrom(display);
     if (multiStreamEnabled) {
-      video_track->set_media_stream_id(StreamNameForId(display.screen_id()));
+      video_track->set_media_stream_id(
+          protocol::WebrtcVideoStream::StreamNameForId(display.screen_id()));
     }
 
     LOG(INFO) << "  Display " << display_id << " = " << display.position_x()

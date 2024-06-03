@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -470,8 +471,8 @@ class SharedStorageHeaderObserverTest
   void RunHeaderReceived(const url::Origin& request_origin,
                          std::vector<OperationPtr> operations) {
     base::RunLoop loop;
-    base::OnceCallback<void(base::StringPiece error)> bad_message_callback =
-        base::BindLambdaForTesting([&](base::StringPiece error) {
+    base::OnceCallback<void(std::string_view error)> bad_message_callback =
+        base::BindLambdaForTesting([&](std::string_view error) {
           LOG(ERROR) << error;
           std::move(loop.QuitClosure()).Run();
         });
@@ -833,7 +834,7 @@ TEST_P(SharedStorageHeaderObserverTest, SkipInvalidParams) {
   set_bypass_shared_storage_allowed_count(1);
 
   const url::Origin kOrigin1 = url::Origin::Create(GURL(kTestOrigin1));
-  const std::string kLong(1025, 'x');
+  const std::string kLong(2621441, 'x');
 
   std::vector<OperationPtr> operations = MakeOperationVector({
       std::make_tuple(OperationType::kClear, /*key*/ std::nullopt,

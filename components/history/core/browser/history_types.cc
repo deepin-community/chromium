@@ -244,6 +244,17 @@ FilteredURL::~FilteredURL() = default;
 
 FilteredURL::ExtendedInfo::ExtendedInfo() = default;
 
+// GetAllAppIdsResult -------------------------------------------------------
+
+GetAllAppIdsResult::GetAllAppIdsResult() = default;
+
+GetAllAppIdsResult::GetAllAppIdsResult(GetAllAppIdsResult&& other) = default;
+
+GetAllAppIdsResult& GetAllAppIdsResult::operator=(GetAllAppIdsResult&& other) =
+    default;
+
+GetAllAppIdsResult::~GetAllAppIdsResult() = default;
+
 // DomainsVisitedResult -------------------------------------------------------
 
 DomainsVisitedResult::DomainsVisitedResult() = default;
@@ -408,6 +419,7 @@ DeletionInfo::DeletionInfo(const DeletionTimeRange& time_range,
                    is_from_expiration,
                    Reason::kOther,
                    std::move(deleted_rows),
+                   /*deleted_visit_ids=*/{},
                    std::move(favicon_urls),
                    std::move(restrict_urls)) {}
 
@@ -415,12 +427,14 @@ DeletionInfo::DeletionInfo(const DeletionTimeRange& time_range,
                            bool is_from_expiration,
                            Reason deletion_reason,
                            URLRows deleted_rows,
+                           std::set<VisitID> deleted_visit_ids,
                            std::set<GURL> favicon_urls,
                            std::optional<std::set<GURL>> restrict_urls)
     : time_range_(time_range),
       is_from_expiration_(is_from_expiration),
       deletion_reason_(deletion_reason),
       deleted_rows_(std::move(deleted_rows)),
+      deleted_visit_ids_(std::move(deleted_visit_ids)),
       favicon_urls_(std::move(favicon_urls)),
       restrict_urls_(std::move(restrict_urls)) {
   // If time_range is all time or invalid, restrict_urls should be empty.
@@ -515,13 +529,9 @@ ClusterVisit& ClusterVisit::operator=(ClusterVisit&&) = default;
 
 ClusterKeywordData::ClusterKeywordData() = default;
 ClusterKeywordData::ClusterKeywordData(
-    const std::vector<std::string>& entity_collections)
-    : entity_collections(entity_collections) {}
-ClusterKeywordData::ClusterKeywordData(
     ClusterKeywordData::ClusterKeywordType type,
-    float score,
-    const std::vector<std::string>& entity_collections)
-    : type(type), score(score), entity_collections(entity_collections) {}
+    float score)
+    : type(type), score(score) {}
 ClusterKeywordData::ClusterKeywordData(const ClusterKeywordData&) = default;
 ClusterKeywordData::ClusterKeywordData(ClusterKeywordData&&) = default;
 ClusterKeywordData& ClusterKeywordData::operator=(const ClusterKeywordData&) =
@@ -531,13 +541,11 @@ ClusterKeywordData& ClusterKeywordData::operator=(ClusterKeywordData&&) =
 ClusterKeywordData::~ClusterKeywordData() = default;
 
 bool ClusterKeywordData::operator==(const ClusterKeywordData& data) const {
-  return type == data.type && std::fabs(score - data.score) < kScoreEpsilon &&
-         entity_collections == data.entity_collections;
+  return type == data.type && std::fabs(score - data.score) < kScoreEpsilon;
 }
 
 std::string ClusterKeywordData::ToString() const {
-  return base::StringPrintf("ClusterKeywordData{%d, %f, {%s}}", type, score,
-                            base::JoinString(entity_collections, ",").c_str());
+  return base::StringPrintf("ClusterKeywordData{%d, %f}", type, score);
 }
 
 std::ostream& operator<<(std::ostream& out, const ClusterKeywordData& data) {

@@ -75,8 +75,9 @@ PowerButtonMenuView::PowerButtonMenuView(
     layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
   }
   GetViewAccessibility().SetRole(ax::mojom::Role::kMenu);
-  GetViewAccessibility().OverrideName(
-      l10n_util::GetStringUTF16(IDS_ASH_POWER_BUTTON_MENU_ACCESSIBLE));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_ASH_POWER_BUTTON_MENU_ACCESSIBLE),
+      ax::mojom::NameFrom::kAttribute);
   RecreateItems();
 
   // Create a system shadow for current view.
@@ -200,7 +201,7 @@ void PowerButtonMenuView::RecreateItems() {
   add_remove_item(
       true, PowerButtonMenuActionType::kPowerOff,
       base::BindRepeating(
-          &LockStateController::StartShutdownAnimation,
+          &LockStateController::RequestShutdown,
           base::Unretained(Shell::Get()->lock_state_controller()),
           shutdown_reason_),
       kSystemPowerButtonMenuPowerOffIcon,

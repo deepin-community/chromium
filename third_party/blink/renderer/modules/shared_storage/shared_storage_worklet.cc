@@ -86,20 +86,25 @@ void SharedStorageWorklet::Trace(Visitor* visitor) const {
   ScriptWrappable::Trace(visitor);
 }
 
-ScriptPromise SharedStorageWorklet::addModule(ScriptState* script_state,
-                                              const String& module_url,
-                                              const WorkletOptions* options,
-                                              ExceptionState& exception_state) {
-  return AddModuleHelper(script_state, module_url, options, exception_state,
-                         /*resolve_to_worklet=*/false);
-}
-
-ScriptPromise SharedStorageWorklet::AddModuleHelper(
+ScriptPromise<IDLUndefined> SharedStorageWorklet::addModule(
     ScriptState* script_state,
     const String& module_url,
     const WorkletOptions* options,
-    ExceptionState& exception_state,
-    bool resolve_to_worklet) {
+    ExceptionState& exception_state) {
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
+      script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
+  AddModuleHelper(script_state, resolver, module_url, options, exception_state,
+                  /*resolve_to_worklet=*/false);
+  return promise;
+}
+
+void SharedStorageWorklet::AddModuleHelper(ScriptState* script_state,
+                                           ScriptPromiseResolverBase* resolver,
+                                           const String& module_url,
+                                           const WorkletOptions* options,
+                                           ExceptionState& exception_state,
+                                           bool resolve_to_worklet) {
   base::TimeTicks start_time = base::TimeTicks::Now();
   ExecutionContext* execution_context = ExecutionContext::From(script_state);
   CHECK(execution_context->IsWindow());
@@ -107,20 +112,17 @@ ScriptPromise SharedStorageWorklet::AddModuleHelper(
   if (!CheckBrowsingContextIsValid(*script_state, exception_state)) {
     LogSharedStorageWorkletError(
         SharedStorageWorkletErrorType::kAddModuleWebVisible);
-    return ScriptPromise();
+    resolver->Reject(exception_state);
+    return;
   }
 
   KURL script_source_url = execution_context->CompleteURL(module_url);
-
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
 
   if (!CheckSharedStoragePermissionsPolicy(*script_state, *execution_context,
                                            *resolver)) {
     LogSharedStorageWorkletError(
         SharedStorageWorkletErrorType::kAddModuleWebVisible);
-    return promise;
+    return;
   }
 
   if (!script_source_url.IsValid()) {
@@ -129,7 +131,7 @@ ScriptPromise SharedStorageWorklet::AddModuleHelper(
         "The module script url is invalid."));
     LogSharedStorageWorkletError(
         SharedStorageWorkletErrorType::kAddModuleWebVisible);
-    return promise;
+    return;
   }
 
   scoped_refptr<SecurityOrigin> script_security_origin =
@@ -143,7 +145,7 @@ ScriptPromise SharedStorageWorklet::AddModuleHelper(
         "Only same origin module script is allowed."));
     LogSharedStorageWorkletError(
         SharedStorageWorkletErrorType::kAddModuleWebVisible);
-    return promise;
+    return;
   }
 
   if (worklet_host_) {
@@ -152,7 +154,7 @@ ScriptPromise SharedStorageWorklet::AddModuleHelper(
         "addModule() can only be invoked once per worklet."));
     LogSharedStorageWorkletError(
         SharedStorageWorkletErrorType::kAddModuleWebVisible);
-    return promise;
+    return;
   }
 
   const String& credentials = options->credentials();
@@ -173,7 +175,7 @@ ScriptPromise SharedStorageWorklet::AddModuleHelper(
           worklet_host_.BindNewEndpointAndPassReceiver(
               execution_context->GetTaskRunner(TaskType::kMiscPlatformAPI)),
           WTF::BindOnce(
-              [](ScriptPromiseResolver* resolver,
+              [](ScriptPromiseResolverBase* resolver,
                  SharedStorageWorklet* shared_storage_worklet,
                  base::TimeTicks start_time, bool resolve_to_worklet,
                  bool success, const String& error_message) {
@@ -194,27 +196,28 @@ ScriptPromise SharedStorageWorklet::AddModuleHelper(
                   return;
                 }
 
+                LogSharedStorageWorkletError(
+                    SharedStorageWorkletErrorType::kSuccess);
                 base::UmaHistogramMediumTimes(
                     "Storage.SharedStorage.Document.Timing.AddModule",
                     base::TimeTicks::Now() - start_time);
 
                 if (resolve_to_worklet) {
-                  resolver->Resolve(shared_storage_worklet);
+                  resolver->DowncastTo<SharedStorageWorklet>()->Resolve(
+                      shared_storage_worklet);
                 } else {
-                  resolver->Resolve();
+                  resolver->DowncastTo<IDLUndefined>()->Resolve();
                 }
               },
               WrapPersistent(resolver), WrapPersistent(this), start_time,
               resolve_to_worklet));
-
-  return promise;
 }
 
 // This C++ overload is called by JavaScript:
 // sharedStorage.selectURL('foo', [{url: "bar.com"}]);
 //
 // It returns a JavaScript promise that resolves to an urn::uuid.
-ScriptPromise SharedStorageWorklet::selectURL(
+ScriptPromise<V8SharedStorageResponse> SharedStorageWorklet::selectURL(
     ScriptState* script_state,
     const String& name,
     HeapVector<Member<SharedStorageUrlWithMetadata>> urls,
@@ -236,7 +239,7 @@ ScriptPromise SharedStorageWorklet::selectURL(
 //
 // This function implements the other overload, with `resolveToConfig`
 // defaulting to false.
-ScriptPromise SharedStorageWorklet::selectURL(
+ScriptPromise<V8SharedStorageResponse> SharedStorageWorklet::selectURL(
     ScriptState* script_state,
     const String& name,
     HeapVector<Member<SharedStorageUrlWithMetadata>> urls,
@@ -250,15 +253,16 @@ ScriptPromise SharedStorageWorklet::selectURL(
   if (!CheckBrowsingContextIsValid(*script_state, exception_state)) {
     LogSharedStorageWorkletError(
         SharedStorageWorkletErrorType::kSelectURLWebVisible);
-    return ScriptPromise();
+    return ScriptPromise<V8SharedStorageResponse>();
   }
 
   LocalFrame* frame = To<LocalDOMWindow>(execution_context)->GetFrame();
   DCHECK(frame);
 
-  ScriptPromiseResolver* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<V8SharedStorageResponse>>(
+          script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
 
   // For `selectURL()` to succeed, it is currently enforced in the browser side
   // that `addModule()` must be called beforehand that passed the early
@@ -451,7 +455,7 @@ ScriptPromise SharedStorageWorklet::selectURL(
       name, std::move(converted_urls), std::move(*serialized_data), keep_alive,
       std::move(context_id), aggregation_coordinator_origin,
       WTF::BindOnce(
-          [](ScriptPromiseResolver* resolver,
+          [](ScriptPromiseResolver<V8SharedStorageResponse>* resolver,
              SharedStorageWorklet* shared_storage_worklet,
              base::TimeTicks start_time, bool resolve_to_config, bool success,
              const String& error_message,
@@ -473,6 +477,8 @@ ScriptPromise SharedStorageWorklet::selectURL(
               return;
             }
 
+            LogSharedStorageWorkletError(
+                SharedStorageWorkletErrorType::kSuccess);
             base::UmaHistogramMediumTimes(
                 "Storage.SharedStorage.Document.Timing.SelectURL",
                 base::TimeTicks::Now() - start_time);
@@ -491,14 +497,15 @@ ScriptPromise SharedStorageWorklet::selectURL(
   return promise;
 }
 
-ScriptPromise SharedStorageWorklet::run(ScriptState* script_state,
-                                        const String& name,
-                                        ExceptionState& exception_state) {
+ScriptPromise<IDLAny> SharedStorageWorklet::run(
+    ScriptState* script_state,
+    const String& name,
+    ExceptionState& exception_state) {
   return run(script_state, name,
              SharedStorageRunOperationMethodOptions::Create(), exception_state);
 }
 
-ScriptPromise SharedStorageWorklet::run(
+ScriptPromise<IDLAny> SharedStorageWorklet::run(
     ScriptState* script_state,
     const String& name,
     const SharedStorageRunOperationMethodOptions* options,
@@ -510,19 +517,19 @@ ScriptPromise SharedStorageWorklet::run(
 
   if (!CheckBrowsingContextIsValid(*script_state, exception_state)) {
     LogSharedStorageWorkletError(SharedStorageWorkletErrorType::kRunWebVisible);
-    return ScriptPromise();
+    return ScriptPromise<IDLAny>();
   }
 
   std::optional<BlinkCloneableMessage> serialized_data =
       Serialize(options, *execution_context, exception_state);
   if (!serialized_data) {
     LogSharedStorageWorkletError(SharedStorageWorkletErrorType::kRunWebVisible);
-    return ScriptPromise();
+    return ScriptPromise<IDLAny>();
   }
 
-  ScriptPromiseResolver* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLAny>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
 
   if (!CheckSharedStoragePermissionsPolicy(*script_state, *execution_context,
                                            *resolver)) {
@@ -567,7 +574,7 @@ ScriptPromise SharedStorageWorklet::run(
       name, std::move(*serialized_data), keep_alive, std::move(context_id),
       std::move(aggregation_coordinator_origin),
       WTF::BindOnce(
-          [](ScriptPromiseResolver* resolver,
+          [](ScriptPromiseResolver<IDLAny>* resolver,
              SharedStorageWorklet* shared_storage_worklet,
              base::TimeTicks start_time, bool success,
              const String& error_message) {
@@ -588,6 +595,8 @@ ScriptPromise SharedStorageWorklet::run(
               return;
             }
 
+            LogSharedStorageWorkletError(
+                SharedStorageWorkletErrorType::kSuccess);
             base::UmaHistogramMediumTimes(
                 "Storage.SharedStorage.Document.Timing.Run",
                 base::TimeTicks::Now() - start_time);

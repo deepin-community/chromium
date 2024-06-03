@@ -5,7 +5,6 @@
 #include "components/content_settings/core/common/host_indexed_content_settings.h"
 
 #include <functional>
-#include <optional>
 #include <string>
 
 #include "components/content_settings/core/common/content_settings.h"
@@ -67,6 +66,8 @@ TEST_F(HostIndexedContentSettingsTest, EmptyHostIndexedContentSettings) {
 
   EXPECT_EQ(index.Find(test_primary_url, test_secondary_url), nullptr);
   EXPECT_EQ(index.begin(), index.end());
+  EXPECT_TRUE(index.empty());
+  EXPECT_EQ(index.size(), 0u);
   EXPECT_THAT(ToVector(index), ::testing::IsEmpty());
 }
 
@@ -147,6 +148,7 @@ TEST_F(HostIndexedContentSettingsTest, SetDelete) {
                                               GURL("https://toplevel.com"))
                                         ->second.value),
               CONTENT_SETTING_ALLOW);
+    EXPECT_FALSE(index.empty());
 
     // Check that inserting the same setting returns false.
     EXPECT_FALSE(index.SetValue(ContentSettingsPattern::FromString(primary),
@@ -167,6 +169,8 @@ TEST_F(HostIndexedContentSettingsTest, SetDelete) {
     EXPECT_EQ(
         index.Find(GURL("https://example.com"), GURL("https://toplevel.com")),
         nullptr);
+    EXPECT_TRUE(index.empty());
+
     // Check that deleting the setting again returns false.
     EXPECT_FALSE(
         index.DeleteValue(ContentSettingsPattern::FromString(primary),

@@ -25,7 +25,6 @@ import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.FeatureList;
 import org.chromium.base.FeatureList.TestValues;
-import org.chromium.base.metrics.UmaRecorderHolder;
 import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.supplier.Supplier;
@@ -94,7 +93,7 @@ public class ToolbarControlContainerTest {
 
     private void makeAdapter() {
         mAdapter =
-                new ToolbarViewResourceAdapter(mToolbarContainer, false) {
+                new ToolbarViewResourceAdapter(mToolbarContainer) {
                     @Override
                     public void onResourceRequested() {
                         // No-op normal functionality and just count calls instead.
@@ -182,7 +181,6 @@ public class ToolbarControlContainerTest {
     @Before
     public void before() {
         mJniMocker.mock(ResourceFactoryJni.TEST_HOOKS, mResourceFactoryJni);
-        UmaRecorderHolder.resetForTesting();
         when(mToolbarContainer.getWidth()).thenReturn(1);
         when(mToolbarContainer.getHeight()).thenReturn(1);
         when(mToolbarContainer.findViewById(anyInt())).thenReturn(mToolbarHairline);
@@ -389,9 +387,7 @@ public class ToolbarControlContainerTest {
         TestValues testValues = new TestValues();
         testValues.addFeatureFlagOverride(ChromeFeatureList.SUPPRESS_TOOLBAR_CAPTURES, true);
         testValues.addFieldTrialParamOverride(
-                ChromeFeatureList.SUPPRESS_TOOLBAR_CAPTURES,
-                ToolbarFeatures.BLOCK_FOR_FULLSCREEN,
-                "true");
+                ChromeFeatureList.sShouldBlockCapturesForFullscreenParam, "true");
         FeatureList.setTestValues(testValues);
 
         final @ToolbarSnapshotDifference int difference = ToolbarSnapshotDifference.URL_TEXT;

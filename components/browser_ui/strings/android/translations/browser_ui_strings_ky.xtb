@@ -94,12 +94,12 @@
 <translation id="2501278716633472235">Артка кайтуу</translation>
 <translation id="2546283357679194313">Кукилер жана сайттын дайындары</translation>
 <translation id="2550801787432930915">Баасы арзандады картасы</translation>
-<translation id="2569468611847789653">{COOKIE_COUNT,plural, =1{1 cookie файлы бөгөттөлдү}other{# cookie файлы бөгөттөлдү}}</translation>
 <translation id="2570922361219980984">Жайгашкан жерди аныктоо жөндөөсү бул түзмөктө өчүрүлгөн. Аны <ph name="BEGIN_LINK" />Android параметрлерине<ph name="END_LINK" /> өтүп, күйгүзүңүз.</translation>
 <translation id="257931822824936280">Жайылып көрсөтүлгөн – жыйнап коюу үчүн чыкылдатыңыз.</translation>
 <translation id="2586657967955657006">Алмашуу буфери</translation>
 <translation id="2597457036804169544">Сайттарга караңгы тема колдонулбасын</translation>
 <translation id="2606760465469169465">Автоматтык түрдө ырастоо</translation>
+<translation id="2613007545732217283"><ph name="HOST_NAME" /> <ph name="SEPARATOR" /> <ph name="RECENCY" /></translation>
 <translation id="2621115761605608342">Белгилүү бир сайтта JavaScript иштешине уруксат берүү.</translation>
 <translation id="2653659639078652383">Тапшыруу</translation>
 <translation id="2677748264148917807">Чыгуу</translation>
@@ -122,7 +122,6 @@
 <translation id="2979365474350987274">Үчүнчү тараптын cookie файлдары чектелген</translation>
 <translation id="3008272652534848354">Уруксаттарды өзгөртүү</translation>
 <translation id="301521992641321250">Автоматтык түрдө бөгөттөлдү</translation>
-<translation id="3025010840409371499"><ph name="RECENCY" /> <ph name="SEPARATOR" /> <ph name="HOST_NAME" /></translation>
 <translation id="3069226013421428034">Белгилүү бир сайтка үчүнчү тараптан кирүүгө уруксат бериңиз.</translation>
 <translation id="3082992102194421695">{COUNT,plural, =1{Мөөнөтү эртең бүтөт}other{Мөөнөтү # күндөн кийин бүтөт}}</translation>
 <translation id="310297983047869047">Мурунку слайд</translation>
@@ -177,6 +176,7 @@
 <translation id="3895926599014793903">Мажбурлап чоңойтууну иштетүү</translation>
 <translation id="3908288065506437185">Жашыруун режимде үчүнчү тараптын cookie файлдарын бөгөттөө</translation>
 <translation id="3918378745482005425">Айрым функциялар иштебеши мүмкүн. Байланышкан сайттар үчүнчү тараптын cookie файлдарын колдоно бериши мүмкүн.</translation>
+<translation id="3933121352599513978">Керексиз сурамдарды жыйыштыруу (сунушталат)</translation>
 <translation id="3955193568934677022">Сайттарга корголгон мазмунду ойнотууга уруксат берүү (сунушталат)</translation>
 <translation id="3967822245660637423">Жүктөп алуу аяктады</translation>
 <translation id="3974105241379491420">Сайттар аларда сакталган маалыматыңызды колдонууга уруксат сурашат</translation>
@@ -199,6 +199,7 @@
 <translation id="429312253194641664">Сайтта медиа файл ойнотулууда</translation>
 <translation id="42981349822642051">Жайып көрсөтүү</translation>
 <translation id="4336566011000459927">Chrome бүгүн cookie файлдарын кайра чектейт</translation>
+<translation id="4336836404251800362"><ph name="RECENCY" /> <ph name="SEPARATOR" /> Акыркы өтмөгүңүз</translation>
 <translation id="4338831206024587507"><ph name="DOMAIN" /> домениндеги бардык сайттар</translation>
 <translation id="4402755511846832236">Түзмөгүңүз активдүү колдонулуп жаткан учур сайттардан жашырылсын</translation>
 <translation id="4412992751769744546">Үчнчү жактн кукилрне урукст брүү</translation>
@@ -233,7 +234,7 @@
 <translation id="4994033804516042629">Байланыштар табылган жок</translation>
 <translation id="4996978546172906250">Төмөнкү аркылуу бөлүшүү</translation>
 <translation id="5001526427543320409">Үчүнчү тараптын cookie файлдары</translation>
-<translation id="5039804452771397117">Уруксат берүү</translation>
+<translation id="5039804452771397117">Ооба</translation>
 <translation id="5048398596102334565">Сайттарга сенсорлорду колдонууга уруксат берүү (сунушталат)</translation>
 <translation id="5050380848339752099">Бул сайт жашыруун режимден сырткары колдонмо менен маалыматты бөлүшкөнү жатат.</translation>
 <translation id="5063480226653192405">Колдонулушу</translation>
@@ -262,7 +263,7 @@
 <translation id="5389626883706033615">Сайттарга сиз жөнүндө сакталган маалыматты колдонууга уруксат суроого тыюу алынды</translation>
 <translation id="5394307150471348411">{DETAIL_COUNT,plural, =1{(+ дагы 1)}other{(+ дагы #)}}</translation>
 <translation id="5403592356182871684">Ысымдар</translation>
-<translation id="5438097262470833822">Ушуну менен <ph name="WEBSITE" /> сайтынын уруксаттары баштапкы абалга келтирилет</translation>
+<translation id="5438097262470833822">Ушуну менен <ph name="WEBSITE" /> сайтынын уруксаттары баштапкы абалга келет</translation>
 <translation id="5459413148890178711">Бул параметр күйүп турганда, сайттар жайгашкан жериңизди колдонууга уруксат сурашы мүмкүн. Бул параметр өчүп турганда, сайттар жайгашкан жериңизди көрө алышпайт.</translation>
 <translation id="5489227211564503167"><ph name="TOTAL_TIME" /> ичинен <ph name="ELAPSED_TIME" /> өттү.</translation>
 <translation id="5502860503640766021">Уруксат берилген: <ph name="PERMISSION_1" />. Бөгөттөлгөн: <ph name="PERMISSION_2" />.</translation>
@@ -289,6 +290,7 @@
 <translation id="5853982612236235577">Бул параметр күйүп турганда, сайттар билдирмелерди жөнөтүүгө уруксат сурашы мүмкүн. Бул параметр өчүп турганда, сайттар билдирмелерди жөнөтө алышпайт.</translation>
 <translation id="5860033963881614850">Өчүк</translation>
 <translation id="5876056640971328065">Видеону тындыруу</translation>
+<translation id="5877248419911025165">Бардык сурамдарды жыйыштыруу</translation>
 <translation id="5884085660368669834">Сайттын параметри</translation>
 <translation id="5887687176710214216">Кечээ акыркы жолу кирген</translation>
 <translation id="5916664084637901428">Күйүк</translation>
@@ -345,6 +347,7 @@
 <translation id="6612358246767739896">Корголгон мазмун</translation>
 <translation id="662080504995468778">Калуу</translation>
 <translation id="6653342741369270081">Толук экрандан чыгуу үчүн "Артка" баскычын басыңыз.</translation>
+<translation id="6670377348676659110">{TILE_COUNT,plural, =1{Бул өтмөктө улантууну жашыруу}other{Бул өтмөктөрдө улантууну жашыруу}}</translation>
 <translation id="6689172468748959065">Профилдин сүрөттөрү</translation>
 <translation id="6697925417670533197">Жүктөлүп алынган файлдар</translation>
 <translation id="6722828510648505498">Идентификациялык кызматтарда кирүү сурамдарын бөгөттөө.</translation>
@@ -367,6 +370,7 @@
 <translation id="702275896380648118">Бул сайт сизге жаккан нерселерди аныктап, башка сайттарга жарнамаларды сунуштап турат. Ошондой эле, ал Сhrome'дон жарнама темаларыңыз тууралуу маалымат алып, сизге ылайыктуу жарнамаларды көрсөтүп турат.</translation>
 <translation id="7053983685419859001">Бөгөттөө</translation>
 <translation id="7066151586745993502">{NUM_SELECTED,plural, =1{1 тандалды}other{# тандалды}}</translation>
+<translation id="708014373017851679">"<ph name="APP_NAME" />" эскирип калган. Колдонмону жаңыртыңыз.</translation>
 <translation id="7087918508125750058"><ph name="ITEM_COUNT" /> тандалды.  Параметрлер экрандын жогору жагында берилген</translation>
 <translation id="7141896414559753902">Сайттарда калкыма терезелерди көрсөтүү менен багыттоолор бөгөттөлсүн (сунушталат)</translation>
 <translation id="7176368934862295254"><ph name="KILOBYTES" /> Кб</translation>
@@ -455,7 +459,6 @@
 <translation id="8441146129660941386">Артка түрдүрүү</translation>
 <translation id="8444433999583714703"><ph name="APP_NAME" /> колдонмосуна жайгашкан жериңизге кирүүгө уруксат берүү үчүн, <ph name="BEGIN_LINK" />Android Параметрлеринен<ph name="END_LINK" /> жайгашкан жер кызматын күйгүзүңүз.</translation>
 <translation id="8447861592752582886">Түзмөккө болгон уруксатты жоюу</translation>
-<translation id="8451050538944905715">{NUM_SELECTED,plural, =1{1 cookie файлы колдонулууда}other{# cookie файлы колдонулууда}}</translation>
 <translation id="8487700953926739672">Оффлайнда жеткиликтүү</translation>
 <translation id="848952951823693243">Мобилдик сайт ар дайым суралсын</translation>
 <translation id="8499083585497694743">Микрофондун үнүн чыгаруу</translation>
@@ -483,7 +486,6 @@
 <translation id="8803526663383843427">Күйүп турганда</translation>
 <translation id="8805385115381080995">Сайттар чыныгы колдонуучу экениңизди ырастоону азыраак сураса, серептөө тезирээк болот</translation>
 <translation id="8816026460808729765">Сайттардын сенсорлорду колдонуусун бөгөттөө</translation>
-<translation id="8843699287283948910">Башка түзмөктөрдөгү өтмөктөрдү жашыруу</translation>
 <translation id="8847988622838149491">USB</translation>
 <translation id="8874790741333031443">Үчүнчү тараптын cookie файлдарына убактылуу уруксат берип көрүңүз. Мында Интернетте коопсуздугуңуз азыраак корголот, бирок сайттын функциялары ойдогудай иштеши мүмкүн.</translation>
 <translation id="8889294078294184559">Андан кийин башка сайттарга өтсөңүз, алар Chrome аркылуу бот эмес экениңизди текшере алышат</translation>
@@ -496,6 +498,7 @@
 <translation id="8959122750345127698">Чабыттоо жеткиликсиз: <ph name="URL" /></translation>
 <translation id="8986362086234534611">Унутуу</translation>
 <translation id="8990043154272859344">Бардык сайттардан чыгасыз</translation>
+<translation id="8993853206419610596">Бардык сурамдарды жайып көрсөтүү</translation>
 <translation id="9002538116239926534">Бул параметр күйүп турганда, сайттар түзмөгүңүзгө маалымат сактай алат. Бул параметр өчүп турганда, сайттар түзмөгүңүзгө маалымат сактай алышпайт.</translation>
 <translation id="9011903857143958461"><ph name="SITE_NAME" /> сайтына уруксат берилди</translation>
 <translation id="9019902583201351841">Ата-энеңиз башкарат</translation>

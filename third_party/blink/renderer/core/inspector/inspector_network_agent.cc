@@ -877,7 +877,7 @@ static std::unique_ptr<protocol::Network::SecurityDetails> BuildSecurityDetails(
     san_list->push_back(StringFromASCII(san));
   }
   for (const std::string& san : san_ip) {
-    net::IPAddress ip(reinterpret_cast<const uint8_t*>(san.data()), san.size());
+    net::IPAddress ip(base::as_byte_span(san));
     san_list->push_back(StringFromASCII(ip.ToString()));
   }
 
@@ -1137,6 +1137,10 @@ BuildObjectForResourceResponse(const ResourceResponse& response,
   const std::optional<net::SSLInfo>& ssl_info = response.GetSSLInfo();
   if (ssl_info.has_value()) {
     response_object->setSecurityDetails(BuildSecurityDetails(*ssl_info));
+  }
+
+  if (cached_resource && cached_resource->IsPreloadedByEarlyHints()) {
+    response_object->setFromEarlyHints(true);
   }
 
   return response_object;
@@ -2219,7 +2223,10 @@ protocol::Response InspectorNetworkAgent::emulateNetworkConditions(
     double latency,
     double download_throughput,
     double upload_throughput,
-    Maybe<String> connection_type) {
+    Maybe<String> connection_type,
+    Maybe<double> packet_loss,
+    Maybe<int> packet_queue_length,
+    Maybe<bool> packet_reordering) {
   WebConnectionType type = kWebConnectionTypeUnknown;
   if (connection_type.has_value()) {
     type = ToWebConnectionType(connection_type.value());

@@ -8,6 +8,7 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/notreached.h"
+#include "components/optimization_guide/core/model_execution/feature_keys.h"
 
 namespace optimization_guide {
 namespace features {
@@ -25,13 +26,13 @@ BASE_FEATURE(kWallpaperSearchSettingsVisibility,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Graduation features.
-BASE_FEATURE(kComposeGraduatedFromSettings,
+BASE_FEATURE(kComposeGraduated,
              "ComposeGraduated",
              base::FEATURE_DISABLED_BY_DEFAULT);
-BASE_FEATURE(kTabOrganizationGraduatedFromSettings,
+BASE_FEATURE(kTabOrganizationGraduated,
              "TabOrganizationGraduated",
              base::FEATURE_DISABLED_BY_DEFAULT);
-BASE_FEATURE(kWallpaperSearchGraduatedFromSettings,
+BASE_FEATURE(kWallpaperSearchGraduated,
              "WallpaperSearchGraduated",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -43,27 +44,19 @@ BASE_FEATURE(kModelExecutionCapabilityDisable,
              "ModelExecutionCapabilityDisable",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-bool IsGraduatedFeature(proto::ModelExecutionFeature feature) {
+bool IsGraduatedFeature(UserVisibleFeatureKey feature) {
   bool is_graduated = false;
   switch (feature) {
     // Actual features.
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
-      is_graduated =
-          base::FeatureList::IsEnabled(kComposeGraduatedFromSettings);
+    case UserVisibleFeatureKey::kCompose:
+      is_graduated = base::FeatureList::IsEnabled(kComposeGraduated);
       break;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION:
-      is_graduated =
-          base::FeatureList::IsEnabled(kTabOrganizationGraduatedFromSettings);
+    case UserVisibleFeatureKey::kTabOrganization:
+      is_graduated = base::FeatureList::IsEnabled(kTabOrganizationGraduated);
       break;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
-      is_graduated =
-          base::FeatureList::IsEnabled(kWallpaperSearchGraduatedFromSettings);
+    case UserVisibleFeatureKey::kWallpaperSearch:
+      is_graduated = base::FeatureList::IsEnabled(kWallpaperSearchGraduated);
       break;
-    // Non-features.
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
-      NOTREACHED();
-      return false;
   }
   DCHECK(!is_graduated ||
          !base::FeatureList::IsEnabled(
@@ -74,41 +67,24 @@ bool IsGraduatedFeature(proto::ModelExecutionFeature feature) {
 }
 
 const base::Feature* GetFeatureToUseToCheckSettingsVisibility(
-    proto::ModelExecutionFeature feature) {
+    UserVisibleFeatureKey feature) {
   switch (feature) {
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
+    case UserVisibleFeatureKey::kCompose:
       return &kComposeSettingsVisibility;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION:
+    case UserVisibleFeatureKey::kTabOrganization:
       return &kTabOrganizationSettingsVisibility;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
+    case UserVisibleFeatureKey::kWallpaperSearch:
       return &kWallpaperSearchSettingsVisibility;
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
-      NOTREACHED();
-      return nullptr;
   }
 }
 
-base::flat_set<proto::ModelExecutionFeature>
-GetAllowedFeaturesForUnsignedUser() {
-  std::vector<proto::ModelExecutionFeature> allowed_features;
-  for (int i = proto::ModelExecutionFeature_MIN;
-       i <= proto::ModelExecutionFeature_MAX; ++i) {
-    proto::ModelExecutionFeature model_execution_feature =
-        static_cast<proto::ModelExecutionFeature>(i);
-    if (model_execution_feature ==
-        proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED) {
-      continue;
-    }
-    if (model_execution_feature ==
-        proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST) {
-      continue;
-    }
-    const auto* feature =
-        GetFeatureToUseToCheckSettingsVisibility(model_execution_feature);
+base::flat_set<UserVisibleFeatureKey> GetAllowedFeaturesForUnsignedUser() {
+  std::vector<UserVisibleFeatureKey> allowed_features;
+  for (auto key : kAllUserVisibleFeatureKeys) {
+    const auto* feature = GetFeatureToUseToCheckSettingsVisibility(key);
     if (GetFieldTrialParamByFeatureAsBool(*feature, "allow_unsigned_user",
                                           false)) {
-      allowed_features.push_back(model_execution_feature);
+      allowed_features.push_back(key);
     }
   }
   return allowed_features;

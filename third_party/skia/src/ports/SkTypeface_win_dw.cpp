@@ -18,6 +18,7 @@
 #undef GetGlyphIndices
 
 #include "include/core/SkData.h"
+#include "include/core/SkFontTypes.h"
 #include "include/private/base/SkTo.h"
 #include "src/core/SkFontDescriptor.h"
 #include "src/core/SkFontStream.h"
@@ -657,20 +658,11 @@ std::unique_ptr<SkAdvancedTypefaceMetrics> DWriteFontTypeface::onGetAdvancedMetr
         }
     }
 
-    // SkAdvancedTypefaceMetrics::fFontName must actually be a family name.
-    SkTScopedComPtr<IDWriteLocalizedStrings> familyNames;
-    if (FAILED(fDWriteFontFamily->GetFamilyNames(&familyNames)) ||
-        FAILED(sk_get_locale_string(familyNames.get(), nullptr, &info->fFontName)))
-    {
-        SkDEBUGF("Unable to get family name for typeface 0x%p\n", this);
-    }
-    if (info->fPostScriptName.isEmpty()) {
-        info->fPostScriptName = info->fFontName;
-    }
-
     DWRITE_FONT_FACE_TYPE fontType = fDWriteFontFace->GetType();
     if (fontType != DWRITE_FONT_FACE_TYPE_TRUETYPE &&
-        fontType != DWRITE_FONT_FACE_TYPE_TRUETYPE_COLLECTION)
+        fontType != DWRITE_FONT_FACE_TYPE_CFF &&
+        fontType != DWRITE_FONT_FACE_TYPE_TRUETYPE_COLLECTION &&
+        fontType != DWRITE_FONT_FACE_TYPE_OPENTYPE_COLLECTION)
     {
         return info;
     }

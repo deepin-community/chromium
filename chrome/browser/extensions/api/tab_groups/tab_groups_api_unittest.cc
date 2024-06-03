@@ -374,10 +374,8 @@ TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateError) {
             error);
 }
 
-// Test that tabGroups.update() fails on a saved group.
-TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTabGroupsError) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({features::kTabGroupsSave}, {});
+// Test that tabGroups.update() passes on a saved group.
+TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTab) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
   ASSERT_TRUE(tab_strip_model->SupportsTabGroups());
 
@@ -389,8 +387,8 @@ TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTabGroupsError) {
       u"Initial title", tab_groups::TabGroupColorId::kBlue);
   tab_group_model->GetTabGroup(group)->SetVisualData(visual_data);
 
-  SavedTabGroupKeyedService* saved_service =
-      SavedTabGroupServiceFactory::GetInstance()->GetForProfile(
+  tab_groups::SavedTabGroupKeyedService* saved_service =
+      tab_groups::SavedTabGroupServiceFactory::GetInstance()->GetForProfile(
           browser()->profile());
   ASSERT_NE(saved_service, nullptr);
   saved_service->SaveGroup(group);
@@ -399,15 +397,18 @@ TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTabGroupsError) {
 
   scoped_refptr<const Extension> extension = CreateTabGroupsExtension();
 
-  // Try to update a non-existent group and expect an error.
+  // Update the group, visual metadata, it should pass.
   auto function = base::MakeRefCounted<TabGroupsUpdateFunction>();
   function->set_extension(extension);
   constexpr char kFormatArgs[] =
       R"([%d, {"title": "another title", "color": "red"}])";
   const std::string args = base::StringPrintf(kFormatArgs, group_id);
-  std::string error = api_test_utils::RunFunctionAndReturnError(
-      function.get(), args, profile(), api_test_utils::FunctionMode::kNone);
-  EXPECT_EQ(tabs_constants::kSavedTabGroupNotEditableError, error);
+  EXPECT_TRUE(api_test_utils::RunFunction(function.get(), args, profile(),
+                                          api_test_utils::FunctionMode::kNone));
+
+  // Check that values were updated.
+  ASSERT_TRUE(tab_group_model->GetTabGroup(group)->visual_data()->title() ==
+              u"another title");
 }
 
 // Test that moving a group to the right results in the correct tab order.

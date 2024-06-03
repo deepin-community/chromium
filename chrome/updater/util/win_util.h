@@ -6,6 +6,7 @@
 #define CHROME_UPDATER_UTIL_WIN_UTIL_H_
 
 #include <windows.h>
+
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
@@ -36,6 +37,7 @@
 #include "base/win/win_util.h"
 #include "base/win/windows_types.h"
 #include "chrome/updater/updater_scope.h"
+#include "chrome/updater/win/scoped_handle.h"
 
 namespace base {
 class FilePath;
@@ -56,6 +58,10 @@ struct IidComparator {
 };
 
 namespace updater {
+
+// Converts a `guid` to a string with the format
+// {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}.
+[[nodiscard]] std::wstring StringFromGuid(const GUID& guid);
 
 template <typename ValueT>
 using HResultOr = base::expected<ValueT, HRESULT>;
@@ -116,8 +122,8 @@ class DynamicIIDsImpl : public internal::WrlRuntimeClass<Interface> {
  public:
   DynamicIIDsImpl() {
     VLOG(3) << __func__ << ": Interface: " << typeid(Interface).name()
-            << ": iid_user: " << base::win::WStringFromGUID(iid_user)
-            << ": iid_system: " << base::win::WStringFromGUID(iid_system)
+            << ": iid_user: " << StringFromGuid(iid_user)
+            << ": iid_system: " << StringFromGuid(iid_system)
             << ": IsSystemInstall(): " << IsSystemInstall();
   }
 
@@ -428,6 +434,24 @@ std::optional<std::wstring> GetRegKeyContents(const std::wstring& reg_key);
 // thread is set, otherwise, the function uses the user/system default LANGID,
 // or it defaults to US English.
 std::wstring GetTextForSystemError(int error);
+
+// Retrieves the logged on user token for the active explorer process if one
+// exists.
+HResultOr<ScopedKernelHANDLE> GetLoggedOnUserToken();
+
+// Returns true if running in Windows Audit mode, as documented at
+// http://technet.microsoft.com/en-us/library/cc721913.aspx.
+bool IsAuditMode();
+
+// Writes the OEM install beginning timestamp in the registry.
+bool SetOemInstallState();
+
+// Removes the OEM install beginning timestamp from the registry.
+bool ResetOemInstallState();
+
+// Returns `true` if the OEM install time is present and it has been less than
+// `kMinOemModeTime` since the OEM install.
+bool IsOemInstalling();
 
 }  // namespace updater
 

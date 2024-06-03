@@ -10,7 +10,6 @@
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/format_macros.h"
@@ -62,9 +61,11 @@ const char kPasswordNotesStateHistogramName[] =
 constexpr char kEntityEncryptionResultHistogramName[] =
     "Sync.EntityEncryptionSucceeded";
 
-BASE_FEATURE(kSyncKeepGcDirectiveDuringSyncCycle,
-             "SyncKeepGcDirectiveDuringSyncCycle",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+// Sync ignores updates encrypted with keys that have been missing for too long
+// from this client and will proceed normally as if those updates didn't exist.
+// The notion of "too long" is measured in number of GetUpdates and is
+// determined by this constant. The counter is in-memory only.
+constexpr int kMinGuResponsesToIgnoreKey = 3;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -311,8 +312,7 @@ ModelTypeWorker::ModelTypeWorker(ModelType type,
       cancelation_signal_(cancelation_signal),
       model_type_state_(initial_state),
       encryption_enabled_(encryption_enabled),
-      passphrase_type_(passphrase_type),
-      min_get_updates_to_ignore_key_(kMinGuResponsesToIgnoreKey.Get()) {
+      passphrase_type_(passphrase_type) {
   DCHECK(cryptographer_);
   DCHECK(!AlwaysEncryptedUserTypes().Has(type_) || encryption_enabled_);
 
@@ -501,12 +501,35 @@ void ModelTypeWorker::ProcessGetUpdatesResponse(
   // TODO(rlarocque): Handle data type context conflicts.
   *model_type_state_.mutable_type_context() = mutated_context;
 
-  if (progress_marker.has_gc_directive() &&
-      base::FeatureList::IsEnabled(kSyncKeepGcDirectiveDuringSyncCycle)) {
-    // Clean up all the pending updates because a new GC directive has been
-    // received which means that all existing data should be cleaned up.
-    pending_updates_.clear();
-    entries_pending_decryption_.clear();
+  if (progress_marker.has_gc_directive()) {
+    if (progress_marker.gc_directive().has_version_watermark()) {
+      // Clean up all the pending updates because a new GC directive has been
+      // received which means that all existing data should be cleaned up.
+      pending_updates_.clear();
+      entries_pending_decryption_.clear();
+    }
+
+    // Ignore collaboration GC for non-shared types.
+    if (progress_marker.gc_directive().has_collaboration_gc() &&
+        SharedTypes().Has(type_)) {
+      // Clean up all the pending updates related to inactive collaborations for
+      // the shared types.
+      auto active_collaborations =
+          base::MakeFlatSet<std::string>(progress_marker.gc_directive()
+                                             .collaboration_gc()
+                                             .active_collaboration_ids());
+      std::erase_if(pending_updates_, [&active_collaborations](
+                                          const UpdateResponseData& update) {
+        return !active_collaborations.contains(update.entity.collaboration_id);
+      });
+      std::erase_if(entries_pending_decryption_,
+                    [&active_collaborations](const auto& pending_decryption) {
+                      const sync_pb::SyncEntity& entity =
+                          pending_decryption.second;
+                      return !active_collaborations.contains(
+                          entity.collaboration().collaboration_id());
+                    });
+    }
   }
 
   *model_type_state_.mutable_progress_marker() = progress_marker;
@@ -550,7 +573,7 @@ void ModelTypeWorker::ProcessGetUpdatesResponse(
           // |server_id|, don't clear it: outdated data is better than nothing.
           // Such entry should be encrypted with another key, since |key_name|'s
           // queued updates would've have been dropped by now.
-          DCHECK(!base::Contains(entries_pending_decryption_, server_id) ||
+          DCHECK(!entries_pending_decryption_.contains(server_id) ||
                  GetEncryptionKeyName(entries_pending_decryption_[server_id]) !=
                      key_name);
           SyncRecordModelTypeUpdateDropReason(
@@ -558,7 +581,7 @@ void ModelTypeWorker::ProcessGetUpdatesResponse(
           break;
         }
         // Copy the sync entity for later decryption.
-        // TODO(crbug.com/1270734): Any write to |entries_pending_decryption_|
+        // TODO(crbug.com/40805099): Any write to |entries_pending_decryption_|
         // should do like DeduplicatePendingUpdatesBasedOnServerId() and honor
         // entity version. Additionally, it should look up the same server id
         // in |pending_updates_| and compare versions. In fact, the 2 containers
@@ -669,6 +692,11 @@ ModelTypeWorker::DecryptionStatus ModelTypeWorker::PopulateUpdateResponseData(
   data.name = update_entity.name();
   data.legacy_parent_id = update_entity.parent_id_string();
   data.server_defined_unique_tag = update_entity.server_defined_unique_tag();
+
+  // Populate shared type fields.
+  if (SharedTypes().Has(model_type)) {
+    data.collaboration_id = update_entity.collaboration().collaboration_id();
+  }
 
   // Populate |originator_cache_guid| and |originator_client_item_id|. This is
   // currently relevant only for bookmarks.
@@ -810,7 +838,7 @@ void ModelTypeWorker::NudgeForCommit() {
 }
 
 void ModelTypeWorker::NudgeIfReadyToCommit() {
-  // TODO(crbug.com/1188034): |kNoNudgedLocalChanges| is used to keep the
+  // TODO(crbug.com/40173160): |kNoNudgedLocalChanges| is used to keep the
   // existing behaviour. But perhaps there is no need to nudge for commit if all
   // known changes are already in flight.
   if (has_local_changes_state_ != kNoNudgedLocalChanges && CanCommitItems()) {
@@ -1121,15 +1149,10 @@ void ModelTypeWorker::DeduplicatePendingUpdatesBasedOnOriginatorClientItemId() {
 
 bool ModelTypeWorker::ShouldIgnoreUpdatesEncryptedWith(
     const std::string& key_name) {
-  if (!base::Contains(unknown_encryption_keys_by_name_, key_name)) {
-    return false;
-  }
-  if (unknown_encryption_keys_by_name_.at(key_name)
-          .get_updates_while_should_have_been_known <
-      min_get_updates_to_ignore_key_) {
-    return false;
-  }
-  return base::FeatureList::IsEnabled(kIgnoreSyncEncryptionKeysLongMissing);
+  return unknown_encryption_keys_by_name_.contains(key_name) &&
+         unknown_encryption_keys_by_name_.at(key_name)
+                 .get_updates_while_should_have_been_known >=
+             kMinGuResponsesToIgnoreKey;
 }
 
 void ModelTypeWorker::MaybeDropPendingUpdatesEncryptedWith(
@@ -1166,15 +1189,15 @@ ModelTypeWorker::RemoveKeysNoLongerUnknown() {
   }
 
   std::vector<ModelTypeWorker::UnknownEncryptionKeyInfo> removed_keys;
-  std::erase_if(
-      unknown_encryption_keys_by_name_, [&](const auto& key_and_info) {
-        if (base::Contains(keys_blocking_updates, key_and_info.first)) {
-          return false;
-        }
-        removed_keys.push_back(key_and_info.second);
-        return true;
-      });
-
+  for (const auto& [key_name, info] : unknown_encryption_keys_by_name_) {
+    if (!keys_blocking_updates.contains(key_name)) {
+      removed_keys.push_back(info);
+    }
+  }
+  std::erase_if(unknown_encryption_keys_by_name_,
+                [&](const auto& key_and_info) {
+                  return !keys_blocking_updates.contains(key_and_info.first);
+                });
   return removed_keys;
 }
 
@@ -1214,16 +1237,13 @@ void ModelTypeWorker::ExtractGcDirective() {
 
   if (model_type_state_.progress_marker().has_gc_directive()) {
     // Keep a new GC directive if received.
+    // TODO(b/325917757): cover the case when a collaboration was removed and
+    // then added in the next GetUpdates request again. All the previous
+    // entities should be removed from the tracker (it's expected that the
+    // server returns all the entities anyway and some entities could be removed
+    // in the meantime).
     pending_gc_directive_ = model_type_state_.progress_marker().gc_directive();
     model_type_state_.mutable_progress_marker()->clear_gc_directive();
-    return;
-  }
-
-  if (pending_gc_directive_.has_value() &&
-      !base::FeatureList::IsEnabled(kSyncKeepGcDirectiveDuringSyncCycle)) {
-    // Remove the GC directive if not present in the response, to mimic the
-    // previous behavior.
-    pending_gc_directive_.reset();
     return;
   }
 

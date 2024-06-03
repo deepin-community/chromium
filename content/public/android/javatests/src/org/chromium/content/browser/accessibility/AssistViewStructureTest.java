@@ -4,8 +4,10 @@
 
 package org.chromium.content.browser.accessibility;
 
+import static org.chromium.content.browser.accessibility.AccessibilityNodeInfoBuilder.EXTRAS_KEY_UNCLIPPED_BOTTOM;
 import static org.chromium.content.browser.accessibility.AccessibilityNodeInfoBuilder.EXTRAS_KEY_UNCLIPPED_HEIGHT;
 import static org.chromium.content.browser.accessibility.AccessibilityNodeInfoBuilder.EXTRAS_KEY_UNCLIPPED_LEFT;
+import static org.chromium.content.browser.accessibility.AccessibilityNodeInfoBuilder.EXTRAS_KEY_UNCLIPPED_RIGHT;
 import static org.chromium.content.browser.accessibility.AccessibilityNodeInfoBuilder.EXTRAS_KEY_UNCLIPPED_TOP;
 import static org.chromium.content.browser.accessibility.AccessibilityNodeInfoBuilder.EXTRAS_KEY_UNCLIPPED_WIDTH;
 
@@ -26,6 +28,7 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.content_shell_apk.ContentShellActivityTestRule;
@@ -35,6 +38,7 @@ import java.util.concurrent.TimeoutException;
 
 /** Tests for the implementation of onProvideVirtualStructure in WebContentsAccessibility. */
 @RunWith(BaseJUnit4ClassRunner.class)
+@DisableFeatures(ContentFeatureList.ACCESSIBILITY_UNIFIED_SNAPSHOTS)
 public class AssistViewStructureTest {
     @Rule public TestRule mProcessor = new Features.InstrumentationProcessor();
 
@@ -228,7 +232,7 @@ public class AssistViewStructureTest {
         Assert.assertEquals(5, grandchild.getTextSelectionEnd());
     }
 
-    /** Test that the snapshot contains Bundle extras for unclipped bounds. */
+    /** Test that the snapshot always contains Bundle extras for unclipped bounds. */
     @Test
     @MediumTest
     public void testUnclippedBounds() throws Throwable {
@@ -236,13 +240,17 @@ public class AssistViewStructureTest {
         TestViewStructure paragraph = root.getChild(0);
 
         Bundle extras = paragraph.getExtras();
-        int unclippedLeft = extras.getInt(EXTRAS_KEY_UNCLIPPED_LEFT, -1);
         int unclippedTop = extras.getInt(EXTRAS_KEY_UNCLIPPED_TOP, -1);
+        int unclippedBottom = extras.getInt(EXTRAS_KEY_UNCLIPPED_BOTTOM, -1);
+        int unclippedLeft = extras.getInt(EXTRAS_KEY_UNCLIPPED_LEFT, -1);
+        int unclippedRight = extras.getInt(EXTRAS_KEY_UNCLIPPED_RIGHT, -1);
         int unclippedWidth = extras.getInt(EXTRAS_KEY_UNCLIPPED_WIDTH, -1);
         int unclippedHeight = extras.getInt(EXTRAS_KEY_UNCLIPPED_HEIGHT, -1);
 
-        Assert.assertTrue(unclippedLeft > 0);
         Assert.assertTrue(unclippedTop > 0);
+        Assert.assertTrue(unclippedBottom > 0);
+        Assert.assertTrue(unclippedLeft > 0);
+        Assert.assertTrue(unclippedRight > 0);
         Assert.assertTrue(unclippedWidth > 0);
         Assert.assertTrue(unclippedHeight > 0);
     }

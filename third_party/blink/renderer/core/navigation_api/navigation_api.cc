@@ -47,7 +47,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_context.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/scheduler/public/task_attribution_info.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 
 namespace blink {
 
@@ -62,25 +62,32 @@ NavigationResult* EarlyErrorResult(ScriptState* script_state,
 NavigationResult* EarlyErrorResult(ScriptState* script_state,
                                    DOMException* ex) {
   auto* result = NavigationResult::Create();
-  result->setCommitted(ScriptPromise::RejectWithDOMException(script_state, ex));
-  result->setFinished(ScriptPromise::RejectWithDOMException(script_state, ex));
+  result->setCommitted(
+      ScriptPromise<NavigationHistoryEntry>::RejectWithDOMException(
+          script_state, ex));
+  result->setFinished(
+      ScriptPromise<NavigationHistoryEntry>::RejectWithDOMException(
+          script_state, ex));
   return result;
 }
 
 NavigationResult* EarlyErrorResult(ScriptState* script_state,
                                    v8::Local<v8::Value> ex) {
   auto* result = NavigationResult::Create();
-  result->setCommitted(ScriptPromise::Reject(script_state, ex));
-  result->setFinished(ScriptPromise::Reject(script_state, ex));
+  result->setCommitted(
+      ScriptPromise<NavigationHistoryEntry>::Reject(script_state, ex));
+  result->setFinished(
+      ScriptPromise<NavigationHistoryEntry>::Reject(script_state, ex));
   return result;
 }
 
 NavigationResult* EarlySuccessResult(ScriptState* script_state,
                                      NavigationHistoryEntry* entry) {
   auto* result = NavigationResult::Create();
-  auto v8_entry = ToV8Traits<NavigationHistoryEntry>::ToV8(script_state, entry);
-  result->setCommitted(ScriptPromise::Cast(script_state, v8_entry));
-  result->setFinished(ScriptPromise::Cast(script_state, v8_entry));
+  result->setCommitted(
+      ToResolvedPromise<NavigationHistoryEntry>(script_state, entry));
+  result->setFinished(
+      ToResolvedPromise<NavigationHistoryEntry>(script_state, entry));
   return result;
 }
 
@@ -625,9 +632,10 @@ NavigationResult* NavigationApi::traverseTo(ScriptState* script_state,
     if (SoftNavigationHeuristics* heuristics =
             SoftNavigationHeuristics::From(*window_)) {
       heuristics->SameDocumentNavigationStarted();
-      auto* tracker = ThreadScheduler::Current()->GetTaskAttributionTracker();
+      auto* tracker =
+          scheduler::TaskAttributionTracker::From(script_state->GetIsolate());
       if (tracker && script_state->World().IsMainWorld()) {
-        task = tracker->RunningTask(script_state->GetIsolate());
+        task = tracker->RunningTask();
         tracker->AddSameDocumentNavigationTask(task);
       }
     }
@@ -896,7 +904,8 @@ NavigationApi::DispatchResult NavigationApi::DispatchNavigateEvent(
 
 void NavigationApi::InformAboutCanceledNavigation(
     CancelNavigationReason reason) {
-  if (auto* tracker = ThreadScheduler::Current()->GetTaskAttributionTracker();
+  if (auto* tracker =
+          scheduler::TaskAttributionTracker::From(window_->GetIsolate());
       tracker && reason != CancelNavigationReason::kNavigateEvent) {
     tracker->ResetSameDocumentNavigationTasks();
   }

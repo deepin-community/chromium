@@ -86,6 +86,16 @@ static enum xnn_status reshape_divide_operator(
     memcpy(opdata->shape2.dim, values[input2_id].shape.dim, values[input2_id].shape.num_dims * sizeof(size_t));
   }
 
+  // Handle scalars. Although the output shape is dimensionless, the reshape
+  // function must be passed a valid shape to prevent skipping the op.
+  if (opdata->shape1.num_dims == 0) {
+    opdata->shape1.num_dims = 1;
+    opdata->shape1.dim[0] = 1;
+  }
+  if (opdata->shape2.num_dims == 0) {
+    opdata->shape2.num_dims = 1;
+    opdata->shape2.dim[0] = 1;
+  }
   const size_t old_workspace_size = opdata->workspace_size;
   enum xnn_status status = xnn_status_invalid_state;
   switch (opdata->operator_objects[0]->type) {
@@ -191,6 +201,7 @@ enum xnn_status xnn_define_divide(
   }
 
   switch (input1_value->datatype) {
+    case xnn_datatype_fp16:
     case xnn_datatype_fp32:
       break;
     default:
@@ -213,6 +224,7 @@ enum xnn_status xnn_define_divide(
   }
 
   switch (input2_value->datatype) {
+    case xnn_datatype_fp16:
     case xnn_datatype_fp32:
       break;
     default:
@@ -234,8 +246,13 @@ enum xnn_status xnn_define_divide(
     return status;
   }
 
+  enum xnn_compute_type compute_type = xnn_compute_type_invalid;
   switch (output_value->datatype) {
+    case xnn_datatype_fp16:
+      compute_type = xnn_compute_type_fp16;
+      break;
     case xnn_datatype_fp32:
+      compute_type = xnn_compute_type_fp32;
       break;
     default:
       xnn_log_error(
@@ -251,7 +268,7 @@ enum xnn_status xnn_define_divide(
   }
 
   node->type = xnn_node_type_divide;
-  node->compute_type = xnn_compute_type_fp32;
+  node->compute_type = compute_type;
   node->activation.output_min = output_min;
   node->activation.output_max = output_max;
   node->num_inputs = 2;

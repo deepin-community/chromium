@@ -166,7 +166,7 @@ bool ProfileTokenQuality::AddObservationsForFilledForm(
     possible_observations.emplace_back(
         stored_type,
         Observation{.type = base::to_underlying(GetObservationTypeFromField(
-                        field, form_data.fields[i].value, other_profiles,
+                        field, form_data.fields[i].value(), other_profiles,
                         pdm.app_locale())),
                     .form_hash = hash});
   }
@@ -226,7 +226,6 @@ ProfileTokenQuality::GetObservationTypesForFieldType(FieldType type) const {
 
 void ProfileTokenQuality::AddObservation(FieldType type,
                                          Observation observation) {
-  CHECK(GetSupportedTypes(*profile_).contains(type)) << FieldTypeToString(type);
   CHECK_NE(observation.type, base::to_underlying(ObservationType::kUnknown));
   base::circular_deque<Observation>& observations =
       observations_[profile_->GetStorableTypeOf(type)];

@@ -739,7 +739,8 @@ class QUICHE_EXPORT QuicConnection
   // QuicPacketCreator::DelegateInterface
   bool ShouldGeneratePacket(HasRetransmittableData retransmittable,
                             IsHandshake handshake) override;
-  void MaybeBundleOpportunistically() override;
+  void MaybeBundleOpportunistically(
+      TransmissionType transmission_type) override;
   QuicByteCount GetFlowControlSendWindowSize(QuicStreamId id) override {
     return visitor_->GetFlowControlSendWindowSize(id);
   }
@@ -1325,13 +1326,18 @@ class QUICHE_EXPORT QuicConnection
   void OnServerPreferredAddressValidated(QuicPathValidationContext& context,
                                          bool owns_writer);
 
-  void set_sent_server_preferred_address(
-      const QuicSocketAddress& sent_server_preferred_address) {
-    sent_server_preferred_address_ = sent_server_preferred_address;
+  void set_expected_server_preferred_address(
+      const QuicSocketAddress& expected_server_preferred_address) {
+    expected_server_preferred_address_ = expected_server_preferred_address;
   }
 
+  // TODO(rch): Remove this method once Envoy is no longer using it.
   const QuicSocketAddress& sent_server_preferred_address() const {
-    return sent_server_preferred_address_;
+    return expected_server_preferred_address_;
+  }
+
+  const QuicSocketAddress& expected_server_preferred_address() const {
+    return expected_server_preferred_address_;
   }
 
   // True if received long packet header contains source connection ID.
@@ -2021,6 +2027,8 @@ class QUICHE_EXPORT QuicConnection
                                  QuicPacketWriter* writer,
                                  const QuicEcnCodepoint ecn_codepoint);
 
+  bool PeerAddressChanged() const;
+
   QuicConnectionContext context_;
 
   QuicFramer framer_;
@@ -2395,8 +2403,11 @@ class QUICHE_EXPORT QuicConnection
   // only.
   QuicSocketAddress received_server_preferred_address_;
 
-  // Stores sent server preferred address in transport param. Server side only.
-  QuicSocketAddress sent_server_preferred_address_;
+  // Stores server preferred address which the server expects to receive
+  // packets from when the client is sending to the preferred address. May be
+  // different from the address sent to the client when the server is behind
+  // a DNAT.
+  QuicSocketAddress expected_server_preferred_address_;
 
   // If true, kicks off validation of server_preferred_address_ once it is
   // received. Also, send all coalesced packets on both paths until handshake is
@@ -2429,6 +2440,9 @@ class QUICHE_EXPORT QuicConnection
 
   const bool quic_limit_new_streams_per_loop_2_ =
       GetQuicReloadableFlag(quic_limit_new_streams_per_loop_2);
+
+  const bool quic_test_peer_addr_change_after_normalize_ =
+      GetQuicReloadableFlag(quic_test_peer_addr_change_after_normalize);
 };
 
 }  // namespace quic

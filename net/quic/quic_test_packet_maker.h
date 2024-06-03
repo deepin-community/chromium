@@ -51,6 +51,10 @@ class QuicTestPacketMaker {
 
   void set_hostname(const std::string& host);
 
+  void set_use_priority_header(const bool use_priority_header) {
+    use_priority_header_ = use_priority_header;
+  }
+
   void set_connection_id(const quic::QuicConnectionId& connection_id) {
     connection_id_ = connection_id;
   }
@@ -287,12 +291,26 @@ class QuicTestPacketMaker {
       bool fin,
       std::string_view data);
 
+  std::unique_ptr<quic::QuicReceivedPacket> MakeDatagramPacket(
+      uint64_t packet_number,
+      std::string_view datagram);
+
+  std::unique_ptr<quic::QuicReceivedPacket> MakeDatagramPacket(
+      uint64_t packet_number,
+      std::vector<std::string> datagrams);
+
   std::unique_ptr<quic::QuicReceivedPacket> MakeAckAndDataPacket(
       uint64_t packet_number,
       quic::QuicStreamId stream_id,
       uint64_t largest_received,
       uint64_t smallest_received,
       bool fin,
+      std::string_view data);
+
+  std::unique_ptr<quic::QuicReceivedPacket> MakeAckAndDatagramPacket(
+      uint64_t packet_number,
+      uint64_t largest_received,
+      uint64_t smallest_received,
       std::string_view data);
 
   std::unique_ptr<quic::QuicReceivedPacket> MakeAckRetransmissionAndDataPacket(
@@ -459,6 +477,7 @@ class QuicTestPacketMaker {
                        uint64_t largest_received,
                        uint64_t smallest_received,
                        std::optional<quic::QuicEcnCounts> ecn = std::nullopt);
+  void AddQuicMessageFrame(std::string_view data);
   void AddQuicRstStreamFrame(quic::QuicStreamId stream_id,
                              quic::QuicRstStreamErrorCode error_code);
   void AddQuicConnectionCloseFrame(quic::QuicErrorCode quic_error,

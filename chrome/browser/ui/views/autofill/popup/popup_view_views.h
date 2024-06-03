@@ -34,6 +34,7 @@ namespace autofill {
 
 class AutofillPopupController;
 class PopupSeparatorView;
+class PopupTitleView;
 class PopupWarningView;
 
 // Sub-popups and their parent popups are connected by providing children
@@ -59,8 +60,10 @@ class PopupViewViews : public PopupBaseView,
   METADATA_HEADER(PopupViewViews, PopupBaseView)
 
  public:
-  using RowPointer =
-      absl::variant<PopupRowView*, PopupSeparatorView*, PopupWarningView*>;
+  using RowPointer = absl::variant<PopupRowView*,
+                                   PopupSeparatorView*,
+                                   PopupTitleView*,
+                                   PopupWarningView*>;
 
   // The time it takes for a selected cell to open a sub-popup if it has one.
   static constexpr base::TimeDelta kMouseOpenSubPopupDelay =
@@ -173,9 +176,8 @@ class PopupViewViews : public PopupBaseView,
 
   // Attempts to accept the selected cell. It will return false if there is no
   // selected cell or the cell does not trigger field filling or scanning a
-  // credit card. `event_time` must be the time the user input event was
-  // triggered.
-  bool AcceptSelectedContentOrCreditCardCell(base::TimeTicks event_time);
+  // credit card.
+  bool AcceptSelectedContentOrCreditCardCell();
 
   // Attempts to remove the selected cell. Only content cells are allowed to be
   // selected.
@@ -211,6 +213,16 @@ class PopupViewViews : public PopupBaseView,
       std::optional<size_t> row_index,
       AutoselectFirstSuggestion autoselect_first_suggestion =
           AutoselectFirstSuggestion(false));
+
+  // Returns true when fields `is_acceptable` and `apply_style_deactivated` are
+  // false for the suggestion as it indicates that the suggestion is a manual
+  // fallback suggestion.
+  bool CanOpenSubPopupSuggestion(const Suggestion& suggestion);
+
+  // Attempts to select the content cell of the row with the currently open
+  // sub-popup. This closes the sub-popup and has the effect of going one menu
+  // level up. Returns whether this was successful.
+  bool SelectParentPopupContentCell();
 
   // Controller for this view.
   base::WeakPtr<AutofillPopupController> controller_ = nullptr;

@@ -20,6 +20,7 @@
 #include "build/build_config.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/devtools/render_frame_devtools_agent_host.h"
+#include "content/browser/preloading/preloading_data_impl.h"
 #include "content/browser/preloading/preloading_trigger_type_impl.h"
 #include "content/browser/preloading/prerender/devtools_prerender_attempt.h"
 #include "content/browser/preloading/prerender/prerender_features.h"
@@ -798,7 +799,9 @@ int PrerenderHostRegistry::CreateAndStartHost(
 
 int PrerenderHostRegistry::CreateAndStartHostForNewTab(
     const PrerenderAttributes& attributes,
-    PreloadingPredictor preloading_predictor) {
+    const PreloadingPredictor& creating_predictor,
+    const PreloadingPredictor& enacting_predictor,
+    PreloadingConfidence confidence) {
   CHECK(base::FeatureList::IsEnabled(blink::features::kPrerender2InNewTab));
   CHECK(IsSpeculationRuleType(attributes.trigger_type));
   std::string recorded_url =
@@ -811,7 +814,8 @@ int PrerenderHostRegistry::CreateAndStartHostForNewTab(
 
   auto handle = std::make_unique<PrerenderNewTabHandle>(
       attributes, *web_contents()->GetBrowserContext());
-  int prerender_host_id = handle->StartPrerendering(preloading_predictor);
+  int prerender_host_id = handle->StartPrerendering(
+      creating_predictor, enacting_predictor, confidence);
   if (prerender_host_id == RenderFrameHost::kNoFrameTreeNodeId)
     return RenderFrameHost::kNoFrameTreeNodeId;
   prerender_new_tab_handle_by_frame_tree_node_id_[prerender_host_id] =
@@ -1274,8 +1278,8 @@ void PrerenderHostRegistry::BackNavigationLikely(
     return;
   }
 
-  PreloadingData* preloading_data =
-      PreloadingData::GetOrCreateForWebContents(web_contents());
+  PreloadingDataImpl* preloading_data =
+      PreloadingDataImpl::GetOrCreateForWebContents(web_contents());
   preloading_data->SetIsNavigationInDomainCallback(
       predictor,
       base::BindRepeating(IsNavigationInSessionHistoryPredictorDomain));
@@ -1305,11 +1309,14 @@ void PrerenderHostRegistry::BackNavigationLikely(
 
   PreloadingURLMatchCallback same_url_matcher =
       PreloadingData::GetSameURLMatcher(back_url);
-  preloading_data->AddPreloadingPrediction(predictor, /*confidence=*/100,
-                                           same_url_matcher);
+  ukm::SourceId triggered_primary_page_source_id =
+      web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId();
+  preloading_data->AddPreloadingPrediction(predictor, PreloadingConfidence{100},
+                                           same_url_matcher,
+                                           triggered_primary_page_source_id);
   PreloadingAttempt* attempt = preloading_data->AddPreloadingAttempt(
       predictor, PreloadingType::kPrerender, same_url_matcher,
-      web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
+      triggered_primary_page_source_id);
 
   if (back_entry->GetMainFrameDocumentSequenceNumber() ==
       controller.GetLastCommittedEntry()
@@ -1444,6 +1451,25 @@ void PrerenderHostRegistry::DidStartNavigation(
   CHECK(prerender_host);
 
   prerender_host->DidStartNavigation(navigation_handle);
+}
+
+void PrerenderHostRegistry::ReadyToCommitNavigation(
+    NavigationHandle* navigation_handle) {
+  // ReadyToCommitNavigation is used for monitoring the main frame navigation in
+  // a prerendered page so do nothing for other navigations.
+  auto* navigation_request = NavigationRequest::From(navigation_handle);
+  if (!navigation_request->IsInPrerenderedMainFrame() ||
+      navigation_request->IsSameDocument()) {
+    return;
+  }
+
+  // This navigation is running on the main frame in the prerendered page, so
+  // its FrameTree::Delegate should be PrerenderHost.
+  auto* prerender_host = static_cast<PrerenderHost*>(
+      navigation_request->frame_tree_node()->frame_tree().delegate());
+  CHECK(prerender_host);
+
+  prerender_host->ReadyToCommitNavigation(navigation_handle);
 }
 
 void PrerenderHostRegistry::DidFinishNavigation(

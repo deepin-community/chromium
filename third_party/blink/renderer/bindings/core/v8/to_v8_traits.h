@@ -242,7 +242,7 @@ template <>
 struct ToV8Traits<IDLPromise> {
   [[nodiscard]] static v8::Local<v8::Value> ToV8(
       ScriptState* script_state,
-      const ScriptPromise& script_promise) {
+      const ScriptPromiseUntyped& script_promise) {
     DCHECK(!script_promise.IsEmpty());
     return script_promise.V8Value();
   }
@@ -963,6 +963,14 @@ struct ToV8Traits<IDLOptional<T>> {
     return ToV8Traits<T>::ToV8(script_state, value);
   }
 };
+
+template <typename IDLType, typename BlinkType>
+ScriptPromise<IDLType> ToResolvedPromise(ScriptState* script_state,
+                                         BlinkType value) {
+  auto v8_value = ToV8Traits<IDLType>::ToV8(script_state, value);
+  return ScriptPromise<IDLType>(
+      script_state, ScriptPromiseUntyped::ResolveRaw(script_state, v8_value));
+}
 
 }  // namespace blink
 

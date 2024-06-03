@@ -1,9 +1,9 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/reference
-  - Chromium OS > Developer Library > Reference
+  - ChromiumOS > Developer Library > Reference
 page_name: cros-commit-pipeline
-title: gsuti
+title: gsutil
 ---
 
 `gsutil` is a command line tool for working with Google Storage (GS) buckets.
@@ -130,7 +130,7 @@ These are used by developers working on ARC++ (Android in CrOS).
 
 ### VM/container (Crostini) buckets
 
-These buckets are used for [Containers/VM/Crostini](./containers_and_vms.md).
+These buckets are used for [Containers/VM/Crostini](/chromium-os/developer-library/guides/containers/containers-and-vms/).
 
 *   `gs://chrome-component-termina/`: Termina VM images for signing. VM images
     uploaded here will be signed, then made available in the Omaha dashboard
@@ -146,7 +146,7 @@ These buckets are used for [Containers/VM/Crostini](./containers_and_vms.md).
 
 ### ClusterFuzz buckets
 
-See the [fuzzing documentation](testing/fuzzing.md#using-clusterfuzz) for details
+See the [fuzzing documentation](/chromium-os/developer-library/guides/testing/fuzzing/#using-clusterfuzz) for details
 on the buckets used by ClusterFuzz.
 
 ### Old/dead buckets
@@ -166,7 +166,7 @@ Comments start with a `#` character and extend to the end of the line.
 
 ```
 # For information about this file, see
-# https://chromium.googlesource.com/chromiumos/docs/+/HEAD/gsutil.md#googlestorage_acl.txt
+# https://www.chromium.org/chromium-os/developer-library/reference/tools/gsutil/#googlestorage_acltxt-file-format
 
 # Give owners of the chromeos.int.bot@gmail.com project full control.
 -g 00b4903a97fb6344be6306829e053825e18a04ab0cc5513e9585a2b8c9634c80:FULL_CONTROL
@@ -195,8 +195,8 @@ If you're confident you need a new bucket, please [file a bug][bugs] using the
 `Infra>Client>ChromeOS` component.
 
 
-[Archive Mirrors]: archive_mirrors.md
-[bugs]: reporting_bugs.md
+[Archive Mirrors]: /chromium-os/developer-library/reference/third-party/archive-mirrors/
+[bugs]: /chromium-os/developer-library/guides/bugs/reporting-bugs/
 [chromite]: https://chromium.googlesource.com/chromiumos/chromite/
 [gsutil Tool]: https://cloud.google.com/storage/docs/gsutil
 [Install gsutil]: https://cloud.google.com/storage/docs/gsutil_install

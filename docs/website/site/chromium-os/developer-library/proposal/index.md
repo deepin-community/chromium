@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library
-  - Chromium OS > Developer Library
+  - ChromiumOS > Developer Library
 page_name: proposal
 title: CrOS Developer Library Proposal
 ---

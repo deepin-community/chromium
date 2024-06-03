@@ -5,7 +5,6 @@
 #include "base/callback_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -15,6 +14,7 @@
 #include "chrome/browser/resource_coordinator/tab_manager.h"
 #include "chrome/browser/resource_coordinator/utils.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/performance_controls/test_support/memory_saver_interactive_test_mixin.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -193,6 +193,13 @@ IN_PROC_BROWSER_TEST_F(MemorySaverDiscardPolicyInteractiveTest,
 // Check that tabs with enabled notifications won't be discarded
 IN_PROC_BROWSER_TEST_F(MemorySaverDiscardPolicyInteractiveTest,
                        TabWithNotificationNotDiscarded) {
+  // HTTPS because only secure origins can get the notification permission.
+  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
+  https_server.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
+  https_server.ServeFilesFromSourceDirectory(GetChromeTestDataDir());
+  ASSERT_TRUE(https_server.Start());
+
+  // Grant notification permission by default (only works for secure origins).
   HostContentSettingsMapFactory::GetForProfile(browser()->profile())
       ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS,
                                  ContentSetting::CONTENT_SETTING_ALLOW);
@@ -200,7 +207,8 @@ IN_PROC_BROWSER_TEST_F(MemorySaverDiscardPolicyInteractiveTest,
       InstrumentTab(kFirstTabContents, 0),
       NavigateWebContents(
           kFirstTabContents,
-          GetURL("example.com", "/notifications/notification_tester.html")),
+          https_server.GetURL("a.test",
+                              "/notifications/notification_tester.html")),
       AddInstrumentedTab(kSecondTabContents, GURL(chrome::kChromeUINewTabURL)),
       TryDiscardTab(0), CheckTabIsDiscarded(0, false));
 }
@@ -211,13 +219,6 @@ class MemorySaverChipInteractiveTest
  public:
   MemorySaverChipInteractiveTest() = default;
   ~MemorySaverChipInteractiveTest() override = default;
-
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        performance_manager::features::kDiscardExceptionsImprovements);
-
-    MemorySaverInteractiveTestMixin<InteractiveBrowserTest>::SetUp();
-  }
 
   void SetUpOnMainThread() override {
     MemorySaverInteractiveTestMixin::SetUpOnMainThread();
@@ -262,9 +263,6 @@ class MemorySaverChipInteractiveTest
                            -> views::View* { return tab_strip->tab_at(index); },
                        index));
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Page Action Chip should appear expanded the first three times a tab is
@@ -476,8 +474,9 @@ IN_PROC_BROWSER_TEST_F(MemorySaverChipInteractiveTest,
       Check(base::BindLambdaForTesting(
           [&]() { return browser()->tab_strip_model()->GetTabCount() == 3; })),
       InstrumentTab(kPerformanceSettingsTab, 2),
-      WaitForWebContentsReady(kPerformanceSettingsTab,
-                              GURL(chrome::kChromeUIPerformanceSettingsURL)));
+      WaitForWebContentsReady(
+          kPerformanceSettingsTab,
+          GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage))));
 }
 
 // Memory Saver Dialog bubble's cancel button's state should be preserved
@@ -549,7 +548,8 @@ IN_PROC_BROWSER_TEST_F(MemorySaverChipInteractiveTest,
       WaitForShow(
           MemorySaverBubbleView::kMemorySaverDialogResourceViewElementId),
       Screenshot(MemorySaverBubbleView::kMemorySaverDialogResourceViewElementId,
-                 "MemorySaverResourceView", "5280502"));
+                 /*screenshot_name=*/"MemorySaverResourceView",
+                 /*baseline_cl=*/"5280502"));
 }
 
 class MemorySaverFaviconTreatmentTest
@@ -588,5 +588,7 @@ IN_PROC_BROWSER_TEST_F(MemorySaverFaviconTreatmentTest,
                  return views::AsViewClass<views::View>(GetTabIcon(0));
                })),
       WaitForEvent(kFirstTabFavicon, kDiscardAnimationFinishes), FlushEvents(),
-      Screenshot(kFirstTabFavicon, "FadeSmallFaviconOnDiscard", "4786929"));
+      Screenshot(kFirstTabFavicon,
+                 /*screenshot_name=*/"FadeSmallFaviconOnDiscard",
+                 /*baseline_cl=*/"4786929"));
 }

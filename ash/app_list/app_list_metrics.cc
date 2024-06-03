@@ -52,12 +52,6 @@ constexpr char kSearchResultRemovalDialogDecisionHistogram[] =
 // mode AppList) and the Shelf.
 constexpr char kAppListAppLaunched[] = "Apps.AppListAppLaunchedV2";
 
-// UMA histograms that log app launches within the app list, and the shelf.
-// Split depending on whether tablet mode is active or not.
-constexpr char kAppLaunchInTablet[] = "Apps.AppList.AppLaunched.TabletMode";
-constexpr char kAppLaunchInClamshell[] =
-    "Apps.AppList.AppLaunched.ClamshellMode";
-
 // UMA histograms that log launcher workflow actions (launching an app, search
 // result, or a continue section task) in the app list UI. Split depending on
 // whether tablet mode is active or not. Note that unlike `kAppListAppLaunched`
@@ -270,18 +264,28 @@ void RecordPeriodicAppListMetrics() {
                            number_of_apps_in_non_system_folders);
 }
 
+void RecordAppListByCollectionLaunched(AppCollection collection,
+                                       bool is_apps_collections_page) {
+  AppEntity app_entity = collection == AppCollection::kUnknown
+                             ? AppEntity::kThirdPartyApp
+                             : AppEntity::kDefaultApp;
+  if (is_apps_collections_page) {
+    base::UmaHistogramEnumeration(
+        "Apps.AppListBubble.AppsCollectionsPage.AppLaunchesByEntity",
+        app_entity);
+    base::UmaHistogramEnumeration(
+        "Apps.AppList.AppsCollections.AppLaunchesByCategory", collection);
+  } else {
+    base::UmaHistogramEnumeration(
+        "Apps.AppListBubble.AppsPage.AppLaunchesByEntity", app_entity);
+  }
+}
+
 void RecordAppListAppLaunched(AppListLaunchedFrom launched_from,
                               AppListViewState app_list_state,
                               bool is_tablet_mode,
                               bool app_list_shown) {
   UMA_HISTOGRAM_ENUMERATION(kAppListAppLaunched, launched_from);
-
-  if (is_tablet_mode) {
-    base::UmaHistogramEnumeration(kAppLaunchInTablet, launched_from);
-
-  } else {
-    base::UmaHistogramEnumeration(kAppLaunchInClamshell, launched_from);
-  }
 
   if (!is_tablet_mode) {
     if (!app_list_shown) {

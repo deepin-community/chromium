@@ -471,7 +471,7 @@ TEST_F(BrowsingDataModelTest, IteratorCanHandleEmptyDataKeyEntriesMaps) {
 }
 
 TEST_F(BrowsingDataModelTest, RemoveBasedOnPartitioning) {
-  // TODO(crbug/1455899): Use helpers so this test can be broken up, likely
+  // TODO(crbug.com/40272946): Use helpers so this test can be broken up, likely
   // done alongside moving partition key detection to a visitor pattern.
   std::unique_ptr<BrowsingDataModel> model = BrowsingDataModel::BuildEmpty(
       storage_partition(),
@@ -621,6 +621,8 @@ TEST_F(BrowsingDataModelTest, ThirdPartyCookieTypes) {
           {BrowsingDataModel::StorageType::kLocalStorage,
            partitioned_storage_key},
           {BrowsingDataModel::StorageType::kQuotaStorage,
+           partitioned_storage_key},
+          {BrowsingDataModel::StorageType::kCdmStorage,
            partitioned_storage_key},
           {BrowsingDataModel::StorageType::kSessionStorage,
            partitioned_session_storage_usage},

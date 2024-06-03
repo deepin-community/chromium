@@ -144,7 +144,7 @@ bool BookmarkEditorView::HandleKeyEvent(views::Textfield* sender,
 void BookmarkEditorView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   views::DialogDelegateView::GetAccessibleNodeData(node_data);
 
-  // TODO(crbug.com/1361263): Currently DialogDelegateView does not override
+  // TODO(crbug.com/40863584): Currently DialogDelegateView does not override
   // GetAccessibleNodeData, thus the call above accomplishes nothing. We need
   // this View to have a role before setting its name, but if we set it to
   // dialog, we'll wind up with a dialog (this view) inside of a dialog
@@ -223,23 +223,20 @@ void BookmarkEditorView::ShowContextMenuForViewImpl(
                                   source_type);
 }
 
-void BookmarkEditorView::BookmarkNodeMoved(BookmarkModel* model,
-                                           const BookmarkNode* old_parent,
+void BookmarkEditorView::BookmarkNodeMoved(const BookmarkNode* old_parent,
                                            size_t old_index,
                                            const BookmarkNode* new_parent,
                                            size_t new_index) {
   Reset();
 }
 
-void BookmarkEditorView::BookmarkNodeAdded(BookmarkModel* model,
-                                           const BookmarkNode* parent,
+void BookmarkEditorView::BookmarkNodeAdded(const BookmarkNode* parent,
                                            size_t index,
                                            bool added_by_user) {
   Reset();
 }
 
 void BookmarkEditorView::BookmarkNodeRemoved(
-    BookmarkModel* model,
     const BookmarkNode* parent,
     size_t index,
     const BookmarkNode* node,
@@ -255,13 +252,11 @@ void BookmarkEditorView::BookmarkNodeRemoved(
 }
 
 void BookmarkEditorView::BookmarkAllUserNodesRemoved(
-    BookmarkModel* model,
     const std::set<GURL>& removed_urls) {
   Reset();
 }
 
 void BookmarkEditorView::BookmarkNodeChildrenReordered(
-    BookmarkModel* model,
     const BookmarkNode* node) {
   Reset();
 }

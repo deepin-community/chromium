@@ -153,8 +153,7 @@ class PrivacyHubNotificationTextTest
       public testing::WithParamInterface<std::tuple<bool, NotificationType>> {
  public:
   PrivacyHubNotificationTextTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kCrosPrivacyHubV0, features::kCrosPrivacyHub}, {});
+    scoped_feature_list_.InitWithFeatures({features::kCrosPrivacyHub}, {});
     scoped_camera_led_fallback_ = std::make_unique<ScopedLedFallbackForTesting>(
         IsCameraLedFallbackActive());
     sensors_ = [this]() -> SensorDisabledNotificationDelegate::SensorSet {
@@ -188,8 +187,8 @@ class PrivacyHubNotificationTextTest
   std::u16string ExpectedText(
       std::initializer_list<std::u16string> app_names = {}) {
     CHECK_LE(app_names.size(), 2ULL);
-    CHECK_GT(sensors_.Size(), 0ULL);
-    CHECK_LE(sensors_.Size(), 2ULL);
+    CHECK_GT(sensors_.size(), 0ULL);
+    CHECK_LE(sensors_.size(), 2ULL);
     const bool microphone =
         sensors_.Has(SensorDisabledNotificationDelegate::Sensor::kMicrophone);
     const bool camera =

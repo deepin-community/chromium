@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -27,7 +28,6 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/test/test_timeouts.h"
-#include "base/test/to_vector.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
@@ -65,6 +65,7 @@
 #include "components/os_crypt/sync/os_crypt_mocker.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/command_line_switches.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/model_type.h"
@@ -192,15 +193,23 @@ SyncTest::SyncTest(TestType test_type)
     }
   }
 
+  std::vector<base::test::FeatureRefAndParams> enabled_features;
   if (num_clients_ > 1) {
     // Workaround to turn off single client optimization for sync standalone
     // invalidations in tests.
-    // TODO(crbug.com/1438806): remove once resolved.
-    feature_list_.InitWithFeaturesAndParameters(
-        /*enabled_features=*/{{switches::
-                                   kSyncFilterOutInactiveDevicesForSingleClient,
-                               {{"SyncActiveDeviceMargin", "-2d"}}}},
-        /*disabled_features=*/{});
+    // TODO(crbug.com/1438806): Remove once resolved.
+    enabled_features.push_back(
+        {switches::kSyncFilterOutInactiveDevicesForSingleClient,
+         {{switches::kSyncActiveDeviceMargin.name, "-2d"}}});
+  }
+  std::vector<base::test::FeatureRef> disabled_features;
+#if BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/329426609): Re-enable the feature after fixing the flakes.
+  disabled_features.push_back(switches::kSeedAccountsRevamp);
+#endif
+  if (!enabled_features.empty() || !disabled_features.empty()) {
+    feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                disabled_features);
   }
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -213,7 +222,9 @@ SyncTest::~SyncTest() = default;
 
 void SyncTest::SetUp() {
 #if BUILDFLAG(IS_ANDROID)
-  sync_test_utils_android::SetUpAuthForTesting();
+  if (server_type_ == IN_PROCESS_FAKE_SERVER) {
+    sync_test_utils_android::SetUpAuthForTesting();
+  }
 #endif
 
   base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
@@ -261,7 +272,9 @@ void SyncTest::PostRunTestOnMainThread() {
   PlatformBrowserTest::PostRunTestOnMainThread();
 
 #if BUILDFLAG(IS_ANDROID)
-  sync_test_utils_android::TearDownAuthForTesting();
+  if (server_type_ == IN_PROCESS_FAKE_SERVER) {
+    sync_test_utils_android::TearDownAuthForTesting();
+  }
 #endif
 }
 
@@ -352,24 +365,26 @@ bool SyncTest::CreateProfile(int index) {
 
   BeforeSetupClient(index, profile_path);
 
+#if BUILDFLAG(IS_ANDROID)
+  // Use default profile no matter running against an EXTERNAL_LIVE_SERVER or
+  // IN_PROCESS_FAKE_SERVER
+  DCHECK_EQ(index, 0);
+  Profile* profile = ProfileManager::GetLastUsedProfile();
+  InitializeProfile(index, profile);
+#else   // BUILDFLAG(IS_ANDROID)
   if (server_type_ == EXTERNAL_LIVE_SERVER) {
     // If running against an EXTERNAL_LIVE_SERVER, we signin profiles using real
     // GAIA server. This requires creating profiles with no test hooks.
     InitializeProfile(index, MakeProfileForUISignin(profile_path));
   } else {
-// Use default profile for Android.
-#if BUILDFLAG(IS_ANDROID)
-    DCHECK(index == 0);
-    Profile* profile = ProfileManager::GetLastUsedProfile();
-#else
     // Without need of real GAIA authentication, we create new test profiles.
     Profile* profile =
         g_browser_process->profile_manager()->GetProfile(profile_path);
-#endif
 
     SetupMockGaiaResponsesForProfile(profile);
     InitializeProfile(index, profile);
   }
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // Once profile initialization has kicked off, wait for it to finish.
   WaitForDataModels(GetProfile(index));
@@ -456,8 +471,8 @@ const SyncServiceImplHarness* SyncTest::GetClient(int index) const {
 }
 
 std::vector<SyncServiceImplHarness*> SyncTest::GetSyncClients() {
-  return base::test::ToVector(clients_,
-                              &std::unique_ptr<SyncServiceImplHarness>::get);
+  return base::ToVector(clients_,
+                        &std::unique_ptr<SyncServiceImplHarness>::get);
 }
 
 SyncServiceImpl* SyncTest::GetSyncService(int index) const {
@@ -618,7 +633,7 @@ void SyncTest::InitializeProfile(int index, Profile* profile) {
     // Make sure that an instance of GCMProfileService has been created. This is
     // required for some tests which only call SetupClients().
     gcm::GCMProfileServiceFactory::GetForProfile(profile);
-    DCHECK(base::Contains(profile_to_fake_gcm_driver_, profile));
+    DCHECK(profile_to_fake_gcm_driver_.contains(profile));
     fake_server_sync_invalidation_sender_->AddFakeGCMDriver(
         profile_to_fake_gcm_driver_[profile]);
   }
@@ -831,7 +846,7 @@ void SyncTest::OnProfileWillBeDestroyed(Profile* profile) {
     CheckForDataTypeFailures(/*client_index=*/index);
 
     // |profile_to_fake_gcm_driver_| may be empty when using an external server.
-    if (base::Contains(profile_to_fake_gcm_driver_, profile)) {
+    if (profile_to_fake_gcm_driver_.contains(profile)) {
       fake_server_sync_invalidation_sender_->RemoveFakeGCMDriver(
           profile_to_fake_gcm_driver_[profile]);
       profile_to_fake_gcm_driver_.erase(profile);
@@ -1120,7 +1135,7 @@ void SyncTest::ExcludeDataTypesFromCheckForDataTypeFailures(
 }
 
 syncer::ModelTypeSet AllowedTypesInStandaloneTransportMode() {
-  static_assert(49 == syncer::GetNumModelTypes(),
+  static_assert(51 == syncer::GetNumModelTypes(),
                 "Add new types below if they can run in transport mode");
   // Only some types will run by default in transport mode (i.e. without their
   // own separate opt-in).
@@ -1129,6 +1144,7 @@ syncer::ModelTypeSet AllowedTypesInStandaloneTransportMode() {
                                         syncer::AUTOFILL_WALLET_USAGE,
                                         syncer::CONTACT_INFO,
                                         syncer::DEVICE_INFO,
+                                        syncer::PLUS_ADDRESS,
                                         syncer::SECURITY_EVENTS,
                                         syncer::SEND_TAB_TO_SELF,
                                         syncer::SHARING_MESSAGE,
@@ -1143,9 +1159,21 @@ syncer::ModelTypeSet AllowedTypesInStandaloneTransportMode() {
           syncer::kSyncEnableWalletOfferInTransportMode)) {
     allowed_types.Put(syncer::AUTOFILL_WALLET_OFFER);
   }
-  if (base::FeatureList::IsEnabled(
-          syncer::kEnablePasswordsAccountStorageForNonSyncingUsers)) {
+
+  bool allow_passwords = base::FeatureList::IsEnabled(
+      syncer::kEnablePasswordsAccountStorageForNonSyncingUsers);
+#if !BUILDFLAG(IS_ANDROID)
+  // This is an approximation because passwords are only enabled if the signin
+  // is explicit (they are not enabled for users who signed in through Dice).
+  allow_passwords &= switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
+      switches::ExplicitBrowserSigninPhase::kExperimental);
+#endif
+
+  if (allow_passwords) {
     allowed_types.Put(syncer::PASSWORDS);
+    allowed_types.Put(syncer::WEBAUTHN_CREDENTIAL);
+    allowed_types.Put(syncer::INCOMING_PASSWORD_SHARING_INVITATION);
+    allowed_types.Put(syncer::OUTGOING_PASSWORD_SHARING_INVITATION);
   }
   if (base::FeatureList::IsEnabled(syncer::kEnablePreferencesAccountStorage) &&
       base::FeatureList::IsEnabled(
@@ -1159,8 +1187,14 @@ syncer::ModelTypeSet AllowedTypesInStandaloneTransportMode() {
   }
   if (base::FeatureList::IsEnabled(
           syncer::kSyncSharedTabGroupDataInTransportMode)) {
+    allowed_types.Put(syncer::COLLABORATION_GROUP);
     allowed_types.Put(syncer::SHARED_TAB_GROUP_DATA);
   }
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(syncer::kWebApkBackupAndRestoreBackend)) {
+    allowed_types.Put(syncer::WEB_APKS);
+  }
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   // On Lacros, Apps-related types may run in transport mode.

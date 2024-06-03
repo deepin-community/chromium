@@ -27,14 +27,6 @@ constexpr char kWildCardMatching[] = "*";
 ChromeDlpRulesManager::ChromeDlpRulesManager(Profile* profile)
     : profile_(profile) {
   DCHECK(profile_);
-  if (base::FeatureList::IsEnabled(kEnableDesktopDataControls)) {
-    data_controls_rules_registrar_.Init(profile_->GetPrefs());
-    data_controls_rules_registrar_.Add(
-        kDataControlsRulesPref,
-        base::BindRepeating(&ChromeDlpRulesManager::OnDataControlsRulesUpdate,
-                            base::Unretained(this)));
-    OnDataControlsRulesUpdate();
-  }
 }
 
 ChromeDlpRulesManager::~ChromeDlpRulesManager() = default;
@@ -250,40 +242,6 @@ std::string ChromeDlpRulesManager::GetSourceUrlPattern(
   return std::string();
 }
 
-Verdict ChromeDlpRulesManager::GetVerdict(Restriction restriction,
-                                          const ActionContext& context) const {
-  if (!base::FeatureList::IsEnabled(kEnableDesktopDataControls)) {
-    return Verdict::NotSet();
-  }
-
-  Level max_level = Level::kNotSet;
-  std::set<size_t> triggered_rules;
-  for (size_t i = 0; i < rules_.size(); ++i) {
-    Level level = rules_[i].GetLevel(restriction, context);
-    if (level > max_level) {
-      max_level = level;
-    }
-    if (level != Level::kNotSet) {
-      triggered_rules.insert(i);
-    }
-  }
-
-  // TODO(b/303640183): Access `rules_` using the indexes in `triggered_rules`
-  // to populate the reporting callback(s) appropriately.
-  switch (max_level) {
-    case Rule::Level::kNotSet:
-      return Verdict::NotSet();
-    case Rule::Level::kReport:
-      return Verdict::Report(base::DoNothing());
-    case Rule::Level::kWarn:
-      return Verdict::Warn(base::DoNothing(), base::DoNothing());
-    case Rule::Level::kBlock:
-      return Verdict::Block(base::DoNothing());
-    case Rule::Level::kAllow:
-      return Verdict::Allow();
-  }
-}
-
 // static
 RulesConditionsMap ChromeDlpRulesManager::MatchUrlAndGetRulesMapping(
     const GURL& url,
@@ -338,28 +296,6 @@ ChromeDlpRulesManager::GetMaxJoinRestrictionLevelAndRuleId(
   }
 
   return MatchedRuleInfo(max_level, matched_rule_id, url_condition);
-}
-
-void ChromeDlpRulesManager::OnDataControlsRulesUpdate() {
-  DCHECK(profile_);
-  if (!base::FeatureList::IsEnabled(kEnableDesktopDataControls)) {
-    return;
-  }
-
-  rules_.clear();
-
-  const base::Value::List& rules_list =
-      profile_->GetPrefs()->GetList(kDataControlsRulesPref);
-
-  for (const base::Value& rule_value : rules_list) {
-    auto rule = Rule::Create(rule_value);
-
-    if (!rule) {
-      continue;
-    }
-
-    rules_.push_back(std::move(*rule));
-  }
 }
 
 void ChromeDlpRulesManager::OnDataLeakPreventionRulesUpdate() {

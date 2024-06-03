@@ -139,12 +139,19 @@ const char* ProtoEnumToString(
   return "";
 }
 
-const char* ProtoEnumToString(
-    sync_pb::GetUpdatesCallerInfo::GetUpdatesSource updates_source) {
-  ASSERT_ENUM_BOUNDS(sync_pb::GetUpdatesCallerInfo, GetUpdatesSource, UNKNOWN,
-                     UNKNOWN);
-  switch (updates_source) {
-    ENUM_CASE(sync_pb::GetUpdatesCallerInfo, UNKNOWN);
+const char* ProtoEnumToString(sync_pb::NigoriSpecifics::
+    AutoUpgradeDebugInfo::AutoUpgradeExperimentGroup
+        auto_upgrade_experiment_group) {
+  ASSERT_ENUM_BOUNDS(sync_pb::NigoriSpecifics::AutoUpgradeDebugInfo,
+    AutoUpgradeExperimentGroup, AUTO_UPGRADE_EXPERIMENT_GROUP_UNSPECIFIED,
+        VALIDATION);
+
+  switch (auto_upgrade_experiment_group) {
+    ENUM_CASE(sync_pb::NigoriSpecifics::AutoUpgradeDebugInfo,
+        AUTO_UPGRADE_EXPERIMENT_GROUP_UNSPECIFIED);
+    ENUM_CASE(sync_pb::NigoriSpecifics::AutoUpgradeDebugInfo, TREATMENT);
+    ENUM_CASE(sync_pb::NigoriSpecifics::AutoUpgradeDebugInfo, CONTROL);
+    ENUM_CASE(sync_pb::NigoriSpecifics::AutoUpgradeDebugInfo, VALIDATION);
   }
   NOTREACHED();
   return "";
@@ -168,10 +175,11 @@ const char* ProtoEnumToString(sync_pb::NigoriSpecifics::PassphraseType type) {
 const char* ProtoEnumToString(
     sync_pb::PaymentInstrument::SupportedRail supported_rail) {
   ASSERT_ENUM_BOUNDS(sync_pb::PaymentInstrument, SupportedRail,
-                     SUPPORTED_RAIL_UNKNOWN, PIX);
+                     SUPPORTED_RAIL_UNKNOWN, IBAN);
   switch (supported_rail) {
     ENUM_CASE(sync_pb::PaymentInstrument, SUPPORTED_RAIL_UNKNOWN);
     ENUM_CASE(sync_pb::PaymentInstrument, PIX);
+    ENUM_CASE(sync_pb::PaymentInstrument, IBAN);
   }
   NOTREACHED();
   return "";
@@ -243,29 +251,6 @@ const char* ProtoEnumToString(
     ENUM_CASE(sync_pb::SearchEngineSpecifics, ACTIVE_STATUS_UNSPECIFIED);
     ENUM_CASE(sync_pb::SearchEngineSpecifics, ACTIVE_STATUS_TRUE);
     ENUM_CASE(sync_pb::SearchEngineSpecifics, ACTIVE_STATUS_FALSE);
-  }
-  NOTREACHED();
-  return "";
-}
-
-const char* ProtoEnumToString(
-    sync_pb::SegmentationSpecifics::DeviceMetadata::PlatformType
-        platform_type) {
-  ASSERT_ENUM_BOUNDS(sync_pb::SegmentationSpecifics::DeviceMetadata,
-                     PlatformType, PLATFORM_TYPE_UNSPECIFIED,
-                     PLATFORM_CHROMEOS_LACROS);
-  switch (platform_type) {
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata,
-              PLATFORM_TYPE_UNSPECIFIED);
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata, PLATFORM_WINDOWS);
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata, PLATFORM_MAC);
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata, PLATFORM_LINUX);
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata,
-              PLATFORM_CHROMEOS_ASH);
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata, PLATFORM_ANDROID);
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata, PLATFORM_IOS);
-    ENUM_CASE(sync_pb::SegmentationSpecifics::DeviceMetadata,
-              PLATFORM_CHROMEOS_LACROS);
   }
   NOTREACHED();
   return "";

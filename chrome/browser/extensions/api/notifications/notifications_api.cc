@@ -174,7 +174,7 @@ bool ShouldShowOverCurrentFullscreenWindow(Profile* profile,
   DCHECK(!extension_id.empty());
   AppWindowRegistry::AppWindowList windows =
       AppWindowRegistry::Get(profile)->GetAppWindowsForApp(extension_id);
-  for (auto* window : windows) {
+  for (AppWindow* window : windows) {
     if (window->IsFullscreen() && window->GetBaseWindow()->IsActive())
       return true;
   }
@@ -327,7 +327,7 @@ bool NotificationsApiFunction::CreateNotification(
   optional_fields.settings_button_handler =
       message_center::SettingsButtonHandler::INLINE;
 
-  // TODO(crbug.com/772004): Remove the manual limitation in favor of an IDL
+  // TODO(crbug.com/41348342): Remove the manual limitation in favor of an IDL
   // annotation once supported.
   if (id.size() > kNotificationIdLengthLimit) {
     *error =

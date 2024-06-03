@@ -27,6 +27,10 @@
 #include "ui/views/view_observer.h"
 #include "url/gurl.h"
 
+#if defined(TOOLKIT_VIEWS)
+#include "ui/views/test/widget_test_api.h"
+#endif
+
 class Browser;
 class FullscreenController;
 class Profile;
@@ -201,6 +205,18 @@ void WaitForAutocompleteDone(Browser* browser);
 // Returns success or not.
 bool WaitForMinimized(Browser* browser);
 
+// Waits until the window gets maximized.
+// Returns success or not.
+bool WaitForMaximized(Browser* browser);
+
+// See comment on views::AsyncWidgetRequestWaiter.
+[[nodiscard]] views::AsyncWidgetRequestWaiter CreateAsyncWidgetRequestWaiter(
+    Browser& browser);
+
+// SetAndWaitForBounds sets the given `bounds` on `browser` and waits until the
+// bounds update will be observable from all parts of the client.
+void SetAndWaitForBounds(Browser& browser, const gfx::Rect& bounds);
+
 // Waits for fullscreen state to be updated.
 // There're two variation of fullscreen concepts, browser fullscreen and
 // tab fullscreen. Due to fullscreen implementation, fullscreen state may
@@ -301,6 +317,29 @@ class BrowserSetLastActiveWaiter : public BrowserListObserver {
 
 // Toggles browser fullscreen mode, then wait for its completion.
 void ToggleFullscreenModeAndWait(Browser* browser);
+
+// Waits for |browser| becomes the last active browser.
+// By default, the waiting will be satisfied if the expected |browser| is the
+// last active browser in BrowserList. In most cases, this is enough for the
+// testing code depending on chrome::FindLastActive(). In some cases, for
+// example, when there is only one browser in the BrowserList, |browser| can be
+// returned as the last active browser even if the asynchronous Wayland UI event
+// has not arrived yet (i.e. BrowserList::SetLastActive() is not triggered and
+// the code observing BrowserList::OnSetLastActive() will not be called). If the
+// test case depends on the code observing BrowserList::OnSetLastActive() being
+// executed first, we can configure the waiter to be satisfied upon
+// OnBrowserSetLastActive is observed by passing
+// |wait_for_set_last_active_observed| being true.
+void WaitForBrowserSetLastActive(
+    Browser* browser,
+    bool wait_for_set_last_active_observed = false);
+
+// Opens a new browser window with chrome::NewEmptyWindow() and wait until it
+// becomes the last active browser.
+// Returns newly created browser.
+Browser* OpenNewEmptyWindowAndWaitUntilSetAsLastActive(
+    Profile* profile,
+    bool should_trigger_session_restore = false);
 
 // Send the given text to the omnibox and wait until it's updated.
 void SendToOmniboxAndSubmit(

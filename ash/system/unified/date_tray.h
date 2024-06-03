@@ -50,7 +50,7 @@ class ASH_EXPORT DateTray : public TrayBackgroundView,
   void CloseBubble() override;
   void HideBubbleWithView(const TrayBubbleView* bubble_view) override;
   void HideBubble(const TrayBubbleView* bubble_view) override;
-  void ClickedOutsideBubble() override;
+  void ClickedOutsideBubble(const ui::LocatedEvent& event) override;
   void UpdateTrayItemColor(bool is_active) override;
 
   // UnifiedSystemTray::Observer:
@@ -65,11 +65,12 @@ class ASH_EXPORT DateTray : public TrayBackgroundView,
   void ShowGlanceableBubble(bool from_keyboard);
   void HideGlanceableBubble();
 
+  GlanceableTrayBubble* glanceables_bubble_for_test() const {
+    return bubble_.get();
+  }
+
  private:
   friend class DateTrayTest;
-  friend class GlanceablesPixelTest;
-  friend class GlanceablesBrowserTest;
-  friend class GlanceableTrayBubbleViewTest;
 
   // Owned by the views hierarchy.
   raw_ptr<TimeTrayItemView> time_view_ = nullptr;

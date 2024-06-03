@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/frame/animation_frame_timing_monitor.h"
+
 #include "base/time/time.h"
 #include "base/trace_event/base_tracing.h"
+#include "base/trace_event/trace_id_helper.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
@@ -69,7 +71,8 @@ void AnimationFrameTimingMonitor::WillPerformStyleAndLayoutCalculation() {
 }
 
 void AnimationFrameTimingMonitor::DidBeginMainFrame() {
-  // This can happen if a frame becomes visible mid-frame.
+  // This can happen if the AnimationFrameTimingMonitor instance is created
+  // in the middle of a frame.
   if (!current_frame_timing_info_) {
     return;
   }
@@ -170,16 +173,15 @@ void AnimationFrameTimingMonitor::OnTaskCompleted(
   entry_point_depth_ = 0;
   pending_script_info_ = std::nullopt;
 
+  if (RuntimeEnabledFeatures::LongTaskFromLongAnimationFrameEnabled() &&
+      frame && frame->DomWindow() && task_duration >= kLongTaskDuration) {
+    client_.ReportLongTaskTiming(start_time, end_time, frame->DomWindow());
+  }
+
   // If we already need an update and a new task is processed, count its
   // duration towards blockingTime.
-  if (frame || did_see_ui_events) {
-    if (RuntimeEnabledFeatures::LongTaskFromLongAnimationFrameEnabled() &&
-        task_duration >= kLongTaskDuration) {
-      client_.ReportLongTaskTiming(start_time, end_time, frame->DomWindow());
-    }
-    if (state_ == State::kPendingFrame) {
-      ApplyTaskDuration(task_duration);
-    }
+  if ((frame || did_see_ui_events) && (state_ == State::kPendingFrame)) {
+    ApplyTaskDuration(task_duration);
   }
 
   if (state_ != State::kProcessingTask) {
@@ -260,11 +262,14 @@ void RecordLongAnimationFrameTrace(const AnimationFrameTimingInfo& info,
   }
   traced_value->SetInteger("numScripts", info.Scripts().size());
 
+  uint64_t trace_id = base::trace_event::GetNextGlobalTraceId();
+
   TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP1(
-      "devtools.timeline", "LongAnimationFrame", scope, info.FrameStartTime(),
-      "data", std::move(traced_value));
-  TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP0(
-      "devtools.timeline", "LongAnimationFrame", scope, info.RenderEndTime());
+      "devtools.timeline", "LongAnimationFrame", trace_id,
+      info.FrameStartTime(), "data", std::move(traced_value));
+  TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP0("devtools.timeline",
+                                                 "LongAnimationFrame", trace_id,
+                                                 info.RenderEndTime());
 }
 }  // namespace
 

@@ -72,6 +72,7 @@
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
+#include "ui/events/ozone/layout/stub/stub_keyboard_layout_engine.h"
 #include "ui/events/test/events_test_utils.h"
 #include "ui/events/test/test_event_processor.h"
 #include "ui/events/test/test_event_rewriter_continuation.h"
@@ -139,7 +140,7 @@ class TestKeyboardModifierEventRewriterDelegate
       ui::EventRewriterAsh::Delegate* ash_delegate)
       : ash_delegate_(ash_delegate) {}
 
-  absl::optional<ui::mojom::ModifierKey> GetKeyboardRemappedModifierValue(
+  std::optional<ui::mojom::ModifierKey> GetKeyboardRemappedModifierValue(
       int device_id,
       ui::mojom::ModifierKey modifier_key,
       const std::string& pref_name) const override {
@@ -288,9 +289,6 @@ using KeyDigit9 = TestCharKey<ui::DomCode::DIGIT9, '9', ui::VKEY_9, '('>;
 using KeyDigit0 = TestCharKey<ui::DomCode::DIGIT0, '0', ui::VKEY_0, ')'>;
 using KeyMinus = TestCharKey<ui::DomCode::MINUS, '-', ui::VKEY_OEM_MINUS, '_'>;
 using KeyEqual = TestCharKey<ui::DomCode::EQUAL, '=', ui::VKEY_OEM_PLUS, '+'>;
-
-using KeyUnidentifiedA =
-    TestKey<ui::DomCode::US_A, ui::DomKey::UNIDENTIFIED, ui::VKEY_A>;
 
 // Modifier keys.
 using KeyLShift = TestKey<ui::DomCode::SHIFT_LEFT,
@@ -554,6 +552,39 @@ class EventRewriterTestBase : public ChromeAshTestBase {
   ~EventRewriterTestBase() override {}
 
   void SetUp() override {
+    keyboard_layout_engine_ = std::make_unique<ui::StubKeyboardLayoutEngine>();
+    // Inject custom table to make this closer to en-US behavior.
+    keyboard_layout_engine_->SetCustomLookupTableForTesting({
+        // Keep MetaRight as MetaRight.
+        {ui::DomCode::META_RIGHT, ui::DomKey::META, ui::DomKey::META,
+         ui::VKEY_RWIN},
+
+        // Inject select_task key.
+        {ui::DomCode::SELECT_TASK, ui::DomKey::LAUNCH_MY_COMPUTER,
+         ui::DomKey::LAUNCH_MY_COMPUTER, ui::VKEY_MEDIA_LAUNCH_APP1},
+
+        // Map numpad keys.
+        {ui::DomCode::NUMPAD0, ui::DomKey::FromCharacter('0'),
+         ui::DomKey::INSERT, ui::VKEY_NUMPAD0},
+        {ui::DomCode::NUMPAD1, ui::DomKey::FromCharacter('1'), ui::DomKey::END,
+         ui::VKEY_NUMPAD1},
+        {ui::DomCode::NUMPAD2, ui::DomKey::FromCharacter('2'),
+         ui::DomKey::ARROW_DOWN, ui::VKEY_NUMPAD2},
+        {ui::DomCode::NUMPAD3, ui::DomKey::FromCharacter('3'),
+         ui::DomKey::PAGE_DOWN, ui::VKEY_NUMPAD3},
+        {ui::DomCode::NUMPAD4, ui::DomKey::FromCharacter('4'),
+         ui::DomKey::ARROW_RIGHT, ui::VKEY_NUMPAD4},
+        {ui::DomCode::NUMPAD5, ui::DomKey::FromCharacter('5'),
+         ui::DomKey::CLEAR, ui::VKEY_NUMPAD5},
+        {ui::DomCode::NUMPAD6, ui::DomKey::FromCharacter('6'),
+         ui::DomKey::ARROW_LEFT, ui::VKEY_NUMPAD6},
+        {ui::DomCode::NUMPAD7, ui::DomKey::FromCharacter('7'), ui::DomKey::HOME,
+         ui::VKEY_NUMPAD7},
+        {ui::DomCode::NUMPAD8, ui::DomKey::FromCharacter('8'),
+         ui::DomKey::ARROW_UP, ui::VKEY_NUMPAD8},
+        {ui::DomCode::NUMPAD9, ui::DomKey::FromCharacter('9'),
+         ui::DomKey::PAGE_UP, ui::VKEY_NUMPAD9},
+    });
     keyboard_capability_ =
         ui::KeyboardCapability::CreateStubKeyboardCapability();
     input_method_manager_mock_ = new input_method::MockInputMethodManagerImpl;
@@ -594,7 +625,8 @@ class EventRewriterTestBase : public ChromeAshTestBase {
         std::make_unique<ui::KeyboardModifierEventRewriter>(
             std::make_unique<TestKeyboardModifierEventRewriterDelegate>(
                 delegate_.get()),
-            keyboard_capability_.get(), &fake_ime_keyboard_);
+            keyboard_layout_engine_.get(), keyboard_capability_.get(),
+            &fake_ime_keyboard_);
     event_rewriter_ash_ = std::make_unique<ui::EventRewriterAsh>(
         delegate_.get(), keyboard_capability_.get(),
         Shell::Get()->sticky_keys_controller(), false, &fake_ime_keyboard_);
@@ -622,6 +654,8 @@ class EventRewriterTestBase : public ChromeAshTestBase {
     ChromeAshTestBase::TearDown();
     // Shutdown() deletes the IME mock object.
     input_method::Shutdown();
+    keyboard_capability_.reset();
+    keyboard_layout_engine_.reset();
   }
 
   ui::test::TestEventSource& source() { return source_; }
@@ -837,6 +871,7 @@ class EventRewriterTestBase : public ChromeAshTestBase {
 
   sync_preferences::TestingPrefServiceSyncable prefs_;
   std::unique_ptr<EventRewriterDelegateImpl> delegate_;
+  std::unique_ptr<ui::StubKeyboardLayoutEngine> keyboard_layout_engine_;
   std::unique_ptr<ui::KeyboardCapability> keyboard_capability_;
   input_method::FakeImeKeyboard fake_ime_keyboard_;
   std::unique_ptr<ui::KeyboardDeviceIdEventRewriter>
@@ -3557,6 +3592,8 @@ TEST_P(EventRewriterTest, MouseWheelEventDispatchImpl) {
 // Tests that if modifier keys are remapped, the flags of a mouse wheel event
 // will be rewritten properly.
 TEST_P(EventRewriterTest, MouseWheelEventModifiersRewritten) {
+  Preferences::RegisterProfilePrefs(prefs()->registry());
+
   // For EF_CONTROL_DOWN modifier.
   SendKeyEvent(KeyLControl::Pressed());
 
@@ -3706,6 +3743,12 @@ TEST_P(EventRewriterTest, ScrollEventDispatchImpl) {
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 TEST_P(EventRewriterTest, RemapHangulOnCros1p) {
+  Preferences::RegisterProfilePrefs(prefs()->registry());
+  IntegerPrefMember alt;
+  InitModifierKeyPref(&alt, ::prefs::kLanguageRemapAltKeyTo,
+                      ui::mojom::ModifierKey::kAlt,
+                      ui::mojom::ModifierKey::kAlt);
+
   scoped_refptr<input_method::MockInputMethodManagerImpl::State> state =
       base::MakeRefCounted<input_method::MockInputMethodManagerImpl::State>(
           input_method_manager_mock_);
@@ -3758,17 +3801,17 @@ TEST_P(EventRewriterInputSettingsSplitDisabledTest,
     SetUpKeyboard(keyboard);
 
     // VKEY_A, Alt modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_ALT_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_ALT_DOWN));
+    EXPECT_EQ(KeyA::Typed(ui::EF_ALT_DOWN),
+              RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN));
 
     // VKEY_A, Win modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_COMMAND_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_COMMAND_DOWN));
+    EXPECT_EQ(KeyA::Typed(ui::EF_COMMAND_DOWN),
+              RunRewriter(KeyA::Typed(), ui::EF_COMMAND_DOWN));
 
     // VKEY_A, Alt+Win modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(),
-                          ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
+    EXPECT_EQ(
+        KeyA::Typed(ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN),
+        RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
 
     // VKEY_LWIN (left Windows key), Alt modifier.
     EXPECT_EQ(KeyLMeta::Typed(ui::EF_ALT_DOWN),
@@ -3787,17 +3830,17 @@ TEST_P(EventRewriterInputSettingsSplitDisabledTest,
     SetUpKeyboard(kExternalAppleKeyboard);
 
     // VKEY_A, Alt modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_ALT_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_ALT_DOWN));
+    EXPECT_EQ(KeyA::Typed(ui::EF_ALT_DOWN),
+              RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN));
 
     // VKEY_A, Win modifier.
     EXPECT_EQ(KeyA::Typed(ui::EF_CONTROL_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_COMMAND_DOWN));
+              RunRewriter(KeyA::Typed(), ui::EF_COMMAND_DOWN));
 
     // VKEY_A, Alt+Win modifier.
-    EXPECT_EQ(KeyA::Typed(ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(),
-                          ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN));
+    EXPECT_EQ(
+        KeyA::Typed(ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN),
+        RunRewriter(KeyA::Typed(), ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN));
 
     // VKEY_LWIN (left Windows key), Alt modifier.
     EXPECT_EQ(KeyLControl::Typed(ui::EF_ALT_DOWN),
@@ -3818,17 +3861,17 @@ TEST_P(EventRewriterInputSettingsSplitDisabledTest,
     SetUpKeyboard(kExternalAppleKeyboard);
 
     // VKEY_A, Alt modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_ALT_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_ALT_DOWN));
+    EXPECT_EQ(KeyA::Typed(ui::EF_ALT_DOWN),
+              RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN));
 
     // VKEY_A, Win modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_COMMAND_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_COMMAND_DOWN));
+    EXPECT_EQ(KeyA::Typed(ui::EF_COMMAND_DOWN),
+              RunRewriter(KeyA::Typed(), ui::EF_COMMAND_DOWN));
 
     // VKEY_A, Alt+Win modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(),
-                          ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
+    EXPECT_EQ(
+        KeyA::Typed(ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN),
+        RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
 
     // VKEY_LWIN (left Windows key), Alt modifier.
     EXPECT_EQ(KeyLMeta::Typed(ui::EF_ALT_DOWN),
@@ -3853,13 +3896,13 @@ TEST_P(EventRewriterInputSettingsSplitDisabledTest,
     SetUpKeyboard(keyboard);
 
     // VKEY_A, Win modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_COMMAND_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_COMMAND_DOWN));
+    EXPECT_EQ(KeyA::Typed(ui::EF_COMMAND_DOWN),
+              RunRewriter(KeyA::Typed(), ui::EF_COMMAND_DOWN));
 
     // VKEY_A, Alt+Win modifier.
-    EXPECT_EQ(KeyUnidentifiedA::Typed(ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(),
-                          ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
+    EXPECT_EQ(
+        KeyA::Typed(ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN),
+        RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
 
     // VKEY_LWIN (left Windows key), Alt modifier.
     EXPECT_EQ(KeyLMeta::Typed(ui::EF_ALT_DOWN),
@@ -3891,12 +3934,12 @@ TEST_P(EventRewriterInputSettingsSplitDisabledTest,
 
     // VKEY_A, Win modifier.
     EXPECT_EQ(KeyA::Typed(ui::EF_CONTROL_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_COMMAND_DOWN));
+              RunRewriter(KeyA::Typed(), ui::EF_COMMAND_DOWN));
 
     // VKEY_A, Alt+Win modifier.
-    EXPECT_EQ(KeyA::Typed(ui::EF_ALT_DOWN | ui::EF_CONTROL_DOWN),
-              RunRewriter(KeyUnidentifiedA::Typed(),
-                          ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
+    EXPECT_EQ(
+        KeyA::Typed(ui::EF_ALT_DOWN | ui::EF_CONTROL_DOWN),
+        RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
 
     // VKEY_LWIN (left Windows key), Alt modifier.
     EXPECT_EQ(KeyLControl::Typed(ui::EF_ALT_DOWN),
@@ -3911,12 +3954,11 @@ TEST_P(EventRewriterInputSettingsSplitDisabledTest,
 
   // VKEY_A, Win modifier.
   EXPECT_EQ(KeyA::Typed(ui::EF_ALT_DOWN),
-            RunRewriter(KeyUnidentifiedA::Typed(), ui::EF_COMMAND_DOWN));
+            RunRewriter(KeyA::Typed(), ui::EF_COMMAND_DOWN));
 
   // VKEY_A, Alt+Win modifier.
   EXPECT_EQ(KeyA::Typed(ui::EF_ALT_DOWN),
-            RunRewriter(KeyUnidentifiedA::Typed(),
-                        ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
+            RunRewriter(KeyA::Typed(), ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN));
 
   if (ash::features::IsKeyboardRewriterFixEnabled()) {
     // VKEY_LWIN (left Windows key), Alt modifier.
@@ -4175,6 +4217,8 @@ TEST_P(StickyKeysOverlayTest, ModifierVisibility) {
 }
 
 TEST_P(EventRewriterTest, RewrittenModifier) {
+  Preferences::RegisterProfilePrefs(prefs()->registry());
+
   // Register Control + B as an extension shortcut.
   SetExtensionCommands({{{ui::VKEY_B, ui::EF_CONTROL_DOWN}}});
 
@@ -4223,6 +4267,159 @@ TEST_P(EventRewriterTest, RewriteNumpadExtensionCommand) {
   SetExtensionCommands(std::nullopt);
   EXPECT_EQ(KeyNumpad1::Typed(ui::EF_CONTROL_DOWN),
             RunRewriter(KeyNumpadEnd::Typed(), ui::EF_CONTROL_DOWN));
+}
+
+TEST_P(EventRewriterTest, RecordRewritingToFunctionKeys) {
+  Preferences::RegisterProfilePrefs(prefs()->registry());
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kInputDeviceSettingsSplit},
+      {::features::kImprovedKeyboardShortcuts});
+
+  base::HistogramTester histogram_tester;
+  histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 0);
+
+  // Search + back -> F1.
+  SetUpKeyboard(kWilco1_0Keyboard);
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*SearchTopRowTranslated*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kSearchTopRowTranslated),
+      0);
+  EXPECT_EQ(KeyF1::Typed(),
+            RunRewriter(KeyBrowserBack::Typed(), ui::EF_COMMAND_DOWN));
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*SearchTopRowTranslated*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kSearchTopRowTranslated),
+      1u);
+  histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 1u);
+
+  mojom::KeyboardSettings settings;
+  EXPECT_CALL(*input_device_settings_controller_mock_,
+              GetKeyboardSettings(kKeyboardDeviceId))
+      .WillRepeatedly(testing::Return(&settings));
+
+  // Back + Search -> F1 + Search. Back was automatically translated to F1,
+  // with search key unaffected so it should be mapped to
+  // kTopRowAutoTranslated.
+  settings.top_row_are_fkeys = true;
+  settings.suppress_meta_fkey_rewrites = true;
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*TopRowAutoTranslated*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kTopRowAutoTranslated),
+      0);
+  EXPECT_EQ(KeyF1::Typed(ui::EF_COMMAND_DOWN),
+            RunRewriter(KeyBrowserBack::Typed(), ui::EF_COMMAND_DOWN));
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*TopRowAutoTranslated*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kTopRowAutoTranslated),
+      1u);
+  histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 2u);
+
+  SetUpKeyboard(kExternalGenericKeyboard);
+
+  // F1 + search -> F1.
+  settings.top_row_are_fkeys = false;
+  settings.suppress_meta_fkey_rewrites = false;
+
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*DirectlyWithSearch*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kDirectlyWithSearch), 0);
+  // The keyboard sends F1 + search and the result is F1 only without search so
+  // it should be mapped to kDirectlyWithSearch.
+  EXPECT_EQ(KeyF1::Typed(), RunRewriter(KeyF1::Typed(), ui::EF_COMMAND_DOWN));
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*DirectlyWithSearch*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kDirectlyWithSearch),
+      1u);
+  histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 3u);
+
+  // No change.
+  settings.top_row_are_fkeys = true;
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*DirectlyFromKeyboard*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kDirectlyFromKeyboard),
+      0);
+  EXPECT_EQ(KeyF1::Typed(), RunRewriter(KeyF1::Typed()));
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*DirectlyFromKeyboard*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kDirectlyFromKeyboard),
+      1u);
+  histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 4u);
+
+  // Search + number.
+  SetUpKeyboard(kInternalChromeKeyboard);
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*SearchDigitTranslated*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kSearchDigitTranslated),
+      0);
+  EXPECT_EQ(KeyF1::Typed(),
+            RunRewriter(KeyDigit1::Typed(), ui::EF_COMMAND_DOWN));
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*SearchDigitTranslated*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kSearchDigitTranslated),
+      1u);
+  histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 5u);
+
+  // F1 + search to F1 + search
+  settings.suppress_meta_fkey_rewrites = true;
+  EXPECT_EQ(KeyF1::Typed(ui::EF_COMMAND_DOWN),
+            RunRewriter(KeyF1::Typed(), ui::EF_COMMAND_DOWN));
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.Keyboard.F1Pressed",
+      /*DirectlyFromKeyboard*/
+      static_cast<int>(ui::InputKeyEventToFunctionKey::kDirectlyFromKeyboard),
+      2u);
+  histogram_tester.ExpectTotalCount("ChromeOS.Inputs.Keyboard.F1Pressed", 6u);
+}
+
+TEST_P(EventRewriterTest, AltgrLatch) {
+  // TODO(b/331906341): Consider to use real latvian layout.
+  keyboard_layout_engine_->SetCustomLookupTableForTesting({
+      {ui::DomCode::QUOTE, ui::DomKey::ALT_GRAPH_LATCH,
+       ui::DomKey::FromCharacter(u'"'), ui::VKEY_ALTGR},
+  });
+
+  // Use fake latvian quote key.
+  using KeyLatvianQuote =
+      TestKey<ui::DomCode::QUOTE, ui::DomKey::ALT_GRAPH_LATCH, ui::VKEY_ALTGR,
+              ui::EF_ALTGR_DOWN>;
+  EXPECT_EQ(std::vector<TestKeyEvent>(
+                {{ui::ET_KEY_PRESSED, ui::DomCode::QUOTE, ui::DomKey::ALT_GRAPH,
+                  ui::VKEY_ALTGR, ui::EF_ALTGR_DOWN},
+                 // EF_ALTGR_DOWN is still here, because it's latched.
+                 {ui::ET_KEY_RELEASED, ui::DomCode::QUOTE,
+                  ui::DomKey::ALT_GRAPH, ui::VKEY_ALTGR, ui::EF_ALTGR_DOWN}}),
+            SendKeyEvents(KeyLatvianQuote::Typed()));
+  EXPECT_EQ(std::vector({KeyA::Pressed(ui::EF_ALTGR_DOWN), KeyA::Released()}),
+            SendKeyEvents(KeyA::Typed()));
+
+  // Hold the quote.
+  EXPECT_EQ(std::vector<TestKeyEvent>(
+                {{ui::ET_KEY_PRESSED, ui::DomCode::QUOTE, ui::DomKey::ALT_GRAPH,
+                  ui::VKEY_ALTGR, ui::EF_ALTGR_DOWN}}),
+            SendKeyEvent(KeyLatvianQuote::Pressed()));
+
+  // Type A followed by C.
+  EXPECT_EQ(KeyA::Typed(ui::EF_ALTGR_DOWN),
+            SendKeyEvents(KeyA::Typed(ui::EF_ALTGR_DOWN)));
+  EXPECT_EQ(KeyC::Typed(ui::EF_ALTGR_DOWN),
+            SendKeyEvents(KeyC::Typed(ui::EF_ALTGR_DOWN)));
+
+  // Release the quote, where EF_ALTGR_DOWN should not be set.
+  EXPECT_EQ(
+      std::vector<TestKeyEvent>({{ui::ET_KEY_RELEASED, ui::DomCode::QUOTE,
+                                  ui::DomKey::ALT_GRAPH, ui::VKEY_ALTGR}}),
+      SendKeyEvent(KeyLatvianQuote::Released()));
 }
 
 class ModifierPressedMetricsTest

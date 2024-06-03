@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_TOOLBAR_BUTTON_VIEW_H_
 
 #include <optional>
+#include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
@@ -106,6 +107,7 @@ class DownloadToolbarButtonView : public ToolbarButton,
   void ShowDetails() override;
   void HideDetails() override;
   bool IsShowingDetails() const override;
+  void AnnounceAccessibleAlertNow(const std::u16string& alert_text) override;
   bool IsFullscreenWithParentViewHidden() const override;
   bool ShouldShowExclusiveAccessBubble() const override;
   void OpenSecuritySubpage(
@@ -165,7 +167,7 @@ class DownloadToolbarButtonView : public ToolbarButton,
   // already-inactive state. This is created by the DownloadToolbarButtonView
   // when the bubble is shown with ShowInactive, and is destroyed when the
   // bubble is closed.
-  // TODO(crbug.com/1503082): Factor out common logic copied from translate
+  // TODO(crbug.com/40943500): Factor out common logic copied from translate
   // bubble.
   class BubbleCloser : public ui::EventObserver {
    public:
@@ -230,6 +232,8 @@ class DownloadToolbarButtonView : public ToolbarButton,
 
   bool ShouldShowBubbleAsInactive() const;
 
+  void CloseAutofillPopup();
+
   // Whether to show the progress ring as a continuously spinning ring, during
   // deep scanning or if the progress is indeterminate.
   bool ShouldShowScanningAnimation() const;
@@ -283,9 +287,15 @@ class DownloadToolbarButtonView : public ToolbarButton,
   // laid out properly, so this provides a way to remember to show the animation
   // if needed, when performing layout.
   bool has_pending_download_started_animation_ = false;
-  // Overrides whether we are allowed to show the download started animation,
-  // may be false in tests.
+
+// Overrides whether we are allowed to show the download started animation,
+// may be false in tests.
+#if BUILDFLAG(IS_CHROMEOS)
+  // NOTE: Disabled on ChromeOS to respect its own download renderings.
+  bool show_download_started_animation_ = false;
+#else
   bool show_download_started_animation_ = true;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Tracks the task to automatically close the partial view after some amount
   // of time open, to minimize disruption to the user.

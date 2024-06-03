@@ -4,6 +4,8 @@
 
 #include "gpu/command_buffer/client/shared_image_interface.h"
 
+#include <GLES2/gl2.h>
+
 #include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
@@ -29,25 +31,35 @@ SharedImageInterface::SharedImageInterface()
 SharedImageInterface::~SharedImageInterface() = default;
 
 scoped_refptr<ClientSharedImage> SharedImageInterface::CreateSharedImage(
+    const SharedImageInfo& si_info,
+    gpu::SurfaceHandle surface_handle,
+    gfx::BufferUsage buffer_usage) {
+  NOTREACHED();
+  return base::MakeRefCounted<ClientSharedImage>(Mailbox(), si_info.meta,
+                                                 GenUnverifiedSyncToken(),
+                                                 holder_, gfx::EMPTY_BUFFER);
+}
+
+uint32_t SharedImageInterface::UsageForMailbox(const Mailbox& mailbox) {
+  return 0u;
+}
+
+scoped_refptr<ClientSharedImage>
+SharedImageInterface::AddReferenceToSharedImage(
+    const SyncToken& sync_token,
+    const Mailbox& mailbox,
     viz::SharedImageFormat format,
     const gfx::Size& size,
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
     uint32_t usage,
-    base::StringPiece debug_label,
-    gpu::SurfaceHandle surface_handle,
-    gfx::BufferUsage buffer_usage) {
-  NOTREACHED();
-  return base::MakeRefCounted<ClientSharedImage>(
-      Mailbox(),
-      ClientSharedImage::Metadata(format, size, color_space, surface_origin,
-                                  alpha_type, usage),
-      GenUnverifiedSyncToken(), holder_);
-}
-
-uint32_t SharedImageInterface::UsageForMailbox(const Mailbox& mailbox) {
-  return 0u;
+    uint32_t texture_target) {
+  return ImportSharedImage(ExportedSharedImage(
+      mailbox,
+      SharedImageMetadata{format, size, color_space, surface_origin, alpha_type,
+                          usage},
+      sync_token, texture_target));
 }
 
 scoped_refptr<ClientSharedImage> SharedImageInterface::NotifyMailboxAdded(

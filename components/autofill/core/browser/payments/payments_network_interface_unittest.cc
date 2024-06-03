@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/autofill/core/browser/payments/payments_network_interface.h"
+
 #include <optional>
 #include <set>
 #include <string>
@@ -26,7 +28,6 @@
 #include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "components/autofill/core/browser/payments/credit_card_save_manager.h"
 #include "components/autofill/core/browser/payments/local_card_migration_manager.h"
-#include "components/autofill/core/browser/payments/payments_network_interface.h"
 #include "components/autofill/core/browser/payments/payments_network_interface_test_base.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
 #include "components/autofill/core/browser/test_personal_data_manager.h"
@@ -202,7 +203,7 @@ class PaymentsNetworkInterfaceTest : public PaymentsNetworkInterfaceTestBase,
     legal_message_.reset();
     payments_network_interface_ = std::make_unique<PaymentsNetworkInterface>(
         test_shared_loader_factory_, identity_test_env_.identity_manager(),
-        &test_personal_data_);
+        &test_personal_data_.payments_data_manager());
   }
 
   void TearDown() override { payments_network_interface_.reset(); }
@@ -214,8 +215,9 @@ class PaymentsNetworkInterfaceTest : public PaymentsNetworkInterfaceTestBase,
     unmask_details_ = unmask_details;
   }
 
-  void OnDidGetRealPan(AutofillClient::PaymentsRpcResult result,
-                       PaymentsNetworkInterface::UnmaskResponseDetails& response) {
+  void OnDidGetRealPan(
+      AutofillClient::PaymentsRpcResult result,
+      const PaymentsNetworkInterface::UnmaskResponseDetails& response) {
     result_ = result;
     unmask_response_details_ = response;
   }
@@ -1054,15 +1056,15 @@ TEST_F(PaymentsNetworkInterfaceTest, GetDetailsIncludesDetectedValuesInRequest) 
 }
 
 TEST_F(PaymentsNetworkInterfaceTest,
-       GetDetailsIncludesIncludesClientBehaviorSignalsInChromeUserContext) {
+       GetDetailsIncludesClientBehaviorSignalsInChromeUserContext) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kAutofillEnableNewSaveCardBubbleUi);
+      features::kAutofillEnableCvcStorageAndFilling);
 
   StartGettingUploadDetails(
       GetUploadDetailsOptions().with_client_behavior_signals(
           std::vector<ClientBehaviorConstants>{
-              ClientBehaviorConstants::kUsingFasterAndProtectedUi}));
+              ClientBehaviorConstants::kOfferingToSaveCvc}));
   IssueOAuthToken();
 
   // Verify ChromeUserContext was set.
@@ -1070,9 +1072,9 @@ TEST_F(PaymentsNetworkInterfaceTest,
   // Verify Client_behavior_signals was set.
   EXPECT_THAT(GetUploadData(), HasSubstr("client_behavior_signals"));
   // Verify fake_client_behavior_signal was set.
-  // ClientBehaviorConstants::kUsingFasterAndProtectedUi has the numeric value
-  // set to 1.
-  EXPECT_THAT(GetUploadData(), HasSubstr("\"client_behavior_signals\":[1]"));
+  // ClientBehaviorConstants::kOfferingToSaveCvc has the numeric value
+  // set to 3.
+  EXPECT_THAT(GetUploadData(), HasSubstr("\"client_behavior_signals\":[3]"));
 }
 
 TEST_F(PaymentsNetworkInterfaceTest, GetDetailsIncludesChromeUserContext) {
@@ -1253,7 +1255,8 @@ TEST_F(PaymentsNetworkInterfaceTest, GetUploadAccountFromSyncTest) {
   // Set up a different account.
   const AccountInfo& secondary_account_info =
       identity_test_env_.MakeAccountAvailable("secondary@gmail.com");
-  test_personal_data_.SetAccountInfoForPayments(secondary_account_info);
+  test_personal_data_.test_payments_data_manager().SetAccountInfoForPayments(
+      secondary_account_info);
 
   StartUploading(UploadCardOptions());
   ReturnResponse(payments_network_interface_.get(), net::HTTP_OK, "{}");
@@ -1448,11 +1451,11 @@ TEST_F(PaymentsNetworkInterfaceTest,
 TEST_F(PaymentsNetworkInterfaceTest, UploadRequestIncludesClientBehaviorSignals) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      features::kAutofillEnableNewSaveCardBubbleUi);
+      features::kAutofillEnableCvcStorageAndFilling);
 
   StartUploading(UploadCardOptions().with_client_behavior_signals(
       std::vector<ClientBehaviorConstants>{
-          ClientBehaviorConstants::kUsingFasterAndProtectedUi}));
+          ClientBehaviorConstants::kOfferingToSaveCvc}));
   IssueOAuthToken();
 
   // Verify ChromeUserContext was set.
@@ -1460,10 +1463,10 @@ TEST_F(PaymentsNetworkInterfaceTest, UploadRequestIncludesClientBehaviorSignals)
   // Verify Client_behavior_signals was set.
   EXPECT_THAT(GetUploadData(), HasSubstr("client_behavior_signals"));
   // Verify fake_client_behavior_signal was set.
-  // ClientBehaviorConstants::kUsingFasterAndProtectedUi has the numeric value
-  // set to 1.
+  // ClientBehaviorConstants::kOfferingToSaveCvc has the numeric value
+  // set to 3.
   EXPECT_THAT(GetUploadData(),
-              HasSubstr("%22client_behavior_signals%22:%5B1%5D"));
+              HasSubstr("%22client_behavior_signals%22:%5B3%5D"));
 }
 
 TEST_F(PaymentsNetworkInterfaceTest, UploadRequestIncludesPan) {

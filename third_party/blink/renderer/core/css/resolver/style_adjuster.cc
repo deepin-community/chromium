@@ -292,13 +292,10 @@ static bool IsAtMediaUAShadowBoundary(const Element* element) {
 // to manually stop text-decorations to apply to text inside media controls.
 static bool StopPropagateTextDecorations(const ComputedStyleBuilder& builder,
                                          const Element* element) {
-  const bool is_ruby_text = RuntimeEnabledFeatures::CssDisplayRubyEnabled()
-                                ? (builder.Display() == EDisplay::kRubyText)
-                                : IsA<HTMLRTElement>(element);
   return builder.IsDisplayReplacedType() ||
          IsAtMediaUAShadowBoundary(element) || builder.IsFloating() ||
          builder.HasOutOfFlowPosition() || IsOutermostSVGElement(element) ||
-         is_ruby_text;
+         builder.Display() == EDisplay::kRubyText;
 }
 
 static bool LayoutParentStyleForcesZIndexToCreateStackingContext(
@@ -469,15 +466,6 @@ static void AdjustStyleForHTMLElement(ComputedStyleBuilder& builder,
         element.GetDocument().GetStyleResolver().InitialZoom());
   }
 
-  if (IsA<HTMLRTElement>(element) &&
-      !RuntimeEnabledFeatures::CssDisplayRubyEnabled()) {
-    // Ruby text does not support float or position. This might change with
-    // evolution of the specification.
-    builder.SetPosition(EPosition::kStatic);
-    builder.SetFloating(EFloat::kNone);
-    return;
-  }
-
   if (IsA<HTMLLegendElement>(element) &&
       builder.Display() != EDisplay::kContents) {
     // Allow any blockified display value for legends. Note that according to
@@ -628,8 +616,7 @@ static void AdjustStyleForDisplay(ComputedStyleBuilder& builder,
 
   // We need to avoid to inlinify children of a <fieldset>, which creates a
   // dedicated LayoutObject and it assumes only block children.
-  if (RuntimeEnabledFeatures::RubyInlinifyEnabled() &&
-      layout_parent_style.InlinifiesChildren() &&
+  if (layout_parent_style.InlinifiesChildren() &&
       !builder.HasOutOfFlowPosition() && !builder.IsFloating() &&
       !(element && IsA<HTMLFieldSetElement>(element->parentNode()))) {
     builder.SetIsInInlinifyingDisplay();
@@ -840,7 +827,7 @@ static void AdjustStyleForInert(ComputedStyleBuilder& builder,
 }
 
 void StyleAdjuster::AdjustForForcedColorsMode(ComputedStyleBuilder& builder,
-                                              Element* element) {
+                                              Document& document) {
   if (!builder.InForcedColorsMode() ||
       builder.ForcedColorAdjust() != EForcedColorAdjust::kAuto) {
     return;
@@ -859,14 +846,12 @@ void StyleAdjuster::AdjustForForcedColorsMode(ComputedStyleBuilder& builder,
   }
 
   mojom::blink::ColorScheme color_scheme = mojom::blink::ColorScheme::kLight;
-  if (element &&
-      element->GetDocument().GetStyleEngine().GetPreferredColorScheme() ==
-          mojom::blink::PreferredColorScheme::kDark) {
+  if (document.GetStyleEngine().GetPreferredColorScheme() ==
+      mojom::blink::PreferredColorScheme::kDark) {
     color_scheme = mojom::blink::ColorScheme::kDark;
   }
   const ui::ColorProvider* color_provider =
-      element ? element->GetDocument().GetColorProviderForPainting(color_scheme)
-              : nullptr;
+      document.GetColorProviderForPainting(color_scheme);
 
   // Re-resolve some internal forced color properties whose initial
   // values are system colors. This is necessary to ensure we get
@@ -914,7 +899,7 @@ void StyleAdjuster::AdjustForSVGTextElement(ComputedStyleBuilder& builder) {
   builder.SetColumnRuleStyle(
       ComputedStyleInitialValues::InitialColumnRuleStyle());
   builder.SetColumnRuleWidthInternal(
-      LayoutUnit(ComputedStyleInitialValues::InitialColumnRuleWidth()));
+      ComputedStyleInitialValues::InitialColumnRuleWidth());
   builder.SetColumnRuleColor(
       ComputedStyleInitialValues::InitialColumnRuleColor());
   builder.SetInternalVisitedColumnRuleColor(
@@ -1084,7 +1069,7 @@ void StyleAdjuster::AdjustComputedStyle(StyleResolverState& state,
 
   // A subset of CSS properties should be forced at computed value time:
   // https://drafts.csswg.org/css-color-adjust-1/#forced-colors-properties.
-  AdjustForForcedColorsMode(builder, element);
+  AdjustForForcedColorsMode(builder, state.GetDocument());
 
   // Let the theme also have a crack at adjusting the style.
   LayoutTheme::GetTheme().AdjustStyle(element, builder);

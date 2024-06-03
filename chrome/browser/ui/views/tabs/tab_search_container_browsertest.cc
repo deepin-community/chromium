@@ -44,8 +44,7 @@ class TabSearchContainerBrowserTest : public InProcessBrowserTest {
     PrefService* prefs = browser()->profile()->GetPrefs();
     prefs->SetInteger(
         optimization_guide::prefs::GetSettingEnabledPrefName(
-            optimization_guide::proto::ModelExecutionFeature::
-                MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION),
+            optimization_guide::UserVisibleFeatureKey::kTabOrganization),
         static_cast<int>(
             optimization_guide::prefs::FeatureOptInState::kEnabled));
   }
@@ -77,6 +76,31 @@ IN_PROC_BROWSER_TEST_F(TabSearchContainerBrowserTest, TogglesActionUIState) {
 
   ASSERT_TRUE(
       tab_search_container()->expansion_animation_for_testing()->IsShowing());
+}
+
+IN_PROC_BROWSER_TEST_F(TabSearchContainerBrowserTest,
+                       TogglesActionUIStateOnlyInCorrectBrowser) {
+  const Browser* const second_browser = CreateBrowser(browser()->profile());
+  TabSearchContainer* const second_search_container =
+      BrowserView::GetBrowserViewForBrowser(second_browser)
+          ->tab_strip_region_view()
+          ->tab_search_container();
+
+  ASSERT_FALSE(
+      second_search_container->expansion_animation_for_testing()->IsShowing());
+
+  TabOrganizationService* service =
+      tab_search_container()->tab_organization_service_for_testing();
+  // Same profile -> same service.
+  ASSERT_EQ(service,
+            second_search_container->tab_organization_service_for_testing());
+
+  service->OnTriggerOccured(browser());
+
+  EXPECT_TRUE(
+      tab_search_container()->expansion_animation_for_testing()->IsShowing());
+  EXPECT_FALSE(
+      second_search_container->expansion_animation_for_testing()->IsShowing());
 }
 
 IN_PROC_BROWSER_TEST_F(TabSearchContainerBrowserTest, DelaysShow) {

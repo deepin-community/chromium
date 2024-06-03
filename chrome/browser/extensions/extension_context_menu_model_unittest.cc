@@ -26,10 +26,10 @@
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/extensions/menu_manager.h"
 #include "chrome/browser/extensions/menu_manager_factory.h"
-#include "chrome/browser/extensions/permissions_test_util.h"
-#include "chrome/browser/extensions/permissions_updater.h"
-#include "chrome/browser/extensions/scripting_permissions_modifier.h"
-#include "chrome/browser/extensions/site_permissions_helper.h"
+#include "chrome/browser/extensions/permissions/permissions_test_util.h"
+#include "chrome/browser/extensions/permissions/permissions_updater.h"
+#include "chrome/browser/extensions/permissions/scripting_permissions_modifier.h"
+#include "chrome/browser/extensions/permissions/site_permissions_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "chrome/common/extensions/api/context_menus.h"
@@ -2253,6 +2253,39 @@ TEST_P(ExtensionContextMenuModelWithUserHostControlsTest,
     }
   }
 }
+
+// Tests that the uninstall entry is only visible for extensions that can be
+// uninstalled (e.g non-enterprise extensions).
+TEST_P(ExtensionContextMenuModelWithUserHostControlsTest,
+       UninstallEntryVisibility) {
+  InitializeEmptyExtensionService();
+
+  const Extension* extension = AddExtension(
+      "Extension", manifest_keys::kBrowserAction, ManifestLocation::kInternal);
+  const Extension* enterprise_extension =
+      AddExtension("Enterprise extension", manifest_keys::kBrowserAction,
+                   ManifestLocation::kExternalPolicy);
+
+  const GURL url("http://www.example.com/");
+  AddTab(url);
+
+  {
+    // Verify non-enterprise extension has uninstall entry.
+    ExtensionContextMenuModel menu(extension, GetBrowser(),
+                                   /*is_pinned=*/true, nullptr, true,
+                                   ContextMenuSource::kToolbarAction);
+    EXPECT_EQ(GetCommandState(menu, kUninstall), CommandState::kEnabled);
+  }
+
+  {
+    // Verify enterprise extension does not have uninstall entry.
+    ExtensionContextMenuModel menu(enterprise_extension, GetBrowser(),
+                                   /*is_pinned=*/true, nullptr, true,
+                                   ContextMenuSource::kToolbarAction);
+    EXPECT_EQ(GetCommandState(menu, kUninstall), CommandState::kAbsent);
+  }
+}
+
 // Test clicking on the "permissions page" item opens the correct link.
 TEST_P(ExtensionContextMenuModelWithUserHostControlsTest,
        TestClickingPageAccessPermissionsPage) {

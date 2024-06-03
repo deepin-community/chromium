@@ -111,7 +111,6 @@ float GetFingerSizeScale(int32_t finger_size_res, int32_t screen_size_res) {
 
 const int kTrackingIdForUnusedSlot = -1;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 struct SupportedHidrawDevice {
   std::string name;
   uint16_t vendor_id;
@@ -121,12 +120,20 @@ struct SupportedHidrawDevice {
 
 // Returns a list of supported hidraw spi devices.
 std::vector<SupportedHidrawDevice> GetSupportedHidrawDevices() {
-  return {{
-      .name = "spi 04F3:4222",
-      .vendor_id = 0x04F3,
-      .product_id = 0x4222,
-      .model_id = ui::HeatmapPalmDetector::ModelId::kRex,
-  }};
+  return {
+      {
+          .name = "spi 04F3:4222",
+          .vendor_id = 0x04F3,
+          .product_id = 0x4222,
+          .model_id = ui::HeatmapPalmDetector::ModelId::kRex,
+      },
+      {
+          .name = "hid-hxtp 4858:1002",
+          .vendor_id = 0x4858,
+          .product_id = 0x1002,
+          .model_id = ui::HeatmapPalmDetector::ModelId::kGeralt,
+      },
+  };
 }
 
 ui::HeatmapPalmDetector::ModelId GetHidrawModelId(
@@ -151,7 +158,6 @@ base::FilePath GetHidrawPath(const base::FilePath& root_path) {
                               base::FileEnumerator::DIRECTORIES)
       .Next();
 }
-#endif
 }  // namespace
 
 namespace ui {
@@ -344,24 +350,21 @@ void TouchEventConverterEvdev::Initialize(const EventDeviceInfo& info) {
 
   false_touch_finder_ = FalseTouchFinder::Create(GetTouchscreenSize());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   if (base::FeatureList::IsEnabled(kEnableHeatmapPalmDetection)) {
-    hidraw_model_id_ = GetHidrawModelId(info);
-    if (hidraw_model_id_ != HeatmapPalmDetector::ModelId::kNotSupported) {
-      std::string hidraw_device_dir =
-          base::StrCat({"/sys/class/input/", path_.BaseName().value(),
-                        "/device/device/hidraw/"});
-      hidraw_device_path_ = base::StrCat(
-          {"/dev/", GetHidrawPath(base::FilePath(hidraw_device_dir))
-                        .BaseName()
-                        .value()});
+    auto hidraw_model_id = GetHidrawModelId(info);
+    if (hidraw_model_id != HeatmapPalmDetector::ModelId::kNotSupported) {
+      support_heatmap_palm_detection_ = true;
+      auto hidraw_device_dir = base::FilePath("/sys/class/input")
+                                   .Append(path_.BaseName())
+                                   .Append("device/device/hidraw");
+      auto hidraw_device_path = base::FilePath("/dev").Append(
+          GetHidrawPath(hidraw_device_dir).BaseName());
       auto* palm_detector = HeatmapPalmDetector::GetInstance();
       if (palm_detector) {
-        palm_detector->Start(hidraw_model_id_, hidraw_device_path_);
+        palm_detector->Start(hidraw_model_id, hidraw_device_path.value());
       }
     }
   }
-#endif
 }
 
 void TouchEventConverterEvdev::Reinitialize() {
@@ -658,6 +661,13 @@ bool TouchEventConverterEvdev::MaybeCancelAllTouches() {
 }
 
 bool TouchEventConverterEvdev::IsPalm(const InProgressTouchEvdev& touch) {
+  if (support_heatmap_palm_detection_) {
+    auto* palm_detector = HeatmapPalmDetector::GetInstance();
+    if (palm_detector && palm_detector->IsReady()) {
+      return palm_detector->IsPalm(touch.tracking_id);
+    }
+  }
+
   if (palm_on_tool_type_palm_ && touch.tool_type == MT_TOOL_PALM)
     return true;
   else if (palm_on_touch_major_max_ && major_max_ > 0 &&
@@ -670,6 +680,19 @@ void TouchEventConverterEvdev::ReportEvents(base::TimeTicks timestamp) {
   if (dropped_events_) {
     Reinitialize();
     dropped_events_ = false;
+  }
+
+  if (support_heatmap_palm_detection_) {
+    auto* palm_detector = HeatmapPalmDetector::GetInstance();
+    if (palm_detector) {
+      std::vector<int> tracking_ids;
+      for (size_t i = 0; i < events_.size(); i++) {
+        if (events_[i].tracking_id >= 0) {
+          tracking_ids.push_back(events_[i].tracking_id);
+        }
+      }
+      palm_detector->AddTouchRecord(base::Time::Now(), tracking_ids);
+    }
   }
 
   if (false_touch_finder_)
@@ -943,6 +966,13 @@ void TouchEventConverterEvdev::UpdateTrackingId(int slot, int tracking_id) {
 
   if (event->tracking_id == tracking_id)
     return;
+
+  if (support_heatmap_palm_detection_) {
+    auto* palm_detector = HeatmapPalmDetector::GetInstance();
+    if (palm_detector) {
+      palm_detector->RemoveTouch(event->tracking_id);
+    }
+  }
 
   event->tracking_id = tracking_id;
   event->touching = (tracking_id >= 0);

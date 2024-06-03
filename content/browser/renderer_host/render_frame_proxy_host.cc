@@ -547,8 +547,8 @@ void RenderFrameProxyHost::RouteMessageEvent(
   // TODO(lukasza): Move opaque-ness check into ChildProcessSecurityPolicyImpl.
   auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
   if (source_origin != u"null" &&
-      !policy->CanAccessDataForOrigin(
-          GetProcess()->GetID(), url::Origin::Create(GURL(source_origin)))) {
+      !policy->HostsOrigin(GetProcess()->GetID(),
+                           url::Origin::Create(GURL(source_origin)))) {
     bad_message::ReceivedBadMessage(
         GetProcess(), bad_message::RFPH_POST_MESSAGE_INVALID_SOURCE_ORIGIN);
     return;
@@ -745,7 +745,7 @@ void RenderFrameProxyHost::OpenURL(blink::mojom::OpenURLParamsPtr params) {
     RenderFrameHostImpl* initiator_frame = RenderFrameHostImpl::FromFrameToken(
         GetProcess()->GetID(), params->initiator_frame_token.value());
     if (current_rfh->IsOutermostMainFrame()) {
-      MaybeRecordAdClickMainFrameNavigationUseCounter(
+      MaybeRecordAdClickMainFrameNavigationMetrics(
           initiator_frame, params->initiator_activation_and_ad_status);
     }
   }

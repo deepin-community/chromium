@@ -27,8 +27,12 @@
 #include "core/fpdfapi/render/cpdf_renderstatus.h"
 #include "core/fpdfapi/render/cpdf_textrenderer.h"
 #include "core/fpdftext/cpdf_textpage.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_string_wrappers.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxcrt/utf16.h"
@@ -39,10 +43,6 @@
 #include "core/fxge/text_char_pos.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
 #include "public/fpdf_edit.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 // These checks are here because core/ and public/ cannot depend on each other.
 static_assert(static_cast<int>(TextRenderingMode::MODE_UNKNOWN) ==
@@ -164,7 +164,7 @@ RetainPtr<CPDF_Dictionary> LoadFontDesc(CPDF_Document* doc,
   // TODO(npm): Lengths for Type1 fonts.
   if (font_type == FPDF_FONT_TRUETYPE) {
     stream->GetMutableDict()->SetNewFor<CPDF_Number>(
-        "Length1", pdfium::base::checked_cast<int>(font_data.size()));
+        "Length1", pdfium::checked_cast<int>(font_data.size()));
   }
   ByteString font_file_key =
       font_type == FPDF_FONT_TYPE1 ? "FontFile" : "FontFile2";
@@ -542,8 +542,8 @@ RetainPtr<CPDF_Font> LoadCustomCompositeFont(
 
   CreateDescendantFontsArray(doc, font_dict, cid_font_dict->GetObjNum());
 
-  auto to_unicode_stream =
-      doc->NewIndirect<CPDF_Stream>(ByteStringView(to_unicode_cmap).raw_span());
+  auto to_unicode_stream = doc->NewIndirect<CPDF_Stream>(
+      ByteStringView(to_unicode_cmap).unsigned_span());
   font_dict->SetNewFor<CPDF_Reference>("ToUnicode", doc,
                                        to_unicode_stream->GetObjNum());
   return CPDF_DocPageData::FromDocument(doc)->GetFont(font_dict);
@@ -683,10 +683,14 @@ FPDFText_LoadCidType2Font(FPDF_DOCUMENT document,
     return nullptr;
   }
 
-  // Caller takes ownership.
+  // Caller takes ownership of result.
+  // SAFETY: caller ensures `cid_to_gid_map_data` points to at least
+  // `cid_to_gid_map_data_size` entries.
   return FPDFFontFromCPDFFont(
-      LoadCustomCompositeFont(doc, std::move(font), font_span, to_unicode_cmap,
-                              {cid_to_gid_map_data, cid_to_gid_map_data_size})
+      LoadCustomCompositeFont(
+          doc, std::move(font), font_span, to_unicode_cmap,
+          UNSAFE_BUFFERS(
+              pdfium::make_span(cid_to_gid_map_data, cid_to_gid_map_data_size)))
           .Leak());
 }
 
@@ -849,7 +853,7 @@ FPDFFont_GetFontName(FPDF_FONT font, char* buffer, unsigned long length) {
   CFX_Font* pCfxFont = pFont->GetFont();
   ByteString name = pCfxFont->GetFamilyName();
   const unsigned long dwStringLen =
-      pdfium::base::checked_cast<unsigned long>(name.GetLength() + 1);
+      pdfium::checked_cast<unsigned long>(name.GetLength() + 1);
   if (buffer && length >= dwStringLen)
     memcpy(buffer, name.c_str(), dwStringLen);
 
@@ -951,8 +955,9 @@ FPDFFont_GetGlyphPath(FPDF_FONT font, uint32_t glyph, float font_size) {
   if (!pFont)
     return nullptr;
 
-  if (!pdfium::base::IsValueInRangeForNumericType<wchar_t>(glyph))
+  if (!pdfium::IsValueInRangeForNumericType<wchar_t>(glyph)) {
     return nullptr;
+  }
 
   uint32_t charcode = pFont->CharCodeFromUnicode(static_cast<wchar_t>(glyph));
   std::vector<TextCharPos> pos =

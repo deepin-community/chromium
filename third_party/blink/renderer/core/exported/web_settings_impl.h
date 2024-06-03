@@ -221,6 +221,9 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetLazyLoadingImageMarginPx4G(int) override;
 
   void SetForceDarkModeEnabled(bool) override;
+  void SetInForcedColors(bool) override;
+  void SetBrowserPreferredColorScheme(
+      mojom::blink::PreferredColorScheme) override;
   void SetPreferredColorScheme(mojom::blink::PreferredColorScheme) override;
   void SetPreferredContrast(mojom::blink::PreferredContrast) override;
   void SetNavigationControls(NavigationControls) override;

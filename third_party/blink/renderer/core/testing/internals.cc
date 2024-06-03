@@ -231,7 +231,7 @@ void ResetMockOverlayScrollbars() {
 
 class UseCounterImplObserverImpl final : public UseCounterImpl::Observer {
  public:
-  UseCounterImplObserverImpl(ScriptPromiseResolver* resolver,
+  UseCounterImplObserverImpl(ScriptPromiseResolver<IDLUndefined>* resolver,
                              WebFeature feature)
       : resolver_(resolver), feature_(feature) {}
   UseCounterImplObserverImpl(const UseCounterImplObserverImpl&) = delete;
@@ -241,7 +241,7 @@ class UseCounterImplObserverImpl final : public UseCounterImpl::Observer {
   bool OnCountFeature(WebFeature feature) final {
     if (feature_ != feature)
       return false;
-    resolver_->Resolve(static_cast<int>(feature));
+    resolver_->Resolve();
     return true;
   }
 
@@ -251,7 +251,7 @@ class UseCounterImplObserverImpl final : public UseCounterImpl::Observer {
   }
 
  private:
-  Member<ScriptPromiseResolver> resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> resolver_;
   WebFeature feature_;
 };
 
@@ -318,27 +318,30 @@ class TestReadableStreamSource : public UnderlyingSourceBase {
   TestReadableStreamSource(ScriptState* script_state, Type type)
       : UnderlyingSourceBase(script_state), type_(type) {}
 
-  ScriptPromise Start(ScriptState* script_state, ExceptionState&) override {
+  ScriptPromiseUntyped Start(ScriptState* script_state,
+                             ExceptionState&) override {
     if (generator_) {
-      return ScriptPromise::CastUndefined(script_state);
+      return ScriptPromiseUntyped::CastUndefined(script_state);
     }
-    resolver_ = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+    resolver_ =
+        MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
     return resolver_->Promise();
   }
 
-  ScriptPromise Pull(ScriptState* script_state, ExceptionState&) override {
+  ScriptPromiseUntyped Pull(ScriptState* script_state,
+                            ExceptionState&) override {
     if (!generator_) {
-      return ScriptPromise::CastUndefined(script_state);
+      return ScriptPromiseUntyped::CastUndefined(script_state);
     }
 
     const auto result = generator_->Generate();
     if (!result) {
       Controller()->Close();
-      return ScriptPromise::CastUndefined(script_state);
+      return ScriptPromiseUntyped::CastUndefined(script_state);
     }
     Controller()->Enqueue(
         v8::Integer::New(script_state->GetIsolate(), *result));
-    return ScriptPromise::CastUndefined(script_state);
+    return ScriptPromiseUntyped::CastUndefined(script_state);
   }
 
   std::unique_ptr<ReadableStreamTransferringOptimizer>
@@ -385,7 +388,7 @@ class TestReadableStreamSource : public UnderlyingSourceBase {
  private:
   const Type type_;
   std::unique_ptr<Generator> generator_;
-  Member<ScriptPromiseResolver> resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> resolver_;
 };
 
 UnderlyingSourceBase*
@@ -482,19 +485,20 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
                 std::in_place,
                 false)) {}
 
-  ScriptPromise start(ScriptState* script_state,
-                      WritableStreamDefaultController*,
-                      ExceptionState&) override {
+  ScriptPromise<IDLUndefined> start(ScriptState* script_state,
+                                    WritableStreamDefaultController*,
+                                    ExceptionState&) override {
     if (internal_sink_) {
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
-    start_resolver_ = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+    start_resolver_ =
+        MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
     return start_resolver_->Promise();
   }
-  ScriptPromise write(ScriptState* script_state,
-                      ScriptValue chunk,
-                      WritableStreamDefaultController*,
-                      ExceptionState&) override {
+  ScriptPromise<IDLUndefined> write(ScriptState* script_state,
+                                    ScriptValue chunk,
+                                    WritableStreamDefaultController*,
+                                    ExceptionState&) override {
     DCHECK(internal_sink_);
     internal_sink_->Append(
         ToCoreString(script_state->GetIsolate(),
@@ -502,15 +506,16 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
                          ->ToString(script_state->GetContext())
                          .ToLocalChecked())
             .Utf8());
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
-  ScriptPromise close(ScriptState* script_state, ExceptionState&) override {
+  ScriptPromise<IDLUndefined> close(ScriptState* script_state,
+                                    ExceptionState&) override {
     DCHECK(internal_sink_);
     closed_ = true;
     if (!optimizer_flag_->data.load()) {
       // The normal closure case.
       internal_sink_->Close();
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
 
     // When the optimizer is active, we need to detach `internal_sink_` and
@@ -520,12 +525,12 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
           *reply_task_runner_, FROM_HERE,
           CrossThreadBindOnce(std::move(reply_), std::move(internal_sink_)));
     }
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
-  ScriptPromise abort(ScriptState* script_state,
-                      ScriptValue reason,
-                      ExceptionState&) override {
-    return ScriptPromise::CastUndefined(script_state);
+  ScriptPromise<IDLUndefined> abort(ScriptState* script_state,
+                                    ScriptValue reason,
+                                    ExceptionState&) override {
+    return ToResolvedUndefinedPromise(script_state);
   }
 
   void Attach(std::unique_ptr<InternalSink> internal_sink) {
@@ -578,10 +583,11 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
     UnderlyingSinkBase::Trace(visitor);
   }
 
-  static void Resolve(ScriptPromiseResolver* resolver, std::string result) {
+  static void Resolve(ScriptPromiseResolver<IDLString>* resolver,
+                      std::string result) {
     resolver->Resolve(String::FromUTF8(result));
   }
-  static void Reject(ScriptPromiseResolver* resolver) {
+  static void Reject(ScriptPromiseResolverBase* resolver) {
     ScriptState* script_state = resolver->GetScriptState();
     ScriptState::Scope scope(script_state);
     resolver->Reject(
@@ -594,7 +600,7 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
   // initially, and set atomically when the associated optimizer is activated.
   scoped_refptr<base::RefCountedData<std::atomic_bool>> optimizer_flag_;
   std::unique_ptr<InternalSink> internal_sink_;
-  Member<ScriptPromiseResolver> start_resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> start_resolver_;
   bool closed_ = false;
   bool detached_ = false;
   Reply reply_;
@@ -624,7 +630,7 @@ TestWritableStreamSink::Optimizer::PerformInProcessOptimization(
   return sink;
 }
 
-void OnLCPPredicted(ScriptPromiseResolver* resolver,
+void OnLCPPredicted(ScriptPromiseResolver<IDLString>* resolver,
                     const Element* lcp_element) {
   const ElementLocator locator =
       lcp_element ? element_locator::OfElement(*lcp_element) : ElementLocator();
@@ -805,6 +811,17 @@ unsigned Internals::layoutCountForTesting(
   return context_frame->View()->LayoutCountForTesting();
 }
 
+bool Internals::nodeNeedsStyleRecalc(Node* node,
+                                     ExceptionState& exception_state) const {
+  if (!node) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidNodeTypeError,
+                                      "Not a node");
+    return false;
+  }
+
+  return node->NeedsStyleRecalc();
+}
+
 unsigned Internals::hitTestCount(Document* doc,
                                  ExceptionState& exception_state) const {
   if (!doc) {
@@ -918,13 +935,14 @@ bool Internals::isLoadingFromMemoryCache(const String& url) {
   return resource && resource->GetStatus() == ResourceStatus::kCached;
 }
 
-ScriptPromise Internals::getInitialResourcePriority(ScriptState* script_state,
-                                                    const String& url,
-                                                    Document* document,
-                                                    bool new_load_only) {
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLLong> Internals::getInitialResourcePriority(
+    ScriptState* script_state,
+    const String& url,
+    Document* document,
+    bool new_load_only) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLLong>>(script_state);
+  auto promise = resolver->Promise();
   KURL resource_url = url_test_helpers::ToKURL(url.Utf8());
 
   auto callback = WTF::BindOnce(&Internals::ResolveResourcePriority,
@@ -935,7 +953,7 @@ ScriptPromise Internals::getInitialResourcePriority(ScriptState* script_state,
   return promise;
 }
 
-ScriptPromise Internals::getInitialResourcePriorityOfNewLoad(
+ScriptPromise<IDLLong> Internals::getInitialResourcePriorityOfNewLoad(
     ScriptState* script_state,
     const String& url,
     Document* document) {
@@ -1168,7 +1186,7 @@ ShadowRoot* Internals::shadowRoot(Element* host) {
   return host->GetShadowRoot();
 }
 
-String Internals::shadowRootType(const Node* root,
+String Internals::ShadowRootMode(const Node* root,
                                  ExceptionState& exception_state) const {
   DCHECK(root);
   auto* shadow_root = DynamicTo<ShadowRoot>(root);
@@ -1179,12 +1197,12 @@ String Internals::shadowRootType(const Node* root,
     return String();
   }
 
-  switch (shadow_root->GetType()) {
-    case ShadowRootType::kUserAgent:
+  switch (shadow_root->GetMode()) {
+    case ShadowRootMode::kUserAgent:
       return String("UserAgentShadowRoot");
-    case ShadowRootType::kOpen:
+    case ShadowRootMode::kOpen:
       return String("OpenShadowRoot");
-    case ShadowRootType::kClosed:
+    case ShadowRootMode::kClosed:
       return String("ClosedShadowRoot");
     default:
       NOTREACHED();
@@ -1195,18 +1213,6 @@ String Internals::shadowRootType(const Node* root,
 const AtomicString& Internals::shadowPseudoId(Element* element) {
   DCHECK(element);
   return element->ShadowPseudoId();
-}
-
-String Internals::visiblePlaceholder(Element* element) {
-  if (auto* text_control_element = ToTextControlOrNull(element)) {
-    if (!text_control_element->IsPlaceholderVisible())
-      return String();
-    if (HTMLElement* placeholder_element =
-            text_control_element->PlaceholderElement())
-      return placeholder_element->textContent();
-  }
-
-  return String();
 }
 
 bool Internals::isValidationMessageVisible(Element* element) {
@@ -2710,19 +2716,6 @@ int Internals::numberOfPages(float page_width,
                                      gfx::SizeF(page_width, page_height));
 }
 
-String Internals::pageProperty(String property_name,
-                               unsigned page_number,
-                               ExceptionState& exception_state) const {
-  if (!GetFrame()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidAccessError,
-                                      "No frame is available.");
-    return String();
-  }
-
-  return PrintContext::PageProperty(GetFrame(), property_name.Utf8().c_str(),
-                                    page_number);
-}
-
 float Internals::pageScaleFactor(ExceptionState& exception_state) {
   if (!document_->GetPage()) {
     exception_state.ThrowDOMException(
@@ -3002,20 +2995,22 @@ void Internals::forceFullRepaint(Document* document,
 
 DOMRectList* Internals::draggableRegions(Document* document,
                                          ExceptionState& exception_state) {
-  return AnnotatedRegions(document, true, exception_state);
+  return DraggableRegions(document, true, exception_state);
 }
 
 DOMRectList* Internals::nonDraggableRegions(Document* document,
                                             ExceptionState& exception_state) {
-  return AnnotatedRegions(document, false, exception_state);
+  return DraggableRegions(document, false, exception_state);
 }
 
-void Internals::SetSupportsAppRegion(bool supports_app_region) {
-  document_->GetPage()->GetChromeClient().GetWebView()->SetSupportsAppRegion(
-      supports_app_region);
+void Internals::SetSupportsDraggableRegions(bool supports_draggable_regions) {
+  document_->GetPage()
+      ->GetChromeClient()
+      .GetWebView()
+      ->SetSupportsDraggableRegions(supports_draggable_regions);
 }
 
-DOMRectList* Internals::AnnotatedRegions(Document* document,
+DOMRectList* Internals::DraggableRegions(Document* document,
                                          bool draggable,
                                          ExceptionState& exception_state) {
   DCHECK(document);
@@ -3026,11 +3021,11 @@ DOMRectList* Internals::AnnotatedRegions(Document* document,
   }
 
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
-  document->View()->UpdateDocumentAnnotatedRegions();
-  Vector<AnnotatedRegionValue> regions = document->AnnotatedRegions();
+  document->View()->UpdateDocumentDraggableRegions();
+  Vector<DraggableRegionValue> regions = document->DraggableRegions();
 
   Vector<gfx::QuadF> quads;
-  for (const AnnotatedRegionValue& region : regions) {
+  for (const DraggableRegionValue& region : regions) {
     if (region.draggable == draggable)
       quads.push_back(gfx::QuadF(gfx::RectF(region.bounds)));
   }
@@ -3337,7 +3332,7 @@ String Internals::selectMenuListText(HTMLSelectElement* select) {
   DCHECK(select);
   if (!select->UsesMenuList())
     return String();
-  return select->InnerElement().innerText();
+  return select->InnerElementForAppearanceAuto().innerText();
 }
 
 bool Internals::isSelectPopupVisible(Node* node) {
@@ -3404,13 +3399,12 @@ void Internals::forceCompositingUpdate(Document* document,
 
 void Internals::setForcedColorsAndDarkPreferredColorScheme(Document* document) {
   DCHECK(document);
-  ColorSchemeHelper color_scheme_helper(*document);
-  color_scheme_helper.SetPreferredColorScheme(
+  color_scheme_helper_.emplace(*document);
+  color_scheme_helper_->SetPreferredColorScheme(
       mojom::blink::PreferredColorScheme::kDark);
-  color_scheme_helper.SetForcedColors(*document, ForcedColors::kActive);
-  color_scheme_helper.SetEmulatedForcedColors(*document,
-                                              /*is_dark_theme=*/false);
-  document->GetFrame()->View()->UpdateAllLifecyclePhasesForTest();
+  color_scheme_helper_->SetInForcedColors(/*in_forced_colors=*/true);
+  color_scheme_helper_->SetEmulatedForcedColors(*document,
+                                                /*is_dark_theme=*/false);
 }
 
 void Internals::setDarkPreferredColorScheme(Document* document) {
@@ -3450,78 +3444,73 @@ class AddOneFunction : public ScriptFunction::Callable {
 
 }  // namespace
 
-ScriptPromiseTyped<IDLAny> Internals::createResolvedPromise(
+ScriptPromise<IDLAny> Internals::createResolvedPromise(
     ScriptState* script_state,
     ScriptValue value) {
-  auto* resolver =
-      MakeGarbageCollected<ScriptPromiseResolverTyped<IDLAny>>(script_state);
-  auto promise = resolver->Promise();
-  resolver->Resolve(value);
-  return promise;
+  return ToResolvedPromise<IDLAny>(script_state, value);
 }
 
-ScriptPromise Internals::createRejectedPromise(ScriptState* script_state,
-                                               ScriptValue value) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
-  resolver->Reject(value);
-  return promise;
+ScriptPromise<IDLAny> Internals::createRejectedPromise(
+    ScriptState* script_state,
+    ScriptValue value) {
+  return ScriptPromise<IDLAny>::Reject(script_state, value);
 }
 
-ScriptPromise Internals::addOneToPromise(ScriptState* script_state,
-                                         ScriptPromise promise) {
+ScriptPromise<IDLAny> Internals::addOneToPromise(ScriptState* script_state,
+                                                 ScriptPromiseUntyped promise) {
   return promise.Then(MakeGarbageCollected<ScriptFunction>(
       script_state, MakeGarbageCollected<AddOneFunction>()));
 }
 
-ScriptPromise Internals::promiseCheck(ScriptState* script_state,
-                                      int32_t arg1,
-                                      bool arg2,
-                                      const ScriptValue& arg3,
-                                      const String& arg4,
-                                      const Vector<String>& arg5,
-                                      ExceptionState& exception_state) {
-  if (arg2)
-    return ScriptPromise::Cast(script_state,
-                               V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheck(ScriptState* script_state,
+                                              int32_t arg1,
+                                              bool arg2,
+                                              const ScriptValue& arg3,
+                                              const String& arg4,
+                                              const Vector<String>& arg5,
+                                              ExceptionState& exception_state) {
+  if (arg2) {
+    return ToResolvedPromise<IDLAny>(
+        script_state, V8String(script_state->GetIsolate(), "done"));
+  }
   exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                     "Thrown from the native implementation.");
-  return ScriptPromise();
+  return ScriptPromise<IDLAny>();
 }
 
-ScriptPromise Internals::promiseCheckWithoutExceptionState(
+ScriptPromise<IDLAny> Internals::promiseCheckWithoutExceptionState(
     ScriptState* script_state,
     const ScriptValue& arg1,
     const String& arg2,
     const Vector<String>& arg3) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckRange(ScriptState* script_state,
-                                           int32_t arg1) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckRange(ScriptState* script_state,
+                                                   int32_t arg1) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckOverload(ScriptState* script_state,
-                                              Location*) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckOverload(ScriptState* script_state,
+                                                      Location*) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckOverload(ScriptState* script_state,
-                                              Document*) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckOverload(ScriptState* script_state,
+                                                      Document*) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckOverload(ScriptState* script_state,
-                                              Location*,
-                                              int32_t,
-                                              int32_t) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckOverload(ScriptState* script_state,
+                                                      Location*,
+                                                      int32_t,
+                                                      int32_t) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
 void Internals::Trace(Visitor* visitor) const {
@@ -3680,11 +3669,13 @@ Vector<String> Internals::getCSSPropertyAliases() const {
   return result;
 }
 
-ScriptPromise Internals::observeUseCounter(ScriptState* script_state,
-                                           Document* document,
-                                           uint32_t feature) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLUndefined> Internals::observeUseCounter(
+    ScriptState* script_state,
+    Document* document,
+    uint32_t feature) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
   if (feature >= static_cast<int32_t>(WebFeature::kNumberOfFeatures)) {
     resolver->Reject();
     return promise;
@@ -3860,8 +3851,9 @@ void Internals::setDeviceEmulationScale(float scale,
   page->GetChromeClient().GetWebView()->EnableDeviceEmulation(params);
 }
 
-void Internals::ResolveResourcePriority(ScriptPromiseResolver* resolver,
-                                        int resource_load_priority) {
+void Internals::ResolveResourcePriority(
+    ScriptPromiseResolver<IDLLong>* resolver,
+    int resource_load_priority) {
   resolver->Resolve(resource_load_priority);
 }
 
@@ -3974,7 +3966,8 @@ ScriptValue Internals::createWritableStreamAndSink(
   }
 
   ExecutionContext* context = ExecutionContext::From(script_state);
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(script_state);
   auto internal_sink = std::make_unique<TestWritableStreamSink::InternalSink>(
       context->GetTaskRunner(TaskType::kInternalDefault),
       CrossThreadBindOnce(&TestWritableStreamSink::Resolve,
@@ -4021,16 +4014,50 @@ Vector<String> Internals::getCreatorScripts(HTMLImageElement* img) {
   return Vector<String>(img->creator_scripts());
 }
 
-ScriptPromise Internals::LCPPrediction(ScriptState* script_state,
-                                       Document* document) {
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLString> Internals::LCPPrediction(ScriptState* script_state,
+                                                  Document* document) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(script_state);
+  auto promise = resolver->Promise();
 
   LCPCriticalPathPredictor* lcpp = document->GetFrame()->GetLCPP();
   CHECK(lcpp);
   lcpp->AddLCPPredictedCallback(
       WTF::BindOnce(&OnLCPPredicted, WrapPersistent(resolver)));
+  return promise;
+}
+
+void ExemptUrlFromNetworkRevocationComplete(
+    ScriptPromiseResolver<IDLUndefined>* resolver) {
+  resolver->Resolve();
+}
+
+ScriptPromise<IDLUndefined> Internals::exemptUrlFromNetworkRevocation(
+    ScriptState* script_state,
+    const String& url) {
+  if (!blink::features::IsFencedFramesEnabled()) {
+    return ScriptPromise<IDLUndefined>();
+  }
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kFencedFramesLocalUnpartitionedDataAccess)) {
+    return ScriptPromise<IDLUndefined>();
+  }
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kExemptUrlFromNetworkRevocationForTesting)) {
+    return ScriptPromise<IDLUndefined>();
+  }
+  if (!GetFrame()) {
+    return ScriptPromise<IDLUndefined>();
+  }
+  LocalFrame* frame = GetFrame();
+  DCHECK(frame->GetDocument());
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
+  frame->GetLocalFrameHostRemote().ExemptUrlFromNetworkRevocationForTesting(
+      url_test_helpers::ToKURL(url.Utf8()),
+      WTF::BindOnce(&ExemptUrlFromNetworkRevocationComplete,
+                    WrapPersistent(resolver)));
   return promise;
 }
 

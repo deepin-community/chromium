@@ -8,6 +8,7 @@
 
 #include "base/check.h"
 #include "base/logging.h"
+#include "chromeos/ash/components/nearby/presence/conversions/proto_conversions.h"
 #include "chromeos/ash/components/nearby/presence/credentials/nearby_presence_credential_manager_impl.h"
 #include "chromeos/ash/components/nearby/presence/nearby_presence_service_enum_coversions.h"
 #include "chromeos/ash/components/nearby/presence/prefs/nearby_presence_prefs.h"
@@ -60,46 +61,21 @@ namespace {
   return proto;
 }
 
-ash::nearby::presence::NearbyPresenceService::Action ConvertActionToActionType(
-    ash::nearby::presence::mojom::ActionType action_type) {
-  switch (action_type) {
-    case ash::nearby::presence::mojom::ActionType::kActiveUnlockAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::
-          kActiveUnlock;
-    case ash::nearby::presence::mojom::ActionType::kNearbyShareAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::kNearbyShare;
-    case ash::nearby::presence::mojom::ActionType::kInstantTetheringAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::
-          kInstantTethering;
-    case ash::nearby::presence::mojom::ActionType::kPhoneHubAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::kPhoneHub;
-    case ash::nearby::presence::mojom::ActionType::kPresenceManagerAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::
-          kPresenceManager;
-    case ash::nearby::presence::mojom::ActionType::kFinderAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::kFinder;
-    case ash::nearby::presence::mojom::ActionType::kFastPairSassAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::
-          kFastPairSass;
-    case ash::nearby::presence::mojom::ActionType::kTapToTransferAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::
-          kTapToTransfer;
-    case ash::nearby::presence::mojom::ActionType::kLastAction:
-      return ash::nearby::presence::NearbyPresenceService::Action::kLast;
-  }
-}
-
-ash::nearby::presence::NearbyPresenceService::PresenceDevice
-BuildPresenceDevice(ash::nearby::presence::mojom::PresenceDevicePtr device) {
-  std::vector<ash::nearby::presence::NearbyPresenceService::Action> actions;
+::nearby::presence::PresenceDevice BuildPresenceDevice(
+    ash::nearby::presence::mojom::PresenceDevicePtr device) {
+  ::nearby::presence::PresenceDevice presence_device(device->endpoint_id);
+  presence_device.SetMetadata(ConvertMetadataFromMojom(device->metadata.get()));
   for (auto action : device->actions) {
-    actions.push_back(ConvertActionToActionType(action));
+    presence_device.AddAction(static_cast<uint32_t>(action));
   }
 
-  // TODO(b/276642472): Populate actions and rssi fields.
-  return ash::nearby::presence::NearbyPresenceService::PresenceDevice(
-      ConvertMetadataFromMojom(device->metadata.get()),
-      device->stable_device_id, device->endpoint_id, actions, /*rssi_=*/-65);
+  if (device->decrypt_shared_credential.get()) {
+    presence_device.SetDecryptSharedCredential(
+        ash::nearby::presence::proto::SharedCredentialFromMojom(
+            device->decrypt_shared_credential.get()));
+  }
+
+  return presence_device;
 }
 
 }  // namespace
@@ -192,15 +168,16 @@ void NearbyPresenceServiceImpl::UpdateCredentials() {
   // flow has already occurred, and we can move forward with updating
   // credentials.
   if (credential_manager_) {
-    CD_LOG(VERBOSE, Feature::NP)
+    CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__ << ": Initiating updating credentials.";
     credential_manager_->UpdateCredentials();
     return;
   }
 
-  CD_LOG(VERBOSE, Feature::NP) << __func__
-                               << ": Attempted to update credentials, but "
-                                  "CredentialManager was not yet initialized.";
+  CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
+      << __func__
+      << ": Attempted to update credentials, but "
+         "CredentialManager was not yet initialized.";
 
   // Otherwise, initialize a `CredentialManager` before updating credentials.
   Initialize(
@@ -216,7 +193,7 @@ void NearbyPresenceServiceImpl::Shutdown() {
 
 void NearbyPresenceServiceImpl::OnDeviceFound(mojom::PresenceDevicePtr device) {
   auto build_device = BuildPresenceDevice(std::move(device));
-  for (auto* delegate : scan_delegate_set_) {
+  for (ScanDelegate* delegate : scan_delegate_set_) {
     delegate->OnPresenceDeviceFound(build_device);
   }
 }
@@ -224,33 +201,34 @@ void NearbyPresenceServiceImpl::OnDeviceFound(mojom::PresenceDevicePtr device) {
 void NearbyPresenceServiceImpl::OnDeviceChanged(
     mojom::PresenceDevicePtr device) {
   auto build_device = BuildPresenceDevice(std::move(device));
-  for (auto* delegate : scan_delegate_set_) {
+  for (ScanDelegate* delegate : scan_delegate_set_) {
     delegate->OnPresenceDeviceChanged(build_device);
   }
 }
 
 void NearbyPresenceServiceImpl::OnDeviceLost(mojom::PresenceDevicePtr device) {
   auto build_device = BuildPresenceDevice(std::move(device));
-  for (auto* delegate : scan_delegate_set_) {
+  for (ScanDelegate* delegate : scan_delegate_set_) {
     delegate->OnPresenceDeviceLost(build_device);
   }
 }
 
 void NearbyPresenceServiceImpl::OnMessageReceived(
     base::flat_map<std::string, std::string> message) {
-  CD_LOG(VERBOSE, Feature::NP)
+  CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
       << __func__ << ": Push notification message recieved.";
   if ((message.at(push_notification::kNotificationClientIdKey) ==
        kNearbyPresencePushNotificationClientId) &&
       (message.at(push_notification::kNotificationTypeIdKey) ==
        kNearbyPresencePushNotificationTypeId)) {
     // TODO(b/319286048): Check for action specific information.
-    CD_LOG(ERROR, Feature::NP) << __func__
-                               << ": Push notification message is correctly "
-                                  "formatted. Updating credentials now.";
+    CD_LOG(ERROR, Feature::NEARBY_INFRA)
+        << __func__
+        << ": Push notification message is correctly "
+           "formatted. Updating credentials now.";
     UpdateCredentials();
   } else {
-    CD_LOG(VERBOSE, Feature::NP)
+    CD_LOG(VERBOSE, Feature::NEARBY_INFRA)
         << __func__
         << ": Push notification message is malformed. Discarding message.";
   }

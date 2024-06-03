@@ -52,7 +52,6 @@
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/rail_mode_observer.h"
-#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -194,6 +193,7 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   Vector<WebInputEventAttribution> GetPendingUserInputInfo(
       bool include_continuous) const override;
   void StartIdlePeriodForTesting() override;
+  void SetRendererBackgroundedForTesting(bool backgrounded) override;
 
   // ThreadScheduler implementation:
   bool ShouldYieldForHighPriorityWork() override;
@@ -211,9 +211,6 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   void AddTaskObserver(base::TaskObserver* task_observer) override;
   void RemoveTaskObserver(base::TaskObserver* task_observer) override;
   void SetV8Isolate(v8::Isolate* isolate) override;
-  TaskAttributionTracker* GetTaskAttributionTracker() override;
-  void InitializeTaskAttributionTracker(
-      std::unique_ptr<TaskAttributionTracker> tracker) override;
   blink::MainThreadScheduler* ToMainThreadScheduler() override;
 
   // ThreadSchedulerBase implementation:
@@ -446,7 +443,7 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
     scoped_refptr<base::SingleThreadTaskRunner> previous_task_runner;
     scoped_refptr<base::SingleThreadTaskRunner> current_task_runner;
     const char* trace_event_scope_name;
-    raw_ptr<void, ExperimentalRenderer> trace_event_scope_id;
+    raw_ptr<void> trace_event_scope_id;
   };
 
   void BeginAgentGroupSchedulerScope(
@@ -489,8 +486,7 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
     ~RendererPauseHandleImpl() override;
 
    private:
-    raw_ptr<MainThreadSchedulerImpl, ExperimentalRenderer>
-        scheduler_;  // NOT OWNED
+    raw_ptr<MainThreadSchedulerImpl> scheduler_;  // NOT OWNED
   };
 
   // IdleHelper::Delegate implementation:
@@ -646,8 +642,6 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
       FrameSchedulerImpl* frame_scheduler,
       bool precise_attribution);
 
-  void SetNumberOfCompositingTasksToPrioritize(int number_of_tasks);
-
   void ShutdownAllQueues();
 
   bool AllPagesFrozen() const;
@@ -802,7 +796,6 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
     WTF::Vector<AgentGroupSchedulerScope> agent_group_scheduler_scope_stack;
 
-    std::unique_ptr<TaskAttributionTracker> task_attribution_tracker;
     Persistent<HeapHashSet<WeakMember<AgentGroupSchedulerImpl>>>
         agent_group_schedulers;
     // Task queues that have been detached from their scheduler and may have

@@ -59,7 +59,7 @@ ScopedServer::ScopedServer(
   EXPECT_TRUE((test_server_handle_ = test_server_->StartAndReturnHandle()));
 
   integration_test_commands_->EnterTestMode(update_url(), crash_upload_url(),
-                                            device_management_url(),
+                                            device_management_url(), {},
                                             base::Minutes(5));
 }
 
@@ -75,9 +75,10 @@ ScopedServer::~ScopedServer() {
 }
 
 void ScopedServer::ExpectOnce(request::MatcherGroup request_matcher_group,
-                              const std::string& response_body) {
+                              const std::string& response_body,
+                              net::HttpStatusCode http_status_code) {
   request_matcher_groups_.push_back(std::move(request_matcher_group));
-  response_bodies_.push_back(response_body);
+  responses_.push_back(std::make_pair(http_status_code, response_body));
 }
 
 std::unique_ptr<net::test_server::HttpResponse> ScopedServer::HandleRequest(
@@ -108,13 +109,14 @@ std::unique_ptr<net::test_server::HttpResponse> ScopedServer::HandleRequest(
     response.reset(new net::test_server::DelayedHttpResponse(download_delay_));
   }
 
-  response->set_code(net::HTTP_OK);
+  const auto& [response_code, response_body] = responses_.front();
+  response->set_code(response_code);
   if (base::StartsWith(request.relative_url, device_management_path())) {
     response->set_content_type("application/x-protobuf");
   }
-  response->set_content(response_bodies_.front());
+  response->set_content(response_body);
   request_matcher_groups_.pop_front();
-  response_bodies_.pop_front();
+  responses_.pop_front();
   return response;
 }
 

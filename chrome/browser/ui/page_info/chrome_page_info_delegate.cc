@@ -282,11 +282,13 @@ void ChromePageInfoDelegate::OpenCertificateDialog(
 
 void ChromePageInfoDelegate::OpenConnectionHelpCenterPage(
     const ui::Event& event) {
-  web_contents_->OpenURL(content::OpenURLParams(
-      GURL(chrome::kPageInfoHelpCenterURL), content::Referrer(),
-      ui::DispositionFromEventFlags(event.flags(),
-                                    WindowOpenDisposition::NEW_FOREGROUND_TAB),
-      ui::PAGE_TRANSITION_LINK, false));
+  web_contents_->OpenURL(
+      content::OpenURLParams(
+          GURL(chrome::kPageInfoHelpCenterURL), content::Referrer(),
+          ui::DispositionFromEventFlags(
+              event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
+          ui::PAGE_TRANSITION_LINK, false),
+      /*navigation_handle_callback=*/{});
 }
 
 void ChromePageInfoDelegate::OpenSafetyTipHelpCenterPage() {
@@ -295,14 +297,19 @@ void ChromePageInfoDelegate::OpenSafetyTipHelpCenterPage() {
 
 void ChromePageInfoDelegate::OpenContentSettingsExceptions(
     ContentSettingsType content_settings_type) {
+  if (content_settings_type == ContentSettingsType::FILE_SYSTEM_WRITE_GUARD) {
+    const GURL& url = web_contents_->GetLastCommittedURL();
+    chrome::ShowSiteSettingsFileSystem(GetProfile(), url);
+    return;
+  }
   chrome::ShowContentSettingsExceptionsForProfile(GetProfile(),
                                                   content_settings_type);
 }
 
 void ChromePageInfoDelegate::OnPageInfoActionOccurred(
-    PageInfo::PageInfoAction action) {
+    page_info::PageInfoAction action) {
   if (sentiment_service_) {
-    if (action == PageInfo::PAGE_INFO_OPENED) {
+    if (action == page_info::PAGE_INFO_OPENED) {
       sentiment_service_->PageInfoOpened();
     } else {
       sentiment_service_->InteractedWithPageInfo();

@@ -31,11 +31,6 @@ TEST(ProtoEnumConversionsTest, GetAppListItemTypeString) {
   TestEnumStringsNonEmpty(sync_pb::AppListSpecifics::AppListItemType);
 }
 
-TEST(ProtoEnumConversionsTest, GetSegmentationPlatformTypeTypeString) {
-  TestEnumStringsNonEmpty(
-      sync_pb::SegmentationSpecifics::DeviceMetadata::PlatformType);
-}
-
 TEST(ProtoEnumConversionsTest, GetBrowserTypeString) {
   TestEnumStringsNonEmpty(sync_pb::SyncEnums::BrowserType);
 }
@@ -70,10 +65,6 @@ TEST(ProtoEnumConversionsTest, GetWifiConfigurationMeteredOptionString) {
 TEST(ProtoEnumConversionsTest, GetWifiConfigurationProxyOptionString) {
   TestEnumStringsNonEmpty(
       sync_pb::WifiConfigurationSpecifics::ProxyConfiguration::ProxyOption);
-}
-
-TEST(ProtoEnumConversionsTest, GetUpdatesSourceString) {
-  TestEnumStringsNonEmpty(sync_pb::GetUpdatesCallerInfo::GetUpdatesSource);
 }
 
 TEST(ProtoEnumConversionsTest, GetUpdatesOriginString) {
@@ -127,6 +118,11 @@ TEST(ProtoEnumConversionsTest, GetInitialSyncStateString) {
 
 TEST(ProtoEnumConversionsTest, GetCategoryBenefitTypeString) {
   TestEnumStringsNonEmpty(sync_pb::CardBenefit::CategoryBenefitType);
+}
+
+TEST(ProtoEnumConversionsTest, GetAutoUpgradeExperimentGroupString) {
+  TestEnumStringsNonEmpty(sync_pb::NigoriSpecifics::AutoUpgradeDebugInfo::
+    AutoUpgradeExperimentGroup);
 }
 
 }  // namespace

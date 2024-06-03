@@ -165,7 +165,7 @@ std::vector<ToolbarController::ResponsiveElementInfo>
 ToolbarController::GetDefaultResponsiveElements(Browser* browser) {
   bool is_refresh = features::IsChromeRefresh2023();
   bool is_incognito = browser->profile()->IsIncognitoProfile();
-  // TODO(crbug.com/1445573): Fill in observed identifier.
+  // TODO(crbug.com/40912482): Fill in observed identifier.
   // Order matters because it should match overflow menu order top to bottom.
   std::vector<ToolbarController::ResponsiveElementInfo> elements = {
       {ToolbarController::ElementIdInfo{
@@ -268,6 +268,7 @@ std::string ToolbarController::GetActionNameFromElementIdentifier(
           {kToolbarNewTabButtonElementId, "NewTabButton"},
           {kToolbarSidePanelButtonElementId, "SidePanelButton"},
           {kActionClearBrowsingData, "PinnedClearBrowsingDataButton"},
+          {kActionDevTools, "PinnedDeveloperToolsButton"},
           {kActionNewIncognitoWindow, "PinnedNewIncognitoWindowButton"},
           {kActionPrint, "PinnedPrintButton"},
           {kActionSidePanelShowBookmarks, "PinnedShowBookmarkSidePanelButton"},
@@ -281,6 +282,8 @@ std::string ToolbarController::GetActionNameFromElementIdentifier(
            "PinnedShowSearchCompanionSidePanelButton"},
           {kActionSidePanelShowPerformance, "ShowPerformanceSidePanelButton"},
           {kActionTaskManager, "PinnedTaskManagerButton"},
+          {kActionSidePanelShowLensOverlayResults,
+           "PinnedShowLensOverlayResultsSidePanelButton"},
       });
 
   const auto it = identifier_to_action_name_map->find(identifier);

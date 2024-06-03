@@ -7,32 +7,40 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "ash/ash_export.h"
-#include "ash/picker/model/picker_category.h"
-#include "ash/public/cpp/ash_web_view.h"
+#include "ash/public/cpp/picker/picker_category.h"
+#include "ui/base/emoji/emoji_panel_helper.h"
 
 namespace ash {
 
 class PickerAssetFetcher;
 class PickerSearchResult;
-class PickerSearchResults;
+class PickerSearchResultsSection;
 
 // Delegate for `PickerView`.
 class ASH_EXPORT PickerViewDelegate {
  public:
-  using SearchResultsCallback =
-      base::RepeatingCallback<void(const PickerSearchResults& results)>;
+  using SearchResultsCallback = base::RepeatingCallback<void(
+      std::vector<PickerSearchResultsSection> results)>;
 
   virtual ~PickerViewDelegate() {}
 
-  virtual std::unique_ptr<AshWebView> CreateWebView(
-      const AshWebView::InitParams& params) = 0;
+  virtual std::vector<PickerCategory> GetAvailableCategories() = 0;
+
+  // Returns whether we should show suggested results in zero state view.
+  virtual bool ShouldShowSuggestedResults() = 0;
 
   // Gets initially suggested results for category. Results will be returned via
   // `callback`, which may be called multiples times to update the results.
   virtual void GetResultsForCategory(PickerCategory category,
                                      SearchResultsCallback callback) = 0;
+
+  // Transforms the selected text specified by `category` then commits to the
+  // focused input field. `category` should be one of   kUpperCase, kLowerCase,
+  // kSentenceCase, kTitleCase.
+  virtual void TransformSelectedText(PickerCategory category) = 0;
 
   // Starts a search for `query`. Results will be returned via `callback`,
   // which may be called multiples times to update the results.
@@ -44,6 +52,15 @@ class ASH_EXPORT PickerViewDelegate {
   // If there's no focus event within some timeout after the widget is closed,
   // the result is dropped silently.
   virtual void InsertResultOnNextFocus(const PickerSearchResult& result) = 0;
+
+  // Shows the Emoji Picker with `category`.
+  virtual void ShowEmojiPicker(ui::EmojiPickerCategory category) = 0;
+
+  // Shows the Editor.
+  virtual void ShowEditor() = 0;
+
+  // Sets the current caps lock state.
+  virtual void SetCapsLockEnabled(bool enabled) = 0;
 
   virtual PickerAssetFetcher* GetAssetFetcher() = 0;
 };

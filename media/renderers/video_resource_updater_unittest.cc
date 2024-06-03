@@ -20,6 +20,7 @@
 #include "components/viz/test/test_gles2_interface.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/ipc/client/client_shared_image_interface.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 #include "skia/ext/skcolorspace_primaries.h"
@@ -28,14 +29,8 @@
 namespace media {
 namespace {
 
-// Returns if kRasterInterfaceInVideoResourceUpdater is enabled
-bool CanUseRasterInterface() {
-  return base::FeatureList::IsEnabled(
-      media::kRasterInterfaceInVideoResourceUpdater);
-}
-
 bool UseMultiplanarSoftwarePixelUpload() {
-  return CanUseRasterInterface() && IsWritePixelsYUVEnabled();
+  return IsWritePixelsYUVEnabled();
 }
 
 class FakeSharedBitmapReporter : public viz::SharedBitmapReporter {
@@ -146,40 +141,20 @@ class VideoResourceUpdaterTest : public testing::Test {
     }
   }
 
-  void ExpectedMultiplanarResourceMultiplier(float actual_multiplier,
-                                             float expected_multiplier,
-                                             float error) {
-    if (UseMultiplanarSoftwarePixelUpload()) {
-      // With multiplanar shared images, the multiplier is always 1.0
-      EXPECT_NEAR(actual_multiplier, 1.0, error);
-    } else {
-      EXPECT_NEAR(actual_multiplier, expected_multiplier, error);
-    }
-  }
-
-  void ExpectedMultiplanarResourceOffset(float actual_offset,
-                                         float expected_offset,
-                                         float error) {
-    if (UseMultiplanarSoftwarePixelUpload()) {
-      // With multiplanar shared images, the multiplier is always 0
-      EXPECT_NEAR(actual_offset, 0, error);
-    } else {
-      EXPECT_NEAR(actual_offset, expected_offset, error);
-    }
-  }
-
   std::unique_ptr<VideoResourceUpdater> CreateUpdaterForHardware(
       bool use_stream_video_draw_quad = false) {
     return std::make_unique<VideoResourceUpdater>(
         context_provider_.get(), nullptr, resource_provider_.get(),
-        use_stream_video_draw_quad, /*use_gpu_memory_buffer_resources=*/false,
+        /*shared_image_interface=*/nullptr, use_stream_video_draw_quad,
+        /*use_gpu_memory_buffer_resources=*/false,
         /*max_resource_size=*/10000);
   }
 
   std::unique_ptr<VideoResourceUpdater> CreateUpdaterForSoftware() {
     return std::make_unique<VideoResourceUpdater>(
         /*context_provider=*/nullptr, &shared_bitmap_reporter_,
-        resource_provider_.get(), /*use_stream_video_draw_quad=*/false,
+        resource_provider_.get(), /*shared_image_interface=*/nullptr,
+        /*use_stream_video_draw_quad=*/false,
         /*use_gpu_memory_buffer_resources=*/false, /*max_resource_size=*/10000);
   }
 
@@ -343,12 +318,11 @@ class VideoResourceUpdaterTest : public testing::Test {
     const int kDimension = 10;
     gfx::Size size(kDimension, kDimension);
 
-    auto mailbox = gpu::Mailbox::GenerateForSharedImage();
-
-    gpu::MailboxHolder mailbox_holders[VideoFrame::kMaxPlanes] = {
-        gpu::MailboxHolder(mailbox, kMailboxSyncToken, target)};
-    scoped_refptr<VideoFrame> video_frame = VideoFrame::WrapNativeTextures(
-        format, mailbox_holders,
+    scoped_refptr<gpu::ClientSharedImage>
+        shared_images[VideoFrame::kMaxPlanes] = {
+            gpu::ClientSharedImage::CreateForTesting()};
+    scoped_refptr<VideoFrame> video_frame = VideoFrame::WrapSharedImages(
+        format, shared_images, kMailboxSyncToken, target,
         base::BindOnce(&VideoResourceUpdaterTest::SetReleaseSyncToken,
                        base::Unretained(this)),
         size,                // coded_size
@@ -387,15 +361,12 @@ class VideoResourceUpdaterTest : public testing::Test {
     const int kDimension = 10;
     gfx::Size size(kDimension, kDimension);
 
-    gpu::MailboxHolder mailbox_holders[VideoFrame::kMaxPlanes];
+    scoped_refptr<gpu::ClientSharedImage> shared_images[VideoFrame::kMaxPlanes];
     for (size_t i = 0; i < num_textures; ++i) {
-      gpu::Mailbox mailbox;
-      mailbox.name[0] = 50 + 1;
-      mailbox_holders[i] =
-          gpu::MailboxHolder(mailbox, kMailboxSyncToken, target);
+      shared_images[i] = gpu::ClientSharedImage::CreateForTesting();
     }
-    scoped_refptr<VideoFrame> video_frame = VideoFrame::WrapNativeTextures(
-        format, mailbox_holders,
+    scoped_refptr<VideoFrame> video_frame = VideoFrame::WrapSharedImages(
+        format, shared_images, kMailboxSyncToken, target,
         base::BindOnce(&VideoResourceUpdaterTest::SetReleaseSyncToken,
                        base::Unretained(this)),
         size,                // coded_size
@@ -497,6 +468,28 @@ TEST_F(VideoResourceUpdaterTest, SoftwareFrameRGB) {
   }
 }
 
+// TOOD(crbug.com/333906350): Remove this test once BT2020_CL matrix from
+// gfx::ColorSpace is also removed.
+TEST_F(VideoResourceUpdaterTest, SoftwareFrameBT2020CL) {
+  std::unique_ptr<VideoResourceUpdater> updater = CreateUpdaterForHardware();
+  scoped_refptr<VideoFrame> video_frame = CreateTestYUVVideoFrame();
+  video_frame->set_color_space(gfx::ColorSpace(
+      gfx::ColorSpace::PrimaryID::BT709, gfx::ColorSpace::TransferID::BT709,
+      gfx::ColorSpace::MatrixID::BT2020_CL, gfx::ColorSpace::RangeID::LIMITED));
+
+  // We should always get `VideoFrameResourceType::YUV` since Skia doesn't
+  // support BT2020_CL matrix color spaces.
+  VideoFrameExternalResources resources =
+      updater->CreateExternalResourcesFromVideoFrame(video_frame);
+  EXPECT_EQ(VideoFrameResourceType::YUV, resources.type);
+
+  // Setting to kSharedImageFormat, resources type should not change.
+  video_frame->set_shared_image_format_type(
+      SharedImageFormatType::kSharedImageFormat);
+  resources = updater->CreateExternalResourcesFromVideoFrame(video_frame);
+  EXPECT_EQ(VideoFrameResourceType::YUV, resources.type);
+}
+
 // Ensure the visible data is where it's supposed to be.
 TEST_F(VideoResourceUpdaterTest, SoftwareFrameRGBNonOrigin) {
   std::unique_ptr<VideoResourceUpdater> updater = CreateUpdaterForHardware();
@@ -587,16 +580,12 @@ TEST_F(VideoResourceUpdaterTestWithF16, HighBitFrame) {
   VideoFrameExternalResources resources =
       updater->CreateExternalResourcesFromVideoFrame(video_frame);
   ExpectedMultiplanarResourceType(resources.type);
-  ExpectedMultiplanarResourceMultiplier(resources.multiplier, 1.0, 0.1);
-  ExpectedMultiplanarResourceOffset(resources.offset, 0, 0.1);
 
   // Create the resource again, to test the path where the
   // resources are cached.
   VideoFrameExternalResources resources2 =
       updater->CreateExternalResourcesFromVideoFrame(video_frame);
   ExpectedMultiplanarResourceType(resources2.type);
-  ExpectedMultiplanarResourceMultiplier(resources2.multiplier, 1.0, 0.1);
-  ExpectedMultiplanarResourceOffset(resources2.offset, 0, 0.1);
 }
 
 class VideoResourceUpdaterTestWithR16 : public VideoResourceUpdaterTest {
@@ -620,18 +609,12 @@ TEST_F(VideoResourceUpdaterTestWithR16, HighBitFrame) {
   ExpectedMultiplanarResourceType(resources.type);
   EXPECT_EQ(resources.bits_per_channel, 10u);
 
-  // Max 10-bit values as read by a sampler.
-  ExpectedMultiplanarResourceMultiplier(resources.multiplier, 1.0, 0.0001);
-  ExpectedMultiplanarResourceOffset(resources.offset, 0.0, 0.1);
-
   // Create the resource again, to test the path where the
   // resources are cached.
   VideoFrameExternalResources resources2 =
       updater->CreateExternalResourcesFromVideoFrame(video_frame);
   ExpectedMultiplanarResourceType(resources2.type);
   EXPECT_EQ(resources2.bits_per_channel, 10u);
-  ExpectedMultiplanarResourceMultiplier(resources2.multiplier, 1.0, 0.0001);
-  ExpectedMultiplanarResourceOffset(resources2.offset, 0.0, 0.1);
 }
 
 TEST_F(VideoResourceUpdaterTest, NV12FrameSoftwareCompositor) {

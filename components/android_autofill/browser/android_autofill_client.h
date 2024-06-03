@@ -75,13 +75,18 @@ class AndroidAutofillClient : public autofill::ContentAutofillClient {
       base::FunctionRef<void(const base::android::JavaRef<jobject>&)>
           notify_client_created);
 
+  // Checks whether the AutofillService selected in Android settings works for
+  // the browser. Autofill With Google should never fill Chrome since the
+  // built-in filling mechanism is the preferred way.
+  static bool AllowedForAutofillService();
+
   AndroidAutofillClient(const AndroidAutofillClient&) = delete;
   AndroidAutofillClient& operator=(const AndroidAutofillClient&) = delete;
 
   ~AndroidAutofillClient() override;
 
   // AutofillClient:
-  bool IsOffTheRecord() override;
+  bool IsOffTheRecord() const override;
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   autofill::AutofillCrowdsourcingManager* GetCrowdsourcingManager() override;
   autofill::PersonalDataManager* GetPersonalDataManager() override;
@@ -92,8 +97,6 @@ class AndroidAutofillClient : public autofill::ContentAutofillClient {
   syncer::SyncService* GetSyncService() override;
   signin::IdentityManager* GetIdentityManager() override;
   autofill::FormDataImporter* GetFormDataImporter() override;
-  autofill::payments::PaymentsNetworkInterface* GetPaymentsNetworkInterface()
-      override;
   autofill::StrikeDatabase* GetStrikeDatabase() override;
   ukm::UkmRecorder* GetUkmRecorder() override;
   ukm::SourceId GetUkmSourceId() override;
@@ -131,8 +134,6 @@ class AndroidAutofillClient : public autofill::ContentAutofillClient {
       base::span<const autofill::SelectOption> datalist) override;
   std::vector<autofill::Suggestion> GetPopupSuggestions() const override;
   void PinPopupView() override;
-  autofill::AutofillClient::PopupOpenArgs GetReopenPopupArgs(
-      autofill::AutofillSuggestionTriggerSource trigger_source) const override;
   void UpdatePopup(
       const std::vector<autofill::Suggestion>& suggestions,
       autofill::FillingProduct main_filling_product,
@@ -149,18 +150,10 @@ class AndroidAutofillClient : public autofill::ContentAutofillClient {
   bool IsContextSecure() const override;
   autofill::FormInteractionsFlowId GetCurrentFormInteractionsFlowId() override;
 
-  void Dismissed(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
-  void SuggestionSelected(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& obj,
-                          jint position);
-
   // ContentAutofillClient:
   std::unique_ptr<autofill::AutofillManager> CreateManager(
       base::PassKey<autofill::ContentAutofillDriver> pass_key,
       autofill::ContentAutofillDriver& driver) override;
-  void InitAgent(base::PassKey<autofill::ContentAutofillDriverFactory> pass_key,
-                 const mojo::AssociatedRemote<autofill::mojom::AutofillAgent>&
-                     agent) override;
 
  private:
   friend class content::WebContentsUserData<AndroidAutofillClient>;
@@ -186,11 +179,6 @@ class AndroidAutofillClient : public autofill::ContentAutofillClient {
 
   JavaObjectWeakGlobalRef java_ref_;
 
-  ui::ViewAndroid::ScopedAnchorView anchor_view_;
-
-  // The current Autofill query values.
-  std::vector<autofill::Suggestion> suggestions_;
-  base::WeakPtr<autofill::AutofillPopupDelegate> delegate_;
   std::unique_ptr<autofill::AutofillCrowdsourcingManager>
       crowdsourcing_manager_;
 };

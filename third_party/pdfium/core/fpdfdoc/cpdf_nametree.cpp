@@ -16,9 +16,9 @@
 #include "core/fpdfapi/parser/cpdf_reference.h"
 #include "core/fpdfapi/parser/cpdf_string.h"
 #include "core/fpdfapi/parser/fpdf_parser_decode.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/ptr_util.h"
 #include "core/fxcrt/stl_util.h"
-#include "third_party/base/check.h"
-#include "third_party/base/memory/ptr_util.h"
 
 namespace {
 
@@ -244,7 +244,7 @@ RetainPtr<const CPDF_Object> SearchNameNodeByNameInternal(
       if (ppFind)
         *ppFind = pNames;
       if (pFindIndex)
-        *pFindIndex = pdfium::base::checked_cast<int32_t>(i);
+        *pFindIndex = pdfium::checked_cast<int32_t>(i);
       if (iCompare < 0)
         continue;
 
@@ -580,5 +580,6 @@ RetainPtr<const CPDF_Object> CPDF_NameTree::LookupValue(
 
 RetainPtr<const CPDF_Array> CPDF_NameTree::LookupNewStyleNamedDest(
     const ByteString& sName) {
-  return GetNamedDestFromObject(LookupValue(PDF_DecodeText(sName.raw_span())));
+  return GetNamedDestFromObject(
+      LookupValue(PDF_DecodeText(sName.unsigned_span())));
 }

@@ -50,9 +50,13 @@ CalculationExpressionSizingKeywordNode::CalculationExpressionSizingKeywordNode(
     Keyword keyword)
     : keyword_(keyword) {
   if (keyword != Keyword::kSize && keyword != Keyword::kAny) {
-    // TODO(https://crbug.com/313072): When we implement 'auto' it probably
-    // needs to be tracked separately here.
-    has_content_or_intrinsic_ = true;
+    if (keyword == Keyword::kAuto) {
+      has_auto_ = true;
+    } else if (keyword == Keyword::kWebkitFillAvailable) {
+      has_stretch_ = true;
+    } else {
+      has_content_or_intrinsic_ = true;
+    }
   }
 #if DCHECK_IS_ON()
   result_type_ = ResultType::kPixelsAndPercent;
@@ -69,7 +73,9 @@ float CalculationExpressionSizingKeywordNode::Evaluate(
       return *input.size_keyword_basis;
     case Keyword::kAny:
       return 0.0f;
-    // TODO(https://crbug.com/313072): Add support for 'auto'.
+    case Keyword::kAuto:
+      intrinsic_type = Length::Type::kAuto;
+      break;
     case Keyword::kMinContent:
     case Keyword::kWebkitMinContent:
       intrinsic_type = Length::Type::kMinContent;
@@ -321,7 +327,9 @@ CalculationExpressionOperationNode::CreateSimplified(Children&& children,
         }
       }
     }
-    case CalculationOperator::kProgress: {
+    case CalculationOperator::kProgress:
+    case CalculationOperator::kMediaProgress:
+    case CalculationOperator::kContainerProgress: {
       DCHECK_EQ(children.size(), 3u);
       Vector<float, 3> operand_pixels;
       bool can_simplify = true;
@@ -367,12 +375,30 @@ CalculationExpressionOperationNode::CalculationExpressionOperationNode(
   result_type_ = ResolvedResultType();
   DCHECK_NE(result_type_, ResultType::kInvalid);
 #endif
-  for (const auto& child : children_) {
-    if (child->HasAnchorQueries()) {
-      has_anchor_queries_ = true;
-    }
-    if (child->HasContentOrIntrinsicSize()) {
-      has_content_or_intrinsic_ = true;
+  if (op == CalculationOperator::kCalcSize) {
+    // "A calc-size() is treated, in all respects, as if it were its
+    // calc-size basis."  This is particularly relevant for ignoring the
+    // presence of percentages in the calculation.
+    DCHECK_EQ(children_.size(), 2u);
+    const auto& basis = children_[0];
+    has_content_or_intrinsic_ = basis->HasContentOrIntrinsicSize();
+    has_auto_ = basis->HasAuto();
+    has_percent_ = basis->HasPercent();
+    has_stretch_ = basis->HasStretch();
+  } else {
+    for (const auto& child : children_) {
+      if (child->HasContentOrIntrinsicSize()) {
+        has_content_or_intrinsic_ = true;
+      }
+      if (child->HasAuto()) {
+        has_auto_ = true;
+      }
+      if (child->HasPercent()) {
+        has_percent_ = true;
+      }
+      if (child->HasStretch()) {
+        has_stretch_ = true;
+      }
     }
   }
 }
@@ -456,19 +482,28 @@ float CalculationExpressionOperationNode::Evaluate(
         return value > 0 ? 1 : -1;
       }
     }
-    case CalculationOperator::kProgress: {
-      DCHECK_EQ(children_.size(), 3u);
-      float progress = children_[0]->Evaluate(max_value, input);
-      float from = children_[1]->Evaluate(max_value, input);
-      float to = children_[2]->Evaluate(max_value, input);
-      return (progress - from) / (to - from);
-    }
     case CalculationOperator::kCalcSize: {
       DCHECK_EQ(children_.size(), 2u);
       Length::EvaluationInput calculation_input(input);
       calculation_input.size_keyword_basis =
           children_[0]->Evaluate(max_value, input);
+      if (max_value == kIndefiniteSize) {
+        // "When evaluating the calc-size calculation, if percentages are not
+        // definite in the given context, the resolve to 0px. Otherwise, they
+        // resolve as normal."
+        //   -- https://drafts.csswg.org/css-values-5/#resolving-calc-size
+        max_value = 0.0f;
+      }
       return children_[1]->Evaluate(max_value, calculation_input);
+    }
+    case CalculationOperator::kProgress:
+    case CalculationOperator::kMediaProgress:
+    case CalculationOperator::kContainerProgress: {
+      DCHECK(!children_.empty());
+      float progress = children_[0]->Evaluate(max_value, input);
+      float from = children_[1]->Evaluate(max_value, input);
+      float to = children_[2]->Evaluate(max_value, input);
+      return (progress - from) / (to - from);
     }
     case CalculationOperator::kInvalid:
       break;
@@ -525,7 +560,9 @@ CalculationExpressionOperationNode::Zoom(double factor) const {
     case CalculationOperator::kHypot:
     case CalculationOperator::kAbs:
     case CalculationOperator::kSign:
-    case CalculationOperator::kProgress: {
+    case CalculationOperator::kProgress:
+    case CalculationOperator::kMediaProgress:
+    case CalculationOperator::kContainerProgress: {
       DCHECK(children_.size());
       Vector<scoped_refptr<const CalculationExpressionNode>> cloned_operands;
       cloned_operands.reserve(children_.size());
@@ -603,7 +640,9 @@ CalculationExpressionOperationNode::ResolvedResultType() const {
       return first_child_type;
     }
     case CalculationOperator::kSign:
+    case CalculationOperator::kContainerProgress:
     case CalculationOperator::kProgress:
+    case CalculationOperator::kMediaProgress:
       return ResultType::kNumber;
     case CalculationOperator::kInvalid:
       NOTREACHED();

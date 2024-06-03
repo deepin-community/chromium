@@ -15,7 +15,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
@@ -123,7 +122,7 @@ void AuctionURLLoaderFactoryProxy::CreateLoaderAndStart(
   }
 
   bool is_request_allowed = false;
-  bool is_trusted_bidding_signals_request = false;
+  bool is_trusted_signals_request = false;
   std::optional<InterestGroupAuctionFetchType> event_type;
 
   const SubresourceUrlBuilder::BundleSubresourceInfo* maybe_subresource_info =
@@ -145,7 +144,7 @@ void AuctionURLLoaderFactoryProxy::CreateLoaderAndStart(
                      ? InterestGroupAuctionFetchType::kSellerTrustedSignals
                      : InterestGroupAuctionFetchType::kBidderTrustedSignals;
     is_request_allowed = true;
-    is_trusted_bidding_signals_request = true;
+    is_trusted_signals_request = true;
   } else {
     maybe_subresource_info =
         subresource_url_authorizations_.GetAuthorizationInfo(url_request.url);
@@ -207,7 +206,7 @@ void AuctionURLLoaderFactoryProxy::CreateLoaderAndStart(
         *new_request.devtools_request_id, relevant_auction_ids);
   }
 
-  if (is_trusted_bidding_signals_request) {
+  if (is_trusted_signals_request) {
     std::optional<std::string> maybe_deprecation_label =
         get_cookie_deprecation_label_.Run();
     if (maybe_deprecation_label) {
@@ -227,7 +226,7 @@ void AuctionURLLoaderFactoryProxy::CreateLoaderAndStart(
     // URL's scheme is https and not uuid-in-package. However, unlike
     // traditional network requests, the browser cannot read the response if
     // kNoCors is used, even with CORS-safe methods and headers -- the response
-    // is blocked by CORB.
+    // is blocked by ORB.
     new_request.mode = network::mojom::RequestMode::kCors;
   } else {
     // CORS is not needed.
@@ -238,9 +237,9 @@ void AuctionURLLoaderFactoryProxy::CreateLoaderAndStart(
     //
     // For seller worklets, while the publisher page provides both the script
     // and the trusted signals URLs, both requests use safe methods (GET), and
-    // don't set any headers, so CORS is not needed. CORB would block the
+    // don't set any headers, so CORS is not needed. ORB would block the
     // signal's JSON response, if made in the context of the page, but the JSON
-    // is only made available to the same-origin script, so CORB isn't needed
+    // is only made available to the same-origin script, so ORB isn't needed
     // here.
     new_request.mode = network::mojom::RequestMode::kNoCors;
   }
@@ -248,7 +247,7 @@ void AuctionURLLoaderFactoryProxy::CreateLoaderAndStart(
   GetUrlLoaderFactoryCallback url_loader_factory_getter =
       get_trusted_url_loader_factory_;
   if (is_for_seller_) {
-    if (!is_trusted_bidding_signals_request && !maybe_subresource_info) {
+    if (!is_trusted_signals_request && !maybe_subresource_info) {
       // The script URL is provided in its entirety by the frame initiating the
       // auction, so just use its URLLoaderFactory for those requests.
       url_loader_factory_getter = get_frame_url_loader_factory_;

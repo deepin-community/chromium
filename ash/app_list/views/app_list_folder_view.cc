@@ -702,7 +702,9 @@ AppListFolderView::AppListFolderView(AppListFolderController* folder_controller,
 
   // Create a shadow under `background_view_`.
   shadow_ = SystemShadow::CreateShadowOnNinePatchLayer(
-      SystemShadow::Type::kElevation12);
+      SystemShadow::Type::kElevation12,
+      base::BindRepeating(&AppListFolderView::OnShadowLayerRecreated,
+                          base::Unretained(this)));
   background_view_->AddLayerToRegion(shadow_->GetLayer(),
                                      views::LayerRegion::kBelow);
 
@@ -824,7 +826,8 @@ void AppListFolderView::ScheduleShowHideAnimation(bool show,
 
   shown_ = show;
   if (show) {
-    GetViewAccessibility().OverrideName(folder_item_view_->GetAccessibleName());
+    GetViewAccessibility().SetName(folder_item_view_->GetAccessibleName(),
+                                   ax::mojom::NameFrom::kAttribute);
   }
   NotifyAccessibilityEvent(ax::mojom::Event::kStateChanged, true);
 
@@ -1040,6 +1043,12 @@ void AppListFolderView::UpdatePreferredBounds() {
 
 void AppListFolderView::UpdateShadowBounds() {
   shadow_->SetContentBounds(background_view_->layer()->bounds());
+}
+
+void AppListFolderView::OnShadowLayerRecreated(ui::Layer* old_layer,
+                                               ui::Layer* new_layer) {
+  background_view_->RemoveLayerFromRegions(old_layer);
+  background_view_->AddLayerToRegion(new_layer, views::LayerRegion::kBelow);
 }
 
 int AppListFolderView::GetYOffsetForFolder() {

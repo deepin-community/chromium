@@ -14,6 +14,8 @@
 #include <string>
 #include <utility>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_memcpy_wrappers.h"
@@ -22,8 +24,6 @@
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxcrt/string_pool_template.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 // Instantiate.
 template class fxcrt::StringViewTemplate<char>;
@@ -90,9 +90,11 @@ ByteString ByteString::Format(const char* pFormat, ...) {
   return ret;
 }
 
+// TODO(tsepez): should be UNSAFE_BUFFER_USAGE.
 ByteString::ByteString(const char* pStr, size_t nLen) {
   if (nLen) {
-    m_pData = StringData::Create({pStr, nLen});
+    // SAFETY: caller ensures `pStr` points to at least `nLen` chars.
+    m_pData = StringData::Create(UNSAFE_BUFFERS(pdfium::make_span(pStr, nLen)));
   }
 }
 
@@ -147,7 +149,7 @@ ByteString::ByteString(const std::initializer_list<ByteStringView>& list) {
 ByteString::ByteString(const fxcrt::ostringstream& outStream) {
   auto str = outStream.str();
   if (!str.empty()) {
-    m_pData = StringData::Create({str.c_str(), str.size()});
+    m_pData = StringData::Create(pdfium::make_span(str));
   }
 }
 
@@ -271,25 +273,22 @@ bool ByteString::operator<(const ByteString& other) const {
 }
 
 bool ByteString::EqualNoCase(ByteStringView str) const {
-  if (!m_pData)
+  if (!m_pData) {
     return str.IsEmpty();
-
-  size_t len = str.GetLength();
-  if (m_pData->m_nDataLength != len)
+  }
+  if (m_pData->m_nDataLength != str.GetLength()) {
     return false;
-
-  const uint8_t* pThis = (const uint8_t*)m_pData->m_String;
-  const uint8_t* pThat = str.raw_str();
-  for (size_t i = 0; i < len; i++) {
-    if ((*pThis) != (*pThat)) {
-      uint8_t this_char = tolower(*pThis);
-      uint8_t that_char = tolower(*pThat);
-      if (this_char != that_char) {
-        return false;
-      }
+  }
+  pdfium::span<const uint8_t> this_span = pdfium::as_bytes(m_pData->span());
+  pdfium::span<const uint8_t> that_span = str.unsigned_span();
+  while (!this_span.empty()) {
+    uint8_t this_char = this_span.front();
+    uint8_t that_char = that_span.front();
+    if (this_char != that_char && tolower(this_char) != tolower(that_char)) {
+      return false;
     }
-    pThis++;
-    pThat++;
+    this_span = this_span.subspan(1);
+    that_span = that_span.subspan(1);
   }
   return true;
 }
@@ -354,85 +353,17 @@ int ByteString::Compare(ByteStringView str) const {
   return this_len < that_len ? -1 : 1;
 }
 
-void ByteString::Trim() {
-  TrimRight(kTrimChars);
-  TrimLeft(kTrimChars);
+void ByteString::TrimWhitespace() {
+  TrimWhitespaceBack();
+  TrimWhitespaceFront();
 }
 
-void ByteString::Trim(char target) {
-  ByteStringView targets(target);
-  TrimRight(targets);
-  TrimLeft(targets);
+void ByteString::TrimWhitespaceFront() {
+  TrimFront(kTrimChars);
 }
 
-void ByteString::Trim(ByteStringView targets) {
-  TrimRight(targets);
-  TrimLeft(targets);
-}
-
-void ByteString::TrimLeft() {
-  TrimLeft(kTrimChars);
-}
-
-void ByteString::TrimLeft(char target) {
-  TrimLeft(ByteStringView(target));
-}
-
-void ByteString::TrimLeft(ByteStringView targets) {
-  if (!m_pData || targets.IsEmpty())
-    return;
-
-  size_t len = GetLength();
-  if (len == 0)
-    return;
-
-  size_t pos = 0;
-  while (pos < len) {
-    size_t i = 0;
-    while (i < targets.GetLength() && targets[i] != m_pData->m_String[pos])
-      i++;
-    if (i == targets.GetLength())
-      break;
-    pos++;
-  }
-  if (pos) {
-    ReallocBeforeWrite(len);
-    size_t nDataLength = len - pos;
-    FXSYS_memmove(m_pData->m_String, m_pData->m_String + pos,
-                  (nDataLength + 1) * sizeof(char));
-    m_pData->m_nDataLength = nDataLength;
-  }
-}
-
-void ByteString::TrimRight() {
-  TrimRight(kTrimChars);
-}
-
-void ByteString::TrimRight(char target) {
-  TrimRight(ByteStringView(target));
-}
-
-void ByteString::TrimRight(ByteStringView targets) {
-  if (!m_pData || targets.IsEmpty())
-    return;
-
-  size_t pos = GetLength();
-  if (pos == 0)
-    return;
-
-  while (pos) {
-    size_t i = 0;
-    while (i < targets.GetLength() && targets[i] != m_pData->m_String[pos - 1])
-      i++;
-    if (i == targets.GetLength())
-      break;
-    pos--;
-  }
-  if (pos < m_pData->m_nDataLength) {
-    ReallocBeforeWrite(m_pData->m_nDataLength);
-    m_pData->m_String[pos] = 0;
-    m_pData->m_nDataLength = pos;
-  }
+void ByteString::TrimWhitespaceBack() {
+  TrimBack(kTrimChars);
 }
 
 std::ostream& operator<<(std::ostream& os, const ByteString& str) {

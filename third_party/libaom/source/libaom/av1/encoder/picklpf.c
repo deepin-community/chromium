@@ -27,10 +27,10 @@
 #include "av1/encoder/encoder.h"
 #include "av1/encoder/picklpf.h"
 
-// AV1 loop filter applies to the whole frame accoring to mi_rows and mi_cols,
+// AV1 loop filter applies to the whole frame according to mi_rows and mi_cols,
 // which are calculated based on aligned width and aligned height,
 // In addition, if super res is enabled, it copies the whole frame
-// according to the alighed with and height (av1_superres_upscale()).
+// according to the aligned width and height (av1_superres_upscale()).
 // So we need to copy the whole filtered region, instead of the cropped region.
 // For example, input image size is: 160x90.
 // Then src->y_crop_width = 160, src->y_crop_height = 90.
@@ -257,6 +257,8 @@ void av1_pick_filter_level(const YV12_BUFFER_CONFIG *sd, AV1_COMP *cpi,
         inter_frame_multiplier = inter_frame_multiplier << 1;
       else if (cpi->rc.frame_source_sad > 50000)
         inter_frame_multiplier = 3 * (inter_frame_multiplier >> 1);
+    } else if (cpi->sf.rt_sf.use_fast_fixed_part) {
+      inter_frame_multiplier = inter_frame_multiplier << 1;
     }
     // These values were determined by linear fitting the result of the
     // searched level for 8 bit depth:

@@ -178,7 +178,7 @@ MATCHER_P(CodeEquals, code, "Checks error codes but not messages.") {
 
 class SenderSessionTest : public ::testing::Test {
  public:
-  SenderSessionTest() : clock_(Clock::time_point{}), task_runner_(&clock_) {}
+  SenderSessionTest() : clock_(Clock::time_point{}), task_runner_(clock_) {}
 
   std::unique_ptr<MockEnvironment> MakeEnvironment() {
     auto environment = std::make_unique<NiceMock<MockEnvironment>>(
@@ -194,7 +194,7 @@ class SenderSessionTest : public ::testing::Test {
     environment_ = MakeEnvironment();
 
     SenderSession::Configuration config{IPAddress::kV4LoopbackAddress(),
-                                        &client_,
+                                        client_,
                                         environment_.get(),
                                         message_port_.get(),
                                         "sender-12345",

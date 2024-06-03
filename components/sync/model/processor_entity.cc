@@ -98,10 +98,15 @@ bool ProcessorEntity::HasCommitData() const {
 }
 
 bool ProcessorEntity::MatchesData(const EntityData& data) const {
-  if (metadata_.is_deleted())
-    return data.is_deleted();
-  if (data.is_deleted())
+  if (data.collaboration_id != metadata_.collaboration().collaboration_id()) {
     return false;
+  }
+  if (metadata_.is_deleted()) {
+    return data.is_deleted();
+  }
+  if (data.is_deleted()) {
+    return false;
+  }
   return MatchesSpecificsHash(data.specifics);
 }
 
@@ -126,7 +131,7 @@ bool ProcessorEntity::IsUnsynced() const {
   return metadata_.sequence_number() > metadata_.acked_sequence_number();
 }
 
-// TODO(crbug.com/1137817): simplify the API and consider changing
+// TODO(crbug.com/40725000): simplify the API and consider changing
 // RequiresCommitRequest() with IsUnsynced().
 bool ProcessorEntity::RequiresCommitRequest() const {
   return metadata_.sequence_number() > commit_requested_sequence_number_;
@@ -169,6 +174,10 @@ void ProcessorEntity::RecordAcceptedRemoteUpdate(
   metadata_.set_is_deleted(update.entity.is_deleted());
   metadata_.set_modification_time(
       TimeToProtoTime(update.entity.modification_time));
+  if (!update.entity.collaboration_id.empty()) {
+    metadata_.mutable_collaboration()->set_collaboration_id(
+        update.entity.collaboration_id);
+  }
   UpdateSpecificsHash(update.entity.specifics);
   *metadata_.mutable_possibly_trimmed_base_specifics() =
       std::move(trimmed_specifics);
@@ -203,6 +212,10 @@ void ProcessorEntity::RecordLocalUpdate(
       std::move(trimmed_specifics);
   if (!data->creation_time.is_null()) {
     metadata_.set_creation_time(TimeToProtoTime(data->creation_time));
+  }
+  if (!data->collaboration_id.empty()) {
+    metadata_.mutable_collaboration()->set_collaboration_id(
+        data->collaboration_id);
   }
   metadata_.set_modification_time(TimeToProtoTime(modification_time));
   metadata_.set_is_deleted(false);

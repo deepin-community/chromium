@@ -87,6 +87,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_observer.h"
 #include "third_party/blink/renderer/platform/loader/fetch/response_body_loader.h"
 #include "third_party/blink/renderer/platform/loader/fetch/shared_buffer_bytes_consumer.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/background_response_processor.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/request_conversion.h"
 #include "third_party/blink/renderer/platform/loader/mixed_content_autoupgrade_status.h"
@@ -319,6 +320,12 @@ void ResourceLoader::Trace(Visitor* visitor) const {
 
 void ResourceLoader::Start() {
   const ResourceRequestHead& request = resource_->GetResourceRequest();
+
+  if (request.GetKeepalive()) {
+    FetchUtils::LogFetchKeepAliveRequestMetric(
+        request.GetRequestContext(),
+        FetchUtils::FetchKeepAliveRequestState::kStarted);
+  }
 
   if (!resource_->Url().ProtocolIsData()) {
     network_resource_request_ = CreateNetworkRequest(request, request_body_);
@@ -773,6 +780,15 @@ void ResourceLoader::DidReceiveResponse(
     mojo::ScopedDataPipeConsumerHandle body,
     std::optional<mojo_base::BigBuffer> cached_metadata) {
   DCHECK(!response.IsNull());
+
+  if (resource_->GetResourceRequest().GetKeepalive()) {
+    // Logs when a keepalive request succeeds. It does not matter whether the
+    // response is a multipart resource or not.
+    FetchUtils::LogFetchKeepAliveRequestMetric(
+        resource_->GetResourceRequest().GetRequestContext(),
+        FetchUtils::FetchKeepAliveRequestState::kSucceeded);
+  }
+
   DidReceiveResponseInternal(response.ToResourceResponse(),
                              std::move(cached_metadata));
   if (!IsLoading() || !body) {
@@ -969,6 +985,8 @@ void ResourceLoader::DidReceiveResponseInternal(
     return;
   }
 
+  fetcher_->MarkEarlyHintConsumedIfNeeded(resource_->InspectorId(), resource_,
+                                          response);
   // FrameType never changes during the lifetime of a request.
   if (auto* observer = fetcher_->GetResourceLoadObserver()) {
     ResourceRequest request_for_obserber(initial_request);
@@ -1143,6 +1161,12 @@ void ResourceLoader::CountFeature(blink::mojom::WebFeature feature) {
 }
 
 void ResourceLoader::HandleError(const ResourceError& error) {
+  if (resource_->GetResourceRequest().GetKeepalive()) {
+    FetchUtils::LogFetchKeepAliveRequestMetric(
+        resource_->GetResourceRequest().GetRequestContext(),
+        FetchUtils::FetchKeepAliveRequestState::kFailed);
+  }
+
   if (error.CorsErrorStatus() &&
       error.CorsErrorStatus()
           ->has_authorization_covered_by_wildcard_on_preflight) {
@@ -1295,6 +1319,17 @@ void ResourceLoader::RequestAsynchronously() {
   }
   CHECK(loader_);
   CHECK(network_resource_request_);
+
+  // When `loader_` is a BackgroundURLLoader and
+  // kBackgroundResponseProcessorBackground feature param is enabled, creates a
+  // BackgroundResponseProcessor for the `resource_`, and set it to the
+  // `loader_`.
+  if (loader_->CanHandleResponseOnBackground() &&
+      features::kBackgroundResponseProcessor.Get()) {
+    if (auto processor = resource_->MaybeCreateBackgroundResponseProcessor()) {
+      loader_->SetBackgroundResponseProcessor(std::move(processor));
+    }
+  }
 
   // Don't do mime sniffing for fetch (crbug.com/2016)
   bool no_mime_sniffing = resource_->GetResourceRequest().GetRequestContext() ==

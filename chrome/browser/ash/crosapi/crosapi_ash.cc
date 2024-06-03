@@ -63,6 +63,7 @@
 #include "chrome/browser/ash/crosapi/file_system_access_cloud_identifier_provider_ash.h"
 #include "chrome/browser/ash/crosapi/file_system_provider_service_ash.h"
 #include "chrome/browser/ash/crosapi/force_installed_tracker_ash.h"
+#include "chrome/browser/ash/crosapi/full_restore_ash.h"
 #include "chrome/browser/ash/crosapi/fullscreen_controller_ash.h"
 #include "chrome/browser/ash/crosapi/geolocation_service_ash.h"
 #include "chrome/browser/ash/crosapi/guest_os_sk_forwarder_factory_ash.h"
@@ -88,6 +89,7 @@
 #include "chrome/browser/ash/crosapi/networking_attributes_ash.h"
 #include "chrome/browser/ash/crosapi/networking_private_ash.h"
 #include "chrome/browser/ash/crosapi/nonclosable_app_toast_service_ash.h"
+#include "chrome/browser/ash/crosapi/one_drive_integration_service_ash.h"
 #include "chrome/browser/ash/crosapi/one_drive_notification_service_ash.h"
 #include "chrome/browser/ash/crosapi/parent_access_ash.h"
 #include "chrome/browser/ash/crosapi/payment_app_instance_ash.h"
@@ -98,11 +100,13 @@
 #include "chrome/browser/ash/crosapi/resource_manager_ash.h"
 #include "chrome/browser/ash/crosapi/screen_ai_downloader_ash.h"
 #include "chrome/browser/ash/crosapi/screen_manager_ash.h"
+#include "chrome/browser/ash/crosapi/search_controller_factory_ash.h"
 #include "chrome/browser/ash/crosapi/search_provider_ash.h"
 #include "chrome/browser/ash/crosapi/select_file_ash.h"
 #include "chrome/browser/ash/crosapi/sharesheet_ash.h"
 #include "chrome/browser/ash/crosapi/speech_recognition_ash.h"
 #include "chrome/browser/ash/crosapi/structured_metrics_service_ash.h"
+#include "chrome/browser/ash/crosapi/suggestion_service_ash.h"
 #include "chrome/browser/ash/crosapi/task_manager_ash.h"
 #include "chrome/browser/ash/crosapi/time_zone_service_ash.h"
 #include "chrome/browser/ash/crosapi/url_handler_ash.h"
@@ -193,7 +197,7 @@ namespace crosapi {
 namespace {
 
 // Assumptions:
-// 1. TODO(crbug.com/1102768): Multi-Signin / Fast-User-Switching is disabled.
+// 1. TODO(crbug.com/40704278): Multi-Signin / Fast-User-Switching is disabled.
 // 2. ash-chrome has 1 and only 1 "regular" `Profile`.
 Profile* GetAshProfile() {
 #if DCHECK_IS_ON()
@@ -211,6 +215,8 @@ Profile* GetAshProfile() {
 }
 
 }  // namespace
+
+CrosapiAsh::TestControllerReceiver::~TestControllerReceiver() = default;
 
 CrosapiAsh::CrosapiAsh(CrosapiDependencyRegistry* registry)
     : arc_ash_(std::make_unique<ArcAsh>()),
@@ -265,6 +271,7 @@ CrosapiAsh::CrosapiAsh(CrosapiDependencyRegistry* registry)
           std::make_unique<FileSystemProviderServiceAsh>()),
       force_installed_tracker_ash_(
           std::make_unique<ForceInstalledTrackerAsh>()),
+      full_restore_ash_(std::make_unique<FullRestoreAsh>()),
       fullscreen_controller_ash_(std::make_unique<FullscreenControllerAsh>()),
       geolocation_service_ash_(std::make_unique<GeolocationServiceAsh>()),
       identity_manager_ash_(std::make_unique<IdentityManagerAsh>()),
@@ -294,6 +301,8 @@ CrosapiAsh::CrosapiAsh(CrosapiDependencyRegistry* registry)
           g_browser_process->platform_part()->ash_proxy_monitor())),
       one_drive_notification_service_ash_(
           std::make_unique<OneDriveNotificationServiceAsh>()),
+      one_drive_integration_service_ash_(
+          std::make_unique<OneDriveIntegrationServiceAsh>()),
       parent_access_ash_(std::make_unique<ParentAccessAsh>()),
       payment_app_instance_ash_(std::make_unique<PaymentAppInstanceAsh>()),
       policy_service_ash_(std::make_unique<PolicyServiceAsh>()),
@@ -317,6 +326,8 @@ CrosapiAsh::CrosapiAsh(CrosapiDependencyRegistry* registry)
       resource_manager_ash_(std::make_unique<ResourceManagerAsh>()),
       screen_ai_downloader_ash_(std::make_unique<ScreenAIDownloaderAsh>()),
       screen_manager_ash_(std::make_unique<ScreenManagerAsh>()),
+      search_controller_factory_ash_(
+          std::make_unique<SearchControllerFactoryAsh>()),
       search_provider_ash_(std::make_unique<SearchProviderAsh>()),
       select_file_ash_(std::make_unique<SelectFileAsh>()),
       sharesheet_ash_(std::make_unique<SharesheetAsh>()),
@@ -324,6 +335,7 @@ CrosapiAsh::CrosapiAsh(CrosapiDependencyRegistry* registry)
       speech_recognition_ash_(std::make_unique<SpeechRecognitionAsh>()),
       structured_metrics_service_ash_(
           std::make_unique<StructuredMetricsServiceAsh>()),
+      suggestion_service_ash_(std::make_unique<SuggestionServiceAsh>()),
       task_manager_ash_(std::make_unique<TaskManagerAsh>()),
       time_zone_service_ash_(std::make_unique<TimeZoneServiceAsh>()),
       tts_ash_(std::make_unique<TtsAsh>(g_browser_process->profile_manager())),
@@ -660,6 +672,11 @@ void CrosapiAsh::BindForceInstalledTracker(
   force_installed_tracker_ash_->BindReceiver(std::move(receiver));
 }
 
+void CrosapiAsh::BindFullRestore(
+    mojo::PendingReceiver<crosapi::mojom::FullRestore> receiver) {
+  full_restore_ash_->BindReceiver(std::move(receiver));
+}
+
 void CrosapiAsh::BindFullscreenController(
     mojo::PendingReceiver<crosapi::mojom::FullscreenController> receiver) {
   fullscreen_controller_ash_->BindReceiver(std::move(receiver));
@@ -845,6 +862,11 @@ void CrosapiAsh::BindOneDriveNotificationService(
   one_drive_notification_service_ash_->BindReceiver(std::move(receiver));
 }
 
+void CrosapiAsh::BindOneDriveIntegrationService(
+    mojo::PendingReceiver<mojom::OneDriveIntegrationService> receiver) {
+  one_drive_integration_service_ash_->BindReceiver(std::move(receiver));
+}
+
 void CrosapiAsh::BindParentAccess(
     mojo::PendingReceiver<mojom::ParentAccess> receiver) {
   parent_access_ash_->BindReceiver(std::move(receiver));
@@ -937,6 +959,11 @@ void CrosapiAsh::BindScreenManager(
   screen_manager_ash_->BindReceiver(std::move(receiver));
 }
 
+void CrosapiAsh::BindSearchControllerFactory(
+    mojo::PendingRemote<mojom::SearchControllerFactory> remote) {
+  search_controller_factory_ash_->BindRemote(std::move(remote));
+}
+
 void CrosapiAsh::BindSearchControllerRegistry(
     mojo::PendingReceiver<mojom::SearchControllerRegistry> receiver) {
   search_provider_ash_->BindReceiver(std::move(receiver));
@@ -984,6 +1011,11 @@ void CrosapiAsh::BindStableVideoDecoderFactory(
 void CrosapiAsh::BindStructuredMetricsService(
     mojo::PendingReceiver<crosapi::mojom::StructuredMetricsService> receiver) {
   structured_metrics_service_ash_->BindReceiver(std::move(receiver));
+}
+
+void CrosapiAsh::BindSuggestionService(
+    mojo::PendingReceiver<crosapi::mojom::SuggestionService> receiver) {
+  suggestion_service_ash_->BindReceiver(std::move(receiver));
 }
 
 void CrosapiAsh::BindSyncService(
@@ -1149,8 +1181,8 @@ void CrosapiAsh::REMOVED_62(
 }
 
 void CrosapiAsh::SetTestControllerForTesting(
-    TestControllerReceiver* test_controller) {
-  test_controller_ = test_controller;
+    std::unique_ptr<TestControllerReceiver> test_controller) {
+  test_controller_ = std::move(test_controller);
 }
 
 void CrosapiAsh::OnDisconnected() {

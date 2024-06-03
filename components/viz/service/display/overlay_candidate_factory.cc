@@ -55,7 +55,8 @@ Axis VectorToAxis(const gfx::Vector3dF& vec) {
 }
 
 gfx::OverlayTransform GetOverlayTransform(const gfx::Transform& quad_transform,
-                                          bool y_flipped) {
+                                          bool y_flipped,
+                                          bool supports_flip_rotate_transform) {
   if (!quad_transform.Preserves2dAxisAlignment()) {
     return gfx::OVERLAY_TRANSFORM_INVALID;
   }
@@ -69,20 +70,28 @@ gfx::OverlayTransform GetOverlayTransform(const gfx::Transform& quad_transform,
   Axis x_to = VectorToAxis(x_axis);
   Axis y_to = VectorToAxis(y_axis);
 
-  if (x_to == AXIS_POS_X && y_to == AXIS_POS_Y)
+  if (x_to == AXIS_POS_X && y_to == AXIS_POS_Y) {
     return gfx::OVERLAY_TRANSFORM_NONE;
-  else if (x_to == AXIS_NEG_X && y_to == AXIS_POS_Y)
+  } else if (x_to == AXIS_NEG_X && y_to == AXIS_POS_Y) {
     return gfx::OVERLAY_TRANSFORM_FLIP_HORIZONTAL;
-  else if (x_to == AXIS_POS_X && y_to == AXIS_NEG_Y)
+  } else if (x_to == AXIS_POS_X && y_to == AXIS_NEG_Y) {
     return gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL;
-  else if (x_to == AXIS_NEG_Y && y_to == AXIS_POS_X)
+  } else if (x_to == AXIS_NEG_Y && y_to == AXIS_POS_X) {
     return gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270;
-  else if (x_to == AXIS_NEG_X && y_to == AXIS_NEG_Y)
+  } else if (x_to == AXIS_NEG_X && y_to == AXIS_NEG_Y) {
     return gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_180;
-  else if (x_to == AXIS_POS_Y && y_to == AXIS_NEG_X)
+  } else if (x_to == AXIS_POS_Y && y_to == AXIS_NEG_X) {
     return gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_90;
-  else
+  } else if (supports_flip_rotate_transform) {
+    if (x_to == AXIS_POS_Y && y_to == AXIS_POS_X) {
+      return gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_90;
+    } else if (x_to == AXIS_NEG_Y && y_to == AXIS_NEG_X) {
+      return gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_270;
+    }
     return gfx::OVERLAY_TRANSFORM_INVALID;
+  } else {
+    return gfx::OVERLAY_TRANSFORM_INVALID;
+  }
 }
 
 constexpr double kEpsilon = 0.0001;
@@ -120,6 +129,10 @@ bool ShouldApplyRoundedCorner(OverlayCandidate& candidate,
 }
 
 }  // namespace
+
+OverlayCandidateFactory::OverlayContext::OverlayContext() = default;
+OverlayCandidateFactory::OverlayContext::OverlayContext(const OverlayContext&) =
+    default;
 
 OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuad(
     const DrawQuad* quad,
@@ -191,7 +204,7 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuad(
 
   // Conditionally set the rounded corners once the candidate's |display_rect|
   // is known.
-  // TODO(https://crbug.com/1462171): Consider moving this code to
+  // TODO(crbug.com/40274803): Consider moving this code to
   // FromDrawQuadResource() that covers all of delegated compositing.
   if (context_.disable_wire_size_optimization ||
       ShouldApplyRoundedCorner(candidate, quad)) {
@@ -206,7 +219,7 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuad(
 
 OverlayCandidateFactory::OverlayCandidateFactory(
     const AggregatedRenderPass* render_pass,
-    DisplayResourceProvider* resource_provider,
+    const DisplayResourceProvider* resource_provider,
     const SurfaceDamageRectList* surface_damage_rect_list,
     const SkM44* output_color_matrix,
     const gfx::RectF primary_rect,
@@ -330,9 +343,11 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuadResource(
     ResourceId resource_id,
     bool y_flipped,
     OverlayCandidate& candidate) const {
-  if (resource_id != kInvalidResourceId &&
-      !resource_provider_->IsOverlayCandidate(resource_id))
+  if (!context_.allow_non_overlay_resources &&
+      resource_id != kInvalidResourceId &&
+      !resource_provider_->IsOverlayCandidate(resource_id)) {
     return CandidateStatus::kFailNotOverlay;
+  }
 
   if (quad->visible_rect.IsEmpty())
     return CandidateStatus::kFailVisible;
@@ -405,7 +420,7 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuadResource(
         context_.supports_arbitrary_transform ||
         absl::holds_alternative<gfx::OverlayTransform>(candidate.transform);
     // Out of window clipping is enabled on Lacros only when it is supported.
-    // TODO(crbug.com/1385509): Remove the condition on `quad_within_window`
+    // TODO(crbug.com/40246811): Remove the condition on `quad_within_window`
     // when M117 becomes widely supported.
     bool can_delegate_clipping =
         context_.supports_clip_rect &&
@@ -480,7 +495,7 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::DoGeometricClipping(
     clip_to_apply.Intersect(gfx::RectF(*candidate.clip_rect));
   }
 
-  // TODO(https://crbug.com/1300552) : Tile quads can overlay other quads
+  // TODO(crbug.com/40216317) : Tile quads can overlay other quads
   // and the window by one pixel. Exo does not yet clip these quads so we
   // need to clip here with the |primary_rect|.
   clip_to_apply.Intersect(primary_rect_);
@@ -503,7 +518,8 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::ApplyTransform(
   // a full |gfx::Transform|.
   if (!context_.disable_wire_size_optimization) {
     gfx::OverlayTransform overlay_transform =
-        GetOverlayTransform(quad_to_target_transform, y_flipped);
+        GetOverlayTransform(quad_to_target_transform, y_flipped,
+                            context_.supports_flip_rotate_transform);
     if (overlay_transform != gfx::OVERLAY_TRANSFORM_INVALID) {
       candidate.transform = overlay_transform;
       candidate.display_rect =
@@ -514,7 +530,8 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::ApplyTransform(
 
   // Otherwise, try to set an arbitrary transform, if possible.
   if (context_.supports_arbitrary_transform &&
-      !quad_to_target_transform.HasPerspective()) {
+      (!quad_to_target_transform.HasPerspective() ||
+       quad_to_target_transform.Preserves2dAffine())) {
     gfx::Transform transform = quad_to_target_transform;
     if (y_flipped) {
       transform.PreConcat(gfx::OverlayTransformToTransform(
@@ -564,7 +581,8 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromVideoHoleQuad(
     candidate.transform = sqs->quad_to_target_transform;
   } else {
     gfx::OverlayTransform overlay_transform =
-        GetOverlayTransform(sqs->quad_to_target_transform, false);
+        GetOverlayTransform(sqs->quad_to_target_transform, false,
+                            context_.supports_flip_rotate_transform);
     if (overlay_transform == gfx::OVERLAY_TRANSFORM_INVALID)
       return CandidateStatus::kFailNotAxisAligned;
     candidate.transform = overlay_transform;
@@ -662,12 +680,13 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromTextureQuad(
     }
 
 #if BUILDFLAG(IS_ANDROID)
+    candidate.is_video_in_surface_view =
+        quad->is_stream_video &&
+        !resource_provider_->IsBackedBySurfaceTexture(quad->resource_id());
     if (quad->is_stream_video) {
       // StreamVideoDrawQuad used to set the resource_size_in_pixels directly
       // from the quad rather than from the resource.
       candidate.resource_size_in_pixels = quad->resource_size_in_pixels();
-      candidate.is_backed_by_surface_texture =
-          resource_provider_->IsBackedBySurfaceTexture(quad->resource_id());
     }
 #endif
 

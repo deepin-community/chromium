@@ -11,14 +11,14 @@
 
 #include <algorithm>
 
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxge/cfx_font.h"
 #include "core/fxge/dib/cfx_dibbase.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/text_char_pos.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/notreached.h"
 
 CTextOnlyPrinterDriver::CTextOnlyPrinterDriver(HDC hDC)
     : m_hDC(hDC),
@@ -131,10 +131,12 @@ bool CTextOnlyPrinterDriver::DrawDeviceText(
     float font_size,
     uint32_t color,
     const CFX_TextRenderOptions& /*options*/) {
-  if (g_pdfium_print_mode != WindowsPrintMode::kTextOnly)
+  if (g_pdfium_print_mode != WindowsPrintMode::kTextOnly) {
     return false;
-  if (pCharPos.empty() || !pFont || !pFont->IsEmbedded() || !pFont->IsTTFont())
+  }
+  if (pCharPos.empty() || !pFont) {
     return false;
+  }
 
   // Scale factor used to minimize the kerning problems caused by rounding
   // errors below. Value chosen based on the title of https://crbug.com/18383

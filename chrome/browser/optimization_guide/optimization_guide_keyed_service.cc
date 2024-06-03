@@ -24,6 +24,7 @@
 #include "chrome/browser/download/background_download_service_factory.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/optimization_guide/chrome_hints_manager.h"
+#include "chrome/browser/optimization_guide/chrome_model_quality_logs_uploader_service.h"
 #include "chrome/browser/optimization_guide/chrome_prediction_model_store.h"
 #include "chrome/browser/optimization_guide/model_execution/chrome_on_device_model_service_controller.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
@@ -42,6 +43,7 @@
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/optimization_guide/core/command_line_top_host_provider.h"
 #include "components/optimization_guide/core/hints_processing_util.h"
+#include "components/optimization_guide/core/model_execution/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features_controller.h"
 #include "components/optimization_guide/core/model_execution/model_execution_manager.h"
@@ -221,16 +223,6 @@ class OnDeviceModelComponentStateManagerDelegate
         state_manager);
   }
 };
-
-void RecordUploadStatusHistogram(
-    optimization_guide::proto::ModelExecutionFeature feature,
-    optimization_guide::ModelQualityLogsUploadStatus status) {
-  base::UmaHistogramEnumeration(
-      base::StrCat(
-          {"OptimizationGuide.ModelQualityLogsUploadService.UploadStatus.",
-           optimization_guide::GetStringNameForModelExecutionFeature(feature)}),
-      status);
-}
 
 }  // namespace
 
@@ -417,7 +409,9 @@ void OptimizationGuideKeyedService::Initialize() {
           optimization_guide::features::GetOnDeviceStartupMetricDelay());
     }
 
-    if (base::FeatureList::IsEnabled(
+    if (browser_context_ && !browser_context_->IsOffTheRecord() &&
+        !profile->IsGuestSession() &&
+        base::FeatureList::IsEnabled(
             optimization_guide::features::kOptimizationGuideModelExecution)) {
       scoped_refptr<optimization_guide::OnDeviceModelServiceController>
           service_controller;
@@ -426,24 +420,34 @@ void OptimizationGuideKeyedService::Initialize() {
         service_controller = GetOnDeviceModelServiceController(
             on_device_component_manager_->GetWeakPtr());
       }
-      model_execution_manager_ =
-          std::make_unique<optimization_guide::ModelExecutionManager>(
-              url_loader_factory,
-              IdentityManagerFactory::GetForProfile(profile),
-              std::move(service_controller), this,
-              optimization_guide_logger_.get());
-    }
-  }
 
-  if (!profile->IsOffTheRecord() &&
+      model_execution_features_controller_ = std::make_unique<
+          optimization_guide::ModelExecutionFeaturesController>(
+          profile->GetPrefs(), IdentityManagerFactory::GetForProfile(profile));
+
       // Don't create logs uploader service when feature is disabled. All the
       // logs upload get route through this service which exists one per
-      // session.
-      base::FeatureList::IsEnabled(
-          optimization_guide::features::kModelQualityLogging)) {
-    model_quality_logs_uploader_service_ =
-        std::make_unique<optimization_guide::ModelQualityLogsUploaderService>(
-            url_loader_factory, g_browser_process->local_state());
+      // profile.
+      if (base::FeatureList::IsEnabled(
+              optimization_guide::features::kModelQualityLogging)) {
+        model_quality_logs_uploader_service_ = std::make_unique<
+            optimization_guide::ChromeModelQualityLogsUploaderService>(
+            url_loader_factory, g_browser_process->local_state(),
+            model_execution_features_controller_
+                ? model_execution_features_controller_->GetWeakPtr()
+                : nullptr);
+      }
+
+      model_execution_manager_ =
+          std::make_unique<optimization_guide::ModelExecutionManager>(
+              url_loader_factory, g_browser_process->local_state(),
+              IdentityManagerFactory::GetForProfile(profile),
+              std::move(service_controller), this,
+              optimization_guide_logger_.get(),
+              model_quality_logs_uploader_service_
+                  ? model_quality_logs_uploader_service_->GetWeakPtr()
+                  : nullptr);
+    }
   }
 
   // Register for profile initialization event to initialize the model
@@ -466,16 +470,6 @@ void OptimizationGuideKeyedService::Initialize() {
   optimization_guide::LogFeatureFlagsInfo(optimization_guide_logger_.get(),
                                           profile->IsOffTheRecord(),
                                           profile->GetPrefs());
-
-  if (base::FeatureList::IsEnabled(
-          optimization_guide::features::kOptimizationGuideModelExecution) &&
-      browser_context_ && !browser_context_->IsOffTheRecord() &&
-      !profile->IsGuestSession()) {
-    model_execution_features_controller_ =
-        std::make_unique<optimization_guide::ModelExecutionFeaturesController>(
-            profile->GetPrefs(),
-            IdentityManagerFactory::GetForProfile(profile));
-  }
 }
 
 optimization_guide::ChromeHintsManager*
@@ -566,7 +560,7 @@ void OptimizationGuideKeyedService::CanApplyOptimizationOnDemand(
     optimization_guide::proto::RequestContext request_context,
     optimization_guide::OnDemandOptimizationGuideDecisionRepeatingCallback
         callback,
-    optimization_guide::proto::RequestContextMetadata*
+    std::optional<optimization_guide::proto::RequestContextMetadata>
         request_context_metadata) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(request_context !=
@@ -579,15 +573,17 @@ void OptimizationGuideKeyedService::CanApplyOptimizationOnDemand(
 
 std::unique_ptr<optimization_guide::OptimizationGuideModelExecutor::Session>
 OptimizationGuideKeyedService::StartSession(
-    optimization_guide::proto::ModelExecutionFeature feature) {
+    optimization_guide::ModelBasedCapabilityKey feature,
+    const std::optional<optimization_guide::SessionConfigParams>&
+        config_params) {
   if (!model_execution_manager_) {
     return nullptr;
   }
-  return model_execution_manager_->StartSession(feature);
+  return model_execution_manager_->StartSession(feature, config_params);
 }
 
 void OptimizationGuideKeyedService::ExecuteModel(
-    optimization_guide::proto::ModelExecutionFeature feature,
+    optimization_guide::ModelBasedCapabilityKey feature,
     const google::protobuf::MessageLite& request_metadata,
     optimization_guide::OptimizationGuideModelExecutionResultCallback
         callback) {
@@ -620,45 +616,16 @@ void OptimizationGuideKeyedService::UploadModelQualityLogs(
     return;
   }
 
-  optimization_guide::proto::ModelExecutionFeature feature =
-      optimization_guide::GetModelExecutionFeature(
-          log_entry->log_ai_data_request()->feature_case());
+  auto feature = optimization_guide::GetModelExecutionFeature(
+      log_entry->log_ai_data_request()->feature_case());
 
   TRACE_EVENT1(
       "browser", "OptimizationGuideKeyedService::UploadModelQualityLogs",
       "feature",
       optimization_guide::GetStringNameForModelExecutionFeature(feature));
 
-  // Model quality logging requires user consent. Skip upload if consent is
-  // missing.
-  if (!g_browser_process->GetMetricsServicesManager()
-           ->IsMetricsConsentGiven()) {
-    RecordUploadStatusHistogram(
-        feature,
-        optimization_guide::ModelQualityLogsUploadStatus::kNoMetricsConsent);
-    return;
-  }
-
-  // Don't upload logs if logging is disabled by enterprise policy.
-  if (!ShouldFeatureBeCurrentlyAllowedForLogging(feature)) {
-    RecordUploadStatusHistogram(
-        feature, optimization_guide::ModelQualityLogsUploadStatus::
-                     kDisabledDueToEnterprisePolicy);
-    return;
-  }
-
-  // Set system profile proto before uploading.
-  metrics::MetricsLog::RecordCoreSystemProfile(
-      metrics::GetVersionString(),
-      metrics::AsProtobufChannel(chrome::GetChannel()),
-      chrome::IsExtendedStableChannel(),
-      g_browser_process->GetApplicationLocale(), metrics::GetAppPackageName(),
-      log_entry->logging_metadata()->mutable_system_profile());
-
-  CHECK(log_entry->logging_metadata()->has_system_profile())
-      << "System Profile Proto not set\n";
-  model_quality_logs_uploader_service_.get()->UploadModelQualityLogs(
-      std::move(log_entry));
+  // This uploads the logs on ModelQualityLogEntry destruction.
+  log_entry.reset();
 }
 
 void OptimizationGuideKeyedService::OnProfileInitializationComplete(
@@ -700,7 +667,7 @@ void OptimizationGuideKeyedService::OverrideTargetModelForTesting(
 }
 
 bool OptimizationGuideKeyedService::IsSettingVisible(
-    optimization_guide::proto::ModelExecutionFeature feature) const {
+    optimization_guide::UserVisibleFeatureKey feature) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!model_execution_features_controller_) {
     return false;
@@ -709,7 +676,7 @@ bool OptimizationGuideKeyedService::IsSettingVisible(
 }
 
 bool OptimizationGuideKeyedService::ShouldFeatureBeCurrentlyEnabledForUser(
-    optimization_guide::proto::ModelExecutionFeature feature) const {
+    optimization_guide::UserVisibleFeatureKey feature) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!model_execution_features_controller_) {
     return false;
@@ -719,7 +686,7 @@ bool OptimizationGuideKeyedService::ShouldFeatureBeCurrentlyEnabledForUser(
 }
 
 bool OptimizationGuideKeyedService::ShouldFeatureBeCurrentlyAllowedForLogging(
-    optimization_guide::proto::ModelExecutionFeature feature) const {
+    optimization_guide::UserVisibleFeatureKey feature) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!model_execution_features_controller_) {
     return false;
@@ -740,21 +707,17 @@ bool OptimizationGuideKeyedService::ShouldShowExperimentalAIPromo() const {
   // At least one of the two features should be visible to user in settings, and
   // not currently enabled.
   if (model_execution_features_controller_->IsSettingVisible(
-          optimization_guide::proto::ModelExecutionFeature::
-              MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION) &&
+          optimization_guide::UserVisibleFeatureKey::kTabOrganization) &&
       !model_execution_features_controller_
            ->ShouldFeatureBeCurrentlyEnabledForUser(
-               optimization_guide::proto::ModelExecutionFeature::
-                   MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION)) {
+               optimization_guide::UserVisibleFeatureKey::kTabOrganization)) {
     return true;
   }
   if (model_execution_features_controller_->IsSettingVisible(
-          optimization_guide::proto::ModelExecutionFeature::
-              MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH) &&
+          optimization_guide::UserVisibleFeatureKey::kWallpaperSearch) &&
       !model_execution_features_controller_
            ->ShouldFeatureBeCurrentlyEnabledForUser(
-               optimization_guide::proto::ModelExecutionFeature::
-                   MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH)) {
+               optimization_guide::UserVisibleFeatureKey::kWallpaperSearch)) {
     return true;
   }
   return false;

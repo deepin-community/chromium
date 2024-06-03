@@ -53,6 +53,11 @@ bool MockPermissionPrompt::ShouldFinalizeRequestAfterDecided() const {
   return true;
 }
 
+std::vector<permissions::ElementAnchoredBubbleVariant>
+MockPermissionPrompt::GetPromptVariants() const {
+  return {};
+}
+
 MockPermissionPrompt::MockPermissionPrompt(MockPermissionPromptFactory* factory,
                                            Delegate* delegate)
     : factory_(factory), delegate_(delegate) {
@@ -73,9 +78,7 @@ MockPermissionPrompt::MockPermissionPrompt(MockPermissionPromptFactory* factory,
     EXPECT_FALSE(permissions::GetIconId(request_type).is_empty());
 #endif
     EXPECT_EQ(request->ShouldUseTwoOriginPrompt(),
-              request_type == permissions::RequestType::kStorageAccess &&
-                  base::FeatureList::IsEnabled(
-                      permissions::features::kPermissionStorageAccessAPI));
+              request_type == permissions::RequestType::kStorageAccess);
   }
 }
 

@@ -11,25 +11,42 @@ import 'chrome://resources/ash/common/personalization/common.css.js';
 import 'chrome://resources/ash/common/personalization/cros_button_style.css.js';
 import 'chrome://resources/ash/common/personalization/personalization_shared_icons.html.js';
 import 'chrome://resources/ash/common/sea_pen/sea_pen_icons.html.js';
+import 'chrome://resources/ash/common/sea_pen/sea_pen_options_element.js';
+import 'chrome://resources/ash/common/sea_pen/sea_pen_chip_text_element.js';
+import 'chrome://resources/cros_components/lottie_renderer/lottie-renderer.js';
 
-import {DomRepeat} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {AnchorAlignment} from 'chrome://resources/ash/common/cr_elements/cr_action_menu/cr_action_menu.js';
+import {LottieRenderer} from 'chrome://resources/cros_components/lottie_renderer/lottie-renderer.js';
 import {assert} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {afterNextRender, beforeNextRender} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getSeaPenTemplates, SeaPenOption, SeaPenTemplate} from './constants.js';
 import {SeaPenQuery, SeaPenThumbnail, SeaPenUserVisibleQuery} from './sea_pen.mojom-webui.js';
 import {searchSeaPenThumbnails} from './sea_pen_controller.js';
 import {SeaPenTemplateChip, SeaPenTemplateId, SeaPenTemplateOption} from './sea_pen_generated.mojom-webui.js';
 import {getSeaPenProvider} from './sea_pen_interface_provider.js';
-import {SeaPenPaths, SeaPenRouterElement} from './sea_pen_router_element.js';
+import {logGenerateSeaPenWallpaper} from './sea_pen_metrics_logger.js';
+import {SeaPenPaths} from './sea_pen_router_element.js';
 import {WithSeaPenStore} from './sea_pen_store.js';
 import {getTemplate} from './sea_pen_template_query_element.html.js';
-import {ChipToken, getDefaultOptions, getTemplateTokens, logGenerateSeaPenWallpaper, TemplateToken} from './sea_pen_utils.js';
+import {ChipToken, getDefaultOptions, getTemplateTokens, isNonEmptyArray, TemplateToken} from './sea_pen_utils.js';
+import {getTransitionEnabled} from './transition.js';
 
-export interface SeaPenTemplateQueryElement {
-  $: {
-    optionList: DomRepeat,
-  };
+// Two options are the same if they have the same key-value pairs.
+function isSameOption(
+    map1: Map<SeaPenTemplateChip, SeaPenOption>,
+    map2: Map<SeaPenTemplateChip, SeaPenOption>): boolean {
+  if (map1.size !== map2.size) {
+    return false;
+  }
+
+  for (const [key, value] of map1.entries()) {
+    if (!map2.has(key) || map2.get(key) !== value) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export class SeaPenTemplateQueryElement extends WithSeaPenStore {
@@ -58,6 +75,7 @@ export class SeaPenTemplateQueryElement extends WithSeaPenStore {
       // option on the UI.
       selectedOptions_: {
         type: Object,
+        observer: 'onSelectedOptionsChanged_',
       },
 
       // The tokens generated from `seaPenTemplate_` and `selectedOptions_`.
@@ -78,15 +96,36 @@ export class SeaPenTemplateQueryElement extends WithSeaPenStore {
         type: Array,
       },
 
+      // A boolean indicates whether the user is still selecting chip options.
+      isSelectingOptions: {
+        type: Boolean,
+        reflectToAttribute: true,
+      },
+
       thumbnails_: Object,
 
       thumbnailsLoading_: Boolean,
+
+      searchButtonText_: {
+        type: String,
+        value() {
+          return loadTimeData.getString('seaPenCreateButton');
+        },
+      },
+
+      searchButtonIcon_: {
+        type: String,
+        value() {
+          return 'sea-pen:photo-spark';
+        },
+      },
     };
   }
 
   path: string;
   // TODO(b/319719709) this should be SeaPenTemplateId.
   templateId: string|null;
+  private inspireMeAnimation_: LottieRenderer|null|undefined;
   private seaPenTemplate_: SeaPenTemplate;
   private selectedOptions_: Map<SeaPenTemplateChip, SeaPenOption>;
   private templateTokens_: TemplateToken[];
@@ -94,14 +133,71 @@ export class SeaPenTemplateQueryElement extends WithSeaPenStore {
   private selectedChip_: ChipToken|null;
   private thumbnails_: SeaPenThumbnail[]|null;
   private thumbnailsLoading_: boolean;
+  private searchButtonText_: string;
+  private searchButtonIcon_: string;
+  private isSelectingOptions: boolean;
+
+  static get observers() {
+    return ['updateSearchButton_(path, thumbnails_)'];
+  }
 
   override connectedCallback() {
     super.connectedCallback();
+    this.addEventListener('click', this.onClick_);
     this.watch<SeaPenTemplateQueryElement['thumbnails_']>(
         'thumbnails_', state => state.thumbnails);
     this.watch<SeaPenTemplateQueryElement['thumbnailsLoading_']>(
         'thumbnailsLoading_', state => state.loading.thumbnails);
     this.updateFromStore();
+
+    beforeNextRender(this, () => {
+      this.inspireMeAnimation_ =
+          this.shadowRoot?.querySelector<LottieRenderer>('#inspireMeAnimation');
+      if (this.inspireMeAnimation_) {
+        this.inspireMeAnimation_.autoplay = false;
+      }
+    });
+  }
+
+  // After exiting from the option selection (by "Esc" key or clicking on
+  // anywhere), clear the selected chip state and set focus on the last selected
+  // chip.
+  onOptionSelectionDone() {
+    if (!this.selectedChip_) {
+      return;
+    }
+    const selectedChipIndex =
+        Array
+            .from(this.shadowRoot!.querySelectorAll<HTMLElement>(
+                '.chip-container'))
+            .findIndex(elem => elem.classList.contains('selected'));
+    this.clearSelectedChipState_();
+    afterNextRender(this, () => {
+      this.shadowRoot!
+          .querySelectorAll<HTMLElement>('.chip-text')[selectedChipIndex]
+          ?.focus();
+    });
+  }
+
+  private startInspireIconAnimation_() {
+    this.inspireMeAnimation_?.play();
+  }
+
+  private stopInspireIconAnimation_() {
+    this.inspireMeAnimation_?.stop();
+  }
+
+
+  private clearSelectedChipState_() {
+    if (this.selectedChip_) {
+      this.selectedChip_ = null;
+      this.options_ = null;
+      this.isSelectingOptions = false;
+    }
+  }
+
+  private onClick_(): void {
+    this.onOptionSelectionDone();
   }
 
   private computeSeaPenTemplate_(templateId: string|null) {
@@ -117,60 +213,51 @@ export class SeaPenTemplateQueryElement extends WithSeaPenStore {
 
   private onClickChip_(event: Event&{model: {token: ChipToken}}) {
     assert(this.isChip_(event.model.token), 'Token must be a chip');
-    this.selectedChip_ = event.model.token;
-    assert(
-        this.seaPenTemplate_.options.has(this.selectedChip_.id),
-        'options must exist');
-    this.options_ = this.seaPenTemplate_.options.get(this.selectedChip_.id)!;
-    this.$.optionList.render();
-    this.showOptionMenu_(event);
-  }
-
-  private showOptionMenu_(event: Event&{model: {token: ChipToken}}) {
-    const targetElement = event.currentTarget as HTMLElement;
-    const config = {
-      anchorAlignmentX: AnchorAlignment.AFTER_START,
-      anchorAlignmentY: AnchorAlignment.AFTER_START,
-    };
-    const menuElement = this.shadowRoot!.querySelector('cr-action-menu');
-    menuElement!.showAt(targetElement.parentElement!, config);
-  }
-
-  private onClickOption_(event: Event&{model: {option: SeaPenOption}}) {
-    const option = event.model.option;
-    // Notifies the selected chip's translation has changed to the UI.
-    this.set('selectedChip_.translation', option.translation);
-    this.selectedOptions_.set(this.selectedChip_!.id, option);
-    this.templateTokens_ =
-        getTemplateTokens(this.seaPenTemplate_, this.selectedOptions_);
-    this.closeOptionMenu_();
-  }
-
-  private closeOptionMenu_() {
-    const menuElement = this.shadowRoot!.querySelector('cr-action-menu');
-    menuElement!.close();
-  }
-
-  private onClickInspire_() {
-    this.selectedOptions_ =
-        getDefaultOptions(this.seaPenTemplate_, /*random=*/ true);
-    if (this.selectedChip_) {
-      // The selected chip translation might have changed due to randomized
-      // option. Notifies the UI to update its value.
-      this.set(
-          `selectedChip_.translation`,
-          this.selectedOptions_.get(this.selectedChip_.id)?.translation);
+    if (this.selectedChip_?.id === event.model.token.id) {
+      this.clearSelectedChipState_();
+    } else {
+      this.selectedChip_ = event.model.token;
+      assert(
+          this.seaPenTemplate_.options.has(this.selectedChip_.id),
+          'options must exist');
+      this.options_ = this.seaPenTemplate_.options.get(this.selectedChip_.id)!;
+      this.isSelectingOptions = true;
     }
+    // Stop the event propagation, otherwise, the event will be passed to parent
+    // element, this.onClick_ will be triggered improperly.
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  private onClickInspire_(event: Event) {
+    // Run getDefaultOptions (5 times at most) until we get an options that is
+    // different from current; which highly likely to happen the first time.
+    for (let i = 0; i < 5; i++) {
+      const newOptions =
+          getDefaultOptions(this.seaPenTemplate_, /*random=*/ true);
+
+      if (!isSameOption(newOptions, this.selectedOptions_)) {
+        this.selectedOptions_ = newOptions;
+        break;
+      }
+    }
+
     this.templateTokens_ =
         getTemplateTokens(this.seaPenTemplate_, this.selectedOptions_);
-    this.onClickSearchButton_();
+    this.onClickSearchButton_(event);
   }
 
   private onSeaPenTemplateChanged_(template: SeaPenTemplate) {
     const selectedOptions = getDefaultOptions(template);
-    this.selectedChip_ = null;
-    this.options_ = null;
+    this.clearSelectedChipState_();
     this.selectedOptions_ = selectedOptions;
+    this.templateTokens_ =
+        getTemplateTokens(this.seaPenTemplate_, this.selectedOptions_);
+  }
+
+  private onSelectedOptionsChanged_() {
+    this.searchButtonText_ = this.i18n('seaPenCreateButton');
+    this.searchButtonIcon_ = 'sea-pen:photo-spark';
     this.templateTokens_ =
         getTemplateTokens(this.seaPenTemplate_, this.selectedOptions_);
   }
@@ -231,44 +318,54 @@ export class SeaPenTemplateQueryElement extends WithSeaPenStore {
     };
   }
 
-  private onClickSearchButton_() {
+  private onClickSearchButton_(event: Event) {
+    this.clearSelectedChipState_();
     searchSeaPenThumbnails(
         this.getTemplateRequest_(), getSeaPenProvider(), this.getStore());
     logGenerateSeaPenWallpaper(this.getSeaPenTemplateId_());
-    SeaPenRouterElement.instance().goToRoute(
-        SeaPenPaths.RESULTS, {seaPenTemplateId: this.templateId!.toString()});
+
+    // Stop the event propagation, otherwise, the event will be passed to parent
+    // element, this.onClick_ will be triggered improperly.
+    event.preventDefault();
+    event.stopPropagation();
   }
 
-  private getSearchButtonText_(
-      path: string|null, thumbnails: SeaPenThumbnail[]|null): string {
+  private updateSearchButton_(
+      path: string|null, thumbnails: SeaPenThumbnail[]|null) {
     if (!thumbnails) {
       // The thumbnails are not loaded yet.
-      return this.i18n('seaPenCreateButton');
+      this.searchButtonText_ = this.i18n('seaPenCreateButton');
+      this.searchButtonIcon_ = 'sea-pen:photo-spark';
+      return;
     }
 
     switch (path) {
       case SeaPenPaths.RESULTS:
-        return this.i18n('seaPenRecreateButton');
+        this.searchButtonText_ = this.i18n('seaPenRecreateButton');
+        this.searchButtonIcon_ = 'personalization-shared:refresh';
+        break;
       case SeaPenPaths.ROOT:
       default:
-        return this.i18n('seaPenCreateButton');
+        this.searchButtonText_ = this.i18n('seaPenCreateButton');
+        this.searchButtonIcon_ = 'sea-pen:photo-spark';
+        break;
     }
   }
 
-  private getSearchButtonIcon_(
-      path: string|null, thumbnails: SeaPenThumbnail[]|null): string {
-    if (!thumbnails) {
-      // The thumbnails are not loaded yet.
-      return 'sea-pen:photo-spark';
-    }
+  private shouldShowOptions_(options: SeaPenOption[]|null): boolean {
+    return isNonEmptyArray(options);
+  }
 
-    switch (path) {
-      case SeaPenPaths.RESULTS:
-        return 'personalization-shared:refresh';
-      case SeaPenPaths.ROOT:
-      default:
-        return 'sea-pen:photo-spark';
-    }
+  private shouldEnableTextAnimation(
+      selectedChip: ChipToken|null, token: ChipToken) {
+    // enables text animation if the animation is enabled and the chip is
+    // selected.
+    return getTransitionEnabled() && !!selectedChip &&
+        selectedChip.id === token.id;
+  }
+
+  private getTemplateAriaLabel_() {
+    return this.getUserVisibleQueryInfo_().text;
   }
 }
 

@@ -5,19 +5,25 @@
 #ifndef COMPONENTS_PLUS_ADDRESSES_PLUS_ADDRESS_SERVICE_H_
 #define COMPONENTS_PLUS_ADDRESSES_PLUS_ADDRESS_SERVICE_H_
 
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
 
+#include "base/memory/scoped_refptr.h"
+#include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
+#include "base/timer/timer.h"
 #include "components/autofill/core/browser/autofill_plus_address_delegate.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/plus_addresses/plus_address_http_client.h"
 #include "components/plus_addresses/plus_address_types.h"
+#include "components/plus_addresses/webdata/plus_address_webdata_service.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
+#include "components/webdata/common/web_data_service_consumer.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "url/origin.h"
 
@@ -25,33 +31,42 @@ class PrefService;
 
 namespace signin {
 class IdentityManager;
-class PersistentRepeatingTimer;
 }  // namespace signin
 
 namespace plus_addresses {
+
+class PlusAddressAllocator;
+class PlusAddressHttpClient;
 
 // An experimental class for filling plus addresses (asdf+123@some-domain.com).
 // Not intended for widespread use.
 class PlusAddressService : public KeyedService,
                            public autofill::AutofillPlusAddressDelegate,
-                           public signin::IdentityManager::Observer {
+                           public signin::IdentityManager::Observer,
+                           public PlusAddressWebDataService::Observer,
+                           public WebDataServiceConsumer {
  public:
-  // Limits the number of retries allowed for the initial poll request.
-  const int MAX_INITIAL_POLL_RETRY_ATTEMPTS = 1;
+  class Observer : public base::CheckedObserver {
+   public:
+    // Called whenever the set of `PlusProfile`s returned by `GetPlusProfiles()`
+    // changes, e.g. because a new plus addresses arrived via Sync.
+    virtual void OnPlusAddressesChanged() = 0;
+  };
 
-  // Used to simplify testing in cases where calls depending on external classes
-  // can be mocked out.
-  PlusAddressService();
-  // Used to simplify testing in cases where calls depend on just the
-  // `IdentityManager`.
-  explicit PlusAddressService(signin::IdentityManager* identity_manager);
+  // The number of `HTTP_FORBIDDEN` responses that the user may receive before
+  // `this` is disabled for this session. If a user makes a single successful
+  // call, this limit no longer applies.
+  static constexpr int kMaxHttpForbiddenResponses = 1;
+
+  PlusAddressService(
+      signin::IdentityManager* identity_manager,
+      PrefService* pref_service,
+      std::unique_ptr<PlusAddressHttpClient> plus_address_http_client,
+      scoped_refptr<PlusAddressWebDataService> webdata_service);
   ~PlusAddressService() override;
 
-  // Initialize the PlusAddressService with a `IdentityManager`, `PrefService`,
-  // and a `SharedURLLoaderFactory`.
-  PlusAddressService(signin::IdentityManager* identity_manager,
-                     PrefService* pref_service,
-                     PlusAddressHttpClient plus_address_client);
+  void AddObserver(Observer* o) { observers_.AddObserver(o); }
+  void RemoveObserver(Observer* o) { observers_.RemoveObserver(o); }
 
   // autofill::AutofillPlusAddressDelegate:
   // Checks whether the passed-in string is a known plus address.
@@ -59,8 +74,17 @@ class PlusAddressService : public KeyedService,
   std::vector<autofill::Suggestion> GetSuggestions(
       const url::Origin& last_committed_primary_main_frame_origin,
       bool is_off_the_record,
-      std::u16string_view focused_field_value) override;
+      std::u16string_view focused_field_value,
+      autofill::AutofillSuggestionTriggerSource trigger_source) override;
   void RecordAutofillSuggestionEvent(SuggestionEvent suggestion_event) override;
+
+  // PlusAddressWebDataService::Observer:
+  void OnWebDataChangedBySync(const PlusAddressSyncDataChange& change) override;
+
+  // WebDataServiceConsumer:
+  void OnWebDataServiceRequestDone(
+      WebDataServiceBase::Handle handle,
+      std::unique_ptr<WDTypedResult> result) override;
 
   // Returns `true` when plus addresses are supported. This includes checks that
   // the `kPlusAddressesEnabled` base::Feature is enabled, that there's a
@@ -72,31 +96,32 @@ class PlusAddressService : public KeyedService,
   bool SupportsPlusAddresses(const url::Origin& origin,
                              bool is_off_the_record) const;
 
-  // Returns the suggestion label for creating a new plus address.
-  std::u16string GetCreateSuggestionLabel() const;
-
   // Same as `GetPlusAddress`, but packages the plus address along with its
   // eTLD+1.
   std::optional<PlusProfile> GetPlusProfile(const url::Origin& origin) const;
+
+  // Returns all the cached plus profiles. There are no server requests
+  // triggered by this method, only the cached responses are returned.
+  std::vector<PlusProfile> GetPlusProfiles() const;
 
   // Gets a plus address, if one exists, for the passed-in origin. Note that all
   // plus address activity is scoped to eTLD+1. This class owns the conversion
   // of `origin` to its eTLD+1 form.
   std::optional<std::string> GetPlusAddress(const url::Origin& origin) const;
 
-  // Save a plus address for the given origin, which is converted to its eTLD+1
+  // Saves a plus profile for the given origin, which is converted to its eTLD+1
   // form prior to persistence.
-  void SavePlusAddress(url::Origin origin, std::string plus_address);
+  void SavePlusProfile(url::Origin origin, const PlusProfile& profile);
 
   // Asks the PlusAddressHttpClient to reserve a plus address for use on
-  // `origin`, and returns the plus address via `on_completed`.
+  // `origin` and returns the plus address via `on_completed`.
   //
   // Virtual to allow overriding the behavior in tests.
   virtual void ReservePlusAddress(const url::Origin& origin,
                                   PlusAddressRequestCallback on_completed);
 
   // Asks the PlusAddressHttpClient to confirm `plus_address` for use on
-  // `origin`. and returns the plus address via `on_completed`.
+  // `origin` and returns the plus address via `on_completed`.
   //
   // Virtual to allow overriding the behavior in tests.
   virtual void ConfirmPlusAddress(const url::Origin& origin,
@@ -107,40 +132,41 @@ class PlusAddressService : public KeyedService,
   // virtual to allow mocking in tests that don't want to do identity setup.
   virtual std::optional<std::string> GetPrimaryEmail();
 
-  // Gets the up-to-date mapping from the remote server from the
-  // PlusAddressHttpClient and returns it via `callback`.
-  // This is only intended to be called by the `repeating_timer_`.
-  //
-  // TODO (crbug.com/1467623): Make this private when testing improves.
-  // Virtual to allow overriding the behavior in tests.
-  virtual void SyncPlusAddressMapping();
-
   bool is_enabled() const;
 
- protected:
-  // Creates and starts a timer to keep `plus_address_by_site_` and
-  // `plus_addresses` in sync with a remote plus address server.
-  //
-  // This has no effect if this service is not enabled, `pref_service_` is null
-  // or `repeating_timer_` has already been created.
+ private:
+  // Creates and starts a timer to keep `plus_profiles_` and
+  // `plus_addresses_` in sync with a remote plus address server.
+  // This has no effect if this service is not enabled or the timer is already
+  // running.
   void CreateAndStartTimer();
 
-  // Updates `plus_address_by_site_` and `plus_addresses_` using `map`.
-  void UpdatePlusAddressMap(const PlusAddressMap& map);
+  // Gets the up-to-date plus address mapping mapping from the remote server
+  // from the PlusAddressHttpClient.
+  void SyncPlusAddressMapping();
 
-  // Error handling for failed requests made by GetAllPlusAddresses.
-  //
-  // This is used to determine if the account is forbidden on the startup poll.
-  void HandlePollingError(PlusAddressRequestError error);
+  // Checks whether `error` is a `HTTP_FORBIDDEN` network error and, if there
+  // have been more than `kMaxAllowedForbiddenResponses` such calls without a
+  // successful one, disables plus addresses for the session.
+  void HandlePlusAddressRequestError(const PlusAddressRequestError& error);
 
   // signin::IdentityManager::Observer:
   void OnPrimaryAccountChanged(
       const signin::PrimaryAccountChangeEvent& event) override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
-      const GoogleServiceAuthError& error) override;
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
 
   void HandleSignout();
+
+  // Analyzes `maybe_profile` and, if is an error, it reacts to it (e.g.
+  // by disabling the service for this user). If it is a confirmed plus profile,
+  // it saves it.
+  void HandleCreateOrConfirmResponse(const url::Origin& origin,
+                                     PlusAddressRequestCallback callback,
+                                     const PlusProfileOrError& maybe_profile);
 
   // Get and parse the excluded sites.
   std::set<std::string> GetAndParseExcludedSites();
@@ -150,11 +176,21 @@ class PlusAddressService : public KeyedService,
   // on `excluded_sites_` set, and scheme is http or https.
   bool IsSupportedOrigin(const url::Origin& origin) const;
 
-  // The user's existing set of plus addresses, scoped to sites.
-  PlusAddressMap plus_address_by_site_ GUARDED_BY_CONTEXT(sequence_checker_);
+  // Replaces the data stored in `plus_profiles_` and `plus_addresses_`
+  // with the contents of `profiles`, and notifies observers about this change.
+  void ReplacePlusProfiles(const std::vector<PlusProfile>& profiles);
+
+  // Updates `plus_profiles_` and `plus_addresses_` using `map`.
+  // TODO(b/322147254): Remove once integration has finished.
+  void UpdatePlusAddressMap(const PlusAddressMap& map);
+
+  // The user's existing set of `PlusProfile`s, ordered by facet. Since only a
+  // single address per facet is supported, this can be used as the comparator.
+  std::set<PlusProfile, PlusProfileFacetComparator> plus_profiles_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Used to drive the `IsPlusAddress` function, and derived from the values of
-  // `plus_profiles`.
+  // `plus_profiles_`.
   std::unordered_set<std::string> plus_addresses_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
@@ -168,10 +204,16 @@ class PlusAddressService : public KeyedService,
 
   // A timer to periodically retrieve all plus addresses from a remote server
   // to keep this service in sync.
-  std::unique_ptr<signin::PersistentRepeatingTimer> repeating_timer_;
+  base::RepeatingTimer polling_timer_;
 
   // Handles requests to a remote server that this service uses.
-  PlusAddressHttpClient plus_address_client_;
+  std::unique_ptr<PlusAddressHttpClient> plus_address_http_client_;
+
+  // Responsible for communicating with `PlusAddressTable`.
+  scoped_refptr<PlusAddressWebDataService> webdata_service_;
+
+  // Responsible for allocating new plus addresses.
+  const std::unique_ptr<PlusAddressAllocator> plus_address_allocator_;
 
   // Store set of excluded sites ETLD+1 where PlusAddressService is not
   // supported.
@@ -182,9 +224,8 @@ class PlusAddressService : public KeyedService,
   // auth errors) are loading.
   GoogleServiceAuthError primary_account_auth_error_;
 
-  // Tracks the number of attempts made to fetch the PlusAddressMap from the
-  // remote server after the initial request made at service construction.
-  int initial_poll_retry_attempt_ = 0;
+  // Counts the number of HTTP_FORBIDDEN that the client has received.
+  int http_forbidden_responses_ = 0;
 
   // Stores whether the account for this ProfileKeyedService is forbidden from
   // using the remote server. This is populated once on the initial poll request
@@ -194,6 +235,12 @@ class PlusAddressService : public KeyedService,
   base::ScopedObservation<signin::IdentityManager,
                           signin::IdentityManager::Observer>
       identity_manager_observation_{this};
+
+  base::ScopedObservation<PlusAddressWebDataService,
+                          PlusAddressWebDataService::Observer>
+      webdata_service_observation_{this};
+
+  base::ObserverList<Observer> observers_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

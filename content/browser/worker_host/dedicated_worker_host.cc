@@ -57,9 +57,10 @@
 #include "third_party/blink/public/common/service_worker/service_worker_scope_match.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/mojom/back_forward_cache_not_restored_reasons.mojom.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
-#include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom.h"
 #include "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom.h"
+#include "third_party/blink/public/mojom/script_source_location.mojom.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "content/browser/direct_sockets/direct_sockets_service_impl.h"
@@ -218,6 +219,8 @@ void DedicatedWorkerHost::StartScriptLoad(
     mojo::PendingRemote<blink::mojom::BlobURLToken> blob_url_token,
     mojo::Remote<blink::mojom::DedicatedWorkerHostFactoryClient> client,
     bool has_storage_access) {
+  TRACE_EVENT("loading", "DedicatedWorkerHost::StartScriptLoad", "script_url",
+              script_url);
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(base::FeatureList::IsEnabled(blink::features::kPlzDedicatedWorker));
 
@@ -319,6 +322,8 @@ void DedicatedWorkerHost::StartScriptLoad(
       nearest_ancestor_render_frame_host->GetSiteInstance()->GetPartitionDomain(
           storage_partition_impl);
 
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0(
+      "loading", "WorkerScriptFetcher CreateAndStart", TRACE_ID_LOCAL(this));
   WorkerScriptFetcher::CreateAndStart(
       worker_process_host_->GetID(), token_, script_url,
       nearest_ancestor_render_frame_host, creator_render_frame_host,
@@ -353,6 +358,10 @@ void DedicatedWorkerHost::DidStartScriptLoad(
     const GURL& final_response_url) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(base::FeatureList::IsEnabled(blink::features::kPlzDedicatedWorker));
+  TRACE_EVENT_NESTABLE_ASYNC_END0(
+      "loading", "WorkerScriptFetcher CreateAndStart", TRACE_ID_LOCAL(this));
+  TRACE_EVENT("loading", "DedicatedWorkerHost::DidStartScriptLoad",
+              "final_response_url", final_response_url);
 
   if (!main_script_load_params) {
     ScriptLoadStartFailed(final_response_url,
@@ -488,6 +497,9 @@ void DedicatedWorkerHost::DidStartScriptLoad(
       subresource_loader_updater_.BindNewPipeAndPassReceiver(),
       std::move(controller),
       BindAndPassRemoteForBackForwardCacheControllerHost());
+  if (service_worker_handle_->container_host()) {
+    service_worker_handle_->container_host()->SetContainerReady();
+  }
 
   // |service_worker_remote_object| is an associated remote, so calls can't be
   // made on it until its receiver is sent. Now that the receiver was sent, it
@@ -561,7 +573,7 @@ DedicatedWorkerHost::CreateNetworkFactoryForSubresources(
       url_loader_factory::ContentClientParams(
           worker_process_host_->GetBrowserContext(),
           /*frame=*/nullptr, worker_process_host_->GetID(),
-          GetStorageKey().origin(),
+          GetStorageKey().origin(), isolation_info_,
           ukm::SourceIdObj::FromInt64(
               ancestor_render_frame_host->GetPageUkmSourceId()),
           bypass_redirect_checks),
@@ -1028,7 +1040,7 @@ DedicatedWorkerHost::GetWorkerCoepReporter() {
 
 void DedicatedWorkerHost::EvictFromBackForwardCache(
     blink::mojom::RendererEvictionReason reason,
-    blink::mojom::BlockingDetailsPtr details) {
+    blink::mojom::ScriptSourceLocationPtr source) {
   RenderFrameHostImpl* ancestor_render_frame_host =
       RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
   if (!ancestor_render_frame_host) {
@@ -1036,7 +1048,7 @@ void DedicatedWorkerHost::EvictFromBackForwardCache(
     return;
   }
   ancestor_render_frame_host->EvictFromBackForwardCache(std::move(reason),
-                                                        std::move(details));
+                                                        std::move(source));
 }
 
 void DedicatedWorkerHost::DidChangeBackForwardCacheDisablingFeatures(
@@ -1101,10 +1113,8 @@ blink::scheduler::WebSchedulerTrackedFeatures
 DedicatedWorkerHost::GetBackForwardCacheDisablingFeatures() const {
   blink::scheduler::WebSchedulerTrackedFeatures features;
   for (auto& details : bfcache_blocking_details_) {
-    if (details->feature.has_value()) {
-      features.Put(static_cast<blink::scheduler::WebSchedulerTrackedFeature>(
-          details->feature.value()));
-    }
+    features.Put(static_cast<blink::scheduler::WebSchedulerTrackedFeature>(
+        details->feature));
   }
   return features;
 }

@@ -10,10 +10,10 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
@@ -43,7 +43,6 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/audio/public/mojom/device_notifications.mojom.h"
-#include "services/video_capture/public/cpp/features.h"
 #include "third_party/blink/public/common/mediastream/media_devices.h"
 #include "third_party/blink/public/mojom/mediastream/media_devices.mojom.h"
 
@@ -634,15 +633,7 @@ void MediaDevicesManager::StartMonitoring() {
   }
 
 #if BUILDFLAG(IS_MAC)
-  if (base::FeatureList::IsEnabled(
-          video_capture::features::kCameraMonitoringInVideoCaptureService)) {
     RegisterVideoCaptureDevicesChangedObserver();
-  } else {
-    GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(&MediaDevicesManager::StartMonitoringOnUIThread,
-                       base::Unretained(this)));
-  }
 #endif
 #if BUILDFLAG(IS_WIN)
   if (switches::IsMediaFoundationCameraUsageMonitoringEnabled() &&
@@ -652,18 +643,6 @@ void MediaDevicesManager::StartMonitoring() {
   }
 #endif
 }
-
-#if BUILDFLAG(IS_MAC)
-void MediaDevicesManager::StartMonitoringOnUIThread() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  CHECK(!base::FeatureList::IsEnabled(
-      video_capture::features::kCameraMonitoringInVideoCaptureService));
-  BrowserMainLoop* browser_main_loop = content::BrowserMainLoop::GetInstance();
-  if (!browser_main_loop)
-    return;
-  browser_main_loop->device_monitor_mac()->StartMonitoring();
-}
-#endif
 
 void MediaDevicesManager::StopMonitoring() {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
@@ -715,7 +694,7 @@ media::VideoCaptureFormats MediaDevicesManager::GetVideoInputFormats(
   video_capture_manager_->GetDeviceSupportedFormats(device_id, &formats);
   ReplaceInvalidFrameRatesWithFallback(&formats);
   // Remove formats that have zero resolution.
-  base::EraseIf(formats, [](const media::VideoCaptureFormat& format) {
+  std::erase_if(formats, [](const media::VideoCaptureFormat& format) {
     return format.frame_size.GetArea() <= 0;
   });
 
@@ -1177,7 +1156,7 @@ void MediaDevicesManager::ProcessRequests() {
                    false /* ignore_group_id */);
   }
 
-  base::EraseIf(requests_, [this](EnumerationRequest& request) {
+  std::erase_if(requests_, [this](EnumerationRequest& request) {
     if (IsEnumerationRequestReady(request)) {
       std::move(request.callback).Run(current_snapshot_);
       return true;

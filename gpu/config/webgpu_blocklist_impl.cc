@@ -32,6 +32,11 @@ bool IsWebGPUAdapterBlocklisted(const WGPUAdapterProperties& properties,
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
+  // Blocklist the OpenGLES backend on Android for now.
+  if (properties.backendType == WGPUBackendType_OpenGLES) {
+    return true;
+  }
+
   constexpr uint32_t kARMVendorID = 0x13B5;
   constexpr uint32_t kQualcommVendorID = 0x5143;
 
@@ -45,6 +50,14 @@ bool IsWebGPUAdapterBlocklisted(const WGPUAdapterProperties& properties,
     return true;
   }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Blocklist WebGPU on this GPU. See b/331922614.
+  constexpr uint32_t kAMDVendorID = 0x1002;
+  if (properties.vendorID == kAMDVendorID && properties.deviceID == 0x98e4) {
+    return true;
+  }
+#endif
 
   // TODO(crbug.com/1266550): SwiftShader and CPU adapters are blocked until
   // fully tested.

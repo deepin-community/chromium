@@ -9,6 +9,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/check.h"
 #include "base/feature_list.h"
 #include "build/build_config.h"
 #include "pdf/pdf_engine.h"
@@ -26,21 +27,20 @@ std::optional<bool> g_use_skia_renderer_enabled_by_policy;
 class ScopedSdkInitializer {
  public:
   explicit ScopedSdkInitializer(bool enable_v8) {
-    if (!IsSDKInitializedViaPlugin()) {
-      InitializeSDK(
-          enable_v8,
-          g_use_skia_renderer_enabled_by_policy.value_or(
-              base::FeatureList::IsEnabled(features::kPdfUseSkiaRenderer)),
-          FontMappingMode::kNoMapping);
-    }
+    CHECK(!IsSDKInitializedViaPlugin());
+    InitializeSDK(
+        enable_v8,
+        g_use_skia_renderer_enabled_by_policy.value_or(
+            base::FeatureList::IsEnabled(features::kPdfUseSkiaRenderer)),
+        FontMappingMode::kNoMapping);
   }
 
   ScopedSdkInitializer(const ScopedSdkInitializer&) = delete;
   ScopedSdkInitializer& operator=(const ScopedSdkInitializer&) = delete;
 
   ~ScopedSdkInitializer() {
-    if (!IsSDKInitializedViaPlugin())
-      ShutdownSDK();
+    CHECK(!IsSDKInitializedViaPlugin());
+    ShutdownSDK();
   }
 };
 
@@ -96,6 +96,13 @@ bool GetPDFDocInfo(base::span<const uint8_t> pdf_buffer,
   ScopedSdkInitializer scoped_sdk_initializer(/*enable_v8=*/true);
   PDFEngineExports* engine_exports = PDFEngineExports::Get();
   return engine_exports->GetPDFDocInfo(pdf_buffer, page_count, max_page_width);
+}
+
+std::optional<DocumentMetadata> GetPDFDocMetadata(
+    base::span<const uint8_t> pdf_buffer) {
+  ScopedSdkInitializer scoped_sdk_initializer(/*enable_v8=*/false);
+  PDFEngineExports* engine_exports = PDFEngineExports::Get();
+  return engine_exports->GetPDFDocMetadata(pdf_buffer);
 }
 
 std::optional<bool> IsPDFDocTagged(base::span<const uint8_t> pdf_buffer) {

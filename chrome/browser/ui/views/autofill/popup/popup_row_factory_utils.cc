@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_with_button_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
+#include "chrome/browser/user_education/user_education_service.h"
 #include "components/autofill/core/browser/filling_product.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/ui/suggestion.h"
@@ -103,9 +104,9 @@ std::unique_ptr<PopupRowContentView> CreateFooterPopupRowContentView(
 
   std::unique_ptr<views::Label> main_text_label =
       popup_cell_utils::CreateMainTextLabel(
-          suggestion.main_text, ShouldApplyNewAutofillPopupStyle()
-                                    ? views::style::TextStyle::STYLE_BODY_3
-                                    : views::style::TextStyle::STYLE_SECONDARY);
+          suggestion, ShouldApplyNewAutofillPopupStyle()
+                          ? views::style::TextStyle::STYLE_BODY_3
+                          : views::style::TextStyle::STYLE_SECONDARY);
   if (ShouldApplyNewAutofillPopupStyle()) {
     main_text_label->SetEnabledColorId(ui::kColorLabelForegroundSecondary);
   }
@@ -175,13 +176,12 @@ std::unique_ptr<PopupRowContentView> CreatePasswordPopupRowContentView(
 
   // Add the actual views.
   std::unique_ptr<views::Label> main_text_label =
-      popup_cell_utils::CreateMainTextLabel(suggestion.main_text,
-                                            GetPrimaryTextStyle());
+      popup_cell_utils::CreateMainTextLabel(suggestion, GetPrimaryTextStyle());
   main_text_label->SetMaximumWidthSingleLine(kAutofillPopupUsernameMaxWidth);
 
   popup_cell_utils::AddSuggestionContentToView(
       suggestion, std::move(main_text_label),
-      popup_cell_utils::CreateMinorTextLabel(suggestion.minor_text),
+      popup_cell_utils::CreateMinorTextLabel(suggestion),
       CreatePasswordDescriptionLabel(suggestion),
       CreateAndTrackPasswordSubtextViews(suggestion, *view), *view);
 
@@ -216,14 +216,13 @@ std::unique_ptr<PopupRowContentView> CreatePopupRowContentView(
     FillingProduct main_filling_product) {
   auto view = std::make_unique<PopupRowContentView>();
   std::unique_ptr<views::Label> main_text_label =
-      popup_cell_utils::CreateMainTextLabel(suggestion.main_text,
-                                            GetPrimaryTextStyle());
+      popup_cell_utils::CreateMainTextLabel(suggestion, GetPrimaryTextStyle());
   popup_cell_utils::FormatLabel(
       *main_text_label, suggestion.main_text, main_filling_product,
       popup_cell_utils::GetMaxPopupAddressProfileWidth());
   popup_cell_utils::AddSuggestionContentToView(
       suggestion, std::move(main_text_label),
-      popup_cell_utils::CreateMinorTextLabel(suggestion.minor_text),
+      popup_cell_utils::CreateMinorTextLabel(suggestion),
       /*description_label=*/nullptr,
       popup_cell_utils::CreateAndTrackSubtextViews(*view, suggestion,
                                                    main_filling_product),
@@ -241,15 +240,14 @@ std::unique_ptr<PopupRowWithButtonView> CreateAutocompleteRowWithDeleteButton(
 
   const Suggestion& kSuggestion = controller->GetSuggestionAt(line_number);
   std::unique_ptr<views::Label> main_text_label =
-      popup_cell_utils::CreateMainTextLabel(kSuggestion.main_text,
-                                            GetPrimaryTextStyle());
+      popup_cell_utils::CreateMainTextLabel(kSuggestion, GetPrimaryTextStyle());
   popup_cell_utils::FormatLabel(
       *main_text_label, kSuggestion.main_text,
       controller->GetMainFillingProduct(),
       popup_cell_utils::GetMaxPopupAddressProfileWidth());
   popup_cell_utils::AddSuggestionContentToView(
       kSuggestion, std::move(main_text_label),
-      popup_cell_utils::CreateMinorTextLabel(kSuggestion.minor_text),
+      popup_cell_utils::CreateMinorTextLabel(kSuggestion),
       /*description_label=*/nullptr,
       popup_cell_utils::CreateAndTrackSubtextViews(
           *view, kSuggestion, controller->GetMainFillingProduct()),
@@ -336,21 +334,13 @@ std::unique_ptr<PopupRowView> CreatePopupRowView(
           a11y_selection_delegate, selection_delegate, controller, line_number,
           CreatePasswordPopupRowContentView(suggestion));
     case PopupItemId::kCompose: {
-      auto tracker = std::make_unique<ScopedNewBadgeTracker>(
-          controller->GetWebContents()->GetBrowserContext());
-      const bool show_new_badge = tracker->TryShowNewBadge(
-          feature_engagement::kIPHComposeNewBadgeFeature,
-          &compose::features::kEnableComposeNudge);
-      auto new_badge_tracker =
-          PopupRowView::ScopedNewBadgeTrackerWithAcceptAction(
-              std::move(tracker),
-              /*action_name=*/"compose_activated");
-      auto row_view = std::make_unique<PopupRowView>(
+      const bool show_new_badge = UserEducationService::MaybeShowNewBadge(
+          controller->GetWebContents()->GetBrowserContext(),
+          compose::features::kEnableComposeNudge);
+      return std::make_unique<PopupRowView>(
           a11y_selection_delegate, selection_delegate, controller, line_number,
           CreateComposePopupRowContentView(suggestion, show_new_badge));
-      row_view->set_new_badge_tracker(std::move(new_badge_tracker));
-      return row_view;
-    };
+    }
     default:
       return std::make_unique<PopupRowView>(
           a11y_selection_delegate, selection_delegate, controller, line_number,

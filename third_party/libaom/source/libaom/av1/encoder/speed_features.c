@@ -1461,7 +1461,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
   // for resolutions below 720p.
   if (speed >= 11 && !is_720p_or_larger &&
       cpi->oxcf.tune_cfg.content != AOM_CONTENT_SCREEN) {
-    sf->rt_sf.skip_cdef_sb = 2;
+    sf->rt_sf.skip_cdef_sb = 1;
     sf->rt_sf.force_only_last_ref = 1;
     sf->rt_sf.selective_cdf_update = 1;
     sf->rt_sf.use_nonrd_filter_search = 0;
@@ -1476,6 +1476,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     for (int i = 0; i < BLOCK_SIZES; ++i) {
       sf->rt_sf.intra_y_mode_bsize_mask_nrd[i] = INTRA_DC;
     }
+    sf->rt_sf.hybrid_intra_pickmode = 0;
   }
   // Setting for SVC, or when the ref_frame_config control is
   // used to set the reference structure.
@@ -1576,13 +1577,13 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.screen_content_cdef_filter_qindex_thresh = 80;
       sf->rt_sf.part_early_exit_zeromv = 1;
       sf->rt_sf.nonrd_aggressive_skip = 1;
+      sf->rt_sf.thresh_active_maps_skip_lf_cdef = 90;
     }
     if (speed >= 11) {
       sf->rt_sf.skip_lf_screen = 2;
       sf->rt_sf.skip_cdef_sb = 2;
       sf->rt_sf.part_early_exit_zeromv = 2;
       sf->rt_sf.prune_palette_nonrd = 1;
-      sf->rt_sf.set_zeromv_skip_based_on_source_sad = 2;
       sf->rt_sf.increase_color_thresh_palette = 0;
     }
     sf->rt_sf.use_nonrd_altref_frame = 0;
@@ -2275,6 +2276,7 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->part_early_exit_zeromv = 0;
   rt_sf->sse_early_term_inter_search = EARLY_TERM_DISABLED;
   rt_sf->skip_lf_screen = 0;
+  rt_sf->thresh_active_maps_skip_lf_cdef = 100;
   rt_sf->sad_based_adp_altref_lag = 0;
   rt_sf->partition_direct_merging = 0;
   rt_sf->var_part_based_on_qidx = 0;

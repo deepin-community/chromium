@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/guides
-  - Chromium OS > Developer Library > Guides
+  - ChromiumOS > Developer Library > Guides
 page_name: dbus-in-chrome
 title: ChromeOS D-Bus Usage in Chrome
 ---
@@ -65,7 +65,12 @@ See [D-Bus Best Practices] for more information about D-Bus permissions.
 ## Using system daemons' D-Bus services
 
 To call methods exported by system daemons or observe signals, Chrome uses
-`Client` classes located under [chromeos/dbus].
+`Client` classes located under [chromeos/dbus]. Ash specific clients are located
+under [chromeos/ash/components/dbus].
+
+D-Bus clients for lacros is not recommended without a specific reason because
+lacros has version skews. You should consider to use crosapi so that ash proxies
+the D-Bus request.
 
 **Chrome's D-Bus-related code is not thread-safe and runs on the UI thread in
 the browser process.**
@@ -214,7 +219,7 @@ need to provide a method that Chrome can call when it starts or restarts to get
 the correct initial state from the daemon.
 
 [D-Bus]: https://www.freedesktop.org/wiki/Software/dbus/
-[D-Bus Best Practices]: dbus_best_practices.md
+[D-Bus Best Practices]: /chromium-os/developer-library/guides/ipc/dbus-best-practices/
 [system_api]: https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/system_api
 [src/DEPS]: https://chromium.googlesource.com/chromium/src/+/HEAD/DEPS
 [mus+ash]: https://www.chromium.org/developers/mus-ash

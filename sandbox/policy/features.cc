@@ -59,6 +59,11 @@ BASE_FEATURE(kGpuLPAC,
              "GpuLPAC",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+// Enables Print Compositor Low Privilege AppContainer.
+BASE_FEATURE(kPrintCompositorLPAC,
+             "PrintCompositorLPAC",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // Enables Renderer AppContainer
 BASE_FEATURE(kRendererAppContainer,
              "RendererAppContainer",
@@ -98,6 +103,15 @@ BASE_FEATURE(kWinSboxZeroAppShim,
 // build. See https://blogs.windows.com/blog/tag/code-integrity-guard/.
 BASE_FEATURE(kNetworkServiceCodeIntegrity,
              "NetworkServiceCodeIntegrity",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Run win32k lockdown without applying the interceptions to fake out the
+// dllmain of gdi32 and user32. With this feature enabled, processes with
+// win32k lockdown policy will fail to load gdi32.dll and user32.dll.
+// TODO(crbug.com/326277735) this feature is under development and not
+// completely supported in every process type, may cause delayload failures.
+BASE_FEATURE(kWinSboxNoFakeGdiInit,
+             "WinSboxNoFakeGdiInit",
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
 

@@ -8,46 +8,50 @@
 #include "base/time/time.h"
 
 namespace plus_addresses::features {
+
+namespace {
+
+constexpr char kEnterprisePlusAddressOAuthScopeName[] = "oauth-scope";
+constexpr char kEnterprisePlusAddressServerUrlName[] = "server-url";
+constexpr char kSyncWithEnterprisePlusAddressServerName[] = "sync-with-server";
+constexpr char kEnterprisePlusAddressTimerDelayName[] = "timer-delay";
+constexpr char kPlusAddressManagementUrlName[] = "manage-url";
+constexpr char kPlusAddressExcludedSitesName[] = "excluded-sites";
+constexpr char kPlusAddressErrorReportUrlName[] = "error-report-url";
+constexpr char kDisableForForbiddenUsersName[] = "disable-for-forbidden-users";
+
+}  // namespace
+
 // Controls the enabled/disabled state of the experimental feature.
-BASE_FEATURE(kFeature,
+BASE_FEATURE(kPlusAddressesEnabled,
              "PlusAddressesEnabled",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-const char kEnterprisePlusAddressSuggestionLabelOverrideName[] =
-    "suggestion-label";
-const char kEnterprisePlusAddressSettingsLabelOverrideName[] = "settings-label";
-const char kEnterprisePlusAddressOAuthScopeName[] = "oauth-scope";
-const char kEnterprisePlusAddressServerUrlName[] = "server-url";
-const char kSyncWithEnterprisePlusAddressServerName[] = "sync-with-server";
-const char kEnterprisePlusAddressTimerDelayName[] = "timer-delay";
-const char kPlusAddressManagementUrlName[] = "manage-url";
-const char kPlusAddressExcludedSitesName[] = "excluded-sites";
-const char kPlusAddressErrorReportUrlName[] = "error-report-url";
-const char kDisableForForbiddenUsersName[] = "disable-for-forbidden-users";
-
-const base::FeatureParam<std::string>
-    kEnterprisePlusAddressSuggestionLabelOverride{
-        &kFeature, kEnterprisePlusAddressSuggestionLabelOverrideName,
-        "Lorem Ipsum"};
-const base::FeatureParam<std::string>
-    kEnterprisePlusAddressSettingsLabelOverride{
-        &kFeature, kEnterprisePlusAddressSettingsLabelOverrideName,
-        "Lorem Ipsum"};
 const base::FeatureParam<std::string> kEnterprisePlusAddressOAuthScope{
-    &kFeature, kEnterprisePlusAddressOAuthScopeName, ""};
+    &kPlusAddressesEnabled, kEnterprisePlusAddressOAuthScopeName, ""};
 const base::FeatureParam<std::string> kEnterprisePlusAddressServerUrl{
-    &kFeature, kEnterprisePlusAddressServerUrlName, ""};
+    &kPlusAddressesEnabled, kEnterprisePlusAddressServerUrlName, ""};
 const base::FeatureParam<bool> kSyncWithEnterprisePlusAddressServer{
-    &kFeature, kSyncWithEnterprisePlusAddressServerName, false};
+    &kPlusAddressesEnabled, kSyncWithEnterprisePlusAddressServerName, false};
 const base::FeatureParam<base::TimeDelta> kEnterprisePlusAddressTimerDelay{
-    &kFeature, kEnterprisePlusAddressTimerDelayName, base::Hours(24)};
+    &kPlusAddressesEnabled, kEnterprisePlusAddressTimerDelayName,
+    base::Hours(24)};
 const base::FeatureParam<std::string> kPlusAddressManagementUrl{
-    &kFeature, kPlusAddressManagementUrlName, ""};
+    &kPlusAddressesEnabled, kPlusAddressManagementUrlName, ""};
 const base::FeatureParam<std::string> kPlusAddressExcludedSites{
-    &kFeature, kPlusAddressExcludedSitesName, ""};
+    &kPlusAddressesEnabled, kPlusAddressExcludedSitesName, ""};
 const base::FeatureParam<std::string> kPlusAddressErrorReportUrl{
-    &kFeature, kPlusAddressErrorReportUrlName, ""};
+    &kPlusAddressesEnabled, kPlusAddressErrorReportUrlName, ""};
 const base::FeatureParam<bool> kDisableForForbiddenUsers{
-    &kFeature, kDisableForForbiddenUsersName, false};
+    &kPlusAddressesEnabled, kDisableForForbiddenUsersName, false};
+
+BASE_FEATURE(kPlusAddressFallbackFromContextMenu,
+             "PlusAddressFallbackFromContextMenu",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// When enabled, users can refresh the suggested plus address string.
+BASE_FEATURE(kPlusAddressRefresh,
+             "PlusAddressRefresh",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace plus_addresses::features

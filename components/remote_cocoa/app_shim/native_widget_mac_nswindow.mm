@@ -347,7 +347,7 @@ void OrderChildWindow(NSWindow* child_window,
   // We should like to DCHECK that the object returned implements the
   // NSAccessibility protocol, but the NSAccessibilityRemoteUIElement interface
   // does not conform.
-  // TODO(https://crbug.com/944698): Create a sub-class that does.
+  // TODO(crbug.com/41448396): Create a sub-class that does.
   return obj;
 }
 
@@ -843,5 +843,15 @@ void OrderChildWindow(NSWindow* child_window,
 - (NSWindow*)preferredSheetParent {
   return [self immersiveFullscreen] ? [self rootWindow] : self;
 }
+
+#ifndef NDEBUG
+- (NSString*)debugDescription {
+  if (!self.title.length) {
+    return [super debugDescription];
+  }
+  return [NSString
+      stringWithFormat:@"%@ - %@", [super debugDescription], self.title];
+}
+#endif  // NDEBUG
 
 @end

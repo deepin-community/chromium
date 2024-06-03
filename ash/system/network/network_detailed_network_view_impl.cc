@@ -42,13 +42,19 @@ constexpr auto kTopContainerBorder = gfx::Insets::TLBR(4, 0, 4, 4);
 constexpr auto kBetweenContainerMargins = gfx::Insets::TLBR(6, 0, 0, 0);
 
 // The following getter methods should only be used for
-// `NetworkType::kWiFi`, `NetworkType::kMobile`, or `NetworkType::kCellular`
-// types otherwise a crash will occur.
-std::u16string GetLabelForWifiAndMobileNetwork(NetworkType type) {
+// `NetworkType::kWiFi`, `NetworkType::kTether`, `NetworkType::kMobile`, or
+// `NetworkType::kCellular` types otherwise a crash will occur.
+std::u16string GetLabelForConfigureNetworkEntry(NetworkType type) {
   switch (type) {
     case NetworkType::kWiFi:
       return l10n_util::GetStringUTF16(
           IDS_ASH_QUICK_SETTINGS_JOIN_WIFI_NETWORK);
+    case NetworkType::kTether:
+      if (features::IsInstantHotspotRebrandEnabled()) {
+        return l10n_util::GetStringUTF16(
+            IDS_ASH_QUICK_SETTINGS_SET_UP_YOUR_DEVICE);
+      }
+      [[fallthrough]];
     case NetworkType::kCellular:
       [[fallthrough]];
     case NetworkType::kMobile:
@@ -58,10 +64,16 @@ std::u16string GetLabelForWifiAndMobileNetwork(NetworkType type) {
   }
 }
 
-std::u16string GetTooltipForWifiAndMobileNetwork(NetworkType type) {
+std::optional<std::u16string> GetTooltipForConfigureNetworkEntry(
+    NetworkType type) {
   switch (type) {
     case NetworkType::kWiFi:
       return l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_OTHER_WIFI);
+    case NetworkType::kTether:
+      if (features::IsInstantHotspotRebrandEnabled()) {
+        return std::nullopt;
+      }
+      [[fallthrough]];
     case NetworkType::kCellular:
       [[fallthrough]];
     case NetworkType::kMobile:
@@ -71,10 +83,15 @@ std::u16string GetTooltipForWifiAndMobileNetwork(NetworkType type) {
   }
 }
 
-int GetViewIDForWifiAndMobileNetwork(NetworkType type) {
+int GetViewIDForConfigureNetworkEntry(NetworkType type) {
   switch (type) {
     case NetworkType::kWiFi:
       return VIEW_ID_JOIN_WIFI_NETWORK_ENTRY;
+    case NetworkType::kTether:
+      if (features::IsInstantHotspotRebrandEnabled()) {
+        return VIEW_ID_OPEN_CROSS_DEVICE_SETTINGS;
+      }
+      [[fallthrough]];
     case NetworkType::kCellular:
       [[fallthrough]];
     case NetworkType::kMobile:
@@ -130,17 +147,23 @@ NetworkListNetworkItemView* NetworkDetailedNetworkViewImpl::AddNetworkListItem(
 HoverHighlightView* NetworkDetailedNetworkViewImpl::AddConfigureNetworkEntry(
     NetworkType type) {
   CHECK(type == NetworkType::kWiFi || type == NetworkType::kMobile ||
-        type == NetworkType::kCellular);
+        type == NetworkType::kCellular ||
+        (features::IsInstantHotspotRebrandEnabled() &&
+         type == NetworkType::kTether));
   HoverHighlightView* entry = GetNetworkList(type)->AddChildView(
       std::make_unique<HoverHighlightView>(/*listener=*/this));
-  entry->SetID(GetViewIDForWifiAndMobileNetwork(type));
-  entry->SetTooltipText(GetTooltipForWifiAndMobileNetwork(type));
+  entry->SetID(GetViewIDForConfigureNetworkEntry(type));
+
+  auto tooltip_text = GetTooltipForConfigureNetworkEntry(type);
+  if (tooltip_text.has_value()) {
+    entry->SetTooltipText(tooltip_text.value());
+  }
 
   auto image_view = std::make_unique<views::ImageView>();
   image_view->SetImage(ui::ImageModel::FromVectorIcon(
       kSystemMenuPlusIcon, cros_tokens::kCrosSysPrimary));
   entry->AddViewAndLabel(std::move(image_view),
-                         GetLabelForWifiAndMobileNetwork(type));
+                         GetLabelForConfigureNetworkEntry(type));
   views::Label* label = entry->text_label();
   label->SetEnabledColorId(cros_tokens::kCrosSysPrimary);
   TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosButton2,
@@ -176,19 +199,16 @@ NetworkDetailedNetworkViewImpl::AddMobileSectionHeader() {
 }
 
 NetworkListTetherHostsHeaderView*
-NetworkDetailedNetworkViewImpl::AddTetherHostsSectionHeader() {
+NetworkDetailedNetworkViewImpl::AddTetherHostsSectionHeader(
+    NetworkListTetherHostsHeaderView::OnExpandedStateToggle callback) {
   DCHECK(features::IsInstantHotspotRebrandEnabled());
-  if (!tether_hosts_top_container_) {
-    tether_hosts_top_container_ =
-        scroll_content()->AddChildView(std::make_unique<RoundedContainer>(
-            RoundedContainer::Behavior::kTopRounded));
-    tether_hosts_top_container_->SetBorderInsets(kTopContainerBorder);
-    tether_hosts_top_container_->SetProperty(views::kMarginsKey,
-                                             kBetweenContainerMargins);
-  }
-  return tether_hosts_top_container_->AddChildView(
-      std::make_unique<NetworkListTetherHostsHeaderView>(
-          /*delegate=*/this));
+  NetworkListTetherHostsHeaderView* header_view =
+      scroll_content()->AddChildView(
+          std::make_unique<NetworkListTetherHostsHeaderView>(
+              std::move(callback)));
+  header_view->SetBorderInsets(kTopContainerBorder);
+  header_view->SetProperty(views::kMarginsKey, kBetweenContainerMargins);
+  return header_view;
 }
 
 views::View* NetworkDetailedNetworkViewImpl::GetNetworkList(NetworkType type) {
@@ -275,14 +295,6 @@ void NetworkDetailedNetworkViewImpl::ReorderMobileListView(size_t index) {
   }
 }
 
-void NetworkDetailedNetworkViewImpl::ReorderTetherHostsTopContainer(
-    size_t index) {
-  DCHECK(base::FeatureList::IsEnabled(features::kInstantHotspotRebrand));
-  if (tether_hosts_top_container_) {
-    scroll_content()->ReorderChildView(tether_hosts_top_container_, index);
-  }
-}
-
 void NetworkDetailedNetworkViewImpl::ReorderTetherHostsListView(size_t index) {
   DCHECK(base::FeatureList::IsEnabled(features::kInstantHotspotRebrand));
   if (tether_hosts_network_list_view_) {
@@ -320,11 +332,6 @@ void NetworkDetailedNetworkViewImpl::UpdateMobileStatus(bool enabled) {
 }
 
 void NetworkDetailedNetworkViewImpl::UpdateTetherHostsStatus(bool enabled) {
-  if (tether_hosts_top_container_) {
-    tether_hosts_top_container_->SetBehavior(
-        enabled ? RoundedContainer::Behavior::kTopRounded
-                : RoundedContainer::Behavior::kAllRounded);
-  }
   if (tether_hosts_network_list_view_) {
     tether_hosts_network_list_view_->SetVisible(enabled);
   }

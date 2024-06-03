@@ -31,6 +31,9 @@
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
 #include "core/fpdfapi/parser/cpdf_string.h"
 #include "core/fxcodec/icc/icc_transform.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
+#include "core/fxcrt/fixed_size_data_vector.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_memory.h"
 #include "core/fxcrt/fx_safe_types.h"
@@ -40,8 +43,6 @@
 #include "core/fxge/cfx_substfont.h"
 #include "core/fxge/cfx_unicodeencoding.h"
 #include "core/fxge/fx_font.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
 
 namespace {
 
@@ -74,10 +75,9 @@ ByteString GetPSNameFromTT(HDC hDC) {
   ByteString result;
   DWORD size = ::GetFontData(hDC, 'eman', 0, nullptr, 0);
   if (size != GDI_ERROR) {
-    LPBYTE buffer = FX_Alloc(BYTE, size);
-    ::GetFontData(hDC, 'eman', 0, buffer, size);
-    result = GetNameFromTT({buffer, size}, 6);
-    FX_Free(buffer);
+    auto buffer = FixedSizeDataVector<BYTE>::Uninit(size);
+    ::GetFontData(hDC, 'eman', 0, buffer.span().data(), buffer.size());
+    result = GetNameFromTT(buffer, 6);
   }
   return result;
 }
@@ -408,8 +408,9 @@ RetainPtr<CPDF_IccProfile> CPDF_DocPageData::GetIccProfile(
   CHECK(pProfileStream);
 
   auto it = m_IccProfileMap.find(pProfileStream);
-  if (it != m_IccProfileMap.end() && it->second)
-    return pdfium::WrapRetain(it->second.Get());
+  if (it != m_IccProfileMap.end()) {
+    return it->second;
+  }
 
   auto pAccessor = pdfium::MakeRetain<CPDF_StreamAcc>(pProfileStream);
   pAccessor->LoadAllDataFiltered();
@@ -426,12 +427,13 @@ RetainPtr<CPDF_IccProfile> CPDF_DocPageData::GetIccProfile(
   auto hash_it = m_HashIccProfileMap.find(hash_profile_key);
   if (hash_it != m_HashIccProfileMap.end()) {
     auto it_copied_stream = m_IccProfileMap.find(hash_it->second);
-    if (it_copied_stream != m_IccProfileMap.end() && it_copied_stream->second)
-      return pdfium::WrapRetain(it_copied_stream->second.Get());
+    if (it_copied_stream != m_IccProfileMap.end()) {
+      return it_copied_stream->second;
+    }
   }
-  auto pProfile = pdfium::MakeRetain<CPDF_IccProfile>(
-      pProfileStream, pAccessor->GetSpan(), expected_components);
-  m_IccProfileMap[pProfileStream].Reset(pProfile.Get());
+  auto pProfile =
+      pdfium::MakeRetain<CPDF_IccProfile>(pAccessor, expected_components);
+  m_IccProfileMap[pProfileStream] = pProfile;
   m_HashIccProfileMap[hash_profile_key] = std::move(pProfileStream);
   return pProfile;
 }

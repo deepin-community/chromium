@@ -29,12 +29,14 @@
 #import "content/browser/renderer_host/render_widget_host_view_mac_editcommand_helper.h"
 #include "content/common/features.h"
 #include "content/common/input/web_input_event_builders_mac.h"
+#include "content/public/browser/browser_accessibility_state.h"
 #import "content/public/browser/render_widget_host_view_mac_delegate.h"
 #include "content/public/common/content_features.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
+#include "ui/accessibility/accessibility_features.h"
 #import "ui/base/clipboard/clipboard_util_mac.h"
 #import "ui/base/cocoa/appkit_utils.h"
 #import "ui/base/cocoa/nsmenu_additions.h"
@@ -87,6 +89,7 @@ class DummyHostHelper : public RenderWidgetHostNSViewHostHelper {
 
  private:
   // RenderWidgetHostNSViewHostHelper implementation.
+  id GetAccessibilityElement() override { return nil; }
   id GetRootBrowserAccessibilityElement() override { return nil; }
   id GetFocusedBrowserAccessibilityElement() override { return nil; }
   void SetAccessibilityWindow(NSWindow* window) override {}
@@ -345,6 +348,7 @@ void ExtractUnderlines(NSAttributedString* string,
   NSInteger _textSuggestionsSequenceNumber;
   BOOL _shouldRequestTextSubstitutions;
   BOOL _substitutionWasApplied;
+  bool _sonomaAccessibilityRefinementsAreActive;
 }
 
 @synthesize markedRange = _markedRange;
@@ -371,6 +375,10 @@ void ExtractUnderlines(NSAttributedString* string,
     _isStylusEnteringProximity = false;
     _keyboardLockActive = false;
     _textInputType = ui::TEXT_INPUT_TYPE_NONE;
+    _sonomaAccessibilityRefinementsAreActive =
+        base::mac::MacOSVersion() >= 14'00'00 &&
+        base::FeatureList::IsEnabled(
+            features::kSonomaAccessibilityActivationRefinements);
   }
   return self;
 }
@@ -1890,6 +1898,12 @@ void ExtractUnderlines(NSAttributedString* string,
 - (id)accessibilityHitTest:(NSPoint)point {
   id rootElement = _hostHelper->GetRootBrowserAccessibilityElement();
   if (!rootElement) {
+    if (features::IsAccessibilityRemoteUIAppEnabled()) {
+      id rwhvElement = _hostHelper->GetAccessibilityElement();
+      if (rwhvElement && rwhvElement != self) {
+        return [rwhvElement accessibilityHitTest:point];
+      }
+    }
     return self;
   }
 
@@ -1936,6 +1950,20 @@ void ExtractUnderlines(NSAttributedString* string,
 }
 
 - (NSAccessibilityRole)accessibilityRole {
+  if (_sonomaAccessibilityRefinementsAreActive) {
+    content::BrowserAccessibilityState* accessibility_state =
+        content::BrowserAccessibilityState::GetInstance();
+
+    // When an AT asks the application object for its role, we activate
+    // nativeAPI accessibility support. If the AT descends into the AX tree
+    // and arrives here (the web contents container), activate basic support
+    // so that the AT can descend further into the web content.
+    if (!accessibility_state->GetAccessibilityMode().has_mode(
+            ui::kAXModeBasic.flags())) {
+      accessibility_state->AddAccessibilityModeFlags(ui::kAXModeBasic);
+    }
+  }
+
   return NSAccessibilityScrollAreaRole;
 }
 

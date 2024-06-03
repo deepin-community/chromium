@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <queue>
 #include <set>
 #include <utility>
@@ -20,6 +21,7 @@
 #include "base/dcheck_is_on.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -38,7 +40,6 @@
 #include "base/time/time_override.h"
 #include "base/trace_event/base_tracing_forward.h"
 #include "base/values.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 class LazyNow;
@@ -100,8 +101,8 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
   struct DeferredNonNestableTask {
     Task task;
 
-    // `task_queue` is not a raw_ptr<...> for performance reasons (based on
-    // analysis of sampling profiler data and tab_search:top100:2020).
+    // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of sampling
+    // profiler data and tab_search:top100:2020).
     RAW_PTR_EXCLUSION internal::TaskQueueImpl* task_queue;
 
     WorkQueueType work_queue_type;
@@ -122,7 +123,7 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
   bool IsEmpty() const override;
   size_t GetNumberOfPendingTasks() const override;
   bool HasTaskToRunImmediatelyOrReadyDelayedTask() const override;
-  absl::optional<WakeUp> GetNextDesiredWakeUp() override;
+  std::optional<WakeUp> GetNextDesiredWakeUp() override;
   void SetQueuePriority(TaskQueue::QueuePriority priority) override;
   TaskQueue::QueuePriority GetQueuePriority() const override;
   void AddTaskObserver(TaskObserver* task_observer) override;
@@ -270,7 +271,7 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
 
  protected:
   // Sets this queue's next wake up time to |wake_up| in the time domain.
-  void SetNextWakeUp(LazyNow* lazy_now, absl::optional<WakeUp> wake_up);
+  void SetNextWakeUp(LazyNow* lazy_now, std::optional<WakeUp> wake_up);
 
  private:
   friend class WorkQueue;
@@ -313,7 +314,9 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
 
     base::internal::OperationsController operations_controller_;
     // Pointer might be stale, access guarded by |operations_controller_|
-    raw_ptr<TaskQueueImpl> outer_;
+    // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of
+    // speedometer3).
+    RAW_PTR_EXCLUSION TaskQueueImpl* outer_ = nullptr;
   };
 
   class TaskRunner final : public SingleThreadTaskRunner {
@@ -371,7 +374,9 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
     void UnregisterTaskQueue() { task_queue_impl_ = nullptr; }
 
    private:
-    raw_ptr<TaskQueueImpl> task_queue_impl_;
+    // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of
+    // speedometer3).
+    RAW_PTR_EXCLUSION TaskQueueImpl* task_queue_impl_ = nullptr;
     const scoped_refptr<const AssociatedThreadId> associated_thread_;
   };
 
@@ -421,11 +426,11 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
     std::unique_ptr<WorkQueue> delayed_work_queue;
     std::unique_ptr<WorkQueue> immediate_work_queue;
     DelayedIncomingQueue delayed_incoming_queue;
-    ObserverList<TaskObserver>::Unchecked task_observers;
+    ObserverList<TaskObserver>::UncheckedAndDanglingUntriaged task_observers;
     HeapHandle heap_handle;
     bool is_enabled = true;
-    absl::optional<Fence> current_fence;
-    absl::optional<TimeTicks> delayed_fence;
+    std::optional<Fence> current_fence;
+    std::optional<TimeTicks> delayed_fence;
     // Snapshots the next sequence number when the queue is unblocked, otherwise
     // it contains EnqueueOrder::none(). If the EnqueueOrder of a task just
     // popped from this queue is greater than this, it means that the queue was
@@ -456,12 +461,12 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
     TaskExecutionTraceLogger task_execution_trace_logger;
     // Last reported wake up, used only in UpdateWakeUp to avoid
     // excessive calls.
-    absl::optional<WakeUp> scheduled_wake_up;
+    std::optional<WakeUp> scheduled_wake_up;
     // If false, queue will be disabled. Used only for tests.
     bool is_enabled_for_test = true;
     // The time at which the task queue was disabled, if it is currently
     // disabled.
-    absl::optional<TimeTicks> disabled_time;
+    std::optional<TimeTicks> disabled_time;
     // Whether or not the task queue should emit tracing events for tasks
     // posted to this queue when it is disabled.
     bool should_report_posted_tasks_when_disabled = false;
@@ -564,7 +569,7 @@ class BASE_EXPORT TaskQueueImpl : public TaskQueue {
       TracingOnly();
       ~TracingOnly();
 
-      absl::optional<TimeTicks> disabled_time;
+      std::optional<TimeTicks> disabled_time;
       bool should_report_posted_tasks_when_disabled = false;
     };
 

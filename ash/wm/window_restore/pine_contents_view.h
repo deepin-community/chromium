@@ -22,7 +22,6 @@ class MenuRunner;
 
 namespace ash {
 
-class PillButton;
 class PineContextMenuModel;
 
 class ASH_EXPORT PineContentsView : public views::BoxLayoutView {
@@ -34,12 +33,8 @@ class ASH_EXPORT PineContentsView : public views::BoxLayoutView {
   PineContentsView& operator=(const PineContentsView&) = delete;
   ~PineContentsView() override;
 
-  static std::unique_ptr<views::Widget> Create(aura::Window* root);
-
-  // TODO(sammiequon): Move this to a test api.
-  const PillButton* restore_button_for_testing() const {
-    return restore_button_for_testing_;
-  }
+  static std::unique_ptr<views::Widget> Create(
+      const gfx::Rect& grid_bounds_in_screen);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(PineContextMenuModelTest,
@@ -54,15 +49,19 @@ class ASH_EXPORT PineContentsView : public views::BoxLayoutView {
   // `menu_model_adapter_`.
   void OnMenuClosed();
 
-  raw_ptr<views::ImageButton> settings_button_ = nullptr;
-
   // The context menu model and its adapter for `settings_button_view_`.
   std::unique_ptr<PineContextMenuModel> context_menu_model_;
   std::unique_ptr<views::MenuModelAdapter> menu_model_adapter_;
   // The menu runner that is responsible for the context menu.
   std::unique_ptr<views::MenuRunner> menu_runner_;
 
-  raw_ptr<PillButton> restore_button_for_testing_ = nullptr;
+  // Time `this` was created. Used for metrics.
+  const base::TimeTicks creation_time_;
+
+  bool showing_list_view_ = true;
+  bool close_metric_recorded_ = false;
+
+  raw_ptr<views::ImageButton> settings_button_ = nullptr;
 
   base::WeakPtrFactory<PineContentsView> weak_ptr_factory_{this};
 };

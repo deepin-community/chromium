@@ -12,7 +12,7 @@
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/connection.h"
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/session_context.h"
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/target_device_connection_broker.h"
-#include "chrome/browser/nearby_sharing/public/cpp/nearby_connections_manager.h"
+#include "chromeos/ash/components/nearby/common/connections_manager/nearby_connections_manager.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
 
@@ -120,8 +120,6 @@ class TargetDeviceConnectionBrokerImpl
   raw_ptr<QuickStartConnectivityService> quick_start_connectivity_service_;
   std::unique_ptr<Connection::Factory> connection_factory_;
   std::unique_ptr<Connection> connection_;
-
-  bool is_resume_after_update_;
 
   base::OneShotTimer
       nearby_connections_advertisement_after_update_timeout_timer_;

@@ -6,9 +6,9 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/system/sys_info.h"
 
-namespace lens {
-namespace features {
+namespace lens::features {
 
 BASE_FEATURE(kLensStandalone,
              "LensStandalone",
@@ -45,6 +45,24 @@ BASE_FEATURE(kLensRegionSearchStaticPage,
 BASE_FEATURE(kEnableContextMenuInLensSidePanel,
              "EnableContextMenuInLensSidePanel",
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kLensOverlay, "LensOverlay", base::FEATURE_DISABLED_BY_DEFAULT);
+const base::FeatureParam<int> kLensOverlayMinRamMb{&kLensOverlay, "min_ram_mb",
+                                                   /*default=value=*/-1};
+const base::FeatureParam<std::string> kResultsSearchUrl{
+    &kLensOverlay, "results-search-url", "https://www.google.com/search"};
+const base::FeatureParam<int> kLensOverlayImageCompressionQuality{
+    &kLensOverlay, "image-compression-quality", 40};
+const base::FeatureParam<int> kLensOverlayImageMaxArea{
+    &kLensOverlay, "image-dimensions-max-area", 1000000};
+const base::FeatureParam<int> kLensOverlayImageMaxHeight{
+    &kLensOverlay, "image-dimensions-max-height", 1000};
+const base::FeatureParam<int> kLensOverlayImageMaxWidth{
+    &kLensOverlay, "image-dimensions-max-width", 1000};
+
+constexpr base::FeatureParam<std::string> kLensOverlayEndpointUrl{
+    &kLensOverlay, "endpoint-url",
+    "https://lens.google.com/lensonelrpui/crupload"};
 
 constexpr base::FeatureParam<std::string> kHomepageURLForLens{
     &kLensStandalone, "lens-homepage-url", "https://lens.google.com/v3/"};
@@ -173,5 +191,36 @@ bool GetShouldIssueProcessPrewarmingForLens() {
   return kShouldIssueProcessPrewarmingForLens.Get();
 }
 
-}  // namespace features
-}  // namespace lens
+bool IsLensOverlayEnabled() {
+  if (!base::FeatureList::IsEnabled(kLensOverlay)) {
+    return false;
+  }
+  static int phys_mem_mb = base::SysInfo::AmountOfPhysicalMemoryMB();
+  return phys_mem_mb > kLensOverlayMinRamMb.Get();
+}
+
+std::string GetLensOverlayResultsSearchURL() {
+  return kResultsSearchUrl.Get();
+}
+
+int GetLensOverlayImageCompressionQuality() {
+  return kLensOverlayImageCompressionQuality.Get();
+}
+
+int GetLensOverlayImageMaxArea() {
+  return kLensOverlayImageMaxArea.Get();
+}
+
+int GetLensOverlayImageMaxHeight() {
+  return kLensOverlayImageMaxHeight.Get();
+}
+
+int GetLensOverlayImageMaxWidth() {
+  return kLensOverlayImageMaxWidth.Get();
+}
+
+std::string GetLensOverlayEndpointURL() {
+  return kLensOverlayEndpointUrl.Get();
+}
+
+}  // namespace lens::features

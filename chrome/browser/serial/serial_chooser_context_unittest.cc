@@ -4,11 +4,14 @@
 
 #include "chrome/browser/serial/serial_chooser_context.h"
 
+#include <string_view>
+
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "base/test/values_test_util.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -40,6 +43,8 @@
 namespace {
 
 using ::base::test::ParseJson;
+using ::base::test::TestFuture;
+using ::testing::_;
 using ::testing::NiceMock;
 
 constexpr char kTestUserEmail[] = "user@example.com";
@@ -53,6 +58,8 @@ class MockPortObserver : public SerialChooserContext::PortObserver {
 
   MOCK_METHOD1(OnPortAdded, void(const device::mojom::SerialPortInfo&));
   MOCK_METHOD1(OnPortRemoved, void(const device::mojom::SerialPortInfo&));
+  MOCK_METHOD1(OnPortConnectedStateChanged,
+               void(const device::mojom::SerialPortInfo&));
   MOCK_METHOD0(OnPortManagerConnectionError, void());
   MOCK_METHOD1(OnPermissionRevoked, void(const url::Origin&));
 };
@@ -141,7 +148,7 @@ class SerialChooserContextTestBase {
     SerialBlocklist::Get().ResetToDefaultValuesForTesting();
   }
 
-  void SetDynamicBlocklist(base::StringPiece value) {
+  void SetDynamicBlocklist(std::string_view value) {
     feature_list_.Reset();
 
     std::map<std::string, std::string> parameters;
@@ -767,6 +774,27 @@ TEST_F(SerialChooserContextTest, PolicyBlockedForUrls) {
   std::vector<std::unique_ptr<SerialChooserContext::Object>>
       all_origin_objects = context()->GetAllGrantedObjects();
   EXPECT_EQ(1u, all_origin_objects.size());
+}
+
+TEST_F(SerialChooserContextTest, BluetoothPortConnectedState) {
+  const auto origin = url::Origin::Create(GURL("https://google.com"));
+
+  // Create a Bluetooth serial port.
+  auto port = CreatePersistentBluetoothPort("Persistent Bluetooth Port",
+                                            "aa:aa:aa:aa:aa:aa");
+
+  // Simulate disconnection of the Bluetooth device hosting `port`. The observer
+  // is notified that the port is now disconnected.
+  TestFuture<const device::mojom::SerialPortInfo&> port_future;
+  EXPECT_CALL(port_observer(), OnPortConnectedStateChanged)
+      .WillOnce([&port_future](const device::mojom::SerialPortInfo& port) {
+        port_future.SetValue(port);
+      });
+  auto disconnected_port = port.Clone();
+  disconnected_port->connected = false;
+  context()->OnPortConnectedStateChanged(std::move(disconnected_port));
+  EXPECT_EQ(port_future.Get().token, port->token);
+  EXPECT_FALSE(port_future.Get().connected);
 }
 
 TEST_P(SerialChooserContextAffiliatedTest, PolicyAllowForUrls) {

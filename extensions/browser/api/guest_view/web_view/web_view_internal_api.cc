@@ -322,7 +322,7 @@ WebViewInternalCaptureVisibleRegionFunction::Run() {
       web_view_internal::CaptureVisibleRegion::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  absl::optional<ImageDetails> image_details;
+  std::optional<ImageDetails> image_details;
   if (args().size() > 1) {
     image_details = ImageDetails::FromValue(args()[1]);
   }
@@ -434,7 +434,8 @@ ExtensionFunction::ResponseAction WebViewInternalNavigateFunction::Run() {
       web_view_internal::Navigate::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
   std::string src = params->src;
-  GetGuest().NavigateGuest(src, true /* force_navigation */);
+  GetGuest().NavigateGuest(src, /*navigation_handle_callback=*/{},
+                           true /* force_navigation */);
   return RespondNow(NoArguments());
 }
 
@@ -1037,7 +1038,7 @@ ExtensionFunction::ResponseAction WebViewInternalSetAudioMutedFunction::Run() {
       web_view_internal::SetAudioMuted::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  GetGuest().web_contents()->SetAudioMuted(params->mute);
+  GetGuest().SetAudioMuted(params->mute);
   return RespondNow(NoArguments());
 }
 
@@ -1052,8 +1053,7 @@ ExtensionFunction::ResponseAction WebViewInternalIsAudioMutedFunction::Run() {
       web_view_internal::IsAudioMuted::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  content::WebContents* web_contents = GetGuest().web_contents();
-  return RespondNow(WithArguments(web_contents->IsAudioMuted()));
+  return RespondNow(WithArguments(GetGuest().IsAudioMuted()));
 }
 
 WebViewInternalGetAudioStateFunction::WebViewInternalGetAudioStateFunction() =

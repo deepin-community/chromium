@@ -45,7 +45,8 @@ class Metadata:
         self.impl_dir = metadata.get('impl_dir', '')
         self.native_namespace = metadata['native_namespace']
         self.copyright_year = metadata.get('copyright_year', None)
-
+        self.kotlin_package = 'android.dawn'
+        self.kotlin_path = self.kotlin_package.replace('.', '/')
 
 class Name:
     def __init__(self, name, native=False):
@@ -791,6 +792,10 @@ def as_cppType(name):
         return name.CamelCase()
 
 
+def as_ktName(name):
+    return '_' + name if '0' <= name[0] <= '9' else name
+
+
 def as_jsEnumValue(value):
     if 'jsrepr' in value.json_data: return value.json_data['jsrepr']
     return "'" + value.name.js_enum_case() + "'"
@@ -868,6 +873,14 @@ def as_MethodSuffix(type_name, method_name):
     return type_name.CamelCase() + method_name.CamelCase()
 
 
+def as_CppMethodSuffix(type_name, method_name):
+    assert not type_name.native and not method_name.native
+    original_method_name_str = method_name.CamelCase()
+    if method_name.chunks[-1] == 'f':
+        return type_name.CamelCase() + original_method_name_str[:-1]
+    return type_name.CamelCase() + original_method_name_str
+
+
 def as_frontendType(metadata, typ):
     if typ.category == 'object':
         return typ.name.CamelCase() + 'Base*'
@@ -914,6 +927,10 @@ def has_callback_arguments(method):
     return any(arg.type.category == 'function pointer' for arg in method.arguments)
 
 
+def has_callback_info(method):
+    return method.return_type.name.get() == 'future' and any(
+        arg.name.get() == 'callback info' for arg in method.arguments)
+
 def make_base_render_params(metadata):
     c_prefix = metadata.c_prefix
 
@@ -954,6 +971,7 @@ def make_base_render_params(metadata):
             'as_cppEnum': as_cppEnum,
             'as_cMethod': as_cMethod,
             'as_MethodSuffix': as_MethodSuffix,
+            'as_CppMethodSuffix': as_CppMethodSuffix,
             'as_cProc': as_cProc,
             'as_cType': lambda name: as_cType(c_prefix, name),
             'as_cReturnType': lambda typ: as_cReturnType(c_prefix, typ),
@@ -962,7 +980,8 @@ def make_base_render_params(metadata):
             'convert_cType_to_cppType': convert_cType_to_cppType,
             'as_varName': as_varName,
             'decorate': decorate,
-            'as_formatType': as_formatType
+            'as_formatType': as_formatType,
+            'as_ktName': as_ktName
         }
 
 
@@ -973,7 +992,7 @@ class MultiGeneratorFromDawnJSON(Generator):
     def add_commandline_arguments(self, parser):
         allowed_targets = [
             'dawn_headers', 'cpp_headers', 'cpp', 'proc', 'mock_api', 'wire',
-            'native_utils', 'dawn_lpmfuzz_cpp', 'dawn_lpmfuzz_proto'
+            'native_utils', 'dawn_lpmfuzz_cpp', 'dawn_lpmfuzz_proto', 'kotlin'
         ]
 
         parser.add_argument('--dawn-json',
@@ -1047,7 +1066,7 @@ class MultiGeneratorFromDawnJSON(Generator):
 
         if 'proc' in targets:
             renders.append(
-                FileRender('dawn_proc.c', 'src/dawn/' + prefix + '_proc.c',
+                FileRender('dawn_proc.cpp', 'src/dawn/' + prefix + '_proc.cpp',
                            [RENDER_PARAMS_BASE, params_dawn]))
             renders.append(
                 FileRender('dawn_thread_dispatch_proc.cpp',
@@ -1110,7 +1129,8 @@ class MultiGeneratorFromDawnJSON(Generator):
         if 'mock_api' in targets:
             mock_params = [
                 RENDER_PARAMS_BASE, params_dawn, {
-                    'has_callback_arguments': has_callback_arguments
+                    'has_callback_arguments': has_callback_arguments,
+                    "has_callback_info": has_callback_info
                 }
             ]
             renders.append(
@@ -1318,6 +1338,26 @@ class MultiGeneratorFromDawnJSON(Generator):
                     'dawn/fuzzers/lpmfuzz/DawnLPMConstants.h',
                     'src/dawn/fuzzers/lpmfuzz/DawnLPMConstants_autogen.h',
                     lpm_params))
+
+        if 'kotlin' in targets:
+            params_kotlin = parse_json(loaded_json,
+                                       enabled_tags=['dawn', 'native'])
+
+            for enum in (params_kotlin['by_category']['bitmask'] +
+                         params_kotlin['by_category']['enum']):
+                renders.append(
+                    FileRender(
+                        'art/api_kotlin_enum.kt',
+                        'java/' + metadata.kotlin_path + '/' +
+                        enum.name.CamelCase() + '.kt',
+                        [RENDER_PARAMS_BASE, params_kotlin, {
+                            'enum': enum
+                        }]))
+
+            renders.append(
+                FileRender('art/api_kotlin_constants.kt',
+                           'java/' + metadata.kotlin_path + '/Constants.kt',
+                           [RENDER_PARAMS_BASE, params_kotlin]))
 
         return renders
 

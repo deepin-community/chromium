@@ -7,7 +7,7 @@
 import '@material/web/switch/switch.js';
 
 import {MdSwitch} from '@material/web/switch/switch.js';
-import {PropertyValues, css, CSSResultGroup, html, LitElement} from 'lit';
+import {css, CSSResultGroup, html, LitElement, nothing, PropertyValues} from 'lit';
 
 import {shouldProcessClick} from '../helpers/helpers';
 
@@ -82,6 +82,7 @@ export class Switch extends LitElement {
   static override properties = {
     selected: {type: Boolean, reflect: true},
     disabled: {type: Boolean, reflect: true},
+    ariaLabel: {type: String, reflect: true, attribute: 'aria-label'},
   };
 
   /** @nocollapse */
@@ -116,7 +117,8 @@ export class Switch extends LitElement {
       <md-switch
           ?disabled=${this.disabled}
           ?selected=${this.selected}
-          @change=${this.onChange}>
+          @change=${this.onChange}
+          aria-label=${this.ariaLabel ?? nothing}>
       </md-switch>
     `;
   }

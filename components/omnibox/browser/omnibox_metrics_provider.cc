@@ -20,6 +20,8 @@
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/omnibox_log.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_input_type.pb.h"
 
@@ -210,7 +212,7 @@ void OmniboxMetricsProvider::RecordOmniboxOpenedURL(const OmniboxLog& log) {
       suggestion->set_typed_count(match.typed_count);
     }
 
-    // TODO(https://crbug.com/1103056): send the entire set of subtypes.
+    // TODO(crbug.com/40139076): send the entire set of subtypes.
     if (!match.subtypes.empty()) {
       suggestion->set_result_subtype_identifier(*match.subtypes.begin());
     }
@@ -254,7 +256,14 @@ void OmniboxMetricsProvider::RecordOmniboxOpenedURLClientSummarizedResultType(
       log.selection.IsAction() ? log.selection.action_index : -1);
   auto client_summarized_result_type =
       GetClientSummarizedResultType(omnibox_event_result_type);
+  // Log UMA histogram.
   base::UmaHistogramEnumeration(
       "Omnibox.SuggestionUsed.ClientSummarizedResultType",
       client_summarized_result_type);
+  // Log UKM event.
+  if (log.ukm_source_id != ukm::kInvalidSourceId) {
+    ukm::builders::Omnibox_SuggestionUsed(log.ukm_source_id)
+        .SetResultType(static_cast<int64_t>(client_summarized_result_type))
+        .Record(ukm::UkmRecorder::Get());
+  }
 }

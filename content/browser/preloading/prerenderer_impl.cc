@@ -4,8 +4,11 @@
 
 #include "content/browser/preloading/prerenderer_impl.h"
 
+#include <vector>
+
 #include "content/browser/preloading/preloading.h"
 #include "content/browser/preloading/preloading_attempt_impl.h"
+#include "content/browser/preloading/preloading_data_impl.h"
 #include "content/browser/preloading/preloading_trigger_type_impl.h"
 #include "content/browser/preloading/prerender/prerender_attributes.h"
 #include "content/browser/preloading/prerender/prerender_features.h"
@@ -38,6 +41,10 @@ PrerendererImpl::PrerendererImpl(RenderFrameHost& render_frame_host)
     observation_.Observe(registry_.get());
   }
   ResetReceivedPrerendersCountForMetrics();
+  if (base::FeatureList::IsEnabled(
+          blink::features::kLCPTimingPredictorPrerender2)) {
+    blocked_ = true;
+  }
 }
 
 PrerendererImpl::~PrerendererImpl() {
@@ -175,7 +182,7 @@ void PrerendererImpl::ProcessCandidatesForPrerender(
     // requests rejected by PrerenderHostRegistry can be filtered out. But
     // ideally PrerenderHostRegistry should implement the history management
     // mechanism by itself.
-    base::EraseIf(started_prerenders_, [&](const PrerenderInfo& x) {
+    std::erase_if(started_prerenders_, [&](const PrerenderInfo& x) {
       return base::Contains(removed_prerender_rules_set, x.prerender_host_id);
     });
   }
@@ -185,13 +192,34 @@ void PrerendererImpl::ProcessCandidatesForPrerender(
   base::ranges::sort(candidates_to_start, std::less<>(),
                      [](const auto& p) { return p.first; });
   for (const auto& [_, candidate] : candidates_to_start) {
-    MaybePrerender(candidate);
+    PreloadingTriggerType trigger_type =
+        PreloadingTriggerTypeFromSpeculationInjectionType(
+            candidate->injection_type);
+    // Eager candidates are enacted by the same predictor that creates them.
+    PreloadingPredictor enacting_predictor =
+        GetPredictorForPreloadingTriggerType(trigger_type);
+    MaybePrerender(candidate, enacting_predictor, PreloadingConfidence{100});
+  }
+}
+
+void PrerendererImpl::OnLCPPredicted() {
+  blocked_ = false;
+  for (auto& [candidate, enacting_predictor, confidence] :
+       std::move(blocked_candidates_)) {
+    MaybePrerender(candidate, enacting_predictor, confidence);
   }
 }
 
 bool PrerendererImpl::MaybePrerender(
-    const blink::mojom::SpeculationCandidatePtr& candidate) {
+    const blink::mojom::SpeculationCandidatePtr& candidate,
+    const PreloadingPredictor& enacting_predictor,
+    PreloadingConfidence confidence) {
   CHECK_EQ(candidate->action, blink::mojom::SpeculationAction::kPrerender);
+  if (blocked_) {
+    blocked_candidates_.emplace_back(candidate->Clone(), enacting_predictor,
+                                     confidence);
+    return false;
+  }
 
   // Prerendering frames should not trigger any prerender request.
   CHECK(!render_frame_host_->IsInLifecycleState(
@@ -244,14 +272,14 @@ bool PrerendererImpl::MaybePrerender(
       rfhi.GetProcess()->GetID(), web_contents->GetWeakPtr(),
       rfhi.GetFrameToken(), rfhi.GetFrameTreeNodeId(),
       rfhi.GetPageUkmSourceId(), ui::PAGE_TRANSITION_LINK,
-      /*url_match_predicate=*/std::nullopt,
-      /*prerender_navigation_handle_callback=*/std::nullopt,
+      /*url_match_predicate=*/{},
+      /*prerender_navigation_handle_callback=*/{},
       rfhi.GetDevToolsNavigationToken());
 
   PreloadingTriggerType trigger_type =
       PreloadingTriggerTypeFromSpeculationInjectionType(
           candidate->injection_type);
-  PreloadingPredictor predictor =
+  PreloadingPredictor creating_predictor =
       GetPredictorForPreloadingTriggerType(trigger_type);
   int prerender_host_id = [&] {
     // TODO(crbug.com/1354049): Handle the case where multiple speculation rules
@@ -264,8 +292,8 @@ bool PrerendererImpl::MaybePrerender(
                 blink::features::kPrerender2InNewTab)) {
           // For the prerender-in-new-tab, PreloadingAttempt will be managed by
           // a prerender WebContents to be created later.
-          return registry_->CreateAndStartHostForNewTab(attributes,
-                                                        std::move(predictor));
+          return registry_->CreateAndStartHostForNewTab(
+              attributes, creating_predictor, enacting_predictor, confidence);
         }
         // Handle the rule as kNoHint if the prerender-in-new-tab is not
         // enabled.
@@ -276,13 +304,13 @@ bool PrerendererImpl::MaybePrerender(
         // Create new PreloadingAttempt and pass all the values corresponding to
         // this prerendering attempt.
         auto* preloading_data =
-            PreloadingData::GetOrCreateForWebContents(web_contents);
+            PreloadingDataImpl::GetOrCreateForWebContents(web_contents);
         PreloadingURLMatchCallback same_url_matcher =
             PreloadingData::GetSameURLMatcher(candidate->url);
         auto* preloading_attempt = static_cast<PreloadingAttemptImpl*>(
             preloading_data->AddPreloadingAttempt(
-                std::move(predictor), PreloadingType::kPrerender,
-                std::move(same_url_matcher),
+                creating_predictor, enacting_predictor,
+                PreloadingType::kPrerender, std::move(same_url_matcher),
                 web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId()));
         preloading_attempt->SetSpeculationEagerness(candidate->eagerness);
         return registry_->CreateAndStartHost(attributes, preloading_attempt);

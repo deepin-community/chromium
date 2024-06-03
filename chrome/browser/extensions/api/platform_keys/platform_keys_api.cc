@@ -8,10 +8,10 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "chrome/browser/chromeos/platform_keys/extension_platform_keys_service.h"
 #include "chrome/browser/chromeos/platform_keys/extension_platform_keys_service_factory.h"
 #include "chrome/browser/chromeos/platform_keys/platform_keys.h"
@@ -266,13 +266,13 @@ void PlatformKeysInternalSelectClientCertificatesFunction::
     }
 
     api_pk::Match result_match;
-    base::StringPiece der_encoded_cert =
+    std::string_view der_encoded_cert =
         net::x509_util::CryptoBufferAsStringPiece(match->cert_buffer());
     result_match.certificate.assign(der_encoded_cert.begin(),
                                     der_encoded_cert.end());
 
     std::optional<base::Value::Dict> algorithm =
-        BuildWebCrypAlgorithmDictionary(key_info);
+        BuildWebCryptoAlgorithmDictionary(key_info);
     if (!algorithm) {
       LOG(ERROR) << "Skipping unsupported certificate with key type "
                  << key_info.key_type;
@@ -379,7 +379,7 @@ PlatformKeysInternalGetPublicKeyBySpkiFunction::Run() {
 
   api_pki::GetPublicKeyBySpki::Results::Algorithm algorithm;
   std::optional<base::Value::Dict> algorithm_dictionary =
-      chromeos::platform_keys::BuildWebCrypAlgorithmDictionary(key_info);
+      chromeos::platform_keys::BuildWebCryptoAlgorithmDictionary(key_info);
   DCHECK(algorithm_dictionary);
   algorithm.additional_properties = std::move(*algorithm_dictionary);
 

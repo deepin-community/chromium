@@ -79,6 +79,7 @@ class TabSearchContainer : public views::View,
   void ShowOpacityAnimation();
   void ExecuteHideTabOrganization();
   void ApplyAnimationValue(const gfx::Animation* animation);
+  base::TimeDelta GetAnimationDuration(base::TimeDelta duration);
 
   // View where, if the mouse is currently over its bounds, the expansion state
   // will not change. Changes will be staged until after the mouse exits the
@@ -108,6 +109,9 @@ class TabSearchContainer : public views::View,
   // MouseWatcher is used to lock and unlock the expansion state of this
   // container.
   std::unique_ptr<views::MouseWatcher> mouse_watcher_;
+
+  base::ScopedObservation<TabOrganizationService, TabOrganizationObserver>
+      tab_organization_observation_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_TAB_SEARCH_CONTAINER_H_

@@ -9,9 +9,12 @@
 #include <string>
 #include <vector>
 
+#include "base/files/file_error_or.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/file_system_provider/abort_callback.h"
+#include "chrome/browser/ash/file_system_provider/content_cache/cache_manager.h"
 #include "chrome/browser/ash/file_system_provider/content_cache/content_cache.h"
+#include "chrome/browser/ash/file_system_provider/opened_cloud_file.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_interface.h"
@@ -41,7 +44,7 @@ class CloudFileSystem : public ProvidedFileSystemInterface {
       std::unique_ptr<ProvidedFileSystemInterface> file_system);
 
   CloudFileSystem(std::unique_ptr<ProvidedFileSystemInterface> file_system,
-                   ContentCache* content_cache);
+                  CacheManager* cache_manager);
 
   CloudFileSystem(const CloudFileSystem&) = delete;
   CloudFileSystem& operator=(const CloudFileSystem&) = delete;
@@ -136,10 +139,50 @@ class CloudFileSystem : public ProvidedFileSystemInterface {
  private:
   const std::string GetFileSystemId() const;
   void OnTimer();
+  void OnContentCacheInitialized(
+      base::FileErrorOr<std::unique_ptr<ContentCache>> error_or_cache);
+  // Called when opening a file is completed with either a success or an error.
+  void OnOpenFileCompleted(const base::FilePath& file_path,
+                           OpenFileMode mode,
+                           OpenFileCallback callback,
+                           int file_handle,
+                           base::File::Error result,
+                           std::unique_ptr<CloudFileInfo> cloud_file_info);
+  // Called when closing a file is completed with either a success or an error.
+  void OnCloseFileCompleted(int file_handle,
+                            storage::AsyncFileUtil::StatusCallback callback,
+                            base::File::Error result);
+
+  // When a `ReadFile` completes, attempt to cache the bytes on disk.
+  void OnReadFileCompleted(int file_handle,
+                           net::IOBuffer* buffer,
+                           int64_t offset,
+                           int length,
+                           ReadChunkReceivedCallback callback,
+                           int bytes_read,
+                           bool has_more,
+                           base::File::Error result);
+
+  // After the bytes have finished caching, invoke the `callback`. This is the
+  // `ReadChunkReceivedCallback` above and will always be invoked as the FSP
+  // successfully read the file, if the content cache fails to write the file to
+  // disk this should not stop further FSP requests.
+  void OnBytesWrittenToCache(
+      base::RepeatingCallback<void()> readchunk_success_callback,
+      base::File::Error result);
+
+  // Verify that all invariants are satisfied to make an optimistic cache read.
+  using OpenedCloudFileMap = std::map<int, OpenedCloudFile>;
+  bool ShouldAttemptToServeReadFileFromCache(
+      const OpenedCloudFileMap::const_iterator it);
+
   std::unique_ptr<ProvidedFileSystemInterface> file_system_;
-  raw_ptr<ContentCache, DanglingUntriaged> content_cache_;  // Not owned.
+  std::unique_ptr<ContentCache> content_cache_;
+
   base::MetronomeTimer timer_;
   int file_manager_watchers_ = 0;
+  // File handle -> OpenedCloudFile.
+  OpenedCloudFileMap opened_files_;
 
   base::WeakPtrFactory<CloudFileSystem> weak_ptr_factory_{this};
 };

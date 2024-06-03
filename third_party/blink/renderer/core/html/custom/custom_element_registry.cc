@@ -40,8 +40,9 @@ void CollectUpgradeCandidateInNode(Node& root,
     if (root_element->GetCustomElementState() == CustomElementState::kUndefined)
       candidates.push_back(root_element);
     if (auto* shadow_root = root_element->GetShadowRoot()) {
-      if (shadow_root->GetType() != ShadowRootType::kUserAgent)
+      if (shadow_root->GetMode() != ShadowRootMode::kUserAgent) {
         CollectUpgradeCandidateInNode(*shadow_root, candidates);
+      }
     }
   }
   for (auto& element : Traversal<HTMLElement>::ChildrenOf(root))
@@ -328,22 +329,22 @@ void CustomElementRegistry::AddCandidate(Element& candidate) {
 }
 
 // https://html.spec.whatwg.org/C/#dom-customelementsregistry-whendefined
-ScriptPromiseTyped<V8CustomElementConstructor>
-CustomElementRegistry::whenDefined(ScriptState* script_state,
-                                   const AtomicString& name,
-                                   ExceptionState& exception_state) {
+ScriptPromise<V8CustomElementConstructor> CustomElementRegistry::whenDefined(
+    ScriptState* script_state,
+    const AtomicString& name,
+    ExceptionState& exception_state) {
   if (ThrowIfInvalidName(name, false, exception_state))
-    return ScriptPromiseTyped<V8CustomElementConstructor>();
+    return ScriptPromise<V8CustomElementConstructor>();
   if (CustomElementDefinition* definition = DefinitionForName(name)) {
-    return ScriptPromiseTyped<V8CustomElementConstructor>::Cast(
-        script_state, definition->GetConstructorForScript());
+    return ToResolvedPromise<V8CustomElementConstructor>(
+        script_state, definition->GetV8CustomElementConstructor());
   }
   const auto it = when_defined_promise_map_.find(name);
   if (it != when_defined_promise_map_.end())
     return it->value->Promise();
-  auto* new_resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<V8CustomElementConstructor>>(
-      script_state, exception_state.GetContext());
+  auto* new_resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<V8CustomElementConstructor>>(
+          script_state, exception_state.GetContext());
   when_defined_promise_map_.insert(name, new_resolver);
   return new_resolver->Promise();
 }

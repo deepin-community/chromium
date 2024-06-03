@@ -242,7 +242,6 @@ ResourceFetcher* FrameFetchContext::CreateFetcherForCommittedDocument(
   fetcher->SetResourceLoadObserver(
       MakeGarbageCollected<ResourceLoadObserverForFrame>(
           loader, document, fetcher->GetProperties()));
-  fetcher->SetImagesEnabled(frame->GetSettings()->GetImagesEnabled());
   fetcher->SetAutoLoadImages(
       frame->GetSettings()->GetLoadsImagesAutomatically());
   fetcher->SetEarlyHintsPreloadedResources(
@@ -400,11 +399,16 @@ void FrameFetchContext::AddResourceTiming(
       ->AddResourceTiming(std::move(info), initiator_type);
 }
 
-bool FrameFetchContext::AllowImage(bool images_enabled, const KURL& url) const {
+bool FrameFetchContext::AllowImage() const {
   if (GetResourceFetcherProperties().IsDetached())
     return true;
-  if (auto* settings_client = GetContentSettingsClient())
-    images_enabled = settings_client->AllowImage(images_enabled, url);
+
+  bool images_enabled = GetFrame()->ImagesEnabled();
+  if (!images_enabled) {
+    if (auto* settings_client = GetContentSettingsClient()) {
+      settings_client->DidNotAllowImage();
+    }
+  }
   return images_enabled;
 }
 
@@ -421,6 +425,10 @@ void FrameFetchContext::ModifyRequestForCSP(ResourceRequest& resource_request) {
 void FrameFetchContext::AddClientHintsIfNecessary(
     const std::optional<float> resource_width,
     ResourceRequest& request) {
+  if (GetResourceFetcherProperties().IsDetached()) {
+    return;
+  }
+
   // If the feature is enabled, then client hints are allowed only on secure
   // URLs.
   if (!ClientHintsPreferences::IsClientHintsAllowed(request.Url()))
@@ -428,8 +436,7 @@ void FrameFetchContext::AddClientHintsIfNecessary(
 
   // Check if |url| is allowed to run JavaScript. If not, client hints are not
   // attached to the requests that initiate on the render side.
-  if (!AllowScriptFromSourceWithoutNotifying(
-          request.Url(), GetContentSettingsClient(), GetSettings())) {
+  if (!GetFrame()->ScriptEnabled()) {
     return;
   }
 
@@ -440,9 +447,9 @@ void FrameFetchContext::AddClientHintsIfNecessary(
           ? document_->domWindow()->GetSecurityContext().GetPermissionsPolicy()
           : nullptr;
 
-  url::Origin resource_origin =
-      SecurityOrigin::Create(request.Url())->ToUrlOrigin();
-  bool is_1p_origin = IsFirstPartyOrigin(request.Url());
+  const scoped_refptr<SecurityOrigin> resource_origin =
+      SecurityOrigin::Create(request.Url());
+  bool is_1p_origin = IsFirstPartyOrigin(resource_origin.get());
 
   std::optional<UserAgentMetadata> ua = GetUserAgentMetadata();
 
@@ -477,8 +484,8 @@ void FrameFetchContext::AddClientHintsIfNecessary(
   // by browser (from accept-ch header on this response or previously persisted)
   // with renderer-parsed http-equiv merged in.
   BaseFetchContext::AddClientHintsIfNecessary(
-      GetClientHintsPreferences(), resource_origin, is_1p_origin, ua, policy,
-      image_info, prefers_color_scheme, prefers_reduced_motion,
+      GetClientHintsPreferences(), resource_origin->ToUrlOrigin(), is_1p_origin,
+      ua, policy, image_info, prefers_color_scheme, prefers_reduced_motion,
       prefers_reduced_transparency, request);
 }
 
@@ -551,29 +558,19 @@ void FrameFetchContext::SetFirstPartyCookie(ResourceRequest& request) {
     request.SetSiteForCookies(GetSiteForCookies());
 }
 
-bool FrameFetchContext::AllowScriptFromSource(const KURL& url) const {
-  if (AllowScriptFromSourceWithoutNotifying(url, GetContentSettingsClient(),
-                                            GetSettings())) {
-    return true;
+bool FrameFetchContext::AllowScript() const {
+  bool script_enabled = GetFrame()->ScriptEnabled();
+  if (!script_enabled) {
+    WebContentSettingsClient* settings_client = GetContentSettingsClient();
+    if (settings_client) {
+      settings_client->DidNotAllowScript();
+    }
   }
-  WebContentSettingsClient* settings_client = GetContentSettingsClient();
-  if (settings_client)
-    settings_client->DidNotAllowScript();
-  return false;
+  return script_enabled;
 }
 
-// static
-bool FrameFetchContext::AllowScriptFromSourceWithoutNotifying(
-    const KURL& url,
-    WebContentSettingsClient* settings_client,
-    Settings* settings) {
-  bool allow_script = !settings || settings->GetScriptEnabled();
-  if (settings_client)
-    allow_script = settings_client->AllowScriptFromSource(allow_script, url);
-  return allow_script;
-}
-
-bool FrameFetchContext::IsFirstPartyOrigin(const KURL& url) const {
+bool FrameFetchContext::IsFirstPartyOrigin(
+    const SecurityOrigin* resource_origin) const {
   if (GetResourceFetcherProperties().IsDetached())
     return false;
 
@@ -582,7 +579,7 @@ bool FrameFetchContext::IsFirstPartyOrigin(const KURL& url) const {
       .Top()
       .GetSecurityContext()
       ->GetSecurityOrigin()
-      ->IsSameOriginWith(SecurityOrigin::Create(url).get());
+      ->IsSameOriginWith(resource_origin);
 }
 
 bool FrameFetchContext::ShouldBlockRequestByInspector(const KURL& url) const {

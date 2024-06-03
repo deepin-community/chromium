@@ -69,24 +69,38 @@ class RequestDeviceEvent : public TrackedEvent {
 
   private:
     void CompleteImpl(FutureID futureID, EventCompletionType completionType) override {
+        Device* device = mDevice.ExtractAsDangling();
         if (completionType == EventCompletionType::Shutdown) {
             mStatus = WGPURequestDeviceStatus_InstanceDropped;
             mMessage = "A valid external Instance reference no longer exists.";
         }
-        if (mStatus != WGPURequestDeviceStatus_Success && mDevice != nullptr) {
-            // If there was an error, we may need to reclaim the device allocation, otherwise the
-            // device is returned to the user who owns it.
-            mDevice->GetClient()->Free(mDevice.get());
-            mDevice = nullptr;
-        }
         if (mCallback) {
-            mCallback(mStatus, ToAPI(mDevice), mMessage ? mMessage->c_str() : nullptr, mUserdata);
+            Device* outputDevice = device;
+            if (mStatus != WGPURequestDeviceStatus_Success) {
+                outputDevice = nullptr;
+            }
+            mCallback(mStatus, ToAPI(outputDevice), mMessage ? mMessage->c_str() : nullptr,
+                      mUserdata.ExtractAsDangling());
+        }
+
+        if (mStatus != WGPURequestDeviceStatus_Success) {
+            // If there was an error, we may need to call the device lost callback and reclaim the
+            // device allocation, otherwise the device is returned to the user who owns it.
+            if (mStatus == WGPURequestDeviceStatus_InstanceDropped) {
+                device->HandleDeviceLost(WGPUDeviceLostReason_InstanceDropped,
+                                         "A valid external Instance reference no longer exists.");
+            } else {
+                device->HandleDeviceLost(WGPUDeviceLostReason_FailedCreation,
+                                         "Device failed at creation.");
+            }
+            device->Release();
+        } else if (!mCallback) {
+            device->Release();
         }
     }
 
     WGPURequestDeviceCallback mCallback;
-    // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire.
-    raw_ptr<void, DanglingUntriaged> mUserdata;
+    raw_ptr<void> mUserdata;
 
     // Note that the message is optional because we want to return nullptr when it wasn't set
     // instead of a pointer to an empty string.
@@ -97,25 +111,10 @@ class RequestDeviceEvent : public TrackedEvent {
     // throughout the duration of a RequestDeviceEvent because the Event essentially takes
     // ownership of it until either an error occurs at which point the Event cleans it up, or it
     // returns the device to the user who then takes ownership as the Event goes away.
-    // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire.
-    raw_ptr<Device, DanglingUntriaged> mDevice = nullptr;
+    raw_ptr<Device> mDevice = nullptr;
 };
 
 }  // anonymous namespace
-
-Adapter::~Adapter() {
-    mRequestDeviceRequests.CloseAll([](RequestDeviceData* request) {
-        request->callback(WGPURequestDeviceStatus_Unknown, nullptr,
-                          "Adapter destroyed before callback", request->userdata);
-    });
-}
-
-void Adapter::CancelCallbacksForDisconnect() {
-    mRequestDeviceRequests.CloseAll([](RequestDeviceData* request) {
-        request->callback(WGPURequestDeviceStatus_Unknown, nullptr, "GPU connection lost",
-                          request->userdata);
-    });
-}
 
 ObjectType Adapter::GetObjectType() const {
     return ObjectType::Adapter;
@@ -163,6 +162,11 @@ void Adapter::SetProperties(const WGPUAdapterProperties* properties) {
                 mD3DProperties.shaderModel = d3dProperties->shaderModel;
                 break;
             }
+            case WGPUSType_AdapterPropertiesVk: {
+                auto* vkProperties = reinterpret_cast<WGPUAdapterPropertiesVk*>(chain);
+                mVkProperties.driverVersion = vkProperties->driverVersion;
+                break;
+            }
             default:
                 DAWN_UNREACHABLE();
                 break;
@@ -191,6 +195,11 @@ void Adapter::GetProperties(WGPUAdapterProperties* properties) const {
             case WGPUSType_AdapterPropertiesD3D: {
                 auto* d3dProperties = reinterpret_cast<WGPUAdapterPropertiesD3D*>(chain);
                 d3dProperties->shaderModel = mD3DProperties.shaderModel;
+                break;
+            }
+            case WGPUSType_AdapterPropertiesVk: {
+                auto* vkProperties = reinterpret_cast<WGPUAdapterPropertiesVk*>(chain);
+                vkProperties->driverVersion = mVkProperties.driverVersion;
                 break;
             }
             default:
@@ -237,6 +246,10 @@ void ClientAdapterPropertiesMemoryHeapsFreeMembers(
     delete[] memoryHeapProperties.heapInfo;
 }
 
+void ClientDrmFormatCapabilitiesFreeMembers(WGPUDrmFormatCapabilities capabilities) {
+    delete[] capabilities.properties;
+}
+
 void Adapter::RequestDevice(const WGPUDeviceDescriptor* descriptor,
                             WGPURequestDeviceCallback callback,
                             void* userdata) {
@@ -257,13 +270,17 @@ WGPUFuture Adapter::RequestDeviceF(const WGPUDeviceDescriptor* descriptor,
         return {futureIDInternal};
     }
 
-    // Ensure the device lost callback isn't serialized as part of the command, as it cannot be
-    // passed between processes.
+    // Ensure callbacks are not serialized as part of the command, as they cannot be passed between
+    // processes.
     WGPUDeviceDescriptor wireDescriptor = {};
     if (descriptor) {
         wireDescriptor = *descriptor;
         wireDescriptor.deviceLostCallback = nullptr;
         wireDescriptor.deviceLostUserdata = nullptr;
+        wireDescriptor.deviceLostCallbackInfo.callback = nullptr;
+        wireDescriptor.deviceLostCallbackInfo.userdata = nullptr;
+        wireDescriptor.uncapturedErrorCallbackInfo.callback = nullptr;
+        wireDescriptor.uncapturedErrorCallbackInfo.userdata = nullptr;
     }
 
     AdapterRequestDeviceCmd cmd;
@@ -271,6 +288,7 @@ WGPUFuture Adapter::RequestDeviceF(const WGPUDeviceDescriptor* descriptor,
     cmd.eventManagerHandle = GetEventManagerHandle();
     cmd.future = {futureIDInternal};
     cmd.deviceObjectHandle = device->GetWireHandle();
+    cmd.deviceLostFuture = device->GetDeviceLostFuture();
     cmd.descriptor = &wireDescriptor;
 
     client->SerializeCommand(cmd);
@@ -297,6 +315,12 @@ WGPUInstance Adapter::GetInstance() const {
 WGPUDevice Adapter::CreateDevice(const WGPUDeviceDescriptor*) {
     dawn::ErrorLog() << "adapter.CreateDevice not supported with dawn_wire.";
     return nullptr;
+}
+
+bool Adapter::GetFormatCapabilities(WGPUTextureFormat format,
+                                    WGPUFormatCapabilities* capabilities) {
+    dawn::ErrorLog() << "adapter.GetFormatCapabilities not supported with dawn_wire.";
+    return false;
 }
 
 }  // namespace dawn::wire::client

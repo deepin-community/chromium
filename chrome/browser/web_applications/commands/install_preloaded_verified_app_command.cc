@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check_is_test.h"
@@ -24,10 +25,10 @@
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -45,12 +46,12 @@ namespace {
 // TODO(crbug.com/1457430): Find a better way to do Lacros testing so that we
 // don't have to pass localhost into the allowlist. Allowlisted host must be
 // from a Google server.
-constexpr auto kHostAllowlist = base::MakeFixedFlatSet<base::StringPiece>(
+constexpr auto kHostAllowlist = base::MakeFixedFlatSet<std::string_view>(
     {"googleusercontent.com", "gstatic.com", "youtube.com",
      "127.0.0.1" /*FOR TESTING*/});
 
 bool HasRequiredManifestFields(const blink::mojom::ManifestPtr& manifest) {
-  if (manifest->start_url.is_empty()) {
+  if (!manifest->has_valid_specified_start_url) {
     return false;
   }
 
@@ -103,13 +104,13 @@ void InstallPreloadedVerifiedAppCommand::StartWithLock(
       web_contents_lock_->web_contents_manager().CreateDataRetriever();
   url_loader_->LoadUrl(
       GURL(url::kAboutBlankURL), &web_contents_lock_->shared_web_contents(),
-      WebAppUrlLoader::UrlComparison::kExact,
+      webapps::WebAppUrlLoader::UrlComparison::kExact,
       base::BindOnce(&InstallPreloadedVerifiedAppCommand::OnAboutBlankLoaded,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void InstallPreloadedVerifiedAppCommand::OnAboutBlankLoaded(
-    WebAppUrlLoaderResult result) {
+    webapps::WebAppUrlLoaderResult result) {
   // The shared web contents must have been reset to about:blank before command
   // execution.
   DCHECK_EQ(web_contents_lock_->shared_web_contents().GetURL(),
@@ -228,8 +229,7 @@ void InstallPreloadedVerifiedAppCommand::OnAppLockAcquired(
 
 void InstallPreloadedVerifiedAppCommand::OnInstallFinalized(
     const webapps::AppId& app_id,
-    webapps::InstallResultCode code,
-    OsHooksErrors os_hooks_errors) {
+    webapps::InstallResultCode code) {
   CompleteAndSelfDestruct(webapps::IsSuccess(code) ? CommandResult::kSuccess
                                                    : CommandResult::kFailure,
                           app_id, code);

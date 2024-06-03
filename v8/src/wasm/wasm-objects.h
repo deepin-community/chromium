@@ -71,12 +71,12 @@ class V8_EXPORT_PRIVATE FunctionTargetAndRef {
  public:
   FunctionTargetAndRef(Handle<WasmInstanceObject> target_instance_object,
                        int target_func_index);
-  // The "ref" will be a WasmInstanceObject or a WasmApiFunctionRef.
-  Handle<HeapObject> ref() { return ref_; }
+  // The "ref" will be a WasmTrustedInstanceData or a WasmApiFunctionRef.
+  Handle<ExposedTrustedObject> ref() { return ref_; }
   Address call_target() { return call_target_; }
 
  private:
-  Handle<HeapObject> ref_;
+  Handle<ExposedTrustedObject> ref_;
   Address call_target_;
 };
 
@@ -94,7 +94,7 @@ enum class OnResume : int { kContinue, kThrow };
 //      - object = a WasmApiFunctionRef
 //      - target = entrypoint to import wrapper code
 //   - Wasm to Wasm, which has fields
-//      - object = target instance
+//      - object = target instance data
 //      - target = entrypoint for the function
 class ImportedFunctionEntry {
  public:
@@ -112,7 +112,7 @@ class ImportedFunctionEntry {
                                      const wasm::FunctionSig* sig);
 
   // Initialize this entry as a Wasm to Wasm call.
-  void SetWasmToWasm(Tagged<WasmInstanceObject> target_instance_object,
+  void SetWasmToWasm(Tagged<WasmTrustedInstanceData> target_instance_data,
                      Address call_target);
 
   Tagged<JSReceiver> callable();
@@ -257,8 +257,7 @@ class WasmTableObject
   // {entry} is either {Null} or a {WasmInternalFunction}.
   static void SetFunctionTableEntry(Isolate* isolate,
                                     Handle<WasmTableObject> table,
-                                    Handle<FixedArray> entries, int entry_index,
-                                    Handle<Object> entry);
+                                    int entry_index, Handle<Object> entry);
 
   TQ_OBJECT_CONSTRUCTORS(WasmTableObject)
 };
@@ -357,13 +356,13 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
   DECL_OPTIONAL_ACCESSORS(imported_mutable_globals_buffers, Tagged<FixedArray>)
   // tables: FixedArray of WasmTableObject.
   DECL_OPTIONAL_ACCESSORS(tables, Tagged<FixedArray>)
-  DECL_ACCESSORS(imported_function_refs, Tagged<FixedArray>)
+  DECL_PROTECTED_POINTER_ACCESSORS(dispatch_table_for_imports,
+                                   WasmDispatchTable)
   DECL_ACCESSORS(imported_mutable_globals, Tagged<FixedAddressArray>)
-  DECL_ACCESSORS(imported_function_targets, Tagged<FixedAddressArray>)
   DECL_PROTECTED_POINTER_ACCESSORS(dispatch_table0, WasmDispatchTable)
   DECL_PROTECTED_POINTER_ACCESSORS(dispatch_tables, ProtectedFixedArray)
   DECL_OPTIONAL_ACCESSORS(tags_table, Tagged<FixedArray>)
-  DECL_ACCESSORS(wasm_internal_functions, Tagged<FixedArray>)
+  DECL_ACCESSORS(func_refs, Tagged<FixedArray>)
   DECL_ACCESSORS(managed_object_maps, Tagged<FixedArray>)
   DECL_ACCESSORS(feedback_vectors, Tagged<FixedArray>)
   DECL_ACCESSORS(well_known_imports, Tagged<FixedArray>)
@@ -378,7 +377,8 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
   DECL_PRIMITIVE_ACCESSORS(jump_table_start, Address)
   DECL_PRIMITIVE_ACCESSORS(hook_on_function_call_address, Address)
   DECL_PRIMITIVE_ACCESSORS(tiering_budget_array, uint32_t*)
-  DECL_ACCESSORS(memory_bases_and_sizes, Tagged<FixedAddressArray>)
+  DECL_PROTECTED_POINTER_ACCESSORS(memory_bases_and_sizes,
+                                   TrustedFixedAddressArray)
   DECL_ACCESSORS(data_segment_starts, Tagged<FixedAddressArray>)
   DECL_ACCESSORS(data_segment_sizes, Tagged<FixedUInt32Array>)
   DECL_ACCESSORS(element_segments, Tagged<FixedArray>)
@@ -403,10 +403,9 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
 #define FIELD_LIST(V)                                                     \
   /* Often-accessed fields go first to minimize generated code size. */   \
   /* Less than system pointer sized fields come first. */                 \
-  V(kImportedFunctionRefsOffset, kTaggedSize)                             \
-  V(kDispatchTable0Offset, kTaggedSize)                                   \
+  V(kProtectedDispatchTable0Offset, kTaggedSize)                          \
+  V(kProtectedDispatchTableForImportsOffset, kTaggedSize)                 \
   V(kImportedMutableGlobalsOffset, kTaggedSize)                           \
-  V(kImportedFunctionTargetsOffset, kTaggedSize)                          \
   /* Optional padding to align system pointer size fields */              \
   V(kOptionalPaddingOffset, POINTER_SIZE_PADDING(kOptionalPaddingOffset)) \
   V(kMemory0StartOffset, kSystemPointerSize)                              \
@@ -423,7 +422,7 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
   V(kHookOnFunctionCallAddressOffset, kSystemPointerSize)                 \
   V(kTieringBudgetArrayOffset, kSystemPointerSize)                        \
   /* Less than system pointer size aligned fields are below. */           \
-  V(kMemoryBasesAndSizesOffset, kTaggedSize)                              \
+  V(kProtectedMemoryBasesAndSizesOffset, kTaggedSize)                     \
   V(kDataSegmentStartsOffset, kTaggedSize)                                \
   V(kDataSegmentSizesOffset, kTaggedSize)                                 \
   V(kElementSegmentsOffset, kTaggedSize)                                  \
@@ -434,9 +433,9 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
   V(kTaggedGlobalsBufferOffset, kTaggedSize)                              \
   V(kImportedMutableGlobalsBuffersOffset, kTaggedSize)                    \
   V(kTablesOffset, kTaggedSize)                                           \
-  V(kDispatchTablesOffset, kTaggedSize)                                   \
+  V(kProtectedDispatchTablesOffset, kTaggedSize)                          \
   V(kTagsTableOffset, kTaggedSize)                                        \
-  V(kWasmInternalFunctionsOffset, kTaggedSize)                            \
+  V(kFuncRefsOffset, kTaggedSize)                                         \
   V(kManagedObjectMapsOffset, kTaggedSize)                                \
   V(kFeedbackVectorsOffset, kTaggedSize)                                  \
   V(kWellKnownImportsOffset, kTaggedSize)                                 \
@@ -460,10 +459,9 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
 #undef ASSERT_FIELD_ALIGNED
 #undef FIELD_LIST
 
-  // GC support: List all tagged fields.
+  // GC support: List all tagged fields and protected fields.
   // V(offset, name)
-#define WASM_TAGGED_INSTANCE_OBJECT_FIELDS(V)                                 \
-  V(kImportedFunctionRefsOffset, "imported_function_refs")                    \
+#define WASM_TAGGED_INSTANCE_DATA_FIELDS(V)                                   \
   V(kInstanceObjectOffset, "instance_object")                                 \
   V(kNativeContextOffset, "native_context")                                   \
   V(kMemoryObjectsOffset, "memory_objects")                                   \
@@ -472,32 +470,41 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
   V(kImportedMutableGlobalsBuffersOffset, "imported_mutable_globals_buffers") \
   V(kTablesOffset, "tables")                                                  \
   V(kTagsTableOffset, "tags_table")                                           \
-  V(kWasmInternalFunctionsOffset, "wasm_internal_functions")                  \
+  V(kFuncRefsOffset, "func_refs")                                             \
   V(kManagedObjectMapsOffset, "managed_object_maps")                          \
   V(kFeedbackVectorsOffset, "feedback_vectors")                               \
   V(kWellKnownImportsOffset, "well_known_imports")                            \
   V(kImportedMutableGlobalsOffset, "imported_mutable_globals")                \
-  V(kImportedFunctionTargetsOffset, "imported_function_targets")              \
-  V(kMemoryBasesAndSizesOffset, "memory_bases_and_sizes")                     \
   V(kDataSegmentStartsOffset, "data_segment_starts")                          \
   V(kDataSegmentSizesOffset, "data_segment_sizes")                            \
   V(kElementSegmentsOffset, "element_segments")
+#define WASM_PROTECTED_INSTANCE_DATA_FIELDS(V)                     \
+  V(kProtectedMemoryBasesAndSizesOffset, "memory_bases_and_sizes") \
+  V(kProtectedDispatchTable0Offset, "dispatch_table0")             \
+  V(kProtectedDispatchTablesOffset, "dispatch_tables")             \
+  V(kProtectedDispatchTableForImportsOffset, "dispatch_table_for_imports")
 
-  static constexpr std::array<uint16_t, 19> kTaggedFieldOffsets = {
-#define WASM_INSTANCE_TAGGED_FIELD_OFFSET(offset, _) offset,
-      WASM_TAGGED_INSTANCE_OBJECT_FIELDS(WASM_INSTANCE_TAGGED_FIELD_OFFSET)
-#undef WASM_INSTANCE_TAGGED_FIELD_OFFSET
-  };
+#define WASM_INSTANCE_FIELD_OFFSET(offset, _) offset,
+#define WASM_INSTANCE_FIELD_NAME(_, name) name,
 
-  static constexpr std::array<const char*, 19> kTaggedFieldNames = {
-#define WASM_INSTANCE_TAGGED_FIELD_NAME(_, name) name,
-      WASM_TAGGED_INSTANCE_OBJECT_FIELDS(WASM_INSTANCE_TAGGED_FIELD_NAME)
-#undef WASM_INSTANCE_TAGGED_FIELD_NAME
-  };
-#undef WASM_TAGGED_INSTANCE_OBJECT_FIELDS
+  static constexpr std::array<uint16_t, 16> kTaggedFieldOffsets = {
+      WASM_TAGGED_INSTANCE_DATA_FIELDS(WASM_INSTANCE_FIELD_OFFSET)};
+  static constexpr std::array<const char*, 16> kTaggedFieldNames = {
+      WASM_TAGGED_INSTANCE_DATA_FIELDS(WASM_INSTANCE_FIELD_NAME)};
+  static constexpr std::array<uint16_t, 4> kProtectedFieldOffsets = {
+      WASM_PROTECTED_INSTANCE_DATA_FIELDS(WASM_INSTANCE_FIELD_OFFSET)};
+  static constexpr std::array<const char*, 4> kProtectedFieldNames = {
+      WASM_PROTECTED_INSTANCE_DATA_FIELDS(WASM_INSTANCE_FIELD_NAME)};
+
+#undef WASM_INSTANCE_FIELD_OFFSET
+#undef WASM_INSTANCE_FIELD_NAME
+#undef WASM_TAGGED_INSTANCE_DATA_FIELDS
+#undef WASM_PROTECTED_INSTANCE_DATA_FIELDS
 
   static_assert(kTaggedFieldOffsets.size() == kTaggedFieldNames.size(),
-                "every field offset needs a name");
+                "every tagged field offset needs a name");
+  static_assert(kProtectedFieldOffsets.size() == kProtectedFieldNames.size(),
+                "every protected field offset needs a name");
 
   const wasm::WasmModule* module();
 
@@ -529,25 +536,20 @@ class V8_EXPORT_PRIVATE WasmTrustedInstanceData : public ExposedTrustedObject {
       uint32_t table_index, uint32_t segment_index, uint32_t dst, uint32_t src,
       uint32_t count) V8_WARN_UNUSED_RESULT;
 
-  // Iterates all fields in the object except the untagged fields.
   class BodyDescriptor;
 
-  static MaybeHandle<WasmInternalFunction> GetWasmInternalFunction(
-      Isolate* isolate, Handle<WasmTrustedInstanceData> trusted_instance_data,
-      int index);
+  // Read a WasmFuncRef from the func_refs FixedArray. Returns true on success
+  // and writes the result in the output parameter. Returns false if no func_ref
+  // exists yet for this function. Use GetOrCreateFuncRef to always create one.
+  bool try_get_func_ref(int index, Tagged<WasmFuncRef>* result);
 
-  // Acquires the {WasmInternalFunction} for a given {function_index} from the
-  // cache of the given {trusted_instance_data}, or creates a new
-  // {WasmInternalFunction} if it does not exist yet. The new
-  // {WasmInternalFunction} is added to the cache of the {trusted_instance_data}
-  // immediately.
-  static Handle<WasmInternalFunction> GetOrCreateWasmInternalFunction(
+  // Acquires the {WasmFuncRef} for a given {function_index} from the cache of
+  // the given {trusted_instance_data}, or creates a new {WasmInternalFunction}
+  // and {WasmFuncRef} if it does not exist yet. The new objects are added to
+  // the cache of the {trusted_instance_data} immediately.
+  static Handle<WasmFuncRef> GetOrCreateFuncRef(
       Isolate* isolate, Handle<WasmTrustedInstanceData> trusted_instance_data,
       int function_index);
-
-  static void SetWasmInternalFunction(
-      Handle<WasmTrustedInstanceData> trusted_instance_data, int index,
-      Handle<WasmInternalFunction> val);
 
   // Imports a constructed {WasmJSFunction} into the indirect function table of
   // this instance. Note that this might trigger wrapper compilation, since a
@@ -586,6 +588,7 @@ class WasmInstanceObject
 
   class BodyDescriptor;
 
+  DECL_PRINTER(WasmInstanceObject)
   TQ_OBJECT_CONSTRUCTORS(WasmInstanceObject)
 };
 
@@ -620,10 +623,8 @@ class WasmDispatchTable : public TrustedObject {
 
   // Entries consist of
   // - target (pointer)
-  // - ref (tagged)
-  // - sig (int32_t)
-  // TODO(14564): Make "ref" a protected pointer by moving WasmApiFunctionRef to
-  // the trusted space and linking either that or WasmTrustedInstanceData.
+  // - ref (protected pointer, tagged sized)
+  // - sig (int32_t); unused for imports which check the signature statically.
   static constexpr size_t kTargetBias = 0;
   static constexpr size_t kRefBias = kTargetBias + kSystemPointerSize;
   static constexpr size_t kSigBias = kRefBias + kTaggedSize;
@@ -674,9 +675,18 @@ class WasmDispatchTable : public TrustedObject {
   inline Address target(int index) const;
   inline int sig(int index) const;
 
+  // Set an entry for indirect calls.
   // {ref} has to be a WasmApiFunctionRef, a WasmInstanceObject, or Smi::zero().
   void V8_EXPORT_PRIVATE Set(int index, Tagged<Object> ref, Address call_target,
                              int sig_id);
+
+  // Set an entry for an import. We check signatures statically there, so the
+  // signature is not updated in the dispatch table.
+  // {ref} has to be a WasmApiFunctionRef or a WasmInstanceObject.
+  void V8_EXPORT_PRIVATE SetForImport(int index,
+                                      Tagged<ExposedTrustedObject> ref,
+                                      Address call_target);
+
   void Clear(int index);
   void SetTarget(int index, Address call_target);
 
@@ -752,8 +762,8 @@ class WasmExportedFunction : public JSFunction {
   V8_EXPORT_PRIVATE static bool IsWasmExportedFunction(Tagged<Object> object);
 
   V8_EXPORT_PRIVATE static Handle<WasmExportedFunction> New(
-      Isolate* isolate, Handle<WasmInstanceObject> instance_object,
-      Handle<WasmInternalFunction> internal, int func_index, int arity,
+      Isolate* isolate, Handle<WasmTrustedInstanceData> instance_data,
+      Handle<WasmFuncRef> func_ref, int func_index, int arity,
       Handle<Code> export_wrapper);
 
   Address GetWasmCallTarget();
@@ -815,10 +825,12 @@ class WasmCapiFunction : public JSFunction {
 // class just dispatches to the following concrete classes:
 //  - {WasmExportedFunction}: A proper Wasm function exported from a module.
 //  - {WasmJSFunction}: A function constructed via WebAssembly.Function in JS.
-// // TODO(wasm): Potentially {WasmCapiFunction} will be added here as well.
+//  - {WasmCapiFunction}: A function constructed via the C/C++ API.
 class WasmExternalFunction : public JSFunction {
  public:
   static bool IsWasmExternalFunction(Tagged<Object> object);
+
+  inline Tagged<WasmFuncRef> func_ref() const;
 
   DECL_CAST(WasmExternalFunction)
   OBJECT_CONSTRUCTORS(WasmExternalFunction, JSFunction);
@@ -829,12 +841,11 @@ class WasmFunctionData
  public:
   DECL_CODE_POINTER_ACCESSORS(wrapper_code)
 
-  DECL_ACCESSORS(internal, Tagged<WasmInternalFunction>)
-
   DECL_PRINTER(WasmFunctionData)
 
-  using BodyDescriptor = FixedBodyDescriptor<kStartOfStrongFieldsOffset,
-                                             kEndOfStrongFieldsOffset, kSize>;
+  using BodyDescriptor =
+      StackedBodyDescriptor<FixedBodyDescriptorFor<WasmFunctionData>,
+                            WithStrongCodePointer<kWrapperCodeOffset>>;
 
   using SuspendField = base::BitField<wasm::Suspend, 0, 1>;
   using PromiseField = base::BitField<wasm::Promise, 1, 1>;
@@ -857,16 +868,23 @@ class WasmExportedFunctionData
   DECL_PRINTER(WasmExportedFunctionData)
   DECL_VERIFIER(WasmExportedFunctionData)
 
-  class BodyDescriptor;
+  using BodyDescriptor = StackedBodyDescriptor<
+      SubclassBodyDescriptor<WasmFunctionData::BodyDescriptor,
+                             FixedBodyDescriptorFor<WasmExportedFunctionData>>,
+      WithExternalPointer<kSigOffset, kWasmExportedFunctionDataSignatureTag>>;
 
   TQ_OBJECT_CONSTRUCTORS(WasmExportedFunctionData)
 };
 
 class WasmApiFunctionRef
-    : public TorqueGeneratedWasmApiFunctionRef<WasmApiFunctionRef, HeapObject> {
+    : public TorqueGeneratedWasmApiFunctionRef<WasmApiFunctionRef,
+                                               ExposedTrustedObject> {
  public:
   // Dispatched behavior.
   DECL_PRINTER(WasmApiFunctionRef)
+
+  DECL_CODE_POINTER_ACCESSORS(code)
+
   static constexpr int kInvalidCallOrigin = 0;
 
   static void SetImportIndexAsCallOrigin(Handle<WasmApiFunctionRef> ref,
@@ -885,40 +903,53 @@ class WasmApiFunctionRef
       Isolate* isolate, Handle<WasmApiFunctionRef> ref,
       Handle<WasmInstanceObject> instance_object, int entry_index);
 
-  static void SetInternalFunctionAsCallOrigin(
-      Handle<WasmApiFunctionRef> ref, Handle<WasmInternalFunction> internal);
+  static void SetFuncRefAsCallOrigin(Handle<WasmApiFunctionRef> ref,
+                                     Handle<WasmFuncRef> func_ref);
 
-  class BodyDescriptor;
+  using BodyDescriptor = StackedBodyDescriptor<
+      FixedExposedTrustedObjectBodyDescriptor<
+          WasmApiFunctionRef, kWasmApiFunctionRefIndirectPointerTag>,
+      WithStrongCodePointer<kCodeOffset>>;
 
   TQ_OBJECT_CONSTRUCTORS(WasmApiFunctionRef)
 };
 
 class WasmInternalFunction
     : public TorqueGeneratedWasmInternalFunction<WasmInternalFunction,
-                                                 HeapObject> {
+                                                 ExposedTrustedObject> {
  public:
-  // Returns a handle to the corresponding WasmInternalFunction if {external} is
-  // a WasmExternalFunction, or an empty handle otherwise.
-  static MaybeHandle<WasmInternalFunction> FromExternal(Handle<Object> external,
-                                                        Isolate* isolate);
+  // Get the external function if it exists. Returns true and writes to the
+  // output parameter if an external function exists. Returns false otherwise.
+  bool try_get_external(Tagged<JSFunction>* result);
 
   V8_EXPORT_PRIVATE static Handle<JSFunction> GetOrCreateExternal(
       Handle<WasmInternalFunction> internal);
 
-  DECL_EXTERNAL_POINTER_ACCESSORS(call_target, Address)
-
-  DECL_CODE_POINTER_ACCESSORS(code)
+  DECL_PROTECTED_POINTER_ACCESSORS(ref, ExposedTrustedObject)
 
   // Dispatched behavior.
   DECL_PRINTER(WasmInternalFunction)
 
-  class BodyDescriptor;
+  using BodyDescriptor = StackedBodyDescriptor<
+      FixedExposedTrustedObjectBodyDescriptor<
+          WasmInternalFunction, kWasmInternalFunctionIndirectPointerTag>,
+      WithProtectedPointer<kProtectedRefOffset>>;
 
   TQ_OBJECT_CONSTRUCTORS(WasmInternalFunction)
- private:
-  // Make this private so it is not use by accident. Use {GetOrCreateExternal}
-  // instead.
-  Tagged<HeapObject> external();
+};
+
+class WasmFuncRef : public TorqueGeneratedWasmFuncRef<WasmFuncRef, HeapObject> {
+ public:
+  DECL_TRUSTED_POINTER_ACCESSORS(internal, WasmInternalFunction)
+
+  DECL_PRINTER(WasmFuncRef)
+
+  using BodyDescriptor = StackedBodyDescriptor<
+      FixedBodyDescriptorFor<WasmFuncRef>,
+      WithStrongTrustedPointer<kTrustedInternalOffset,
+                               kWasmInternalFunctionIndirectPointerTag>>;
+
+  TQ_OBJECT_CONSTRUCTORS(WasmFuncRef)
 };
 
 // Information for a WasmJSFunction which is referenced as the function data of
@@ -932,7 +963,8 @@ class WasmJSFunctionData
   DECL_PRINTER(WasmJSFunctionData)
 
   using BodyDescriptor =
-      FlexibleBodyDescriptor<WasmFunctionData::kStartOfStrongFieldsOffset>;
+      SubclassBodyDescriptor<WasmFunctionData::BodyDescriptor,
+                             FixedBodyDescriptorFor<WasmJSFunctionData>>;
 
  private:
   TQ_OBJECT_CONSTRUCTORS(WasmJSFunctionData)
@@ -945,7 +977,8 @@ class WasmCapiFunctionData
   DECL_PRINTER(WasmCapiFunctionData)
 
   using BodyDescriptor =
-      FlexibleBodyDescriptor<WasmFunctionData::kStartOfStrongFieldsOffset>;
+      SubclassBodyDescriptor<WasmFunctionData::BodyDescriptor,
+                             FixedBodyDescriptorFor<WasmCapiFunctionData>>;
 
   TQ_OBJECT_CONSTRUCTORS(WasmCapiFunctionData)
 };
@@ -1097,7 +1130,7 @@ class WasmStruct : public TorqueGeneratedWasmStruct<WasmStruct, WasmObject> {
   // Returns the ObjectSlot for tagged value at given offset.
   inline ObjectSlot RawField(int raw_offset);
 
-  wasm::WasmValue GetFieldValue(uint32_t field_index);
+  V8_EXPORT_PRIVATE wasm::WasmValue GetFieldValue(uint32_t field_index);
 
   static inline void SetField(Isolate* isolate, Handle<WasmStruct> obj,
                               uint32_t field_index, Handle<Object> value);
@@ -1181,7 +1214,9 @@ class WasmContinuationObject
 
   DECL_PRINTER(WasmContinuationObject)
 
-  class BodyDescriptor;
+  using BodyDescriptor = StackedBodyDescriptor<
+      FixedBodyDescriptorFor<WasmContinuationObject>,
+      WithExternalPointer<kJmpbufOffset, kWasmContinuationJmpbufTag>>;
 
  private:
   static Handle<WasmContinuationObject> New(
@@ -1200,9 +1235,6 @@ class WasmSuspenderObject
   enum State : int { kInactive = 0, kActive, kSuspended };
   static Handle<WasmSuspenderObject> New(Isolate* isolate);
   DECL_PRINTER(WasmSuspenderObject)
-  using BodyDescriptor =
-      FixedBodyDescriptor<kStartOfStrongFieldsOffset, kEndOfStrongFieldsOffset,
-                          kHeaderSize>;
   TQ_OBJECT_CONSTRUCTORS(WasmSuspenderObject)
 };
 
@@ -1224,7 +1256,8 @@ class WasmNull : public TorqueGeneratedWasmNull<WasmNull, HeapObject> {
 #else
   static constexpr int kSize = kTaggedSize;
 #endif
-  class BodyDescriptor;
+
+  using BodyDescriptor = FixedBodyDescriptorFor<WasmNull>;
 
   TQ_OBJECT_CONSTRUCTORS(WasmNull)
 };

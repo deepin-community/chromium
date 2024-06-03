@@ -5,6 +5,7 @@
 #include "extensions/common/api/scripts_internal/script_serialization.h"
 
 #include <optional>
+
 #include "base/types/optional_util.h"
 #include "extensions/common/api/scripts_internal.h"
 #include "extensions/common/user_script.h"
@@ -133,6 +134,9 @@ api::scripts_internal::SerializedUserScript SerializeUserScript(
   serialized_script.world =
       ConvertExecutionWorldForAPI(user_script.execution_world());
 
+  // `worldId`.
+  serialized_script.world_id = user_script.world_id();
+
   return serialized_script;
 }
 
@@ -219,6 +223,9 @@ std::unique_ptr<UserScript> ParseSerializedUserScript(
   // `world`.
   user_script->set_execution_world(
       ConvertExecutionWorld(serialized_script.world));
+
+  // `worldId`.
+  user_script->set_world_id(serialized_script.world_id);
 
   // Post-parse validation (these rely on multiple fields).
   if (!script_parsing::ValidateMatchOriginAsFallback(

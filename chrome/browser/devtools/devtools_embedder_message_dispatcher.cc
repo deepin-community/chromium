@@ -367,6 +367,8 @@ DevToolsEmbedderMessageDispatcher::CreateForDevToolsFrontend(
   d->RegisterHandlerWithCallback("setIsDocked",
                                  &Delegate::SetIsDocked, delegate);
   d->RegisterHandler("openInNewTab", &Delegate::OpenInNewTab, delegate);
+  d->RegisterHandler("openSearchResultsInNewTab",
+                     &Delegate::OpenSearchResultsInNewTab, delegate);
   d->RegisterHandler("showItemInFolder", &Delegate::ShowItemInFolder, delegate);
   d->RegisterHandler("save", &Delegate::SaveToFile, delegate);
   d->RegisterHandler("append", &Delegate::AppendToFile, delegate);
@@ -442,9 +444,13 @@ DevToolsEmbedderMessageDispatcher::CreateForDevToolsFrontend(
   d->RegisterHandlerWithCallback("showSurvey", &Delegate::ShowSurvey, delegate);
   d->RegisterHandlerWithCallback("canShowSurvey", &Delegate::CanShowSurvey,
                                  delegate);
-  if (base::FeatureList::IsEnabled(::features::kDevToolsConsoleInsights)) {
+  if (base::FeatureList::IsEnabled(::features::kDevToolsConsoleInsights) ||
+      base::FeatureList::IsEnabled(
+          ::features::kDevToolsConsoleInsightsDogfood)) {
     d->RegisterHandlerWithCallback("doAidaConversation",
                                    &Delegate::DoAidaConversation, delegate);
+    d->RegisterHandler("registerAidaClientEvent",
+                       &Delegate::RegisterAidaClientEvent, delegate);
   }
   return d;
 }

@@ -28,6 +28,7 @@
 #include <optional>
 
 #include "base/auto_reset.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -68,6 +69,7 @@ class Clock;
 
 namespace blink {
 
+class BackgroundResponseProcessor;
 class BlobDataHandle;
 class FetchParameters;
 class ResourceFinishObserver;
@@ -434,18 +436,21 @@ class PLATFORM_EXPORT Resource : public GarbageCollected<Resource>,
 
   void SetIsPreloadedByEarlyHints() { is_preloaded_by_early_hints_ = true; }
 
-  bool IsPreloadedByEarlyHints() { return is_preloaded_by_early_hints_; }
+  bool IsPreloadedByEarlyHints() const { return is_preloaded_by_early_hints_; }
 
   void SetIsLoadedFromMemoryCache() { is_loaded_from_memory_cache_ = true; }
 
   bool IsLoadedFromMemoryCache() { return is_loaded_from_memory_cache_; }
+
+  virtual scoped_refptr<BackgroundResponseProcessor>
+  MaybeCreateBackgroundResponseProcessor();
 
  protected:
   Resource(const ResourceRequestHead&,
            ResourceType,
            const ResourceLoaderOptions&);
 
-  virtual void NotifyDataReceived(const char* data, size_t size);
+  virtual void NotifyDataReceived(base::span<const char> data);
   virtual void NotifyFinished();
 
   void MarkClientFinished(ResourceClient*);

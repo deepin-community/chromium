@@ -268,7 +268,7 @@ class NudgePasswordButtons : public views::View {
         cancel_button_label);
     cancel_button->SetAccessibleRole(ax::mojom::Role::kListBoxOption);
     cancel_button->SetAccessibleName(cancel_button_label);
-    cancel_button->SetAccessibleDescription(help_text);
+    cancel_button->GetViewAccessibility().SetDescription(help_text);
     cancel_button_ = AddChildView(std::move(cancel_button));
 
     AddSpacerWithSize(autofill::PopupBaseView::GetHorizontalPadding(),
@@ -284,7 +284,7 @@ class NudgePasswordButtons : public views::View {
     accept_button->SetAccessibleRole(ax::mojom::Role::kListBoxOption);
     accept_button->SetAccessibleName(
         base::JoinString({accept_button_label, controller_->password()}, u" "));
-    accept_button->SetAccessibleDescription(help_text);
+    accept_button->GetViewAccessibility().SetDescription(help_text);
     accept_button_ = AddChildView(std::move(accept_button));
 
     // Set up custom focus predicates for buttons as the default ones check if
@@ -622,7 +622,7 @@ void PasswordGenerationPopupViewViews::CreateLayoutAndChildren() {
   const int kVerticalPadding =
       provider->GetDistanceMetric(DISTANCE_TOAST_LABEL_VERTICAL);
   const int kHorizontalMargin =
-      provider->GetDistanceMetric(DISTANCE_UNRELATED_CONTROL_HORIZONTAL);
+      provider->GetDistanceMetric(views::DISTANCE_UNRELATED_CONTROL_HORIZONTAL);
 
   if (controller_->ShouldShowNudgePassword()) {
     auto nudge_password_view = CreateNudgePasswordView(controller_);
@@ -682,7 +682,7 @@ void PasswordGenerationPopupViewViews::CreateLayoutAndChildren() {
 
 void PasswordGenerationPopupViewViews::GetAccessibleNodeData(
     ui::AXNodeData* node_data) {
-  // TODO(crbug.com/1404297): kListBox is used for the same reason as in
+  // TODO(crbug.com/40885943): kListBox is used for the same reason as in
   // `autofill::PopupViewViews`. See crrev.com/c/2545285 for details.
   // Consider using a more appropriate role (e.g. kMenuListPopup or similar).
   node_data->role = ax::mojom::Role::kListBox;

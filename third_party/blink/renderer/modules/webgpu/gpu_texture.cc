@@ -59,8 +59,8 @@ bool ConvertToDawn(const GPUTextureDescriptor* in,
     }
   }
 
-  if (in->hasLabel()) {
-    *label = in->label().Utf8();
+  *label = in->label().Utf8();
+  if (!label->empty()) {
     out->label = label->c_str();
   }
 
@@ -96,8 +96,8 @@ WGPUTextureViewDescriptor AsDawnType(
     dawn_desc.arrayLayerCount = webgpu_desc->arrayLayerCount();
   }
   dawn_desc.aspect = AsDawnEnum(webgpu_desc->aspect());
-  if (webgpu_desc->hasLabel()) {
-    *label = webgpu_desc->label().Utf8();
+  *label = webgpu_desc->label().Utf8();
+  if (!label->empty()) {
     dawn_desc.label = label->c_str();
   }
 
@@ -108,21 +108,35 @@ WGPUTextureViewDescriptor AsDawnType(
 // Blink must make sure that an actual value of 0xFFFF'FFFF coming in from JS
 // is not treated as the special `undefined` value, so it injects an error in
 // that case.
-const char* ValidateTextureMipLevelAndArrayLayerCounts(
+std::string ValidateTextureMipLevelAndArrayLayerCounts(
     const GPUTextureViewDescriptor* webgpu_desc) {
   DCHECK(webgpu_desc);
 
   if (webgpu_desc->hasMipLevelCount() &&
       webgpu_desc->mipLevelCount() == WGPU_MIP_LEVEL_COUNT_UNDEFINED) {
-    return "mipLevelCount in GPUTextureViewDescriptor is too large";
+    std::ostringstream error;
+    error << "mipLevelCount (" << webgpu_desc->mipLevelCount()
+          << ") is too large when validating [GPUTextureViewDescriptor";
+    if (!webgpu_desc->label().empty()) {
+      error << " '" << webgpu_desc->label().Utf8() << "'";
+    }
+    error << "].";
+    return error.str();
   }
 
   if (webgpu_desc->hasArrayLayerCount() &&
       webgpu_desc->arrayLayerCount() == WGPU_ARRAY_LAYER_COUNT_UNDEFINED) {
-    return "arrayLayerCount in GPUTextureViewDescriptor is too large";
+    std::ostringstream error;
+    error << "arrayLayerCount (" << webgpu_desc->arrayLayerCount()
+          << ") is too large when validating [GPUTextureViewDescriptor";
+    if (!webgpu_desc->label().empty()) {
+      error << " '" << webgpu_desc->label().Utf8() << "'";
+    }
+    error << "].";
+    return error.str();
   }
 
-  return nullptr;
+  return std::string();
 }
 
 }  // anonymous namespace
@@ -158,9 +172,8 @@ GPUTexture* GPUTexture::Create(GPUDevice* device,
 
   GPUTexture* texture = MakeGarbageCollected<GPUTexture>(
       device,
-      device->GetProcs().deviceCreateTexture(device->GetHandle(), &dawn_desc));
-  if (webgpu_desc->hasLabel())
-    texture->setLabel(webgpu_desc->label());
+      device->GetProcs().deviceCreateTexture(device->GetHandle(), &dawn_desc),
+      webgpu_desc->label());
   return texture;
 }
 
@@ -171,11 +184,14 @@ GPUTexture* GPUTexture::CreateError(GPUDevice* device,
   DCHECK(desc);
   return MakeGarbageCollected<GPUTexture>(
       device,
-      device->GetProcs().deviceCreateErrorTexture(device->GetHandle(), desc));
+      device->GetProcs().deviceCreateErrorTexture(device->GetHandle(), desc),
+      String(desc->label));
 }
 
-GPUTexture::GPUTexture(GPUDevice* device, WGPUTexture texture)
-    : DawnObject<WGPUTexture>(device, texture),
+GPUTexture::GPUTexture(GPUDevice* device,
+                       WGPUTexture texture,
+                       const String& label)
+    : DawnObject<WGPUTexture>(device, texture, label),
       dimension_(GetProcs().textureGetDimension(GetHandle())),
       format_(GetProcs().textureGetFormat(GetHandle())),
       usage_(GetProcs().textureGetUsage(GetHandle())) {}
@@ -183,8 +199,9 @@ GPUTexture::GPUTexture(GPUDevice* device, WGPUTexture texture)
 GPUTexture::GPUTexture(GPUDevice* device,
                        WGPUTextureFormat format,
                        WGPUTextureUsage usage,
-                       scoped_refptr<WebGPUMailboxTexture> mailbox_texture)
-    : DawnObject<WGPUTexture>(device, mailbox_texture->GetTexture()),
+                       scoped_refptr<WebGPUMailboxTexture> mailbox_texture,
+                       const String& label)
+    : DawnObject<WGPUTexture>(device, mailbox_texture->GetTexture(), label),
       format_(format),
       usage_(usage),
       mailbox_texture_(std::move(mailbox_texture)) {
@@ -210,19 +227,19 @@ GPUTextureView* GPUTexture::createView(
     return nullptr;
   }
 
-  const char* error = ValidateTextureMipLevelAndArrayLayerCounts(webgpu_desc);
-  if (error) {
-    device()->InjectError(WGPUErrorType_Validation, error);
+  std::string error = ValidateTextureMipLevelAndArrayLayerCounts(webgpu_desc);
+  if (!error.empty()) {
+    device()->InjectError(WGPUErrorType_Validation, error.c_str());
     return MakeGarbageCollected<GPUTextureView>(
-        device(), GetProcs().textureCreateErrorView(GetHandle(), nullptr));
+        device(), GetProcs().textureCreateErrorView(GetHandle(), nullptr),
+        String());
   }
 
   std::string label;
   WGPUTextureViewDescriptor dawn_desc = AsDawnType(webgpu_desc, &label);
   GPUTextureView* view = MakeGarbageCollected<GPUTextureView>(
-      device_, GetProcs().textureCreateView(GetHandle(), &dawn_desc));
-  if (webgpu_desc->hasLabel())
-    view->setLabel(webgpu_desc->label());
+      device_, GetProcs().textureCreateView(GetHandle(), &dawn_desc),
+      webgpu_desc->label());
   return view;
 }
 
@@ -284,6 +301,10 @@ void GPUTexture::DissociateMailbox() {
     mailbox_texture_->Dissociate();
     mailbox_texture_ = nullptr;
   }
+}
+
+scoped_refptr<WebGPUMailboxTexture> GPUTexture::GetMailboxTexture() {
+  return mailbox_texture_;
 }
 
 void GPUTexture::SetBeforeDestroyCallback(base::OnceClosure callback) {

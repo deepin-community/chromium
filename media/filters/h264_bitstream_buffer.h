@@ -10,13 +10,12 @@
 #ifndef MEDIA_FILTERS_H264_BITSTREAM_BUFFER_H_
 #define MEDIA_FILTERS_H264_BITSTREAM_BUFFER_H_
 
-#include <stddef.h>
 #include <stdint.h>
 
+#include "base/containers/heap_array.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/numerics/safe_conversions.h"
 #include "media/base/media_export.h"
 #include "media/video/h264_parser.h"
 
@@ -24,15 +23,17 @@ namespace media {
 
 // Holds one or more NALUs as a raw bitstream buffer in H.264 Annex-B format.
 // Note that this class currently does NOT insert emulation prevention
-// three-byte sequences (spec 7.3.1).
-// Refcounted as these buffers may be used as arguments to multiple codec jobs
-// (e.g. a buffer containing an H.264 SPS NALU may be used as an argument to all
-// jobs that use parameters contained in that SPS).
-class MEDIA_EXPORT H264BitstreamBuffer
-    : public base::RefCountedThreadSafe<H264BitstreamBuffer> {
+// three-byte sequences (spec 7.3.1) by default.
+class MEDIA_EXPORT H264BitstreamBuffer {
  public:
-  H264BitstreamBuffer();
-
+  // This is used by VA-API encoder and D3D12 encoder.
+  // - For VA-API encoder, set |insert_emulation_prevention_bytes| to |false| as
+  //   VA-API takes SPS/PPS RBSP and outputs the AnnexB bitstream.
+  // - For D3D12 encoder, set |insert_emulation_prevention_bytes| to |true| as
+  //   it only outputs slice NALU. We add SPS/PPS with EPB in Chromium to create
+  //   an AnnexB bitstream.
+  explicit H264BitstreamBuffer(bool insert_emulation_prevention_bytes = false);
+  ~H264BitstreamBuffer();
   H264BitstreamBuffer(const H264BitstreamBuffer&) = delete;
   H264BitstreamBuffer& operator=(const H264BitstreamBuffer&) = delete;
 
@@ -88,14 +89,14 @@ class MEDIA_EXPORT H264BitstreamBuffer
   size_t BitsInBuffer() const;
 
   // Return a pointer to the stream. FinishNALU() must be called before
-  // accessing the stream, otherwise some bits may still be cached and not
-  // in the buffer.
+  // accessing the stream, otherwise some bits may still be cached and not in
+  // the buffer.
+  //
+  // TODO(crbug.com/40284755): Return a span up to `pos_` which is the range of
+  // initialized bytes in `data_`.
   const uint8_t* data() const;
 
  private:
-  friend class base::RefCountedThreadSafe<H264BitstreamBuffer>;
-  ~H264BitstreamBuffer();
-
   FRIEND_TEST_ALL_PREFIXES(H264BitstreamBufferAppendBitsTest,
                            AppendAndVerifyBits);
 
@@ -122,6 +123,12 @@ class MEDIA_EXPORT H264BitstreamBuffer
   static_assert(kGrowBytes >= kRegByteSize,
                 "kGrowBytes must be larger than kRegByteSize");
 
+  // Whether to insert emulation prevention bytes in RBSP.
+  bool insert_emulation_prevention_bytes_;
+
+  // Whether BeginNALU() has been called but not FinishNALU().
+  bool in_nalu_;
+
   // Unused bits left in reg_.
   size_t bits_left_in_reg_;
 
@@ -130,16 +137,13 @@ class MEDIA_EXPORT H264BitstreamBuffer
   // is called.
   RegType reg_;
 
-  // Current capacity of data_, in bytes.
-  size_t capacity_;
-
   // Current byte offset in data_ (points to the start of unwritten bits).
   size_t pos_;
   // Current last bit in data_ (points to the start of unwritten bit).
   size_t bits_in_buffer_;
 
-  // Buffer for stream data.
-  raw_ptr<uint8_t, DanglingUntriaged | AllowPtrArithmetic> data_;
+  // Buffer for stream data. Only the bytes before `pos_` have been initialized.
+  base::HeapArray<uint8_t> data_;
 };
 
 }  // namespace media

@@ -41,6 +41,8 @@
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/platform/scheduler/web_renderer_process_type.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
+#include "third_party/blink/renderer/platform/bindings/parkable_string_manager.h"
+#include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/instrumentation/resource_coordinator/renderer_resource_coordinator.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -70,10 +72,6 @@ class LazyNow;
 
 namespace blink {
 namespace scheduler {
-
-BASE_FEATURE(kTaskAttributionInfrastructureDisabledForTesting,
-             "TaskAttributionInfrastructureDisabledForTesting",
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 using base::sequence_manager::TaskQueue;
 using base::sequence_manager::TaskTimeObserver;
@@ -1074,7 +1072,13 @@ void MainThreadSchedulerImpl::SetRendererBackgrounded(bool backgrounded) {
     main_thread_only().metrics_helper.OnRendererForegrounded(now);
   }
 
+  ParkableStringManager::Instance().SetRendererBackgrounded(backgrounded);
   memory_purge_manager_.SetRendererBackgrounded(backgrounded);
+}
+
+void MainThreadSchedulerImpl::SetRendererBackgroundedForTesting(
+    bool backgrounded) {
+  SetRendererBackgrounded(backgrounded);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -2850,19 +2854,6 @@ bool MainThreadSchedulerImpl::AllPagesFrozen() const {
       return false;
   }
   return true;
-}
-
-TaskAttributionTracker* MainThreadSchedulerImpl::GetTaskAttributionTracker() {
-  return base::FeatureList::IsEnabled(
-             kTaskAttributionInfrastructureDisabledForTesting)
-             ? nullptr
-             : main_thread_only().task_attribution_tracker.get();
-}
-
-void MainThreadSchedulerImpl::InitializeTaskAttributionTracker(
-    std::unique_ptr<TaskAttributionTracker> tracker) {
-  DCHECK(!main_thread_only().task_attribution_tracker);
-  main_thread_only().task_attribution_tracker = std::move(tracker);
 }
 
 // static

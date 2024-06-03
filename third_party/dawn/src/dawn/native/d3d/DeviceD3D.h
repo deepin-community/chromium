@@ -47,7 +47,8 @@ class Device : public DeviceBase {
   public:
     Device(AdapterBase* adapter,
            const UnpackedPtr<DeviceDescriptor>& descriptor,
-           const TogglesState& deviceToggles);
+           const TogglesState& deviceToggles,
+           Ref<DeviceBase::DeviceLostEvent>&& lostEvent);
     ~Device() override;
 
     ResultOrError<wgpu::TextureUsage> GetSupportedSurfaceUsageImpl(
@@ -65,10 +66,12 @@ class Device : public DeviceBase {
     virtual Ref<TextureBase> CreateD3DExternalTexture(
         const UnpackedPtr<TextureDescriptor>& descriptor,
         ComPtr<IUnknown> d3dTexture,
-        ComPtr<IDXGIKeyedMutex> dxgiKeyedMutex,
+        Ref<KeyedMutex> keyedMutex,
         std::vector<FenceAndSignalValue> waitFences,
         bool isSwapChainTexture,
         bool isInitialized) = 0;
+
+    virtual void DisposeKeyedMutex(ComPtr<IDXGIKeyedMutex> dxgiKeyedMutex) = 0;
 
   protected:
     void DestroyImpl() override;

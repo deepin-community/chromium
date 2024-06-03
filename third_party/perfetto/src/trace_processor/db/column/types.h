@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/trace_processor/basic_types.h"
@@ -35,17 +36,6 @@ enum class SingleSearchResult {
   kNoMatch,          // The specified row does not matches the constraint.
   kNeedsFullSearch,  // SingleSearch was unable to determine if the row meets
                      // the crtiteria, a call to *Search is required.
-};
-
-// Result of calling Storage::UniqueSearch function.
-enum class UniqueSearchResult {
-  kMatch,            // The returned row matches the constraint.
-  kNoMatch,          // The returned row does not matches the constraint.
-  kNeedsFullSearch,  // UniqueSearch was unable to determine if a row meets
-                     // the crtiteria, a call to *Search is required. This
-                     // does not mean there >1 row necessarily, just that
-                     // UniqueSearch was unable to quickly identify a single
-                     // row.
 };
 
 // Result of calling Storage::ValidateSearchResult function.
@@ -122,21 +112,6 @@ enum class ColumnType {
 
   // Types which don't have any data backing them.
   kDummy,
-};
-
-// Index vector related data required to Filter using IndexSearch.
-struct Indices {
-  enum class State {
-    // We can't guarantee that data is in monotonic order.
-    kNonmonotonic,
-    // Data is in monotonic order.
-    // TODO(b/307482437): Use this to optimise filtering if storage is sorted.
-    kMonotonic
-  };
-
-  const uint32_t* data = nullptr;
-  uint32_t size = 0;
-  State state = Indices::State::kNonmonotonic;
 };
 
 }  // namespace perfetto::trace_processor

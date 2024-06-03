@@ -55,7 +55,6 @@ const char kContentPackDefaultFilteringBehavior[] =
 const char kContentPackManualBehaviorHosts[] = "ContentPackManualBehaviorHosts";
 const char kContentPackManualBehaviorURLs[] = "ContentPackManualBehaviorURLs";
 const char kCookiesAlwaysAllowed[] = "CookiesAlwaysAllowed";
-const char kForceSafeSearch[] = "ForceSafeSearch";
 const char kGeolocationDisabled[] = "GeolocationDisabled";
 const char kSafeSitesEnabled[] = "SafeSites";
 const char kSigninAllowed[] = "SigninAllowed";
@@ -116,5 +115,10 @@ const char kSupervisedUserURLFilteringResultHistogramName[] =
 
 const char kSupervisedUserTopLevelURLFilteringResultHistogramName[] =
     "ManagedUsers.TopLevelFilteringResult";
+
+const char kManagedByParentUiMoreInfoUrl[] =
+    "https://familylink.google.com/setting/resource/94";
+
+const char kFamilyMemberRoleFeedbackTag[] = "Family_Member_Role";
 
 }  // namespace supervised_user

@@ -1369,8 +1369,8 @@ def GetPylint(input_api,
         kwargs = {'env': env}
         if input_api.platform == 'win32':
             # On Windows, scripts on the current directory take precedence over
-            # PATH. When `pylint.bat` calls `vpython`, it will execute the
-            # `vpython` of the depot_tools under test instead of the one in the
+            # PATH. When `pylint.bat` calls `vpython3`, it will execute the
+            # `vpython3` of the depot_tools under test instead of the one in the
             # bot. As a workaround, we run the tests from the parent directory
             # instead.
             cwd = input_api.change.RepositoryRoot()
@@ -1548,9 +1548,15 @@ def CheckOwnersFormat(input_api, output_api):
     if input_api.gerrit and input_api.gerrit.IsCodeOwnersEnabledOnRepo():
         return []
 
+    host = "none"
+    project = "none"
+    if input_api.gerrit:
+        host = input_api.gerrit.host
+        project = input_api.gerrit.project
     return [
         output_api.PresubmitError(
-            'code-owners is not enabled. Ask your host enable it on your gerrit '
+            f'code-owners is not enabled on {host}/{project}. '
+            'Ask your host enable it on your gerrit '
             'host. Read more about code-owners at '
             'https://chromium-review.googlesource.com/'
             'plugins/code-owners/Documentation/index.html.')
@@ -1568,9 +1574,15 @@ def CheckOwners(input_api, output_api, source_file_filter=None, allow_tbr=True):
     if input_api.gerrit and input_api.gerrit.IsCodeOwnersEnabledOnRepo():
         return []
 
+    host = "none"
+    project = "none"
+    if input_api.gerrit:
+        host = input_api.gerrit.host
+        project = input_api.gerrit.project
     return [
         output_api.PresubmitError(
-            'code-owners is not enabled. Ask your host enable it on your gerrit '
+            f'code-owners is not enabled on {host}/{project}. '
+            'Ask your host enable it on your gerrit '
             'host. Read more about code-owners at '
             'https://chromium-review.googlesource.com/'
             'plugins/code-owners/Documentation/index.html.')
@@ -2117,8 +2129,8 @@ def CheckVPythonSpec(input_api, output_api, file_filter=None):
         output_api: Bag of output related interfaces.
         file_filter: Custom function that takes a path (relative to client root) and
             returns boolean, which is used to filter files for which to apply the
-            verification to. Defaults to any path ending with .vpython, which captures
-            both global .vpython and <script>.vpython files.
+            verification to. Defaults to any path ending with .vpython(3), which captures
+            both global .vpython(3) and <script>.vpython(3) files.
 
     Returns:
         A list of input_api.Command objects containing verification commands.

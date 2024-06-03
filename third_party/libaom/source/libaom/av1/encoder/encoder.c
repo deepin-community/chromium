@@ -153,24 +153,33 @@ int av1_set_active_map(AV1_COMP *cpi, unsigned char *new_map_16x16, int rows,
     unsigned char *const active_map_4x4 = cpi->active_map.map;
     const int mi_rows = mi_params->mi_rows;
     const int mi_cols = mi_params->mi_cols;
-    const int row_scale = mi_size_high_log2[BLOCK_16X16];
-    const int col_scale = mi_size_wide_log2[BLOCK_16X16];
     cpi->active_map.update = 0;
-    assert(mi_rows % 2 == 0);
-    assert(mi_cols % 2 == 0);
+    cpi->rc.percent_blocks_inactive = 0;
+    assert(mi_rows % 2 == 0 && mi_rows > 0);
+    assert(mi_cols % 2 == 0 && mi_cols > 0);
     if (new_map_16x16) {
-      for (int r = 0; r < (mi_rows >> row_scale); ++r) {
-        for (int c = 0; c < (mi_cols >> col_scale); ++c) {
-          const uint8_t val = new_map_16x16[r * cols + c]
+      int num_samples = 0;
+      int num_blocks_inactive = 0;
+      for (int r = 0; r < mi_rows; r += 4) {
+        for (int c = 0; c < mi_cols; c += 4) {
+          const uint8_t val = new_map_16x16[(r >> 2) * cols + (c >> 2)]
                                   ? AM_SEGMENT_ID_ACTIVE
                                   : AM_SEGMENT_ID_INACTIVE;
-          active_map_4x4[(2 * r + 0) * mi_cols + (c + 0)] = val;
-          active_map_4x4[(2 * r + 0) * mi_cols + (c + 1)] = val;
-          active_map_4x4[(2 * r + 1) * mi_cols + (c + 0)] = val;
-          active_map_4x4[(2 * r + 1) * mi_cols + (c + 1)] = val;
+          num_samples++;
+          if (val == AM_SEGMENT_ID_INACTIVE) num_blocks_inactive++;
+          const int row_max = AOMMIN(4, mi_rows - r);
+          const int col_max = AOMMIN(4, mi_cols - c);
+          for (int x = 0; x < row_max; ++x) {
+            for (int y = 0; y < col_max; ++y) {
+              active_map_4x4[(r + x) * mi_cols + (c + y)] = val;
+            }
+          }
         }
       }
       cpi->active_map.enabled = 1;
+      cpi->active_map.update = 1;
+      cpi->rc.percent_blocks_inactive =
+          (num_blocks_inactive * 100) / num_samples;
     }
     return 0;
   }
@@ -2385,7 +2394,10 @@ static void loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm) {
 
   const int use_loopfilter =
       is_loopfilter_used(cm) && !cpi->mt_info.pipeline_lpf_mt_with_enc;
-  const int use_cdef = is_cdef_used(cm);
+  const int use_cdef =
+      is_cdef_used(cm) && (!cpi->active_map.enabled ||
+                           cpi->rc.percent_blocks_inactive <=
+                               cpi->sf.rt_sf.thresh_active_maps_skip_lf_cdef);
   const int use_superres = av1_superres_scaled(cm);
   const int use_restoration = is_restoration_used(cm);
 
@@ -2644,12 +2656,8 @@ static int encode_without_recode(AV1_COMP *cpi) {
         av1_setup_frame(cpi);
     }
   }
-
-  if (q_cfg->aq_mode == CYCLIC_REFRESH_AQ) {
-    suppress_active_map(cpi);
-    av1_cyclic_refresh_setup(cpi);
-  }
   av1_apply_active_map(cpi);
+  if (q_cfg->aq_mode == CYCLIC_REFRESH_AQ) av1_cyclic_refresh_setup(cpi);
   if (cm->seg.enabled) {
     if (!cm->seg.update_data && cm->prev_frame) {
       segfeatures_copy(&cm->seg, &cm->prev_frame->seg);

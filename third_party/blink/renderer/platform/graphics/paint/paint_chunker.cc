@@ -10,10 +10,10 @@
 
 namespace blink {
 
-void PaintChunker::ResetChunks(Vector<PaintChunk>* chunks) {
+void PaintChunker::ResetChunks(PaintChunks* chunks) {
   if (chunks_) {
     FinalizeLastChunkProperties();
-    SetWillForceNewChunk(true);
+    SetWillForceNewChunk();
     current_properties_ = PropertyTreeState::Uninitialized();
   }
   chunks_ = chunks;
@@ -119,9 +119,9 @@ bool PaintChunker::IncrementDisplayItemIndex(const DisplayItemClient& client,
   DCHECK(chunks_);
 
   bool item_forces_new_chunk = item.IsForeignLayer() || item.IsScrollbar();
-  if (item_forces_new_chunk)
-    SetWillForceNewChunk(true);
-
+  if (item_forces_new_chunk) {
+    SetWillForceNewChunk();
+  }
   bool created_new_chunk = EnsureCurrentChunk(item.GetId(), client);
   auto& chunk = chunks_->back();
   chunk.end_index++;
@@ -161,7 +161,7 @@ bool PaintChunker::IncrementDisplayItemIndex(const DisplayItemClient& client,
   DCHECK(!will_force_new_chunk_);
   if (item_forces_new_chunk) {
     DCHECK(created_new_chunk);
-    SetWillForceNewChunk(true);
+    SetWillForceNewChunk();
   }
 
   return created_new_chunk;
@@ -280,7 +280,7 @@ void PaintChunker::CreateScrollHitTestChunk(
     cc::HitTestOpaqueness hit_test_opaqueness) {
 #if DCHECK_IS_ON()
   if (id.type == DisplayItem::Type::kResizerScrollHitTest ||
-      id.type == DisplayItem::Type::kPluginScrollHitTest ||
+      id.type == DisplayItem::Type::kWebPluginHitTest ||
       id.type == DisplayItem::Type::kScrollbarHitTest) {
     // Resizer, plugin, and scrollbar hit tests are only used to prevent
     // composited scrolling and should not have a scroll offset node.
@@ -298,7 +298,7 @@ void PaintChunker::CreateScrollHitTestChunk(
   }
 #endif
 
-  SetWillForceNewChunk(true);
+  SetWillForceNewChunk();
   bool created_new_chunk = EnsureCurrentChunk(id, client);
   DCHECK(created_new_chunk);
 
@@ -307,7 +307,7 @@ void PaintChunker::CreateScrollHitTestChunk(
   auto& hit_test_data = chunk.EnsureHitTestData();
   hit_test_data.scroll_translation = scroll_translation;
   hit_test_data.scroll_hit_test_rect = rect;
-  SetWillForceNewChunk(true);
+  SetWillForceNewChunk();
 }
 
 void PaintChunker::UnionBounds(const gfx::Rect& rect,

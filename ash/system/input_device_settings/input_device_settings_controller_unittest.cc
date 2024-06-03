@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/public/cpp/input_device_settings_controller.h"
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -10,7 +12,6 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/events/event_rewriter_controller_impl.h"
 #include "ash/public/cpp/ash_prefs.h"
-#include "ash/public/cpp/input_device_settings_controller.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -825,6 +826,17 @@ TEST_F(InputDeviceSettingsControllerTest, KeyboardSettingsAreValid) {
       ui::mojom::ModifierKey::kAlt;
   controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardInternal.id,
                                    settings.Clone());
+
+  EXPECT_EQ(observer_->num_keyboards_settings_updated(), 0u);
+  EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_updated(), 0u);
+
+  const mojom::KeyboardSettingsPtr new_settings = CreateNewKeyboardSettings();
+  // Function key is not a modifier key so alt key can't be remapped to function
+  // key.
+  new_settings->modifier_remappings[ui::mojom::ModifierKey::kAlt] =
+      ui::mojom::ModifierKey::kFunction;
+  controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardInternal.id,
+                                   new_settings.Clone());
 
   EXPECT_EQ(observer_->num_keyboards_settings_updated(), 0u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_updated(), 0u);

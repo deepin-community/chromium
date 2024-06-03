@@ -45,6 +45,16 @@ def __filegroups(ctx):
         "type": "glob",
         "includes": sdk_includes,
     }
+
+    # https://b.corp.google.com/issues/332652041#comment2
+    fg[ctx.fs.canonpath("./sdk/xcode_links/MacOSX14.4.sdk") + ":headers"] = {
+        "type": "glob",
+        "includes": sdk_includes,
+    }
+    fg[ctx.fs.canonpath("./sdk/xcode_links/iPhoneSimulator17.4.sdk") + ":headers"] = {
+        "type": "glob",
+        "includes": sdk_includes,
+    }
     fg[ctx.fs.canonpath("./sdk/xcode_links/iPhoneSimulator.platform/Developer/Library/Frameworks") + ":headers"] = {
         "type": "glob",
         "includes": sdk_includes,
@@ -89,38 +99,54 @@ def __step_config(ctx, step_config):
                 "name": "clang/cxx",
                 "action": "(.*_)?cxx",
                 "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang++",
+                "inputs": [
+                    "third_party/llvm-build/Release+Asserts/bin/clang++",
+                ],
                 "exclude_input_patterns": ["*.stamp"],
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
             {
                 "name": "clang/cc",
                 "action": "(.*_)?cc",
                 "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang",
+                "inputs": [
+                    "third_party/llvm-build/Release+Asserts/bin/clang",
+                ],
                 "exclude_input_patterns": ["*.stamp"],
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
             {
                 "name": "clang/objcxx",
                 "action": "(.*_)?objcxx",
                 "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang++",
+                "inputs": [
+                    "third_party/llvm-build/Release+Asserts/bin/clang++",
+                ],
                 "exclude_input_patterns": ["*.stamp"],
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
                 "input_root_absolute_path": need_input_root_absolute_path_for_objc,
             },
             {
                 "name": "clang/objc",
                 "action": "(.*_)?objc",
                 "command_prefix": "../../third_party/llvm-build/Release+Asserts/bin/clang",
+                "inputs": [
+                    "third_party/llvm-build/Release+Asserts/bin/clang",
+                ],
                 "exclude_input_patterns": ["*.stamp"],
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
                 "input_root_absolute_path": need_input_root_absolute_path_for_objc,
             },
             {
@@ -135,6 +161,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
             {
                 "name": "clang-coverage/cc",
@@ -148,6 +175,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
             },
             {
                 "name": "clang-coverage/objcxx",
@@ -161,6 +189,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
                 "input_root_absolute_path": need_input_root_absolute_path_for_objc,
             },
             {
@@ -175,6 +204,7 @@ def __step_config(ctx, step_config):
                 "platform_ref": "clang",
                 "remote": True,
                 "remote_wrapper": reproxy_config["remote_wrapper"],
+                "timeout": "2m",
                 "input_root_absolute_path": need_input_root_absolute_path_for_objc,
             },
         ])

@@ -21,11 +21,13 @@
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/scoped_command_line.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_client_factory_ash.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_store_ash.h"
+#include "chrome/browser/ash/policy/enrollment/auto_enrollment_type_checker.h"
 #include "chrome/browser/ash/policy/enrollment/device_cloud_policy_initializer.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_config.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_handler.h"
@@ -61,6 +63,7 @@
 #include "components/policy/core/common/cloud/mock_signing_service.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/core/common/external_data_fetcher.h"
+#include "components/policy/core/common/policy_switches.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/schema_registry.h"
 #include "components/policy/policy_constants.h"
@@ -246,6 +249,13 @@ class DeviceCloudPolicyManagerAshTest
         "{\"access_token\":\"accessToken4Test\","
         "\"expires_in\":1234,"
         "\"refresh_token\":\"refreshToken4Test\"}";
+
+    // Set the verification key to be used for testing by the
+    // CloudPolicyValidator.
+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+    command_line->AppendSwitchASCII(
+        policy::switches::kPolicyVerificationKey,
+        policy::PolicyBuilder::GetEncodedPolicyVerificationKey());
 
     AllowUninterestingRemoteCommandFetches();
   }
@@ -516,6 +526,11 @@ TEST_F(DeviceCloudPolicyManagerAshTest, ConsumerDevice) {
 }
 
 TEST_F(DeviceCloudPolicyManagerAshTest, EnrolledDeviceNoStateKeysGenerated) {
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+      ash::switches::kEnterpriseEnableForcedReEnrollment,
+      AutoEnrollmentTypeChecker::kForcedReEnrollmentAlways);
+
   LockDevice();
   device_settings_service_->LoadImmediately();
   FlushDeviceSettings();

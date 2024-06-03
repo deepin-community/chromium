@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/guides
-  - Chromium OS > Developer Library > Guides
+  - ChromiumOS > Developer Library > Guides
 page_name: chroot-clangd-guide
 title: Using Clangd LSP Server in the Chroot
 ---
@@ -193,12 +193,12 @@ executable and it should just work.
 [clangd]: https://clangd.llvm.org
 [clangd-c-db]: https://clang.llvm.org/docs/JSONCompilationDatabase.html
 [compiledb]: https://github.com/nickdiego/compiledb
-[cros-dev-guide]: ./developer_guide.md#chromiumos-developer-guide
+[cros-dev-guide]: /chromium-os/developer-library/guides/development/developer-guide/#chromiumos-developer-guide
 [gn]: https://gn.googlesource.com/gn
 [go-clion]: http://go/clion-for-chromeos
 [lsp]: https://microsoft.github.io/language-server-protocol
 [lsp-clients]: https://langserver.org/#implementations-client
 [ninja]: https://ninja-build.org
 [ninja-tools]: https://ninja-build.org/manual.html#_extra_tools
-[permissive-sudo]: ./tips-and-tricks.md#how-to-make-sudo-a-little-more-permissive
+[permissive-sudo]: /chromium-os/developer-library/guides/recipes/tips-and-tricks/#how-to-make-sudo-a-little-more-permissive
 [sarcasm-c-db]: https://sarcasm.github.io/notes/dev/compilation-database.html#how-to-generate-a-json-compilation-database

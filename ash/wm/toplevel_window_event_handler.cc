@@ -11,6 +11,8 @@
 #include "ash/wm/multi_display/multi_display_metrics_controller.h"
 #include "ash/wm/resize_shadow.h"
 #include "ash/wm/resize_shadow_controller.h"
+#include "ash/wm/snap_group/snap_group.h"
+#include "ash/wm/snap_group/snap_group_controller.h"
 #include "ash/wm/window_resizer.h"
 #include "ash/wm/window_state_observer.h"
 #include "ash/wm/window_util.h"
@@ -735,6 +737,10 @@ bool ToplevelWindowEventHandler::AttemptToStartDrag(
     is_moving_floated_window_ = true;
   }
 
+  // Mark the currently dragged or resized window as excluded for occlusion
+  // purposes.
+  scoped_exclude_.emplace(window);
+
   return true;
 }
 
@@ -908,8 +914,11 @@ bool ToplevelWindowEventHandler::PrepareForDrag(
 }
 
 bool ToplevelWindowEventHandler::CompleteDrag(DragResult result) {
-  if (!window_resizer_)
+  scoped_exclude_.reset();
+
+  if (!window_resizer_) {
     return false;
+  }
 
   std::unique_ptr<ScopedWindowResizer> resizer(std::move(window_resizer_));
   switch (result) {
@@ -1001,6 +1010,15 @@ void ToplevelWindowEventHandler::HandleDrag(aura::Window* target,
 
   if (!window_resizer_)
     return;
+
+  // Hide the divider when dragging a window out from a snap group.
+  if (SnapGroupController* snap_group_controller = SnapGroupController::Get()) {
+    if (SnapGroup* snap_group =
+            snap_group_controller->GetSnapGroupForGivenWindow(target)) {
+      snap_group->OnLocatedEvent(event);
+    }
+  }
+
   gfx::PointF location_in_parent = event->location_f();
   aura::Window::ConvertPointToTarget(
       target, window_resizer_->resizer()->GetTarget()->parent(),
@@ -1024,8 +1042,7 @@ void ToplevelWindowEventHandler::HandlePinch(aura::Window* target,
       target, window_resizer_->resizer()->GetTarget()->parent(),
       &location_in_parent);
   window_resizer_->resizer()->Pinch(location_in_parent,
-                                    event->details().scale(),
-                                    event->details().pinch_angle());
+                                    event->details().scale());
   event->StopPropagation();
 }
 

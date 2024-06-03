@@ -68,8 +68,8 @@ const char* TextAlignToString(ETextAlign align) {
 const String SerializeComputedStyleForProperty(const ComputedStyle& style,
                                                CSSPropertyID id) {
   const CSSProperty& property = CSSProperty::Get(id);
-  const CSSValue* value =
-      property.CSSValueFromComputedStyle(style, nullptr, false);
+  const CSSValue* value = property.CSSValueFromComputedStyle(
+      style, nullptr, false, CSSValuePhase::kResolvedValue);
   return String::Format("%s : %s;\n", property.GetPropertyName(),
                         value->CssText().Utf8().c_str());
 }
@@ -310,7 +310,8 @@ void InternalPopupMenu::WriteDocument(SharedBuffer* data) {
       {kPseudoIdScrollbarCorner, "select::-webkit-scrollbar-corner"}};
 
   Scrollbar* temp_scrollbar = nullptr;
-  const LayoutBox* box = owner_element.InnerElement().GetLayoutBox();
+  const LayoutBox* box =
+      owner_element.InnerElementForAppearanceAuto().GetLayoutBox();
   if (box && box->GetScrollableArea()) {
     if (ScrollableArea* scrollable = box->GetScrollableArea()) {
       temp_scrollbar = MakeGarbageCollected<CustomScrollbar>(

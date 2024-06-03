@@ -35,6 +35,7 @@
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 #include "chromeos/ui/frame/caption_buttons/snap_controller.h"
 #include "chromeos/ui/frame/header_view.h"
+#include "chromeos/ui/wm/constants.h"
 #include "chromeos/ui/wm/window_util.h"
 #include "components/app_restore/window_properties.h"
 #include "components/exo/buffer.h"
@@ -136,12 +137,10 @@ class TestCanvas : public SkNoDrawCanvas {
 }  // namespace
 
 // Instantiate the values of frame submission types in the parameterized tests.
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    ClientControlledShellSurfaceTest,
-    testing::Values(test::FrameSubmissionType::kNoReactive,
-                    test::FrameSubmissionType::kReactive_NoAutoNeedsBeginFrame,
-                    test::FrameSubmissionType::kReactive_AutoNeedsBeginFrame));
+INSTANTIATE_TEST_SUITE_P(All,
+                         ClientControlledShellSurfaceTest,
+                         testing::Values(test::FrameSubmissionType::kNoReactive,
+                                         test::FrameSubmissionType::kReactive));
 
 TEST_P(ClientControlledShellSurfaceTest, SetPinned) {
   auto shell_surface = exo::test::ShellSurfaceBuilder({256, 256})
@@ -210,8 +209,7 @@ TEST_P(ClientControlledShellSurfaceTest, UpdateModalWindow) {
   std::unique_ptr<Display> display(new Display);
   std::unique_ptr<Surface> child = display->CreateSurface();
   gfx::Size buffer_size(128, 128);
-  std::unique_ptr<Buffer> child_buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto child_buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   child->Attach(child_buffer.get());
   std::unique_ptr<SubSurface> sub_surface(
       display->CreateSubSurface(child.get(), surface));
@@ -324,8 +322,7 @@ TEST_P(ClientControlledShellSurfaceTest, SurfaceShadow) {
 
   // 4) Shadow bounds is independent of the sub surface.
   gfx::Size new_buffer_size(256, 256);
-  std::unique_ptr<Buffer> new_child_buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(new_buffer_size)));
+  auto new_child_buffer = test::ExoTestHelper::CreateBuffer(new_buffer_size);
   child->Attach(new_child_buffer.get());
   child->Commit();
   surface->Commit();
@@ -1038,14 +1035,16 @@ TEST_P(ClientControlledShellSurfaceTest, SnapWindowInSplitViewModeTest) {
   split_view_controller->SnapWindow(window1, ash::SnapPosition::kPrimary);
   state1->set_bounds_locally(true);
   window1->SetBounds(split_view_controller->GetSnappedWindowBoundsInScreen(
-      ash::SnapPosition::kPrimary, window1, chromeos::kDefaultSnapRatio));
+      ash::SnapPosition::kPrimary, window1, chromeos::kDefaultSnapRatio,
+      /*account_for_divider_width=*/true));
   state1->set_bounds_locally(false);
   EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kPrimarySnapped);
-  EXPECT_EQ(shell_surface1->GetWidget()->GetWindowBoundsInScreen(),
-            split_view_controller->GetSnappedWindowBoundsInScreen(
-                ash::SnapPosition::kPrimary,
-                shell_surface1->GetWidget()->GetNativeWindow(),
-                chromeos::kDefaultSnapRatio));
+  EXPECT_EQ(
+      shell_surface1->GetWidget()->GetWindowBoundsInScreen(),
+      split_view_controller->GetSnappedWindowBoundsInScreen(
+          ash::SnapPosition::kPrimary,
+          shell_surface1->GetWidget()->GetNativeWindow(),
+          chromeos::kDefaultSnapRatio, /*account_for_divider_width=*/true));
   EXPECT_TRUE(HasBackdrop());
   split_view_controller->EndSplitView();
 
@@ -1053,14 +1052,16 @@ TEST_P(ClientControlledShellSurfaceTest, SnapWindowInSplitViewModeTest) {
   split_view_controller->SnapWindow(window1, ash::SnapPosition::kSecondary);
   state1->set_bounds_locally(true);
   window1->SetBounds(split_view_controller->GetSnappedWindowBoundsInScreen(
-      ash::SnapPosition::kSecondary, window1, chromeos::kDefaultSnapRatio));
+      ash::SnapPosition::kSecondary, window1, chromeos::kDefaultSnapRatio,
+      /*account_for_divider_width=*/true));
   state1->set_bounds_locally(false);
   EXPECT_EQ(window_state1->GetStateType(), WindowStateType::kSecondarySnapped);
-  EXPECT_EQ(shell_surface1->GetWidget()->GetWindowBoundsInScreen(),
-            split_view_controller->GetSnappedWindowBoundsInScreen(
-                ash::SnapPosition::kSecondary,
-                shell_surface1->GetWidget()->GetNativeWindow(),
-                chromeos::kDefaultSnapRatio));
+  EXPECT_EQ(
+      shell_surface1->GetWidget()->GetWindowBoundsInScreen(),
+      split_view_controller->GetSnappedWindowBoundsInScreen(
+          ash::SnapPosition::kSecondary,
+          shell_surface1->GetWidget()->GetNativeWindow(),
+          chromeos::kDefaultSnapRatio, /*account_for_divider_width=*/true));
   EXPECT_TRUE(HasBackdrop());
 }
 
@@ -1309,7 +1310,7 @@ TEST_F(ClientControlledShellSurfaceDisplayTest, MoveToAnotherDisplayByDrag) {
   // primary display, it warps to the secondary.
   display::Display secondary_display =
       display::Screen::GetScreen()->GetDisplayNearestWindow(root_windows[1]);
-  // TODO(crbug.com/990589): Unit tests should be able to simulate mouse input
+  // TODO(crbug.com/40638870): Unit tests should be able to simulate mouse input
   // without having to call |CursorManager::SetDisplay|.
   ash::Shell::Get()->cursor_manager()->SetDisplay(secondary_display);
   resizer->Drag(CalculateDragPoint(*resizer, 800, 0), 0);
@@ -1760,8 +1761,7 @@ TEST_P(ClientControlledShellSurfaceTest,
       display::Screen::GetScreen()->GetPrimaryDisplay().id();
 
   const gfx::Size buffer_size(64, 64);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
 
   constexpr double kOriginalScale = 4.f;
   const gfx::Rect bounds_dp(64, 64, 128, 128);
@@ -2375,8 +2375,7 @@ TEST_F(ClientControlledShellSurfaceScaleTest,
   EXPECT_EQ(0, delegate->bounds_change_count());
 
   const gfx::Size new_buffer_size(10, 10);
-  std::unique_ptr<Buffer> new_buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(new_buffer_size)));
+  auto new_buffer = test::ExoTestHelper::CreateBuffer(new_buffer_size);
   surface->Attach(new_buffer.get());
   shell_surface->SetScaleFactor(1.f);
   surface->Commit();
@@ -2429,8 +2428,12 @@ TEST_P(ClientControlledShellSurfaceTest, SnappedClientBounds) {
 
   // Clamshell mode -> tablet mode. The bounds start from top-left corner.
   EnableTabletMode(true);
-  EXPECT_EQ(gfx::Rect(0, 0, 396, 564), delegate->requested_bounds().back());
-  shell_surface->SetGeometry(gfx::Rect(0, 0, 396, 568));
+  EXPECT_EQ(
+      gfx::Rect(0, 0, 400 - chromeos::wm::kSplitviewDividerShortSideLength / 2,
+                564),
+      delegate->requested_bounds().back());
+  shell_surface->SetGeometry(gfx::Rect(
+      0, 0, 400 - chromeos::wm::kSplitviewDividerShortSideLength / 2, 568));
   surface->SetFrame(SurfaceFrameType::AUTOHIDE);
   surface->Commit();
 
@@ -2488,6 +2491,21 @@ TEST_P(ClientControlledShellSurfaceTest, OverlayShadowBounds) {
     gfx::Size shadow_size = shell_surface->GetShadowBounds().size();
     EXPECT_EQ(shadow_size, overlay_size);
   }
+}
+
+// WideFrameView should be safely deleted even when the window is
+// deleted directly.
+TEST_P(ClientControlledShellSurfaceTest, DeleteWindowWithWideframe) {
+  auto shell_surface =
+      exo::test::ShellSurfaceBuilder({64, 64})
+          .SetWindowState(chromeos::WindowStateType::kMaximized)
+          .SetGeometry(gfx::Rect(100, 0, 64, 64))
+          .SetInputRegion(gfx::Rect(0, 0, 64, 64))
+          .SetFrame(SurfaceFrameType::NORMAL)
+          .BuildClientControlledShellSurface();
+  auto* wide_frame = shell_surface->wide_frame_for_test();
+  ASSERT_TRUE(wide_frame);
+  delete shell_surface->GetWidget()->GetNativeWindow();
 }
 
 // WideFrameView follows its respective surface when it is eventually parented.
@@ -2572,9 +2590,7 @@ TEST_P(ClientControlledShellSurfaceTest,
       display::Screen::GetScreen()->GetPrimaryDisplay().id();
 
   const gfx::Size buffer_size(64, 64);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
-
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   const gfx::Rect bounds_dp(64, 64, 128, 128);
   const gfx::Rect bounds_px_for_2x = gfx::ScaleToRoundedRect(bounds_dp, 2);
   {
@@ -2657,6 +2673,34 @@ TEST_P(ClientControlledShellSurfaceTest, FrameOverlap) {
   shell_surface->SetMinimized();
   surface->Commit();
   EXPECT_TRUE(shell_surface->GetWidget()->IsMinimized());
+}
+
+TEST_P(ClientControlledShellSurfaceTest, ShowMinimizedNoActivation) {
+  class TestObserver : public SeatObserver {
+   public:
+    // SeatObserver:
+    void OnSurfaceFocused(Surface* gained_focus,
+                          Surface* lost_focus,
+                          bool has_focused_client) override {
+      focused_called_ = true;
+    }
+
+    bool focused_called() const { return focused_called_; }
+
+   private:
+    bool focused_called_ = false;
+  } observer;
+
+  Seat seat;
+  seat.AddObserver(&observer, 1);
+
+  auto shell_surface =
+      test::ShellSurfaceBuilder({300, 200})
+          .SetWindowState(chromeos::WindowStateType::kMinimized)
+          .BuildClientControlledShellSurface();
+  ASSERT_TRUE(shell_surface->GetWidget()->IsMinimized());
+  EXPECT_FALSE(observer.focused_called());
+  seat.RemoveObserver(&observer);
 }
 
 }  // namespace exo

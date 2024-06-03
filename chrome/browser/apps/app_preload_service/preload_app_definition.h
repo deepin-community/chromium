@@ -27,11 +27,16 @@ class PreloadAppDefinition {
   ~PreloadAppDefinition();
 
   std::string GetName() const;
-  AppType GetPlatform() const;
+  PackageType GetPlatform() const;
   bool IsDefaultApp() const;
   bool IsOemApp() const;
   bool IsTestApp() const;
   AppInstallSurface GetInstallSurface() const;
+
+  // Returns the android package name. This is derived from the package
+  // identifier of the app. Must only be called if `GetPlatform()` returns
+  // `AppType::kArc`.
+  std::string GetAndroidPackageName() const;
 
   // Returns the Web App manifest URL for the app, which hosts the manifest of
   // the app in a JSON format. The URL could point to a local file, or a web

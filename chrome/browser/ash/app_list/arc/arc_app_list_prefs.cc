@@ -142,6 +142,8 @@ constexpr base::TimeDelta kDetectDefaultAppAvailabilityTimeout =
 constexpr const char kAppCountUmaPrefix[] = "Arc.AppCount.";
 // Do not increase. See base/metrics/histogram_functions.h.
 constexpr int kAppCountUmaExclusiveMax = 101;
+// A smaller bucket size for apps with a lower count.
+constexpr int kAppCountUmaExclusiveMaxLower = 20;
 
 // Accessor for deferred set notifications enabled requests in prefs.
 class NotificationsEnabledDeferred {
@@ -578,12 +580,10 @@ ArcAppListPrefs::ArcAppListPrefs(
   if (resize_lock_manager)
     resize_lock_manager->SetPrefDelegate(this);
 
-  if (ash::features::IsPasspointARCSupportEnabled()) {
-    arc::ArcNetHostImpl* net_host =
-        arc::ArcNetHostImpl::GetForBrowserContext(profile_);
-    if (net_host) {
-      net_host->SetArcAppMetadataProvider(this);
-    }
+  arc::ArcNetHostImpl* net_host =
+      arc::ArcNetHostImpl::GetForBrowserContext(profile_);
+  if (net_host) {
+    net_host->SetArcAppMetadataProvider(this);
   }
 
   if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
@@ -1323,6 +1323,8 @@ void ArcAppListPrefs::RecordAppIdsUma() {
   // "Installed" apps are the ones that the user has manually installed. This
   // includes apps installed by Chrome's app sync feature. 0 for opt-out users.
   size_t num_installed_apps = 0;
+  // Number of apps that is a vpn_provider.
+  size_t num_vpn_apps = 0;
 
   const std::vector<std::string> app_ids = GetAppIds();
   for (const auto& app_id : app_ids) {
@@ -1345,6 +1347,10 @@ void ArcAppListPrefs::RecordAppIdsUma() {
     } else {
       ++num_installed_apps;
     }
+    auto package = GetPackage(app_info->package_name);
+    if (package && package->vpn_provider) {
+      ++num_vpn_apps;
+    }
   }
 
   const bool has_installed_apps = num_installed_apps;
@@ -1361,6 +1367,8 @@ void ArcAppListPrefs::RecordAppIdsUma() {
   base::UmaHistogramExactLinear(
       base::StrCat({kAppCountUmaPrefix, "InstalledApp"}), num_installed_apps,
       kAppCountUmaExclusiveMax);
+  base::UmaHistogramExactLinear(base::StrCat({kAppCountUmaPrefix, "VpnApp"}),
+                                num_vpn_apps, kAppCountUmaExclusiveMaxLower);
   base::UmaHistogramBoolean(
       base::StrCat({kAppCountUmaPrefix, "HasInstalledOrUnknownApp"}),
       has_installed_apps);
@@ -2395,18 +2403,6 @@ void ArcAppListPrefs::OnNotificationsEnabledChanged(
   }
   for (auto& observer : observer_list_)
     observer.OnNotificationsEnabledChanged(package_name, enabled);
-}
-
-bool ArcAppListPrefs::IsUnknownPackage(const std::string& package_name) const {
-  if (GetPackage(package_name))
-    return false;
-  if (sync_service_ && sync_service_->IsPackageSyncing(package_name))
-    return false;
-  if (default_apps_->HasPackage(package_name))
-    return false;
-  if (apps_installations_.count(package_name))
-    return false;
-  return true;
 }
 
 bool ArcAppListPrefs::IsDefaultPackage(const std::string& package_name) const {

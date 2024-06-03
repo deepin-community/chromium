@@ -140,16 +140,6 @@ void RunClosureWithTrace(CrossThreadOnceClosure closure,
   std::move(closure).Run();
 }
 
-void RunSynchronousCrossThreadOnceClosure(CrossThreadOnceClosure closure,
-                                          const char* trace_event_name,
-                                          base::WaitableEvent* event) {
-  {
-    TRACE_EVENT0("webrtc", trace_event_name);
-    std::move(closure).Run();
-  }
-  event->Signal();
-}
-
 void RunSynchronousOnceClosure(base::OnceClosure closure,
                                const char* trace_event_name,
                                base::WaitableEvent* event) {
@@ -608,6 +598,8 @@ class RTCPeerConnectionHandler::Observer
             String::FromUTF8(candidate->sdp_mid()),
             candidate->sdp_mline_index(), candidate->candidate().component(),
             candidate->candidate().address().family(),
+            String::FromUTF8(candidate->candidate().username()),
+            String::FromUTF8(candidate->server_url()),
             std::move(pending_local_description),
             std::move(current_local_description),
             std::move(pending_remote_description),
@@ -641,6 +633,8 @@ class RTCPeerConnectionHandler::Observer
                           int sdp_mline_index,
                           int component,
                           int address_family,
+                          const String& username_fragment,
+                          const String& url,
                           std::unique_ptr<webrtc::SessionDescriptionInterface>
                               pending_local_description,
                           std::unique_ptr<webrtc::SessionDescriptionInterface>
@@ -661,7 +655,7 @@ class RTCPeerConnectionHandler::Observer
     // garbage collection. Ensure that handler_ is still valid.
     if (handler_) {
       handler_->OnIceCandidate(sdp, sdp_mid, sdp_mline_index, component,
-                               address_family);
+                               address_family, username_fragment, url);
     }
   }
 
@@ -1757,27 +1751,6 @@ RTCPeerConnectionHandler::NativePeerConnection() {
 }
 
 void RTCPeerConnectionHandler::RunSynchronousOnceClosureOnSignalingThread(
-    CrossThreadOnceClosure closure,
-    const char* trace_event_name) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  scoped_refptr<base::SingleThreadTaskRunner> thread(signaling_thread());
-  if (!thread.get() || thread->BelongsToCurrentThread()) {
-    TRACE_EVENT0("webrtc", trace_event_name);
-    std::move(closure).Run();
-  } else {
-    base::WaitableEvent event(base::WaitableEvent::ResetPolicy::AUTOMATIC,
-                              base::WaitableEvent::InitialState::NOT_SIGNALED);
-    PostCrossThreadTask(
-        *thread.get(), FROM_HERE,
-        CrossThreadBindOnce(&RunSynchronousCrossThreadOnceClosure,
-                            std::move(closure),
-                            CrossThreadUnretained(trace_event_name),
-                            CrossThreadUnretained(&event)));
-    event.Wait();
-  }
-}
-
-void RTCPeerConnectionHandler::RunSynchronousOnceClosureOnSignalingThread(
     base::OnceClosure closure,
     const char* trace_event_name) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
@@ -2001,7 +1974,9 @@ void RTCPeerConnectionHandler::OnIceCandidate(const String& sdp,
                                               const String& sdp_mid,
                                               int sdp_mline_index,
                                               int component,
-                                              int address_family) {
+                                              int address_family,
+                                              const String& usernameFragment,
+                                              const String& url) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   // In order to ensure that the RTCPeerConnection is not garbage collected
   // from under the function, we keep a pointer to it on the stack.
@@ -2010,9 +1985,13 @@ void RTCPeerConnectionHandler::OnIceCandidate(const String& sdp,
     return;
   }
   TRACE_EVENT0("webrtc", "RTCPeerConnectionHandler::OnIceCandidateImpl");
+  std::optional<String> url_or_null;
+  if (!url.empty()) {
+    url_or_null = url;
+  }
   // This line can cause garbage collection.
   auto* platform_candidate = MakeGarbageCollected<RTCIceCandidatePlatform>(
-      sdp, sdp_mid, sdp_mline_index);
+      sdp, sdp_mid, sdp_mline_index, usernameFragment, url_or_null);
   if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackAddIceCandidate(
         this, platform_candidate, PeerConnectionTracker::kSourceLocal, true);
@@ -2172,11 +2151,6 @@ void RTCPeerConnectionHandler::ReportICEState(
   ice_state_seen_[new_state] = true;
   UMA_HISTOGRAM_ENUMERATION("WebRTC.PeerConnection.ConnectionState", new_state,
                             webrtc::PeerConnectionInterface::kIceConnectionMax);
-}
-
-void RTCPeerConnectionHandler::ResetUMAStats() {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  memset(ice_state_seen_, 0, sizeof(ice_state_seen_));
 }
 
 }  // namespace blink

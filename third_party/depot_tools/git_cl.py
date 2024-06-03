@@ -626,12 +626,20 @@ def _print_tryjobs(options, builds):
     print('Total: %d tryjobs' % total)
 
 
-def _ComputeFormatDiffLineRanges(files, upstream_commit):
+def _ComputeFormatDiffLineRanges(files, upstream_commit, expand=0):
     """Gets the changed line ranges for each file since upstream_commit.
 
     Parses a git diff on provided files and returns a dict that maps a file name
     to an ordered list of range tuples in the form (start_line, count).
     Ranges are in the same format as a git diff.
+
+    Args:
+        files: List of paths to diff.
+        upstream_commit: Commit to diff against to find changed lines.
+        expand: Expand diff ranges by this many lines before & after.
+
+    Returns:
+        A dict of path->[(start_line, end_line), ...]
     """
     # If files is empty then diff_output will be a full diff.
     if len(files) == 0:
@@ -662,6 +670,7 @@ def _ComputeFormatDiffLineRanges(files, upstream_commit):
             # Will match the second filename in diff --git a/a.py b/b.py.
             curr_file = match[0]
             line_diffs[curr_file] = []
+            prev_end = 1
         else:
             # Matches +14,3
             if ',' in match[1]:
@@ -673,10 +682,10 @@ def _ComputeFormatDiffLineRanges(files, upstream_commit):
 
             diff_start = int(diff_start)
             diff_count = int(diff_count)
-            diff_end = diff_start + diff_count - 1
-
-            # Only format added ranges (not removed ones).
-            if diff_end >= diff_start:
+            diff_end = diff_start + diff_count + expand
+            diff_start = max(prev_end + 1, diff_start - expand)
+            if diff_start <= diff_end:
+                prev_end = diff_end
                 line_diffs[curr_file].append((diff_start, diff_end))
 
     return line_diffs
@@ -1311,7 +1320,7 @@ class Changelist(object):
 
         self.branchref = branchref
         if self.branchref:
-            assert branchref.startswith('refs/heads/')
+            assert branchref.startswith(('refs/heads/', 'refs/branch-heads/'))
             self.branch = scm.GIT.ShortBranchName(self.branchref)
         else:
             self.branch = None
@@ -2286,9 +2295,15 @@ class Changelist(object):
         if remote_url is None:
             logging.warning('invalid remote')
             return
-        if urllib.parse.urlparse(remote_url).scheme not in ['https', 'sso']:
+
+        parsed_url = urllib.parse.urlparse(remote_url)
+        if parsed_url.scheme == 'sso':
+            # Skip checking authentication for projects with sso:// scheme.
+            return
+
+        if parsed_url.scheme != 'https':
             logging.warning(
-                'Ignoring branch %(branch)s with non-https/sso remote '
+                'Ignoring branch %(branch)s with non-https remote '
                 '%(remote)s', {
                     'branch': self.branch,
                     'remote': self.GetRemoteUrl()
@@ -4659,6 +4674,9 @@ def CMDpresubmit(parser, args):
                       help='Run presubmit checks in the ResultSink environment '
                       'and send results to the ResultDB database.')
     parser.add_option('--realm', help='LUCI realm if reporting to ResultDB')
+    parser.add_option('-j',
+                      '--json',
+                      help='File to write JSON results to, or "-" for stdout')
     options, args = parser.parse_args(args)
 
     if not options.force and git_common.is_dirty_git_tree('presubmit'):
@@ -4691,16 +4709,18 @@ def CMDpresubmit(parser, args):
             return 1
         base_branch = 'HEAD'
 
-    cl.RunHook(committing=not options.upload,
-               may_prompt=False,
-               verbose=options.verbose,
-               parallel=options.parallel,
-               upstream=base_branch,
-               description=description,
-               all_files=options.all,
-               files=options.files,
-               resultdb=options.resultdb,
-               realm=options.realm)
+    result = cl.RunHook(committing=not options.upload,
+                        may_prompt=False,
+                        verbose=options.verbose,
+                        parallel=options.parallel,
+                        upstream=base_branch,
+                        description=description,
+                        all_files=options.all,
+                        files=options.files,
+                        resultdb=options.resultdb,
+                        realm=options.realm)
+    if options.json:
+        write_json(options.json, result)
     return 0
 
 
@@ -5200,9 +5220,9 @@ def UploadAllSquashed(options: optparse.Values,
     return 0
 
 
-def _UploadAllPrecheck(options, orig_args):
-    # type: (optparse.Values, Sequence[str]) -> Tuple[Sequence[Changelist],
-    # bool]
+def _UploadAllPrecheck(
+        options: optparse.Values,
+        orig_args: Sequence[str]) -> Tuple[Sequence[Changelist], bool]:
     """Checks the state of the tree and gives the user uploading options
 
     Returns: A tuple of the ordered list of changes that have new commits
@@ -6021,7 +6041,7 @@ def BuildGitDiffCmd(diff_type, upstream_commit, args, allow_prefix=False):
 
     if args:
         for arg in args:
-            if os.path.isdir(arg) or os.path.isfile(arg):
+            if arg == '-' or os.path.isdir(arg) or os.path.isfile(arg):
                 diff_cmd.append(arg)
             else:
                 DieWithError('Argument "%s" is not a file or a directory' % arg)
@@ -6117,29 +6137,58 @@ def _RunGoogleJavaFormat(opts, paths, top_dir, upstream_commit):
         return 0
 
     base_cmd = [google_java_format, '--aosp']
-    if opts.dry_run or opts.diff:
-        base_cmd += ['--dry-run']
-    else:
-        base_cmd += ['--replace']
+    if not opts.diff:
+        if opts.dry_run:
+            base_cmd += ['--dry-run']
+        else:
+            base_cmd += ['--replace']
 
     changed_lines_only = not (opts.full or settings.GetFormatFullByDefault())
     if changed_lines_only:
-        line_diffs = _ComputeFormatDiffLineRanges(paths, upstream_commit)
+        # Format two lines around each changed line so that the correct amount
+        # of blank lines will be added between symbols.
+        line_diffs = _ComputeFormatDiffLineRanges(paths,
+                                                  upstream_commit,
+                                                  expand=2)
+
+    def RunFormat(cmd, path, range_args, **kwds):
+        stdout = RunCommand(cmd + range_args + [path], **kwds)
+
+        if changed_lines_only:
+            # google-java-format will not remove unused imports because they
+            # do not fall within the changed lines. Run the command again to
+            # remove them.
+            if opts.diff:
+                stdout = RunCommand(cmd + ['--fix-imports-only', '-'],
+                                    stdin=stdout.encode(),
+                                    **kwds)
+            else:
+                stdout += RunCommand(cmd + ['--fix-imports-only', path], **kwds)
+
+        # If --diff is passed, google-java-format will output formatted content.
+        # Diff it with the existing file in the checkout and output the result.
+        if opts.diff:
+            diff_cmd = BuildGitDiffCmd(['-U3'], '--no-index', [path, '-'])
+            stdout = RunGit(diff_cmd, stdin=stdout.encode(), **kwds)
+        return stdout
 
     results = []
     kwds = {'error_ok': True, 'cwd': top_dir}
     with multiprocessing.pool.ThreadPool() as pool:
         for path in paths:
             cmd = base_cmd.copy()
+            range_args = []
             if changed_lines_only:
                 ranges = line_diffs.get(path)
                 if not ranges:
                     # E.g. There were only deleted lines.
                     continue
-                cmd.extend('--lines={}:{}'.format(a, b) for a, b in ranges)
+                range_args = ['--lines={}:{}'.format(a, b) for a, b in ranges]
 
             results.append(
-                pool.apply_async(RunCommand, args=[cmd + [path]], kwds=kwds))
+                pool.apply_async(RunFormat,
+                                 args=[cmd, path, range_args],
+                                 kwds=kwds))
 
         return_value = 0
         for result in results:
@@ -6302,7 +6351,7 @@ def _RunMojomFormat(opts, paths, top_dir, upstream_commit):
         DieWithError('Could not find mojom formater at '
                      f'"{mojom_format_path}"')
 
-    cmd = [mojom_format_path]
+    cmd = ['vpython3', mojom_format_path]
     if opts.dry_run:
         cmd.append('--dry-run')
     cmd.extend(paths)

@@ -44,6 +44,8 @@
 #include "chrome/browser/downgrade/user_data_downgrade.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
+#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/heavy_ad_intervention/heavy_ad_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/web_history_service_factory.h"
@@ -74,11 +76,12 @@
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_service.h"
 #include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/browser/tpcd/metadata/manager_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
-#include "chrome/browser/web_data_service_factory.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/url_constants.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
@@ -123,6 +126,7 @@
 #include "components/search_engines/template_url_service.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
+#include "components/tpcd/metadata/manager.h"
 #include "components/web_cache/browser/web_cache_manager.h"
 #include "components/webrtc_logging/browser/log_cleanup.h"
 #include "components/webrtc_logging/browser/text_log_list.h"
@@ -647,7 +651,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
                                                    website_settings_filter,
                                                    host_content_settings_map_);
 
-    if (!filter_builder->IsCrossSiteClearSiteDataForCookies()) {
+    if (!filter_builder->PartitionedCookiesOnly()) {
       browsing_data::RemoveEmbedderCookieData(
           delete_begin, delete_end, filter_builder, host_content_settings_map_,
           safe_browsing_context,
@@ -662,8 +666,14 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         BrowsingDataFilterBuilder::Mode::kPreserve) {
       auto* privacy_sandbox_settings =
           PrivacySandboxSettingsFactory::GetForProfile(profile_);
-      if (privacy_sandbox_settings)
+      if (privacy_sandbox_settings) {
         privacy_sandbox_settings->OnCookiesCleared();
+      }
+
+      if (tpcd::metadata::Manager* manager =
+              tpcd::metadata::ManagerFactory::GetForProfile(profile_)) {
+        manager->ResetCohorts();
+      }
 
 #if BUILDFLAG(IS_ANDROID)
       Java_PackageHash_onCookiesDeleted(
@@ -674,7 +684,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
 
 #if !BUILDFLAG(IS_ANDROID)
     if (nullable_filter.is_null() ||
-        (!filter_builder->IsCrossSiteClearSiteDataForCookies() &&
+        (!filter_builder->PartitionedCookiesOnly() &&
          nullable_filter.Run(GaiaUrls::GetInstance()->google_url()))) {
       // Set a flag to clear account storage settings later instead of clearing
       // it now as we can not reset this setting before passwords are deleted.
@@ -715,6 +725,16 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
 
     browsing_data::RemoveSiteSettingsData(delete_begin, delete_end,
                                           host_content_settings_map_);
+
+#if !BUILDFLAG(IS_ANDROID)
+    // The active permission does not have timestamps, so the all active grants
+    // will be revoked regardless of the time range because all the are expected
+    // to be recent.
+    if (auto* permission_context =
+            FileSystemAccessPermissionContextFactory::GetForProfile(profile_)) {
+      permission_context->RevokeAllActiveGrants();
+    }
+#endif
 
     auto* handler_registry =
         ProtocolHandlerRegistryFactory::GetForBrowserContext(profile_);
@@ -848,6 +868,10 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         delete_end_, website_settings_filter);
 
     host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
+        ContentSettingsType::REVOKED_ABUSIVE_NOTIFICATION_PERMISSIONS,
+        delete_begin_, delete_end_, website_settings_filter);
+
+    host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
         ContentSettingsType::PRIVATE_NETWORK_GUARD, delete_begin_, delete_end_,
         website_settings_filter);
     host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
@@ -867,7 +891,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
   // DATA_TYPE_COOKIES.
   DIPSEventRemovalType dips_mask = DIPSEventRemovalType::kNone;
   if ((remove_mask & content::BrowsingDataRemover::DATA_TYPE_COOKIES) &&
-      !filter_builder->IsCrossSiteClearSiteDataForCookies()) {
+      !filter_builder->PartitionedCookiesOnly()) {
     dips_mask |= DIPSEventRemovalType::kStorage;
   }
   if (remove_mask & constants::DATA_TYPE_HISTORY) {
@@ -972,7 +996,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
   CHECK(deferred_disable_passwords_auto_signin_cb_.is_null(),
         base::NotFatalUntil::M125);
   if ((remove_mask & content::BrowsingDataRemover::DATA_TYPE_COOKIES) &&
-      !filter_builder->IsCrossSiteClearSiteDataForCookies()) {
+      !filter_builder->PartitionedCookiesOnly()) {
     // Unretained() is safe, this is only executed in OnTasksComplete() if the
     // object is still alive. Also, see the field docs for motivation.
     deferred_disable_passwords_auto_signin_cb_ = base::BindOnce(
@@ -1182,7 +1206,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
   // results only when their respective URLs are in the filter.
   if ((remove_mask & (content::BrowsingDataRemover::DATA_TYPE_CACHE |
                       content::BrowsingDataRemover::DATA_TYPE_COOKIES)) &&
-      !filter_builder->IsCrossSiteClearSiteDataForCookies()) {
+      !filter_builder->PartitionedCookiesOnly()) {
     // If there is no template service or DSE, clear the caches.
     bool should_clear_zero_suggest_and_session_token = true;
     bool should_clear_search_prefetch = true;
@@ -1455,8 +1479,6 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "Synchronous";
     case TracingDataType::kHistory:
       return "History";
-    case TracingDataType::kHostNameResolution:
-      return "HostNameResolution";
     case TracingDataType::kNaclCache:
       return "NaclCache";
     case TracingDataType::kPnaclCache:
@@ -1465,8 +1487,6 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "AutofillData";
     case TracingDataType::kAutofillOrigins:
       return "AutofillOrigins";
-    case TracingDataType::kPluginData:
-      return "PluginData";
     case TracingDataType::kDomainReliability:
       return "DomainReliability";
     case TracingDataType::kWebrtcLogs:
@@ -1485,20 +1505,12 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "DisableAutoSigninForAccountPasswords";
     case TracingDataType::kPasswordsStatistics:
       return "PasswordsStatistics";
-    case TracingDataType::kKeywordsModel:
-      return "KeywordsModel";
     case TracingDataType::kReportingCache:
       return "ReportingCache";
     case TracingDataType::kNetworkErrorLogging:
       return "NetworkErrorLogging";
-    case TracingDataType::kFlashDeauthorization:
-      return "FlashDeauthorization";
     case TracingDataType::kOfflinePages:
       return "OfflinePages";
-    case TracingDataType::kExploreSites:
-      return "ExploreSites";
-    case TracingDataType::kLegacyStrikes:
-      return "LegacyStrikes";
     case TracingDataType::kWebrtcEventLogs:
       return "WebrtcEventLogs";
     case TracingDataType::kCdmLicenses:
@@ -1507,20 +1519,12 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "HostCache";
     case TracingDataType::kTpmAttestationKeys:
       return "TpmAttestationKeys";
-    case TracingDataType::kStrikes:
-      return "Strikes";
-    case TracingDataType::kCompromisedCredentials:
-      return "CompromisedCredentials";
     case TracingDataType::kUserDataSnapshot:
       return "UserDataSnapshot";
-    case TracingDataType::kMediaFeeds:
-      return "MediaFeeds";
     case TracingDataType::kAccountPasswords:
       return "AccountPasswords";
     case TracingDataType::kAccountPasswordsSynced:
       return "AccountPasswordsSynced";
-    case TracingDataType::kAccountCompromisedCredentials:
-      return "AccountCompromisedCredentials";
     case TracingDataType::kFaviconCacheExpiration:
       return "FaviconCacheExpiration";
     case TracingDataType::kSecurePaymentConfirmationCredentials:

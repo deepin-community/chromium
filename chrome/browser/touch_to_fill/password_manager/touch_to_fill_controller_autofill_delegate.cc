@@ -7,6 +7,7 @@
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/ranges/algorithm.h"
 #include "base/types/pass_key.h"
@@ -19,7 +20,6 @@
 #include "components/password_manager/core/browser/passkey_credential.h"
 #include "components/password_manager/core/browser/password_credential_filler.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
-#include "components/password_manager/core/browser/password_manager_util.h"
 #include "content/public/browser/web_contents.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
@@ -121,8 +121,7 @@ void TouchToFillControllerAutofillDelegate::OnCredentialSelected(
   ukm::builders::TouchToFill_Shown(source_id_)
       .SetUserAction(static_cast<int64_t>(UserAction::kSelectedCredential))
       .Record(ukm::UkmRecorder::Get());
-  if (!password_manager_util::CanUseBiometricAuth(authenticator_.get(),
-                                                  password_client_)) {
+  if (!password_client_->CanUseBiometricAuthForFilling(authenticator_.get())) {
     FillCredential(credential);
     return;
   }
@@ -143,7 +142,7 @@ void TouchToFillControllerAutofillDelegate::OnPasskeyCredentialSelected(
   }
 
   webauthn_delegate_->SelectPasskey(
-      base::Base64Encode(credential.credential_id()));
+      base::Base64Encode(credential.credential_id()), base::DoNothing());
 
   CleanUpFillerAndReportOutcome(TouchToFillOutcome::kPasskeyCredentialSelected,
                                 /*show_virtual_keyboard=*/false);

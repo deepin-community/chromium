@@ -135,7 +135,7 @@ class WebAppShortcutCreatorTest : public testing::Test {
     override_registration_ =
         OsIntegrationTestOverrideImpl::OverrideForTesting();
     destination_dir_ =
-        override_registration_->test_override->chrome_apps_folder();
+        override_registration_->test_override().chrome_apps_folder();
 
     EXPECT_TRUE(temp_user_data_dir_.CreateUniqueTempDir());
     user_data_dir_ = temp_user_data_dir_.GetPath();
@@ -170,7 +170,7 @@ class WebAppShortcutCreatorTest : public testing::Test {
     // override DCHECK fails if the directories are not empty. To bypass this in
     // this unittest, we manually delete it.
     // TODO: If these unittests leave OS hook artifacts on bots, undo that here.
-    override_registration_->test_override->DeleteChromeAppsDir();
+    override_registration_->test_override().DeleteChromeAppsDir();
     override_registration_.reset();
     testing::Test::TearDown();
   }
@@ -630,9 +630,10 @@ TEST_F(WebAppShortcutCreatorTest, UpdateShortcutsWithTitleChange) {
                                           .Append(locale_dir_name)
                                           .Append("InfoPlist.strings");
   EXPECT_TRUE(base::PathExists(resource_file_path));
-  NSDictionary* resources = [NSDictionary
-      dictionaryWithContentsOfFile:base::apple::FilePathToNSString(
-                                       resource_file_path)];
+  NSDictionary* resources =
+      [NSDictionary dictionaryWithContentsOfURL:base::apple::FilePathToNSURL(
+                                                    resource_file_path)
+                                          error:nil];
   EXPECT_NSEQ(@"Shortcut Title", resources[app_mode::kCFBundleDisplayNameKey]);
 
   // UpdateShortcuts does this as well, but clear the app bundle contents to
@@ -657,7 +658,8 @@ TEST_F(WebAppShortcutCreatorTest, UpdateShortcutsWithTitleChange) {
                    .Append("Info.plist");
   EXPECT_TRUE(base::PathExists(plist_path));
   plist = [NSDictionary
-      dictionaryWithContentsOfFile:base::apple::FilePathToNSString(plist_path)];
+      dictionaryWithContentsOfURL:base::apple::FilePathToNSURL(plist_path)
+                            error:nil];
   EXPECT_NSEQ(@"Shortcut Title",
               plist[base::apple::CFToNSPtrCast(kCFBundleNameKey)]);
 
@@ -667,9 +669,10 @@ TEST_F(WebAppShortcutCreatorTest, UpdateShortcutsWithTitleChange) {
                            .Append(locale_dir_name)
                            .Append("InfoPlist.strings");
   EXPECT_TRUE(base::PathExists(resource_file_path));
-  resources = [NSDictionary
-      dictionaryWithContentsOfFile:base::apple::FilePathToNSString(
-                                       resource_file_path)];
+  resources =
+      [NSDictionary dictionaryWithContentsOfURL:base::apple::FilePathToNSURL(
+                                                    resource_file_path)
+                                          error:nil];
   EXPECT_NSEQ(@"Shortcut Title", resources[app_mode::kCFBundleDisplayNameKey]);
 
   // Now simulate an update with a different title.
@@ -701,7 +704,8 @@ TEST_F(WebAppShortcutCreatorTest, UpdateShortcutsWithTitleChange) {
                    .Append("Info.plist");
   EXPECT_TRUE(base::PathExists(plist_path));
   plist = [NSDictionary
-      dictionaryWithContentsOfFile:base::apple::FilePathToNSString(plist_path)];
+      dictionaryWithContentsOfURL:base::apple::FilePathToNSURL(plist_path)
+                            error:nil];
   EXPECT_NSEQ(@"Shortcut Title",
               plist[base::apple::CFToNSPtrCast(kCFBundleNameKey)]);
 
@@ -712,9 +716,10 @@ TEST_F(WebAppShortcutCreatorTest, UpdateShortcutsWithTitleChange) {
                            .Append(locale_dir_name)
                            .Append("InfoPlist.strings");
   EXPECT_TRUE(base::PathExists(resource_file_path));
-  resources = [NSDictionary
-      dictionaryWithContentsOfFile:base::apple::FilePathToNSString(
-                                       resource_file_path)];
+  resources =
+      [NSDictionary dictionaryWithContentsOfURL:base::apple::FilePathToNSURL(
+                                                    resource_file_path)
+                                          error:nil];
   EXPECT_NSEQ(@"New App Title", resources[app_mode::kCFBundleDisplayNameKey]);
 }
 
@@ -787,9 +792,10 @@ TEST_F(WebAppShortcutCreatorTest, NormalizeColonsInDisplayName) {
                                           .Append(locale_dir_name)
                                           .Append("InfoPlist.strings");
   EXPECT_TRUE(base::PathExists(resource_file_path));
-  NSDictionary* resources = [NSDictionary
-      dictionaryWithContentsOfFile:base::apple::FilePathToNSString(
-                                       resource_file_path)];
+  NSDictionary* resources =
+      [NSDictionary dictionaryWithContentsOfURL:base::apple::FilePathToNSURL(
+                                                    resource_file_path)
+                                          error:nil];
   EXPECT_NSEQ(@"App Title New", resources[app_mode::kCFBundleDisplayNameKey]);
 }
 
@@ -904,7 +910,7 @@ TEST_F(WebAppShortcutCreatorTest, RunShortcut) {
 }
 
 TEST_F(WebAppShortcutCreatorTest, CreateFailure) {
-  ASSERT_TRUE(override_registration_->test_override->DeleteChromeAppsDir());
+  ASSERT_TRUE(override_registration_->test_override().DeleteChromeAppsDir());
 
   NiceMock<WebAppShortcutCreatorMock> shortcut_creator(app_data_dir_,
                                                        info_.get());

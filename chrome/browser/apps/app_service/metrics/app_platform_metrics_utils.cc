@@ -4,10 +4,11 @@
 
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics_utils.h"
 
+#include <string_view>
+
 #include "ash/constants/app_types.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_shelf_utils.h"
@@ -49,7 +50,7 @@
 namespace {
 
 constexpr auto kAppTypeNameMap =
-    base::MakeFixedFlatMap<base::StringPiece, apps::AppTypeName>({
+    base::MakeFixedFlatMap<std::string_view, apps::AppTypeName>({
         {apps::kArcHistogramName, apps::AppTypeName::kArc},
         {apps::kBuiltInHistogramName, apps::AppTypeName::kBuiltIn},
         {apps::kCrostiniHistogramName, apps::AppTypeName::kCrostini},
@@ -68,6 +69,17 @@ constexpr auto kAppTypeNameMap =
         {apps::kStandaloneBrowserExtensionHistogramName,
          apps::AppTypeName::kStandaloneBrowserExtension},
     });
+
+constexpr char kInstallReasonUnknownHistogram[] = "Unknown";
+constexpr char kInstallReasonSystemHistogram[] = "System";
+constexpr char kInstallReasonPolicyHistogram[] = "Policy";
+constexpr char kInstallReasonOemHistogram[] = "Oem";
+constexpr char kInstallReasonPreloadHistogram[] = "Preload";
+constexpr char kInstallReasonSyncHistogram[] = "Sync";
+constexpr char kInstallReasonUserHistogram[] = "User";
+constexpr char kInstallReasonSubAppHistogram[] = "SubApp";
+constexpr char kInstallReasonKioskHistogram[] = "Kiosk";
+constexpr char kInstallReasonCommandLineHistogram[] = "CommandLine";
 
 // Determines what app type a Chrome App should be logged as based on its launch
 // container and app id. In particular, Chrome apps in tabs are logged as part
@@ -387,8 +399,33 @@ std::string GetAppTypeHistogramName(apps::AppTypeName app_type_name) {
 }
 
 AppTypeName GetAppTypeNameFromString(const std::string& app_type_name) {
-  auto* it = kAppTypeNameMap.find(app_type_name);
+  auto it = kAppTypeNameMap.find(app_type_name);
   return it != kAppTypeNameMap.end() ? it->second : apps::AppTypeName::kUnknown;
+}
+
+std::string GetInstallReason(InstallReason install_reason) {
+  switch (install_reason) {
+    case apps::InstallReason::kUnknown:
+      return kInstallReasonUnknownHistogram;
+    case apps::InstallReason::kSystem:
+      return kInstallReasonSystemHistogram;
+    case apps::InstallReason::kPolicy:
+      return kInstallReasonPolicyHistogram;
+    case apps::InstallReason::kOem:
+      return kInstallReasonOemHistogram;
+    case apps::InstallReason::kDefault:
+      return kInstallReasonPreloadHistogram;
+    case apps::InstallReason::kSync:
+      return kInstallReasonSyncHistogram;
+    case apps::InstallReason::kUser:
+      return kInstallReasonUserHistogram;
+    case apps::InstallReason::kSubApp:
+      return kInstallReasonSubAppHistogram;
+    case apps::InstallReason::kKiosk:
+      return kInstallReasonKioskHistogram;
+    case apps::InstallReason::kCommandLine:
+      return kInstallReasonCommandLineHistogram;
+  }
 }
 
 bool ShouldRecordUkm(Profile* profile) {

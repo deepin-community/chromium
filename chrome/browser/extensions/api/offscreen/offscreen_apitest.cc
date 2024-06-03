@@ -11,10 +11,13 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/version_info/channel.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/api/offscreen/audio_lifetime_enforcer.h"
 #include "extensions/browser/api/offscreen/offscreen_document_manager.h"
 #include "extensions/browser/background_script_executor.h"
@@ -22,6 +25,7 @@
 #include "extensions/browser/lazy_context_id.h"
 #include "extensions/browser/lazy_context_task_queue.h"
 #include "extensions/browser/offscreen_document_host.h"
+#include "extensions/browser/script_executor.h"
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/features/feature_channel.h"
@@ -112,9 +116,10 @@ void WakeUpServiceWorker(const Extension& extension, Profile& profile) {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 class ContentBrowserClientMock : public ChromeContentBrowserClient {
  public:
-  MOCK_METHOD(bool,
-              IsGetAllScreensMediaAllowed,
-              (content::BrowserContext * context, const url::Origin& origin),
+  MOCK_METHOD(void,
+              CheckGetAllScreensMediaAllowed,
+              (content::RenderFrameHost * render_frame_host,
+               base::OnceCallback<void(bool)> callback),
               (override));
 };
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
@@ -547,8 +552,11 @@ IN_PROC_BROWSER_TEST_F(GetAllScreensMediaOffscreenApiTest,
   base::AddTagToTestResult("feature_id",
                            "screenplay-f3601ae4-bff7-495a-a51f-3c0997a46445");
   EXPECT_CALL(content_browser_client(),
-              IsGetAllScreensMediaAllowed(testing::_, testing::_))
-      .WillOnce(testing::Return(true));
+              CheckGetAllScreensMediaAllowed(testing::_, testing::_))
+      .WillOnce(testing::Invoke([](content::RenderFrameHost* render_frame_host,
+                                   base::OnceCallback<void(bool)> callback) {
+        std::move(callback).Run(true);
+      }));
   static constexpr char kManifest[] =
       R"({
            "name": "Offscreen Document Test",
@@ -663,7 +671,7 @@ IN_PROC_BROWSER_TEST_F(GetAllScreensMediaOffscreenApiTest,
 }
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-// TODO(https://crbug.com/1453966): Failing on Windows.
+// TODO(crbug.com/40272130): Failing on Windows.
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_TabCaptureStreams DISABLED_TabCaptureStreams
 #else

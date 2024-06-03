@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "ash/ash_export.h"
-#include "ash/scoped_animation_disabler.h"
 #include "ash/wm/overview/event_handler_delegate.h"
 #include "ash/wm/overview/overview_item_base.h"
 #include "ash/wm/overview/scoped_overview_transform_window.h"
@@ -19,6 +18,7 @@
 #include "ui/aura/scoped_window_event_targeting_blocker.h"
 #include "ui/aura/window_observer.h"
 #include "ui/aura/window_occlusion_tracker.h"
+#include "ui/wm/core/scoped_animation_disabler.h"
 
 namespace aura {
 class Window;
@@ -72,6 +72,10 @@ class ASH_EXPORT OverviewItem : public OverviewItemBase,
 
   OverviewItemView* overview_item_view() { return overview_item_view_; }
 
+  void set_eligible_for_shadow_config(bool eligible_for_shadow_config) {
+    eligible_for_shadow_config_ = eligible_for_shadow_config;
+  }
+
   // Handles events forwarded from the contents view.
   void OnFocusedViewActivated();
   void OnFocusedViewClosed();
@@ -81,6 +85,9 @@ class ASH_EXPORT OverviewItem : public OverviewItemBase,
 
   // Updates the rounded corners on `this` only.
   void UpdateRoundedCorners();
+
+  // Returns the `kTopViewInset` of the `transform_window_`.
+  int GetTopInset() const;
 
   OverviewAnimationType GetExitOverviewAnimationType() const;
   OverviewAnimationType GetExitTransformAnimationType() const;
@@ -104,10 +111,12 @@ class ASH_EXPORT OverviewItem : public OverviewItemBase,
   gfx::RectF GetTransformedBounds() const override;
   std::vector<OverviewFocusableView*> GetFocusableViews() const override;
   views::View* GetBackDropView() const override;
+  bool ShouldHaveShadow() const override;
   void UpdateRoundedCornersAndShadow() override;
   void SetOpacity(float opacity) override;
   float GetOpacity() const override;
   void PrepareForOverview() override;
+  void SetShouldUseSpawnAnimation(bool value) override;
   void OnStartingAnimationComplete() override;
   void HideForSavedDeskLibrary(bool animate) override;
   void RevertHideForSavedDeskLibrary(bool animate) override;
@@ -136,6 +145,8 @@ class ASH_EXPORT OverviewItem : public OverviewItemBase,
   void OnWindowPropertyChanged(aura::Window* window,
                                const void* key,
                                intptr_t old) override;
+  void OnWindowParentChanged(aura::Window* window,
+                             aura::Window* parent) override;
   void OnWindowBoundsChanged(aura::Window* window,
                              const gfx::Rect& old_bounds,
                              const gfx::Rect& new_bounds,
@@ -151,6 +162,7 @@ class ASH_EXPORT OverviewItem : public OverviewItemBase,
  private:
   friend class OverviewTestBase;
   friend class ScopedOverviewTransformWindow;
+  FRIEND_TEST_ALL_PREFIXES(OverviewSessionTest, DraggingOnMultipleDisplay);
   FRIEND_TEST_ALL_PREFIXES(SplitViewOverviewSessionTest, Clipping);
 
   // Creates `item_widget_` with `OverviewItemView` as its contents view.
@@ -227,8 +239,10 @@ class ASH_EXPORT OverviewItem : public OverviewItemBase,
   // If true, `shadow_` is eligible to be created, false otherwise. The shadow
   // should not be created if `this` is hosted by an `OverviewGroupItem`
   // together with another `OverviewItem` (the group-level shadow will be
-  // installed instead).
-  const bool eligible_for_shadow_config_;
+  // installed instead). However if a window inside an `OverviewGroupItem` is
+  // destroyed, `eligible_for_shadow_config_` is set to true to ensure the
+  // shadow bounds get updated correctly.
+  bool eligible_for_shadow_config_;
 
   // The view associated with |item_widget_|. Contains a title, close button and
   // maybe a backdrop. Forwards certain events to |this|.
@@ -244,7 +258,7 @@ class ASH_EXPORT OverviewItem : public OverviewItemBase,
 
   // Disable animations on the contained window while it is being managed by the
   // overview item.
-  ScopedAnimationDisabler animation_disabler_;
+  wm::ScopedAnimationDisabler animation_disabler_;
 
   // Force `OverviewItem` to be visible while overview is in progress. This is
   // to ensure that overview items are properly marked as visible during all

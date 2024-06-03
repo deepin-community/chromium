@@ -136,6 +136,9 @@ _OS_SPECIFIC_FILTER['mac'] = [
     'ChromeDriverTest.testTakeElementScreenshotInIframe',
     'ChromeDriverTest.testTakeElementScreenshotPartlyVisible',
     'ChromeDriverTest.testTakeLargeElementScreenshot',
+    # Flaky: https://crbug.com/333826980 (fails in 80% of cases on mac-arm64)
+    # Error message: Timed out receiving message from renderer: 10.000
+    'ChromeDriverTest.testTakeLargeElementViewportScreenshot',
     'ChromeDriverSiteIsolation.testCanClickOOPIF',
     # Flaky: https://crbug.com/1496826.
     'PureBidiTest.testParallelConnectionIsClosedOnSessionEnd',
@@ -167,11 +170,15 @@ _BROWSER_SPECIFIC_FILTER['chrome-headless-shell'] = [
     # S/A: BrowserHandler::setWindowsBounds at
     # //headelss/lib/browser/protocol/browser_handler.cc.
     'ChromeDriverTest.testWindowMaximize',
+    'ChromeDriverTest.testWindowMaximizeFromFrame',
     'ChromeDriverTest.testWindowFullScreen',
     # chrome-headless-shell does not support scripted print
     'ChromeDriverTest.testCanSwitchToPrintPreviewDialog',
     # FedCM is not supported by chrome-headless-shell.
     'FedCmSpecificTest.*',
+    # https://crbug.com/40279363
+    # Bounce Tracking Mitigations is not supported by chrome-headless-shell.
+    'NavTrackingMitigationSpecificTest.testRunBounceTrackingMitigations',
     # chrome-headless-shell stops handling some CDP commands until the page is
     # fully loaded.
     # See: https://crbug.com/chromedriver/4624
@@ -285,6 +292,7 @@ _ANDROID_NEGATIVE_FILTER['chrome'] = (
         'ChromeDriverTest.testWindowSize',
         'ChromeDriverTest.testWindowRect',
         'ChromeDriverTest.testWindowMaximize',
+        'ChromeDriverTest.testWindowMaximizeFromFrame',
         'ChromeDriverTest.testWindowMinimize',
         'ChromeLogPathCapabilityTest.testChromeLogPath',
         # Connecting to running browser is not supported on Android.
@@ -343,7 +351,10 @@ _ANDROID_NEGATIVE_FILTER['chrome'] = (
         # These tests are failing on Android
         # https://bugs.chromium.org/p/chromedriver/issues/detail?id=3560
         'ChromeDriverTest.testTakeLargeElementViewportScreenshot',
-        'ChromeDriverTest.testTakeLargeElementFullPageScreenshot'
+        'ChromeDriverTest.testTakeLargeElementFullPageScreenshot',
+        # Android does not support command line switches, which are
+        # currently needed for these tests.
+        'NavTrackingMitigationSpecificTest.testRunBounceTrackingMitigations'
     ]
 )
 _ANDROID_NEGATIVE_FILTER['chrome_stable'] = (
@@ -680,6 +691,13 @@ class ChromeDriverBaseTestWithWebServer(ChromeDriverBaseTest):
   @staticmethod
   def GetHttpUrlForFile(file_path):
     return ChromeDriverBaseTestWithWebServer._http_server.GetUrl() + file_path
+
+  @staticmethod
+  def ReplaceHostName(url, new_host_name):
+    url_components = urllib.parse.urlparse(url)
+    return urllib.parse.urlunparse(
+        url_components._replace(
+            netloc=('%s:%d' % (new_host_name, url_components.port))))
 
 
 class ChromeDriverTestWithCustomCapability(ChromeDriverBaseTestWithWebServer):
@@ -2543,6 +2561,33 @@ class ChromeDriverTest(ChromeDriverBaseTestWithWebServer):
     self._driver.SetWindowRect(*old_rect_list)
     self.assertEqual(old_rect_list, self._driver.GetWindowRect())
 
+  def testWindowMaximizeFromFrame(self):
+    # This test is somewhat close to WindowTest.testCanMaximizeTheWindow of
+    # Selenium in its attempt to reproduce https://crbug.com/chromedriver/2663
+    self._http_server.SetDataForPath('/nested.html',
+      bytes('<p>nested.html</p>', 'utf-8'))
+    self._http_server.SetDataForPath('/main.html',
+      bytes('<iframe src="/nested.html">', 'utf-8'))
+
+    old_rect_list = [640, 400, 100, 200]
+    self._driver.SetWindowRect(*old_rect_list)
+
+    self._driver.Load(self.GetHttpUrlForFile('/main.html'))
+    frame = self._driver.FindElement('tag name', 'iframe')
+    self._driver.SwitchToFrame(frame)
+
+    new_rect = self._driver.MaximizeWindow()
+    new_rect_list = [
+        new_rect['width'],
+        new_rect['height'],
+        new_rect['x'],
+        new_rect['y']
+    ]
+    self.assertNotEqual(old_rect_list, new_rect_list)
+
+    self._driver.SetWindowRect(*old_rect_list)
+    self.assertEqual(old_rect_list, self._driver.GetWindowRect())
+
   def testWindowMinimize(self):
     handle = self._driver.GetCurrentWindowHandle()
     self._driver.SetWindowRect(640, 400, 100, 200)
@@ -4128,6 +4173,44 @@ class ChromeDriverSecureContextTest(ChromeDriverBaseTestWithWebServer):
     self.assertEqual('OK', result['status'])
     self.assertEqual(['usb'], result['credential']['transports'])
 
+  def testAddVirtualAuthenticatorDefaultBackupSettings(self):
+    registerCredentialScript = """
+      let done = arguments[0];
+      registerCredential().then(done);
+    """
+    self._driver.Load(self.GetHttpsUrlForFile(
+        '/chromedriver/webauthn_test.html', 'chromedriver.test'))
+
+    for backupState in [False, True]:
+      for backupEligibility in [False, True]:
+        # Add a virtual authenticator with the specified default backup flag
+        # values.
+        authenticatorId = self._driver.AddVirtualAuthenticator(
+            protocol = 'ctap2',
+            transport = 'usb',
+            hasResidentKey = True,
+            hasUserVerification = True,
+            isUserVerified = True,
+            defaultBackupState = backupState,
+            defaultBackupEligibility = backupEligibility
+        )
+
+        # Creating a credential through the web API should reflect the default
+        # values.
+        result = self._driver.ExecuteAsyncScript(registerCredentialScript)
+        self.assertEqual('OK', result['status'])
+        self.assertEqual(backupEligibility, result['credential']['flags']['be'])
+        self.assertEqual(backupState, result['credential']['flags']['bs'])
+
+        # Getting the credential through webdriver should reflect the values.
+        credentials = self._driver.GetCredentials(authenticatorId)
+        self.assertEqual(1, len(credentials))
+        self.assertEqual(backupEligibility, credentials[0]['backupEligibility'])
+        self.assertEqual(backupState, credentials[0]['backupState'])
+
+        # Cleanup.
+        self._driver.RemoveVirtualAuthenticator(authenticatorId)
+
   def testRemoveVirtualAuthenticator(self):
     self._driver.Load(self.GetHttpsUrlForFile(
         '/chromedriver/webauthn_test.html', 'chromedriver.test'))
@@ -4227,6 +4310,58 @@ class ChromeDriverSecureContextTest(ChromeDriverBaseTestWithWebServer):
     result = self._driver.ExecuteAsyncScript(script)
     self.assertEqual('OK', result['status'])
     self.assertEqual('large blob contents', result['blob'])
+
+  def testAddCredentialBackupFlags(self):
+    script = """
+      let done = arguments[0];
+      getCredential({
+        type: "public-key",
+        id: new TextEncoder().encode("cred-1"),
+        transports: ["usb"],
+      }).then(done);
+    """
+    self._driver.Load(self.GetHttpsUrlForFile(
+        '/chromedriver/webauthn_test.html', 'chromedriver.test'))
+
+    authenticatorId = self._driver.AddVirtualAuthenticator(
+        protocol = 'ctap2',
+        transport = 'usb',
+        hasResidentKey = True,
+        hasUserVerification = True,
+        isUserVerified = True,
+    )
+
+    credentialId = self.URLSafeBase64Encode("cred-1")
+    for backupState in [False, True]:
+      for backupEligibility in [False, True]:
+        # Create a credential with the given backup flags.
+        self._driver.AddCredential(
+          authenticatorId = authenticatorId,
+          credentialId = credentialId,
+          userHandle = self.URLSafeBase64Encode('melia'),
+          isResidentCredential = True,
+          rpId = "chromedriver.test",
+          privateKey = self.privateKey,
+          signCount = 1,
+          backupState = backupState,
+          backupEligibility = backupEligibility,
+        )
+
+        # Getting an assertion should reflect the values.
+        result = self._driver.ExecuteAsyncScript(script)
+        self.assertEqual('OK', result['status'])
+        self.assertEqual(backupState, result['flags']['bs'])
+        self.assertEqual(backupEligibility, result['flags']['be'])
+
+        # Getting the credential through webdriver should reflect the values.
+        credentials = self._driver.GetCredentials(authenticatorId)
+        self.assertEqual(1, len(credentials))
+        self.assertEqual(credentialId, credentials[0]['credentialId'])
+        self.assertEqual(backupEligibility, credentials[0]['backupEligibility'])
+        self.assertEqual(backupState, credentials[0]['backupState'])
+
+        # Cleanup.
+        self._driver.RemoveCredential(authenticatorId, credentialId)
 
   def testAddCredentialBase64Errors(self):
     # Test that AddCredential checks UrlBase64 parameteres.
@@ -4412,6 +4547,57 @@ class ChromeDriverSecureContextTest(ChromeDriverBaseTestWithWebServer):
     self._driver.SetUserVerified(authenticatorId, True)
     result = self._driver.ExecuteAsyncScript(register_uv_script)
     self.assertEqual("OK", result['status'])
+
+  def testSetCredentialProperties(self):
+    script = """
+      let done = arguments[0];
+      getCredential({
+        type: "public-key",
+        id: new TextEncoder().encode("cred-1"),
+        transports: ["usb"],
+      }).then(done);
+    """
+    self._driver.Load(self.GetHttpsUrlForFile(
+        '/chromedriver/webauthn_test.html', 'chromedriver.test'))
+
+    authenticatorId = self._driver.AddVirtualAuthenticator(
+        protocol = 'ctap2',
+        transport = 'usb',
+        hasResidentKey = True,
+        hasUserVerification = True,
+        isUserVerified = True,
+    )
+    credentialId = self.URLSafeBase64Encode("cred-1")
+
+    # Create a credential with default backup flags.
+    self._driver.AddCredential(
+      authenticatorId = authenticatorId,
+      credentialId = credentialId,
+      userHandle = self.URLSafeBase64Encode('melia'),
+      isResidentCredential = True,
+      rpId = "chromedriver.test",
+      privateKey = self.privateKey,
+      signCount = 1,
+    )
+    for backupState in [False, True]:
+      for backupEligibility in [False, True]:
+        # Set the credential properties.
+        self._driver.SetCredentialProperties(
+            authenticatorId = authenticatorId, credentialId = credentialId,
+            backupState = backupState, backupEligibility = backupEligibility)
+
+        # Getting an assertion should reflect the values.
+        result = self._driver.ExecuteAsyncScript(script)
+        self.assertEqual('OK', result['status'])
+        self.assertEqual(backupState, result['flags']['bs'])
+        self.assertEqual(backupEligibility, result['flags']['be'])
+
+        # Getting the credential through webdriver should reflect the values.
+        credentials = self._driver.GetCredentials(authenticatorId)
+        self.assertEqual(1, len(credentials))
+        self.assertEqual(credentialId, credentials[0]['credentialId'])
+        self.assertEqual(backupEligibility, credentials[0]['backupEligibility'])
+        self.assertEqual(backupState, credentials[0]['backupState'])
 
   def testCreateVirtualSensorWithInvalidSensorName(self):
     self.assertRaisesRegex(chromedriver.InvalidArgument,
@@ -4676,6 +4862,60 @@ class ChromeDriverSecureContextTest(ChromeDriverBaseTestWithWebServer):
         "This sensor type is not being overridden with a virtual sensor",
         self._driver.UpdateVirtualSensor, 'ambient-light', {'illuminance': 42})
 
+  def testSetDevicePosture(self):
+    self._driver.Load(
+        self.GetHttpsUrlForFile('/chromedriver/device_posture_test.html'))
+    self._driver.ExecuteScript('addDevicePostureEventListener()')
+    original_posture = self._driver.ExecuteScript(
+        'return navigator.devicePosture.type')
+    posture = 'folded' if original_posture == 'continuous' else 'continuous'
+    self._driver.SetDevicePosture(posture)
+    self.assertTrue(
+        self.WaitForCondition(lambda: self._driver.ExecuteScript(
+            'return postures.length === 1')))
+    self.assertNotEqual(original_posture,
+                        self._driver.ExecuteScript('return postures.at(-1)'))
+    self._driver.SetDevicePosture(original_posture)
+    self.assertTrue(
+        self.WaitForCondition(lambda: self._driver.ExecuteScript(
+            'return postures.length === 2')))
+    self.assertEqual(original_posture,
+                     self._driver.ExecuteScript('return postures.at(-1)'))
+
+  def testSetDevicePostureInvalidArgument(self):
+    self.assertRaisesRegex(
+        chromedriver.InvalidArgument,
+        "Invalid posture type",
+        self._driver.SetDevicePosture, 'invalid-posture')
+
+  def testClearDevicePosture(self):
+    self._driver.Load(
+        self.GetHttpsUrlForFile('/chromedriver/device_posture_test.html'))
+    self._driver.ExecuteScript('addDevicePostureEventListener()')
+    original_posture = self._driver.ExecuteScript(
+        'return navigator.devicePosture.type')
+    posture = 'folded' if original_posture == 'continuous' else 'continuous'
+    self._driver.SetDevicePosture(posture)
+    self.assertTrue(
+        self.WaitForCondition(lambda: self._driver.ExecuteScript(
+            'return postures.length === 1')))
+    self.assertNotEqual(original_posture,
+                        self._driver.ExecuteScript('return postures.at(-1)'))
+    self._driver.ClearDevicePosture()
+    self.assertTrue(
+        self.WaitForCondition(lambda: self._driver.ExecuteScript(
+            'return postures.length === 2')))
+    self.assertEqual(original_posture,
+                     self._driver.ExecuteScript('return postures.at(-1)'))
+
+  def testClearDevicePostureWithoutSetDevicePosture(self):
+    self._driver.Load(
+        self.GetHttpsUrlForFile('/chromedriver/device_posture_test.html'))
+    self._driver.ExecuteScript('addDevicePostureEventListener()')
+    self._driver.ClearDevicePosture()
+    self.assertFalse(
+        self.WaitForCondition(lambda: self._driver.ExecuteScript(
+            'return postures.length === 1')))
 
 # Tests in the following class are expected to be moved to ChromeDriverTest
 # class when we no longer support the legacy mode.
@@ -5074,12 +5314,6 @@ class ChromeDriverSiteIsolation(ChromeDriverBaseTestWithWebServer):
   Note that Chrome does not allow "localhost" to be passed to --isolate-origins
   for fixable technical reasons related to subdomain matching.
   """
-
-  def ReplaceHostName(self, url, new_host_name):
-    url_components = urllib.parse.urlparse(url)
-    return urllib.parse.urlunparse(
-        url_components._replace(
-            netloc=('%s:%d' % (new_host_name, url_components.port))))
 
   def setUp(self):
     self._driver = self.CreateDriver(chrome_switches=['--site-per-process'])
@@ -7613,7 +7847,9 @@ class FedCmSpecificTest(ChromeDriverBaseTestWithWebServer):
         ]}""" % self._accounts, 'utf-8')
 
     def respondWithTokenResponse(request):
-      return {'Content-Type': 'application/json'}, self._token_response
+      return {'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': request.GetHeader('Origin'),
+        'Access-Control-Allow-Credentials': 'true'}, self._token_response
 
     self._https_server.SetCallbackForPath('/.well-known/web-identity',
                                           respondWithWellKnownFile)
@@ -7772,6 +8008,32 @@ class FedCmSpecificTest(ChromeDriverBaseTestWithWebServer):
     token = self._driver.ExecuteScript("return getResult()")
     self.assertEqual("token", token)
 
+  def testCancelAfterFailedSelectAccount(self):
+    self._accounts = ""
+
+    self._driver.Load(self._https_server.GetUrl() + "/fedcm.html")
+
+    self._driver.SetDelayEnabled(False)
+    self._driver.ResetCooldown()
+
+    self.assertRaises(chromedriver.NoSuchAlert, self._driver.GetAccounts)
+    self._driver.ExecuteScript("callFedCm()")
+    self.assertTrue(self.WaitForCondition(self.FedCmDialogCondition))
+
+    accounts = self._driver.GetAccounts()
+    self.assertEqual("ConfirmIdpLogin", self._driver.GetDialogType())
+    self.assertEqual(0, len(accounts))
+
+    # SelectAccount should fail, but not cause a later CancelFedCmDialog
+    # to fail.
+    self.assertRaises(chromedriver.InvalidArgument, self._driver.SelectAccount,
+                      0)
+
+    self._driver.CancelFedCmDialog()
+    self.assertRaises(chromedriver.NoSuchAlert, self._driver.GetAccounts)
+    token = self._driver.ExecuteScript('return getResult()')
+    self.assertEqual('NetworkError: Error retrieving a token.', token)
+
   def testClickErrorGotIt(self):
     self._token_response = bytes("""
         {
@@ -7866,6 +8128,92 @@ class FedCmSpecificTest(ChromeDriverBaseTestWithWebServer):
 
     self._driver.CancelFedCmDialog()
 
+class NavTrackingMitigationSpecificTest(ChromeDriverBaseTestWithWebServer):
+
+  def setUp(self):
+    global _VENDOR_ID
+    self._vendor_id = _VENDOR_ID
+
+    self._driver = self.CreateDriver(chrome_switches=[
+        '--enable-features="DIPS:delete/true/'
+            'triggering_action/stateful_bounce/'
+            'client_bounce_detection_timeout/inf"',
+        '--test-third-party-cookie-phaseout',
+        '--host-resolver-rules=MAP * 127.0.0.1'
+    ])
+
+  def testRunBounceTrackingMitigations(self):
+    """Test implementation of bounce tracking mitigations.
+    """
+
+    # This makes sure the underlying service exists and returns an empty
+    # list before the test continues.
+    self.assertTrue(self.WaitForCondition(
+        lambda: len(self._driver.RunBounceTrackingMitigations()) == 0))
+
+    initial_url = self.GetHttpUrlForFile('/initial.html')
+    bounce_url = self.ReplaceHostName(
+        self.GetHttpUrlForFile('/bounce.html'), 'tracker.test')
+    landing_url = self.GetHttpUrlForFile('/landing.html')
+    final_url = self.GetHttpUrlForFile('/final.html')
+
+    self._http_server.SetDataForPath('/initial.html', bytes("""
+        <html>
+          <title>Initial Page</title>
+          <body>
+            <a href='%s' id='bounce'>Stateful Bounce\n</a><br>
+          </body>
+        </html>""" % bounce_url, 'utf-8'))
+
+    def StatefullyBounce(request):
+      return {'Set-Cookie': 'x=y'}, bytes("""
+          <html>
+            <title>Bounce Tracker</title>
+            <body>
+              <script>
+                document.cookie = 'a=b'
+                while (document.cookie.length == 0){}
+                window.location = '%s';
+              </script>
+            </body>
+          </html>""" % landing_url, 'utf-8')
+    self._http_server.SetCallbackForPath('/bounce.html', StatefullyBounce)
+
+    self._http_server.SetDataForPath('/landing.html', bytes("""
+        <html>
+          <title>Landing Page</title>
+          <body>
+            <a href='%s' id='final'>To Final\n</a>
+          </body>
+        </html>""" % final_url, 'utf-8'))
+
+    self._http_server.SetDataForPath('/final.html', bytes("""
+        <html>
+          <title>DONE!</title>
+        </html>""", 'utf-8'))
+
+    self._driver.Load(initial_url)
+    anchor = self._driver.FindElement('css selector', '#bounce')
+    anchor.Click()
+
+    # Waiting to be redirected to landing_url by the bounce page.
+    self.assertTrue(self.WaitForCondition(
+        (lambda: 'Landing Page' in self._driver.GetTitle())))
+
+    # A click-started navigation is used to end the active redirect chain.
+    anchor = self._driver.FindElement('css selector', '#final')
+    anchor.Click()
+
+    # Wait for navigation to final_url to complete.
+    self.assertTrue(self.WaitForCondition(
+        (lambda: 'DONE!' in self._driver.GetTitle())))
+
+    # The DIPSService can take some time to process and record the terminated
+    # redirect chain, but there is not an existing signal exposed to notify
+    # when it has finished. This wait should be sufficient to allow time for it.
+    self.assertTrue(self.WaitForCondition(
+        lambda: "tracker.test" in
+                self._driver.RunBounceTrackingMitigations(), 30, 0.5))
 
 # 'Z' in the beginning is to make test executed in the end of suite.
 class ZChromeStartRetryCountTest(unittest.TestCase):
@@ -7886,6 +8234,11 @@ if __name__ == '__main__':
       '--replayable',
       help="Don't truncate long strings in the log so that the log can be "
       "replayed.")
+  parser.add_argument(
+      '--failfast',
+      action='store_true',
+      default=False,
+      help='Stop the test run on the first error or failure.')
   parser.add_argument('--chrome', help='Path to a build of the chrome binary')
   parser.add_argument(
       '--filter',
@@ -8054,6 +8407,7 @@ if __name__ == '__main__':
 
   runner = unittest.TextTestRunner(
       stream=sys.stdout, descriptions=False, verbosity=2,
+      failfast=options.failfast,
       resultclass=unittest_util.AddSuccessTextTestResult)
   result = runner.run(test_suite)
   results = [result]

@@ -386,10 +386,10 @@ void BaseFetchContext::AddClientHintsIfNecessary(
 
     if (ShouldSendClientHint(
             policy, resource_origin, is_1p_origin,
-            network::mojom::blink::WebClientHintsType::kUAFormFactor,
+            network::mojom::blink::WebClientHintsType::kUAFormFactors,
             hints_preferences)) {
-      SetHttpHeader(WebClientHintsType::kUAFormFactor,
-                    AtomicString(ua->SerializeFormFactor().c_str()), request);
+      SetHttpHeader(WebClientHintsType::kUAFormFactors,
+                    AtomicString(ua->SerializeFormFactors().c_str()), request);
     }
   }
 
@@ -478,7 +478,7 @@ BaseFetchContext::CheckCSPForRequestInternal(
   }
 
   ContentSecurityPolicy* csp =
-      GetContentSecurityPolicyForWorld(options.world_for_csp.get());
+      GetContentSecurityPolicyForWorld(options.world_for_csp.Get());
   if (csp &&
       !csp->AllowRequest(request_context, request_destination, url,
                          options.content_security_policy_nonce,
@@ -569,7 +569,7 @@ BaseFetchContext::CanRequestInternal(
   }
 
   if (type == ResourceType::kScript) {
-    if (!AllowScriptFromSource(url)) {
+    if (!AllowScript()) {
       // TODO(estark): Use a different ResourceRequestBlockedReason here, since
       // this check has nothing to do with CSP. https://crbug.com/600795
       return ResourceRequestBlockedReason::kCSP;
@@ -629,9 +629,9 @@ BaseFetchContext::CanRequestInternal(
   // Only warn if the resource URL's origin is different than its requestor
   // (we don't want to warn for <img src="faß.de/image.img"> on faß.de).
   // TODO(crbug.com/1396475): Remove once Non-Transitional mode is shipped.
-  if (!resource_request.RequestorOrigin()->IsSameOriginWith(
-          SecurityOrigin::Create(url).get()) &&
-      url.HasIDNA2008DeviationCharacter()) {
+  if (url.HasIDNA2008DeviationCharacter() &&
+      !resource_request.RequestorOrigin()->IsSameOriginWith(
+          SecurityOrigin::Create(url).get())) {
     String message = GetConsoleWarningForIDNADeviationCharacters(url);
     if (!message.empty()) {
       console_logger_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(

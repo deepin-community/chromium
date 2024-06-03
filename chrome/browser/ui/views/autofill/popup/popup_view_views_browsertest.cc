@@ -73,6 +73,24 @@ std::vector<Suggestion> CreateCreditCardSuggestions() {
   return suggestions;
 }
 
+std::vector<Suggestion> CreatePasswordSuggestions() {
+  std::vector<Suggestion> suggestions;
+  suggestions.emplace_back(u"Title suggestion", PopupItemId::kTitle);
+
+  suggestions.emplace_back(u"Password main text", PopupItemId::kPasswordEntry);
+  suggestions.back().additional_label = u"example.username@gmail.com";
+  suggestions.back().icon = Suggestion::Icon::kGlobe;
+
+  suggestions.emplace_back(autofill::PopupItemId::kSeparator);
+
+  suggestions.emplace_back(u"Manage passwords",
+                           PopupItemId::kAllSavedPasswordsEntry);
+  suggestions.back().icon = Suggestion::Icon::kSettings;
+  suggestions.back().trailing_icon = Suggestion::Icon::kGooglePasswordManager;
+
+  return suggestions;
+}
+
 std::vector<Suggestion> CreateAutocompleteSuggestions() {
   return {Suggestion("Autocomplete entry 1", "", Suggestion::Icon::kNoIcon,
                      PopupItemId::kAutocompleteEntry),
@@ -217,15 +235,26 @@ IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest, InvokeUi_CreditCard) {
   ShowAndVerifyUi();
 }
 
+IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest, InvokeUi_Passwords) {
+  PrepareSuggestions(CreatePasswordSuggestions());
+  ShowAndVerifyUi();
+}
+
 IN_PROC_BROWSER_TEST_P(PopupViewViewsBrowsertest,
                        InvokeUi_CreditCard_MultipleLabels) {
-  std::vector<std::vector<Suggestion::Text>> labels = {
-      {Suggestion::Text(u"Filling credit card - your card for payments"),
-       Suggestion::Text(u"Alexander Joseph Ricardo Park")},
-      {Suggestion::Text(u"Full credit card"), Suggestion::Text(u"Alex Park")}};
-  Suggestion suggestion("Visa", std::move(labels), Suggestion::Icon::kCardVisa,
-                        PopupItemId::kCreditCardEntry);
-  PrepareSuggestions({suggestion});
+  Suggestion suggestion1(
+      "Visa",
+      {{Suggestion::Text(u"Filling credit card - your card for payments"),
+        Suggestion::Text(u"Alexander Joseph Ricardo Park")},
+       {Suggestion::Text(u"Full credit card"), Suggestion::Text(u"Alex Park")}},
+      Suggestion::Icon::kCardVisa, PopupItemId::kCreditCardEntry);
+
+  // Also create a 1 label line suggestion to make sure they work well together.
+  Suggestion suggestion2(
+      "Visa",
+      {{Suggestion::Text(u"Filling credit card - your card for payments")}},
+      Suggestion::Icon::kCardVisa, PopupItemId::kCreditCardEntry);
+  PrepareSuggestions({suggestion1, suggestion2});
   ShowAndVerifyUi();
 }
 

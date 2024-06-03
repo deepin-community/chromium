@@ -23,7 +23,6 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "components/browsing_data/content/browsing_data_helper.h"
-#include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/browser/ui/cookie_controls_controller.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_uma_util.h"
@@ -136,6 +135,7 @@ ContentSettingsType kPermissionType[] = {
     ContentSettingsType::FEDERATED_IDENTITY_API,
 #if !BUILDFLAG(IS_ANDROID)
     ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
+    ContentSettingsType::CAPTURED_SURFACE_CONTROL,
 #endif  // !BUILDFLAG(IS_ANDROID)
     ContentSettingsType::AUTOMATIC_FULLSCREEN,
 };
@@ -266,7 +266,7 @@ PageInfo::PageInfo(std::unique_ptr<PageInfoDelegate> delegate,
 
   // Every time this is created, page info dialog is opened.
   // So this counts how often the page Info dialog is opened.
-  RecordPageInfoAction(PAGE_INFO_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_OPENED);
 
   // Record the time when the page info dialog is opened so the total time it is
   // open can be measured.
@@ -277,9 +277,14 @@ PageInfo::PageInfo(std::unique_ptr<PageInfoDelegate> delegate,
     controller_ = delegate_->CreateCookieControlsController();
     observation_.Observe(controller_.get());
 
-    // TODO(crbug.com/1430440): SetCookieInfo is called twice, once from here
+    // TODO(crbug.com/40901748): SetCookieInfo is called twice, once from here
     // and once from InitializeUiState. This should be cleaned up.
     controller_->Update(web_contents);
+
+    auto* pscs = GetPageSpecificContentSettings();
+    if (pscs) {
+      pscs->AddPermissionUsageObserver(this);
+    }
   }
 #endif
 }
@@ -323,10 +328,18 @@ PageInfo::~PageInfo() {
   }
 
   base::RecordAction(base::UserMetricsAction("PageInfo.Closed"));
+
+#if !BUILDFLAG(IS_ANDROID)
+  if (web_contents_) {
+    auto* pscs = GetPageSpecificContentSettings();
+    if (pscs) {
+      pscs->RemovePermissionUsageObserver(this);
+    }
+  }
+#endif
 }
 
-void PageInfo::OnStatusChanged(CookieControlsStatus status,
-                               bool controls_visible,
+void PageInfo::OnStatusChanged(bool controls_visible,
                                bool protections_on,
                                CookieControlsEnforcement enforcement,
                                CookieBlocking3pcdStatus blocking_status,
@@ -344,19 +357,11 @@ void PageInfo::OnStatusChanged(CookieControlsStatus status,
   }
 }
 
-void PageInfo::OnBreakageConfidenceLevelChanged(
-    CookieControlsBreakageConfidenceLevel level) {
-  if (cookie_controls_confidence_ != level) {
-    cookie_controls_confidence_ = level;
-    PresentSiteData(base::DoNothing());
-  }
-}
-
 void PageInfo::OnThirdPartyToggleClicked(bool block_third_party_cookies) {
   DCHECK(controls_visible_);
   RecordPageInfoAction(block_third_party_cookies
-                           ? PAGE_INFO_COOKIES_BLOCKED_FOR_SITE
-                           : PAGE_INFO_COOKIES_ALLOWED_FOR_SITE);
+                           ? page_info::PAGE_INFO_COOKIES_BLOCKED_FOR_SITE
+                           : page_info::PAGE_INFO_COOKIES_ALLOWED_FOR_SITE);
   controller_->OnCookieBlockingEnabledForSite(block_third_party_cookies);
   show_info_bar_ = true;
 }
@@ -404,8 +409,8 @@ void PageInfo::UpdateSecurityState() {
   PresentSiteIdentity();
 }
 
-void PageInfo::RecordPageInfoAction(PageInfoAction action) {
-  if (action != PAGE_INFO_OPENED) {
+void PageInfo::RecordPageInfoAction(page_info::PageInfoAction action) {
+  if (action != page_info::PAGE_INFO_OPENED) {
     did_perform_action_ = true;
   }
 
@@ -413,7 +418,8 @@ void PageInfo::RecordPageInfoAction(PageInfoAction action) {
   delegate_->OnPageInfoActionOccurred(action);
 #endif
 
-  base::UmaHistogramEnumeration("WebsiteSettings.Action", action);
+  base::UmaHistogramEnumeration(page_info::kWebsiteSettingsActionHistogram,
+                                action);
 
   if (web_contents_) {
     ukm::builders::PageInfoBubble(
@@ -430,12 +436,12 @@ void PageInfo::RecordPageInfoAction(PageInfoAction action) {
   bool has_topic = settings->HasAccessedTopics();
   bool has_fledge = settings->HasJoinedUserToInterestGroup();
   switch (action) {
-    case PageInfoAction::PAGE_INFO_OPENED:
+    case page_info::PAGE_INFO_OPENED:
       base::RecordAction(base::UserMetricsAction("PageInfo.Opened"));
       base::UmaHistogramBoolean("Security.PageInfo.AdPersonalizationRowShown",
                                 has_fledge || has_topic);
       break;
-    case PageInfoAction::PAGE_INFO_AD_PERSONALIZATION_PAGE_OPENED:
+    case page_info::PAGE_INFO_AD_PERSONALIZATION_PAGE_OPENED:
       if (has_fledge && has_topic) {
         base::RecordAction(base::UserMetricsAction(
             "PageInfo.AdPersonalization.OpenedWithFledgeAndTopics"));
@@ -447,110 +453,110 @@ void PageInfo::RecordPageInfoAction(PageInfoAction action) {
             "PageInfo.AdPersonalization.OpenedWithTopics"));
       }
       break;
-    case PageInfoAction::PAGE_INFO_AD_PERSONALIZATION_SETTINGS_OPENED:
+    case page_info::PAGE_INFO_AD_PERSONALIZATION_SETTINGS_OPENED:
       base::RecordAction(base::UserMetricsAction(
           "PageInfo.AdPersonalization.ManageInterestClicked"));
       break;
-    case PAGE_INFO_CERTIFICATE_DIALOG_OPENED:
+    case page_info::PAGE_INFO_CERTIFICATE_DIALOG_OPENED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.Security.Certificate.Opened"));
       break;
-    case PAGE_INFO_CONNECTION_HELP_OPENED:
+    case page_info::PAGE_INFO_CONNECTION_HELP_OPENED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.Security.ConnectionHelp.Opened"));
       break;
-    case PAGE_INFO_SECURITY_DETAILS_OPENED:
+    case page_info::PAGE_INFO_SECURITY_DETAILS_OPENED:
       base::RecordAction(base::UserMetricsAction("PageInfo.Security.Opened"));
       break;
-    case PAGE_INFO_SITE_SETTINGS_OPENED:
+    case page_info::PAGE_INFO_SITE_SETTINGS_OPENED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.SiteSettings.Opened"));
       break;
-    case PAGE_INFO_COOKIES_DIALOG_OPENED:
+    case page_info::PAGE_INFO_COOKIES_DIALOG_OPENED:
       base::RecordAction(base::UserMetricsAction("PageInfo.Cookies.Opened"));
       break;
-    case PAGE_INFO_COOKIES_ALLOWED_FOR_SITE:
+    case page_info::PAGE_INFO_COOKIES_ALLOWED_FOR_SITE:
       base::RecordAction(base::UserMetricsAction("PageInfo.Cookies.Allowed"));
       break;
-    case PAGE_INFO_COOKIES_BLOCKED_FOR_SITE:
+    case page_info::PAGE_INFO_COOKIES_BLOCKED_FOR_SITE:
       base::RecordAction(base::UserMetricsAction("PageInfo.Cookies.Blocked"));
       break;
-    case PAGE_INFO_COOKIES_CLEARED:
+    case page_info::PAGE_INFO_COOKIES_CLEARED:
       base::RecordAction(base::UserMetricsAction("PageInfo.Cookies.Cleared"));
       break;
-    case PAGE_INFO_PERMISSION_DIALOG_OPENED:
+    case page_info::PAGE_INFO_PERMISSION_DIALOG_OPENED:
       base::RecordAction(base::UserMetricsAction("PageInfo.Permission.Opened"));
       break;
-    case PAGE_INFO_CHANGED_PERMISSION:
+    case page_info::PAGE_INFO_CHANGED_PERMISSION:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.Permission.Changed"));
       break;
-    case PAGE_INFO_PERMISSIONS_CLEARED:
+    case page_info::PAGE_INFO_PERMISSIONS_CLEARED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.Permission.Cleared"));
       break;
-    case PAGE_INFO_CHOOSER_OBJECT_DELETED:
+    case page_info::PAGE_INFO_CHOOSER_OBJECT_DELETED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.Permission.ChooserObjectDeleted"));
       break;
-    case PAGE_INFO_RESET_DECISIONS_CLICKED:
+    case page_info::PAGE_INFO_RESET_DECISIONS_CLICKED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.Permission.ResetDecisions"));
       break;
-    case PAGE_INFO_FORGET_SITE_OPENED:
+    case page_info::PAGE_INFO_FORGET_SITE_OPENED:
       base::RecordAction(base::UserMetricsAction("PageInfo.ForgetSite.Opened"));
       break;
-    case PAGE_INFO_FORGET_SITE_CLEARED:
+    case page_info::PAGE_INFO_FORGET_SITE_CLEARED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.ForgetSite.Cleared"));
       break;
-    case PAGE_INFO_HISTORY_OPENED:
+    case page_info::PAGE_INFO_HISTORY_OPENED:
       base::RecordAction(base::UserMetricsAction("PageInfo.History.Opened"));
       break;
-    case PAGE_INFO_HISTORY_ENTRY_REMOVED:
+    case page_info::PAGE_INFO_HISTORY_ENTRY_REMOVED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.History.EntryRemoved"));
       break;
-    case PAGE_INFO_HISTORY_ENTRY_CLICKED:
+    case page_info::PAGE_INFO_HISTORY_ENTRY_CLICKED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.History.EntryClicked"));
       break;
-    case PAGE_INFO_PASSWORD_REUSE_ALLOWED:
+    case page_info::PAGE_INFO_PASSWORD_REUSE_ALLOWED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.PasswordReuseAllowed"));
       break;
-    case PAGE_INFO_CHANGE_PASSWORD_PRESSED:
+    case page_info::PAGE_INFO_CHANGE_PASSWORD_PRESSED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.ChangePasswordPressed"));
       break;
-    case PAGE_INFO_SAFETY_TIP_HELP_OPENED:
+    case page_info::PAGE_INFO_SAFETY_TIP_HELP_OPENED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.SafetyTip.HelpOpened"));
       break;
-    case PAGE_INFO_STORE_INFO_CLICKED:
+    case page_info::PAGE_INFO_STORE_INFO_CLICKED:
       base::RecordAction(base::UserMetricsAction("PageInfo.StoreInfo.Opened"));
       break;
-    case PAGE_INFO_ABOUT_THIS_SITE_PAGE_OPENED:
+    case page_info::PAGE_INFO_ABOUT_THIS_SITE_PAGE_OPENED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.AboutThisSite.Opened"));
       break;
-    case PAGE_INFO_ABOUT_THIS_SITE_SOURCE_LINK_CLICKED:
+    case page_info::PAGE_INFO_ABOUT_THIS_SITE_SOURCE_LINK_CLICKED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.AboutThisSite.SourceLinkClicked"));
       break;
-    case PAGE_INFO_ABOUT_THIS_SITE_MORE_ABOUT_CLICKED:
+    case page_info::PAGE_INFO_ABOUT_THIS_SITE_MORE_ABOUT_CLICKED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.AboutThisSite.MoreAboutClicked"));
       break;
-    case PAGE_INFO_COOKIES_PAGE_OPENED:
+    case page_info::PAGE_INFO_COOKIES_PAGE_OPENED:
       base::RecordAction(
           base::UserMetricsAction("PageInfo.CookiesSubpage.Opened"));
       break;
-    case PAGE_INFO_COOKIES_SETTINGS_OPENED:
+    case page_info::PAGE_INFO_COOKIES_SETTINGS_OPENED:
       base::RecordAction(base::UserMetricsAction(
           "PageInfo.CookiesSubpage.SettingsLinkClicked"));
       break;
-    case PAGE_INFO_ALL_SITES_WITH_FPS_FILTER_OPENED:
+    case page_info::PAGE_INFO_ALL_SITES_WITH_FPS_FILTER_OPENED:
       base::RecordAction(base::UserMetricsAction(
           "PageInfo.CookiesSubpage.AllSitesFilteredOpened"));
       break;
@@ -586,7 +592,7 @@ void PageInfo::OnSitePermissionChanged(
   // total count of permission changes in another histogram makes it easier to
   // compare it against other kinds of actions in Page Info.
   HostContentSettingsMap* map = GetContentSettings();
-  RecordPageInfoAction(PAGE_INFO_CHANGED_PERMISSION);
+  RecordPageInfoAction(page_info::PAGE_INFO_CHANGED_PERMISSION);
   if (type == ContentSettingsType::SOUND) {
     ContentSetting default_setting =
         map->GetDefaultContentSetting(ContentSettingsType::SOUND, nullptr);
@@ -648,7 +654,8 @@ void PageInfo::OnSitePermissionChanged(
   using Constraints = content_settings::ContentSettingConstraints;
   Constraints constraints;
   if (is_one_time) {
-    constraints.set_session_model(content_settings::SessionModel::OneTime);
+    constraints.set_session_model(
+        content_settings::mojom::SessionModel::ONE_TIME);
     if (base::FeatureList::IsEnabled(
             content_settings::features::kActiveContentSettingExpiry)) {
       constraints.set_lifetime(permissions::kOneTimePermissionMaximumLifetime);
@@ -716,7 +723,7 @@ void PageInfo::OnSiteChosenObjectDeleted(const ChooserUIInfo& ui_info,
 
   // Refresh the UI to reflect the changed settings.
   PresentSitePermissions();
-  RecordPageInfoAction(PAGE_INFO_CHOOSER_OBJECT_DELETED);
+  RecordPageInfoAction(page_info::PAGE_INFO_CHOOSER_OBJECT_DELETED);
 }
 
 void PageInfo::OnUIClosing(bool* reload_prompt) {
@@ -742,14 +749,18 @@ void PageInfo::OnRevokeSSLErrorBypassButtonPressed() {
   stateful_ssl_host_state_delegate->RevokeUserAllowExceptionsHard(
       site_url().host());
   did_revoke_user_ssl_decisions_ = true;
-  RecordPageInfoAction(PAGE_INFO_RESET_DECISIONS_CLICKED);
+  RecordPageInfoAction(page_info::PAGE_INFO_RESET_DECISIONS_CLICKED);
+}
+
+void PageInfo::OnPermissionUsageChange() {
+  UpdatePermissions();
 }
 
 void PageInfo::OpenSiteSettingsView() {
 #if BUILDFLAG(IS_ANDROID)
   NOTREACHED();
 #else
-  RecordPageInfoAction(PAGE_INFO_SITE_SETTINGS_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_SITE_SETTINGS_OPENED);
   delegate_->ShowSiteSettings(site_url());
 #endif
 }
@@ -758,7 +769,7 @@ void PageInfo::OpenCookiesSettingsView() {
 #if BUILDFLAG(IS_ANDROID)
   NOTREACHED();
 #else
-  RecordPageInfoAction(PAGE_INFO_COOKIES_SETTINGS_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_COOKIES_SETTINGS_OPENED);
   delegate_->ShowCookiesSettings();
 #endif
 }
@@ -768,7 +779,7 @@ void PageInfo::OpenAllSitesViewFilteredToFps() {
   NOTREACHED();
 #else
   auto fps_owner = delegate_->GetFpsOwner(site_url_);
-  RecordPageInfoAction(PAGE_INFO_ALL_SITES_WITH_FPS_FILTER_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_ALL_SITES_WITH_FPS_FILTER_OPENED);
   if (fps_owner) {
     delegate_->ShowAllSitesSettingsFilteredByFpsOwner(*fps_owner);
   } else {
@@ -786,7 +797,7 @@ void PageInfo::OpenCookiesDialog() {
     return;
   }
 
-  RecordPageInfoAction(PAGE_INFO_COOKIES_DIALOG_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_COOKIES_DIALOG_OPENED);
   delegate_->OpenCookiesDialog();
 #endif
 }
@@ -801,7 +812,7 @@ void PageInfo::OpenCertificateDialog(net::X509Certificate* certificate) {
 
   gfx::NativeWindow top_window = web_contents_->GetTopLevelNativeWindow();
   if (certificate && top_window) {
-    RecordPageInfoAction(PAGE_INFO_CERTIFICATE_DIALOG_OPENED);
+    RecordPageInfoAction(page_info::PAGE_INFO_CERTIFICATE_DIALOG_OPENED);
     delegate_->OpenCertificateDialog(certificate);
   }
 #endif
@@ -811,7 +822,7 @@ void PageInfo::OpenSafetyTipHelpCenterPage() {
 #if BUILDFLAG(IS_ANDROID)
   NOTREACHED();
 #else
-  RecordPageInfoAction(PAGE_INFO_SAFETY_TIP_HELP_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_SAFETY_TIP_HELP_OPENED);
   delegate_->OpenSafetyTipHelpCenterPage();
 #endif
 }
@@ -820,7 +831,7 @@ void PageInfo::OpenConnectionHelpCenterPage(const ui::Event& event) {
 #if BUILDFLAG(IS_ANDROID)
   NOTREACHED();
 #else
-  RecordPageInfoAction(PAGE_INFO_CONNECTION_HELP_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_CONNECTION_HELP_OPENED);
   delegate_->OpenConnectionHelpCenterPage(event);
 #endif
 }
@@ -830,14 +841,14 @@ void PageInfo::OpenContentSettingsExceptions(
 #if BUILDFLAG(IS_ANDROID)
   NOTREACHED();
 #else
-  RecordPageInfoAction(PAGE_INFO_CONNECTION_HELP_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_CONNECTION_HELP_OPENED);
   delegate_->OpenContentSettingsExceptions(content_settings_type);
 #endif
 }
 
 void PageInfo::OnChangePasswordButtonPressed() {
 #if BUILDFLAG(FULL_SAFE_BROWSING)
-  RecordPageInfoAction(PAGE_INFO_CHANGE_PASSWORD_PRESSED);
+  RecordPageInfoAction(page_info::PAGE_INFO_CHANGE_PASSWORD_PRESSED);
   delegate_->OnUserActionOnPasswordUi(
       safe_browsing::WarningAction::CHANGE_PASSWORD);
 #endif
@@ -845,14 +856,14 @@ void PageInfo::OnChangePasswordButtonPressed() {
 
 void PageInfo::OnAllowlistPasswordReuseButtonPressed() {
 #if BUILDFLAG(FULL_SAFE_BROWSING)
-  RecordPageInfoAction(PAGE_INFO_PASSWORD_REUSE_ALLOWED);
+  RecordPageInfoAction(page_info::PAGE_INFO_PASSWORD_REUSE_ALLOWED);
   delegate_->OnUserActionOnPasswordUi(
       safe_browsing::WarningAction::MARK_AS_LEGITIMATE);
 #endif
 }
 
 void PageInfo::OnCookiesPageOpened() {
-  RecordPageInfoAction(PAGE_INFO_COOKIES_PAGE_OPENED);
+  RecordPageInfoAction(page_info::PAGE_INFO_COOKIES_PAGE_OPENED);
   delegate_->OnCookiesPageOpened();
 }
 
@@ -1161,8 +1172,9 @@ void PageInfo::PopulatePermissionInfo(PermissionInfo& permission_info,
   permission_info.setting = setting;
 
   permission_info.source = info.source;
-  permission_info.is_one_time = (info.metadata.session_model() ==
-                                 content_settings::SessionModel::OneTime);
+  permission_info.is_one_time =
+      (info.metadata.session_model() ==
+       content_settings::mojom::SessionModel::ONE_TIME);
 
   auto* page_specific_content_settings = GetPageSpecificContentSettings();
   if (page_specific_content_settings && setting == CONTENT_SETTING_ALLOW) {
@@ -1298,7 +1310,8 @@ bool PageInfo::ShouldShowPermission(
   }
 #endif
 
-  // TODO(crbug.com/1433644): Filter out FPS related STORAGE_ACCESS permissions.
+  // TODO(crbug.com/40064079): Filter out FPS related STORAGE_ACCESS
+  // permissions.
 
   // Show the content setting if it has been changed by the user since the last
   // page load.
@@ -1343,12 +1356,6 @@ void PageInfo::PresentSitePermissions() {
   }
 
   for (ContentSettingsType type : kTwoPatternPermissions) {
-    if (type == ContentSettingsType::STORAGE_ACCESS &&
-        !base::FeatureList::IsEnabled(
-            permissions::features::kPermissionStorageAccessAPI)) {
-      continue;
-    }
-
     for (auto& requester : GetTwoSitePermissionRequesters(type)) {
       PermissionInfo permission_info;
       permission_info.type = type;
@@ -1465,7 +1472,6 @@ void PageInfo::PresentSiteDataInternal(base::OnceClosure done) {
   cookies_info.enforcement = enforcement_;
   cookies_info.blocking_status = blocking_status_;
   cookies_info.expiration = cookie_exception_expiration_;
-  cookies_info.confidence = cookie_controls_confidence_;
   cookies_info.is_otr = web_contents_->GetBrowserContext()->IsOffTheRecord();
   ui_->SetCookieInfo(cookies_info);
 
@@ -1620,7 +1626,7 @@ void PageInfo::GetSafeBrowsingStatusByMaliciousContentStatus(
     case security_state::MALICIOUS_CONTENT_STATUS_MANAGED_POLICY_BLOCK:
       *status = PageInfo::SAFE_BROWSING_STATUS_MANAGED_POLICY_BLOCK;
       *details =
-          l10n_util::GetStringUTF16(IDS_PAGE_INFO_ENTERPRISE_WARN_DETAILS);
+          l10n_util::GetStringUTF16(IDS_PAGE_INFO_ENTERPRISE_BLOCK_DETAILS);
       break;
     case security_state::MALICIOUS_CONTENT_STATUS_MANAGED_POLICY_WARN:
       *status = PageInfo::SAFE_BROWSING_STATUS_MANAGED_POLICY_WARN;
@@ -1659,22 +1665,12 @@ void PageInfo::ContentSettingChangedViaPageInfo(ContentSettingsType type) {
   return settings->ContentSettingChangedViaPageInfo(type);
 }
 
-int PageInfo::GetFirstPartyAllowedCookiesCount(const GURL& site_url) {
-  auto* settings = GetPageSpecificContentSettings();
-  if (!settings) {
-    return 0;
-  }
-  return settings->allowed_local_shared_objects().GetObjectCountForDomain(
-      site_url);
-}
-
 int PageInfo::GetSitesWithAllowedCookiesAccessCount() {
   auto* settings = GetPageSpecificContentSettings();
   if (!settings) {
     return 0;
   }
   return browsing_data::GetUniqueHostCount(
-      settings->allowed_local_shared_objects(),
       *(settings->allowed_browsing_data_model()));
 }
 
@@ -1685,18 +1681,7 @@ int PageInfo::GetThirdPartySitesWithBlockedCookiesAccessCount(
     return 0;
   }
   return browsing_data::GetUniqueThirdPartyCookiesHostCount(
-      site_url, settings->blocked_local_shared_objects(),
-      *(settings->blocked_browsing_data_model()));
-}
-
-int PageInfo::GetFirstPartyBlockedCookiesCount(const GURL& site_url) {
-  auto* settings = GetPageSpecificContentSettings();
-  if (!settings) {
-    return 0;
-  }
-
-  return settings->blocked_local_shared_objects().GetObjectCountForDomain(
-      site_url);
+      site_url, *(settings->blocked_browsing_data_model()));
 }
 
 bool PageInfo::IsIsolatedWebApp() const {

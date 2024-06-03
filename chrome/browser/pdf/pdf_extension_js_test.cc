@@ -27,7 +27,6 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/web_ui_test_data_source.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
-#include "components/services/screen_ai/buildflags/buildflags.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
@@ -37,6 +36,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "pdf/buildflags.h"
 #include "pdf/pdf_features.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -149,10 +149,6 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, PluginController) {
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, Viewport) {
   RunTestsInJsModule("viewport_test.js", "test.pdf");
-}
-
-IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, ViewportScroller) {
-  RunTestsInJsModule("viewport_scroller_test.js", "test.pdf");
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSTest, Layout3) {
@@ -356,21 +352,11 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, Beep) {
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, NoBeep) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   SetPdfJavaScript(/*enabled=*/false);
   RunTestsInJsModule("nobeep_test.js", "test-beep.pdf");
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, BeepThenNoBeep) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   RunTestsInJsModule("beep_test.js", "test-beep.pdf");
@@ -384,11 +370,6 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, BeepThenNoBeep) {
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, NoBeepThenBeep) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   SetPdfJavaScript(/*enabled=*/false);
@@ -409,11 +390,6 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, BeepCsp) {
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, DISABLED_NoBeepCsp) {
-  // TODO(crbug.com/1445746): Remove this once the test passes for OOPIF PDF.
-  if (UseOopif()) {
-    GTEST_SKIP();
-  }
-
   // The script-source none directive in the mock headers file should
   // prevent the JavaScript from executing the beep().
   // TODO(https://crbug.com/1032511) functionality not implemented.

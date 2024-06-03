@@ -28,10 +28,6 @@ namespace syncer {
 
 namespace {
 
-BASE_FEATURE(kSyncPollIfTimerNotRunning,
-             "SyncPollIfTimerNotRunning",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 constexpr base::TimeDelta kLocalChangeNudgeDelayForTest = base::Milliseconds(1);
 
 bool IsConfigRelatedUpdateOriginValue(
@@ -72,7 +68,7 @@ bool ShouldRequestEarlyExit(const SyncProtocolError& error) {
       DCHECK_NE(error.action, UNKNOWN_ACTION);
       return true;
     case UNKNOWN_ERROR:
-      // TODO(crbug.com/1081266): This NOTREACHED is questionable because the
+      // TODO(crbug.com/40691256): This NOTREACHED is questionable because the
       // sync server can cause it.
       NOTREACHED();
       return false;
@@ -252,7 +248,7 @@ void SyncSchedulerImpl::ScheduleConfiguration(
   DCHECK(!pending_configure_params_);
 
   // Only reconfigure if we have types to download.
-  if (!types_to_download.Empty()) {
+  if (!types_to_download.empty()) {
     // Cache configuration parameters since TrySyncCycleJob() posts a task.
     pending_configure_params_ = std::make_unique<ConfigurationParams>(
         origin, types_to_download, std::move(ready_task));
@@ -323,7 +319,7 @@ void SyncSchedulerImpl::ScheduleLocalNudge(ModelType type) {
 
 void SyncSchedulerImpl::ScheduleLocalRefreshRequest(ModelTypeSet types) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!types.Empty());
+  DCHECK(!types.empty());
 
   SDVLOG(2) << "Scheduling sync because of local refresh request for "
             << ModelTypeSetToDebugString(types);
@@ -672,21 +668,13 @@ void SyncSchedulerImpl::TrySyncCycleJobImpl(
       SDVLOG(2) << "Found pending nudge job";
       DoNudgeSyncCycleJob();
     } else {
-      bool should_poll = false;
-      if (base::FeatureList::IsEnabled(kSyncPollIfTimerNotRunning)) {
-        // If the poll timer isn't running, that means a poll is pending.
-        // Most likely this was called from PollTimerCallback(), but it's also
-        // possible that the poll was triggered earlier while the scheduler was
-        // in an error state, and now it has exited the error state.
-        // Note: At most one of the two poll timers can be running (which one
-        // depends on the state of kSyncSchedulerUseWallClockTimer).
-        should_poll =
-            !poll_timer_ticks_.IsRunning() && !poll_timer_wall_.IsRunning();
-      } else {
-        should_poll =
-            (TimeTicks::Now() - last_poll_reset_ticks_) >= GetPollInterval();
-      }
-      if (should_poll) {
+      // If the poll timer isn't running, that means a poll is pending.
+      // Most likely this was called from PollTimerCallback(), but it's also
+      // possible that the poll was triggered earlier while the scheduler was
+      // in an error state, and now it has exited the error state.
+      // Note: At most one of the two poll timers can be running (which one
+      // depends on the state of kSyncSchedulerUseWallClockTimer).
+      if (!poll_timer_ticks_.IsRunning() && !poll_timer_wall_.IsRunning()) {
         SDVLOG(2) << "Found pending poll";
         DoPollSyncCycleJob();
       }

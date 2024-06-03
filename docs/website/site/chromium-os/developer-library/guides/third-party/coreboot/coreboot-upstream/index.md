@@ -1,6 +1,6 @@
 --------------------------------------------------------------------------------
 
-breadcrumbs: - - /chromium-os/developer-library/guides - Chromium OS > Developer
+breadcrumbs: - - /chromium-os/developer-library/guides - ChromiumOS > Developer
 Library > Guides page_name: coreboot-upstream
 
 ## title: Working with coreboot upstream and Chromium
@@ -187,9 +187,9 @@ $ git checkout origin/main
         1.  image-{BOARD}.net.bin - Debug build. Only applicable on Intel
             platforms
 
-[ChromeOS Developer guide]: https://chromium.googlesource.com/chromiumos/docs/+/main/developer_guide.md
-[ChromiumOS Contributing Guide]: https://chromium.googlesource.com/chromiumos/docs/+/main/contributing.md#commit-messages
-[CL dependencies]: https://chromium.googlesource.com/chromiumos/docs/+/main/contributing.md#cq-depend
+[ChromeOS Developer guide]: https://www.chromium.org/chromium-os/developer-library/guides/development/developer-guide
+[ChromiumOS Contributing Guide]: https://www.chromium.org/chromium-os/developer-library/guides/development/contributing
+[CL dependencies]: https://www.chromium.org/chromium-os/developer-library/guides/development/contributing/#cl-dependencies
 [coreboot.org]: https://coreboot.org
 [Gerrit account page]: https://review.coreboot.org/#/settings/ssh-keys
 [Gerrit's documentation]: https://gerrit-review.googlesource.com/Documentation/user-upload.html#ssh

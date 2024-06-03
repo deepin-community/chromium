@@ -222,6 +222,7 @@ build_webui("build") {
     "os_apps_page/app_notifications_page/app_notification_row.ts",
     "os_apps_page/app_notifications_page/app_notifications_manager_subpage.ts",
     "os_apps_page/app_notifications_page/app_notifications_subpage.ts",
+    "os_apps_page/app_parental_controls/app_parental_controls_subpage.ts",
     "os_apps_page/manage_isolated_web_apps_page/manage_isolated_web_apps_subpage.ts",
     "os_apps_page/os_apps_page.ts",
     "os_bluetooth_page/os_bluetooth_change_device_name_dialog.ts",
@@ -360,6 +361,7 @@ build_webui("build") {
     "common/route_origin_mixin.ts",
     "common/setting_id_param_util.ts",
     "common/types.ts",
+    "controls/v2/pref_control_mixin_internal.ts",
     "os_files_page/google_drive_browser_proxy.ts",
     "os_files_page/one_drive_browser_proxy.ts",
     "crostini_page/crostini_browser_proxy.ts",
@@ -530,7 +532,6 @@ build_webui("build") {
     "//third_party/polymer/v3_0:library",
     "//ui/webui/resources/cr_components/app_management:build_ts",
     "//ui/webui/resources/cr_components/color_change_listener:build_ts",
-    "//ui/webui/resources/cr_components/settings_prefs:build_ts",
     "//ui/webui/resources/js:build_ts",
     "//ui/webui/resources/mojo:build_ts",
   ]
@@ -561,6 +562,7 @@ build_webui("build") {
     extra_grdp_files += [ "$root_gen_dir/chrome/browser/resources/nearby_share/shared/resources.grdp" ]
   }
 
+  webui_context_type = "trusted"
   optimize = optimize_webui
   if (optimize) {
     optimize_webui_host = "os-settings"
@@ -571,12 +573,14 @@ build_webui("build") {
     optimize_webui_excludes = [
       "chrome://resources/cr_components/app_management/app_management.mojom-webui.js",
       "chrome://resources/ash/common/bluetooth/cros_bluetooth_config.js",
+      "chrome://resources/ash/common/bluetooth/hid_preserving_bluetooth_state_controller.js",
       "chrome://resources/ash/common/cellular_setup/mojo_interface_provider.js",
       "chrome://resources/ash/common/connectivity/mojo_connectivity_provider.js",
       "chrome://resources/ash/common/connectivity/passpoint.mojom-webui.js",
       "chrome://resources/ash/common/hotspot/cros_hotspot_config.js",
       "chrome://resources/ash/common/hotspot/cros_hotspot_config.mojom-webui.js",
       "chrome://resources/ash/common/network/mojo_interface_provider.js",
+      "chrome://resources/mojo/ash/public/mojom/hid_preserving_bluetooth_state_controller.mojom-webui.js",
       "chrome://resources/mojo/chromeos/ash/services/cellular_setup/public/mojom/cellular_setup.mojom-webui.js",
       "chrome://resources/mojo/chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom-webui.js",
       "chrome://resources/mojo/chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-webui.js",

@@ -1,16 +1,23 @@
 #include "./fuzztest/init_fuzztest.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "absl/flags/flag.h"
+#include "absl/flags/reflection.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
 #include "absl/time/time.h"
 #include "./fuzztest/internal/configuration.h"
 #include "./fuzztest/internal/flag_name.h"
@@ -26,7 +33,11 @@ FUZZTEST_DEFINE_FLAG(
     bool, list_fuzz_tests, false,
     "Prints (to stdout) the list of all available FUZZ_TEST-s in the "
     "binary and exits. I.e., prints the test names that can be run with "
-    "the flag `--" FUZZTEST_FLAG_PREFIX "fuzz=<test name>`.");
+    "the flag `--" FUZZTEST_FLAG_PREFIX "fuzz=<test name>`.")
+    .OnUpdate([]() {
+      fuzztest::internal::SetFuzzTestListingModeValidatorForGoogleTest(
+          absl::GetFlag(FUZZTEST_FLAG(list_fuzz_tests)));
+    });
 
 static constexpr absl::string_view kUnspecified = "<unspecified>";
 
@@ -148,22 +159,18 @@ std::string GetMatchingFuzzTestOrExit(std::string_view name) {
 namespace {
 
 internal::Configuration CreateConfigurationsFromFlags(
-    absl::string_view binary_path) {
-  const std::string binary_identifier =
-      std::string(internal::Basename(binary_path));
-  std::string binary_corpus = absl::StrCat(
-      absl::GetFlag(FUZZTEST_FLAG(corpus_database)), "/", binary_identifier);
-  if (getenv("TEST_SRCDIR")) {
-    binary_corpus = absl::StrCat(getenv("TEST_SRCDIR"), "/", binary_corpus);
-  }
+    absl::string_view binary_identifier) {
+  bool reproduce_findings_as_separate_tests =
+      absl::GetFlag(FUZZTEST_FLAG(reproduce_findings_as_separate_tests));
   return internal::Configuration{
-      .corpus_database = internal::CorpusDatabase(
-          binary_corpus, absl::GetFlag(FUZZTEST_FLAG(replay_coverage_inputs)),
-          absl::GetFlag(FUZZTEST_FLAG(reproduce_findings_as_separate_tests))),
-      .stack_limit = absl::GetFlag(FUZZTEST_FLAG(stack_limit_kb)) * 1024,
-      .rss_limit = absl::GetFlag(FUZZTEST_FLAG(rss_limit_mb)) * 1024 * 1024,
-      .time_limit_per_input =
-          absl::GetFlag(FUZZTEST_FLAG(time_limit_per_input)),
+      absl::GetFlag(FUZZTEST_FLAG(corpus_database)),
+      std::string(binary_identifier),
+      /*fuzz_tests=*/ListRegisteredTests(),
+      reproduce_findings_as_separate_tests,
+      absl::GetFlag(FUZZTEST_FLAG(replay_coverage_inputs)),
+      /*stack_limit=*/absl::GetFlag(FUZZTEST_FLAG(stack_limit_kb)) * 1024,
+      /*rss_limit=*/absl::GetFlag(FUZZTEST_FLAG(rss_limit_mb)) * 1024 * 1024,
+      absl::GetFlag(FUZZTEST_FLAG(time_limit_per_input)),
   };
 }
 
@@ -208,8 +215,11 @@ void InitFuzzTest(int* argc, char*** argv) {
     internal::Runtime::instance().SetFuzzTimeLimit(duration);
   }
 
+  std::string binary_identifier = std::string(internal::Basename(*argv[0]));
+  std::optional<std::string> reproduction_command_template;
   internal::Configuration configuration =
-      CreateConfigurationsFromFlags(*argv[0]);
+      CreateConfigurationsFromFlags(binary_identifier);
+  configuration.reproduction_command_template = reproduction_command_template;
   internal::RegisterFuzzTestsAsGoogleTests(argc, argv, configuration);
 
   const RunMode run_mode = is_test_to_fuzz_specified || is_duration_specified

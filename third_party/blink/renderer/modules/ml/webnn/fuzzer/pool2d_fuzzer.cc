@@ -46,10 +46,6 @@ void ProtobufToPool2dOptions(const webnn_proto::pool2dOptions& data,
     options->setDilations(RepeatedFieldToVector<uint32_t>(data.dilations()));
   }
 
-  if (data.has_auto_pad()) {
-    options->setAutoPad(ToV8MLAutoPad(data.auto_pad()));
-  }
-
   if (data.has_layout()) {
     options->setLayout(ToV8MLInputOperandLayout(data.layout()));
   }
@@ -79,6 +75,7 @@ DEFINE_PROTO_FUZZER(const webnn_proto::pool2d& pool2d) {
 
   ScriptState* script_state =
       ToScriptStateForMainWorld(&page_holder->GetFrame());
+  ScriptState::Scope script_state_scope(script_state);
 
   DummyExceptionStateForTesting exception_state;
   auto* builder = CreateMLGraphBuilder(

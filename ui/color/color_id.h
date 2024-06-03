@@ -8,6 +8,7 @@
 #include "base/check_op.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "build/chromeos_buildflags.h"
 
 // clang-format off
 #define CROSS_PLATFORM_COLOR_IDS \
@@ -294,6 +295,19 @@
   E_CPONLY(kColorComboboxContainerOutline) \
   E_CPONLY(kColorComboboxInkDropHovered) \
   E_CPONLY(kColorComboboxInkDropRipple) \
+  /* These colors correspond to the system colors defined in */ \
+  /* ui::NativeTheme::SystemThemeColor. They are used to support */ \
+  /* CSS system colors. */ \
+  E_CPONLY(kColorCssSystemBtnFace) \
+  E_CPONLY(kColorCssSystemBtnText) \
+  E_CPONLY(kColorCssSystemGrayText) \
+  E_CPONLY(kColorCssSystemHighlight) \
+  E_CPONLY(kColorCssSystemHighlightText) \
+  E_CPONLY(kColorCssSystemHotlight) \
+  E_CPONLY(kColorCssSystemMenuHilight) \
+  E_CPONLY(kColorCssSystemScrollbar) \
+  E_CPONLY(kColorCssSystemWindow) \
+  E_CPONLY(kColorCssSystemWindowText) \
   E_CPONLY(kColorCustomFrameCaptionForeground) \
   E_CPONLY(kColorDebugBoundsOutline) \
   E_CPONLY(kColorDebugContentOutline) \
@@ -305,19 +319,6 @@
   E_CPONLY(kColorDropdownForegroundSelected) \
   E_CPONLY(kColorFocusableBorderFocused) \
   E_CPONLY(kColorFocusableBorderUnfocused) \
-  /* These colors correspond to the system colors defined in */ \
-  /* ui::NativeTheme::SystemThemeColor. They are used to support the */ \
-  /* platform agnostic forced colors mode. */ \
-  E_CPONLY(kColorForcedBtnFace) \
-  E_CPONLY(kColorForcedBtnText) \
-  E_CPONLY(kColorForcedGrayText) \
-  E_CPONLY(kColorForcedHighlight) \
-  E_CPONLY(kColorForcedHighlightText) \
-  E_CPONLY(kColorForcedHotlight) \
-  E_CPONLY(kColorForcedMenuHilight) \
-  E_CPONLY(kColorForcedScrollbar) \
-  E_CPONLY(kColorForcedWindow) \
-  E_CPONLY(kColorForcedWindowText) \
   E_CPONLY(kColorFrameActive) \
   E_CPONLY(kColorFrameActiveUnthemed) \
   E_CPONLY(kColorFrameCaptionButtonUnfocused) \
@@ -557,8 +558,30 @@
   E_CPONLY(kColorWebNativeControlSliderPressed) \
   E_CPONLY(kColorWindowBackground)
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#define CHROMEOS_ASH_COLOR_IDS \
+  /* Colors for illustrations */ \
+  E_CPONLY(kColorNativeColor1) \
+  E_CPONLY(kColorNativeColor1Shade1) \
+  E_CPONLY(kColorNativeColor1Shade2) \
+  E_CPONLY(kColorNativeColor2) \
+  E_CPONLY(kColorNativeColor3) \
+  E_CPONLY(kColorNativeColor4) \
+  E_CPONLY(kColorNativeColor5) \
+  E_CPONLY(kColorNativeColor6) \
+  E_CPONLY(kColorNativeBaseColor) \
+  E_CPONLY(kColorNativeSecondaryColor) \
+  E_CPONLY(kColorNativeOnPrimaryContainerColor) \
+  E_CPONLY(kColorNativeAnalogColor) \
+  E_CPONLY(kColorNativeMutedColor) \
+  E_CPONLY(kColorNativeComplementColor) \
+  E_CPONLY(kColorNativeOnGradientColor)
+#elif BUILDFLAG(IS_CHROMEOS_LACROS)
+#define CHROMEOS_ASH_COLOR_IDS
+#endif
 #if BUILDFLAG(IS_CHROMEOS)
 #define PLATFORM_SPECIFIC_COLOR_IDS \
+  CHROMEOS_ASH_COLOR_IDS \
   /* NOTE: Nearly all of the following CrOS color ids will need to be re- */ \
   /* evaluated once CrOS fully supports the color pipeline. */ \
   E_CPONLY(kColorAshActionLabelFocusRingEdit) \
@@ -601,16 +624,8 @@
   E_CPONLY(kColorCrosSystemHighlightBorder) \
   E_CPONLY(kColorCrosSystemHighlightBorder1) \
   \
-  E_CPONLY(kColorNativeColor1) \
-  E_CPONLY(kColorNativeColor1Shade1) \
-  E_CPONLY(kColorNativeColor1Shade2) \
-  E_CPONLY(kColorNativeColor2) \
-  E_CPONLY(kColorNativeColor3) \
-  E_CPONLY(kColorNativeColor4) \
-  E_CPONLY(kColorNativeColor5) \
-  E_CPONLY(kColorNativeColor6) \
-  E_CPONLY(kColorNativeBaseColor) \
-  E_CPONLY(kColorNativeSecondaryColor)
+  E_CPONLY(kColorCrosSysPositive) \
+  E_CPONLY(kColorCrosSysComplementVariant)
 #elif BUILDFLAG(IS_LINUX)
 #define PLATFORM_SPECIFIC_COLOR_IDS \
   E_CPONLY(kColorNativeButtonBorder)\

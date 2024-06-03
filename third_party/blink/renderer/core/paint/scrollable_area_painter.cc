@@ -77,11 +77,11 @@ void ScrollableAreaPainter::PaintResizer(GraphicsContext& context,
     larger_corner.set_size(
         gfx::Size(larger_corner.width() + 1, larger_corner.height() + 1));
     context.SetStrokeColor(Color(217, 217, 217));
-    context.SetStrokeStyle(kSolidStroke);
+    context.SetStrokeThickness(1);
     gfx::RectF corner_outline(larger_corner);
     corner_outline.Inset(0.5f);
     context.StrokeRect(
-        corner_outline, 1,
+        corner_outline,
         PaintAutoDarkMode(box->StyleRef(),
                           DarkModeFilter::ElementRole::kBackground));
   }
@@ -388,8 +388,9 @@ void ScrollableAreaPainter::PaintScrollCorner(GraphicsContext& context,
       GetScrollableArea().UsedColorSchemeScrollbars();
   const ui::ColorProvider* color_provider =
       GetScrollableArea().GetColorProvider(color_scheme);
-  theme->PaintScrollCorner(context, GetScrollableArea().VerticalScrollbar(),
-                           client, visual_rect, color_scheme, color_provider);
+  theme->PaintScrollCorner(
+      context, GetScrollableArea().VerticalScrollbar(), client, visual_rect,
+      color_scheme, GetScrollableArea().InForcedColorsMode(), color_provider);
 }
 
 PaintLayerScrollableArea& ScrollableAreaPainter::GetScrollableArea() const {

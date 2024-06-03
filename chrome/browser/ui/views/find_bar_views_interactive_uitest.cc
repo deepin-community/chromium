@@ -112,12 +112,13 @@ class FindResulStateObserver : public ui::test::ObservationStateObserver<
 };
 DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(FindResulStateObserver, kFindResultState);
 
-// TODO(crbug.com/1509945): Remaining tests should be migrated to
+// TODO(crbug.com/41482547): Remaining tests should be migrated to
 // FindInPageTest.
 class LegacyFindInPageTest : public InProcessBrowserTest {
  public:
   LegacyFindInPageTest() {
-    FindBarHost::disable_animations_during_testing_ = true;
+    // TODO(https://crbug.com/40183900): Undo this in the destructor!
+    FindBarHost::SetEnableAnimationsForTesting(false);
   }
 
   LegacyFindInPageTest(const LegacyFindInPageTest&) = delete;
@@ -134,7 +135,9 @@ class LegacyFindInPageTest : public InProcessBrowserTest {
     return static_cast<FindBarHost*>(find_bar);
   }
 
-  FindBarView* GetFindBarView() { return GetFindBarHost()->find_bar_view(); }
+  FindBarView* GetFindBarView() {
+    return GetFindBarHost()->GetFindBarViewForTesting();
+  }
 
   std::u16string GetFindBarText() { return GetFindBarHost()->GetFindText(); }
 
@@ -182,7 +185,10 @@ class LegacyFindInPageTest : public InProcessBrowserTest {
 
 class FindInPageTest : public InteractiveBrowserTest {
  public:
-  FindInPageTest() { FindBarHost::disable_animations_during_testing_ = true; }
+  FindInPageTest() {
+    // TODO(https://crbug.com/40183900): Undo this in the destructor!
+    FindBarHost::SetEnableAnimationsForTesting(false);
+  }
 
   void SetUp() override {
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());

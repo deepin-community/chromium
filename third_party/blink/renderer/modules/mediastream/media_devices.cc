@@ -8,7 +8,9 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/ranges/algorithm.h"
+#include "base/strings/strcat.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -82,6 +84,45 @@ const char kFeaturePolicyBlocked[] =
     "Access to the feature \"display-capture\" is disallowed by permission "
     "policy.";
 
+enum class MultiScreenCaptureCSPResult {
+  kStrictEnough,
+  kNoCSP,
+  kNoStrictCSP,
+  kNoTrustedTypes
+};
+
+MultiScreenCaptureCSPResult IsCSPEnabled(ExecutionContext* context) {
+  const ContentSecurityPolicy* content_security_policy =
+      context->GetContentSecurityPolicy();
+  if (!content_security_policy) {
+    return MultiScreenCaptureCSPResult::kNoCSP;
+  }
+
+  if (!content_security_policy->IsStrictPolicyEnforced()) {
+    return MultiScreenCaptureCSPResult::kNoStrictCSP;
+  }
+
+  if (!content_security_policy->RequiresTrustedTypes()) {
+    return MultiScreenCaptureCSPResult::kNoTrustedTypes;
+  }
+  return MultiScreenCaptureCSPResult::kStrictEnough;
+}
+
+std::string MultiScreenCaptureCSPResultToHelpLink(
+    MultiScreenCaptureCSPResult result) {
+  switch (result) {
+    case MultiScreenCaptureCSPResult::kStrictEnough:
+      NOTREACHED_NORETURN();
+    case MultiScreenCaptureCSPResult::kNoCSP:
+      return "https://web.dev/articles/strict-csp";
+    case MultiScreenCaptureCSPResult::kNoStrictCSP:
+      return "https://web.dev/articles/strict-csp";
+    case MultiScreenCaptureCSPResult::kNoTrustedTypes:
+      return "https://web.dev/articles/trusted-types";
+  }
+  return "";
+}
+
 template <typename IDLResolvedType>
 class PromiseResolverCallbacks final : public UserMediaRequest::Callbacks {
  public:
@@ -104,35 +145,6 @@ class PromiseResolverCallbacks final : public UserMediaRequest::Callbacks {
   template <typename T>
   void OnSuccessImpl(const MediaStreamVector&, CaptureController*);
 
-  template <>
-  void OnSuccessImpl<MediaStream>(const MediaStreamVector& streams,
-                                  CaptureController* capture_controller) {
-    DCHECK_EQ(streams.size(), 1u);
-    MediaStream* stream = streams[0];
-
-    if (on_success_follow_up_) {
-      // Only getDisplayMedia() calls set |on_success_follow_up_|.
-      // Successful invocations of getDisplayMedia() always have exactly
-      // one video track.
-      //
-      // Extension API calls that are followed by a getUserMedia() call with
-      // chromeMediaSourceId are treated liked getDisplayMedia() calls.
-      MediaStreamTrackVector video_tracks = stream->getVideoTracks();
-      DCHECK_EQ(video_tracks.size(), 1u);
-      if (capture_controller) {
-        capture_controller->SetVideoTrack(video_tracks[0], stream->id().Utf8());
-      }
-    }
-
-    // Resolve Promise<MediaStream> on a microtask.
-    resolver_->Resolve(stream);
-
-    // Enqueue the follow-up microtask, if any is intended.
-    if (on_success_follow_up_) {
-      std::move(on_success_follow_up_).Run(stream->id(), capture_controller);
-    }
-  }
-
   void OnError(ScriptWrappable* callback_this_value,
                const V8MediaStreamError* error,
                CaptureController* capture_controller,
@@ -148,15 +160,6 @@ class PromiseResolverCallbacks final : public UserMediaRequest::Callbacks {
     UserMediaRequest::Callbacks::Trace(visitor);
   }
 
-  template <>
-  void OnSuccessImpl<IDLSequence<MediaStream>>(
-      const MediaStreamVector& streams,
-      CaptureController* capture_controller) {
-    DCHECK(!streams.empty());
-    DCHECK_EQ(UserMediaRequestType::kAllScreensMedia, media_type_);
-    resolver_->Resolve(streams);
-  }
-
  private:
   const UserMediaRequestType media_type_;
 
@@ -166,6 +169,47 @@ class PromiseResolverCallbacks final : public UserMediaRequest::Callbacks {
   base::OnceCallback<void(const String&, CaptureController*)>
       on_success_follow_up_;
 };
+
+template <>
+template <>
+void PromiseResolverCallbacks<MediaStream>::OnSuccessImpl<MediaStream>(
+    const MediaStreamVector& streams,
+    CaptureController* capture_controller) {
+  DCHECK_EQ(streams.size(), 1u);
+  MediaStream* stream = streams[0];
+
+  if (on_success_follow_up_) {
+    // Only getDisplayMedia() calls set |on_success_follow_up_|.
+    // Successful invocations of getDisplayMedia() always have exactly
+    // one video track.
+    //
+    // Extension API calls that are followed by a getUserMedia() call with
+    // chromeMediaSourceId are treated liked getDisplayMedia() calls.
+    MediaStreamTrackVector video_tracks = stream->getVideoTracks();
+    DCHECK_EQ(video_tracks.size(), 1u);
+    if (capture_controller) {
+      capture_controller->SetVideoTrack(video_tracks[0], stream->id().Utf8());
+    }
+  }
+
+  // Resolve Promise<MediaStream> on a microtask.
+  resolver_->Resolve(stream);
+
+  // Enqueue the follow-up microtask, if any is intended.
+  if (on_success_follow_up_) {
+    std::move(on_success_follow_up_).Run(stream->id(), capture_controller);
+  }
+}
+
+template <>
+template <>
+void PromiseResolverCallbacks<IDLSequence<MediaStream>>::OnSuccessImpl<
+    IDLSequence<MediaStream>>(const MediaStreamVector& streams,
+                              CaptureController* capture_controller) {
+  DCHECK(!streams.empty());
+  DCHECK_EQ(UserMediaRequestType::kAllScreensMedia, media_type_);
+  resolver_->Resolve(streams);
+}
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -277,7 +321,7 @@ bool TransientActivationRequirementSatisfied(LocalDOMWindow* window) {
   return false;
 }
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 bool IsExtensionScreenSharingFunctionCall(const MediaStreamConstraints* options,
                                           ExceptionState& exception_state) {
   DCHECK(!exception_state.HadException());
@@ -323,7 +367,7 @@ MediaStreamConstraints* ToMediaStreamConstraints(
     constraints->setVideo(source->video());
   }
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   if (source->hasController()) {
     const bool is_screen_sharing =
         IsExtensionScreenSharingFunctionCall(constraints, exception_state);
@@ -385,6 +429,21 @@ bool EqualDeviceForDeviceChange(const WebMediaDeviceInfo& lhs,
          lhs.group_id == rhs.group_id && lhs.IsAvailable() == rhs.IsAvailable();
 }
 
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+base::Token SubCaptureTargetIdToToken(const WTF::String& id) {
+  if (id.empty()) {
+    return base::Token();
+  }
+
+  const base::Uuid guid = base::Uuid::ParseLowercase(id.Ascii());
+  DCHECK(guid.is_valid());
+
+  const base::Token token = blink::GUIDToToken(guid);
+  DCHECK(!token.is_zero());
+  return token;
+}
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
 }  // namespace
 
 const char MediaDevices::kSupplementName[] = "MediaDevices";
@@ -409,7 +468,7 @@ MediaDevices::MediaDevices(Navigator& navigator)
 
 MediaDevices::~MediaDevices() = default;
 
-ScriptPromiseTyped<IDLSequence<MediaDeviceInfo>> MediaDevices::enumerateDevices(
+ScriptPromise<IDLSequence<MediaDeviceInfo>> MediaDevices::enumerateDevices(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -417,7 +476,7 @@ ScriptPromiseTyped<IDLSequence<MediaDeviceInfo>> MediaDevices::enumerateDevices(
   if (!script_state->ContextIsValid()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "Current frame is detached.");
-    return ScriptPromiseTyped<IDLSequence<MediaDeviceInfo>>();
+    return ScriptPromise<IDLSequence<MediaDeviceInfo>>();
   }
 
   auto* result_tracker = MakeGarbageCollected<ScriptPromiseResolverWithTracker<
@@ -444,7 +503,7 @@ MediaTrackSupportedConstraints* MediaDevices::getSupportedConstraints() const {
   return MediaTrackSupportedConstraints::Create();
 }
 
-ScriptPromiseTyped<MediaStream> MediaDevices::getUserMedia(
+ScriptPromise<MediaStream> MediaDevices::getUserMedia(
     ScriptState* script_state,
     const UserMediaStreamConstraints* options,
     ExceptionState& exception_state) {
@@ -472,7 +531,7 @@ ScriptPromiseTyped<MediaStream> MediaDevices::getUserMedia(
 }
 
 template <typename IDLResolvedType>
-ScriptPromiseTyped<IDLResolvedType> MediaDevices::SendUserMediaRequest(
+ScriptPromise<IDLResolvedType> MediaDevices::SendUserMediaRequest(
     UserMediaRequestType media_type,
     ScriptPromiseResolverWithTracker<UserMediaRequestResult, IDLResolvedType>*
         resolver,
@@ -550,7 +609,7 @@ ScriptPromiseTyped<IDLResolvedType> MediaDevices::SendUserMediaRequest(
     return promise;
   }
 
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   if (media_type == UserMediaRequestType::kDisplayMedia) {
     window->ConsumeDisplayCaptureRequestToken();
   }
@@ -560,7 +619,7 @@ ScriptPromiseTyped<IDLResolvedType> MediaDevices::SendUserMediaRequest(
   return promise;
 }
 
-ScriptPromiseTyped<IDLSequence<MediaStream>> MediaDevices::getAllScreensMedia(
+ScriptPromise<IDLSequence<MediaStream>> MediaDevices::getAllScreensMedia(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -581,36 +640,31 @@ ScriptPromiseTyped<IDLSequence<MediaStream>> MediaDevices::getAllScreensMedia(
     return promise;
   }
 
-  const ContentSecurityPolicy* content_security_policy =
-      context->GetContentSecurityPolicy();
-  if (!content_security_policy) {
-    resolver->RecordAndThrowDOMException(
-        exception_state, DOMExceptionCode::kNotAllowedError,
-        "This document's Content Security Policy does not meet the "
-        "requirements to use this API. See https://web.dev/articles/strict-csp "
-        "for more information.",
-        UserMediaRequestResult::kInsecureContext);
-    return promise;
-  }
-
-  if (!content_security_policy->IsStrictPolicyEnforced()) {
-    resolver->RecordAndThrowDOMException(
-        exception_state, DOMExceptionCode::kNotAllowedError,
-        "This document's Content Security Policy does not meet the "
-        "requirements to use this API. See https://web.dev/articles/strict-csp "
-        "for more information.",
-        UserMediaRequestResult::kInsecureContext);
-    return promise;
-  }
-
-  if (!content_security_policy->RequiresTrustedTypes()) {
-    resolver->RecordAndThrowDOMException(
-        exception_state, DOMExceptionCode::kNotAllowedError,
-        "This document's Content Security Policy does not meet the "
-        "requirements to use this API. See "
-        "https://web.dev/articles/trusted-types for more information.",
-        UserMediaRequestResult::kInsecureContext);
-    return promise;
+  // This API is available either in isolated contexts or, temporarily, on web
+  // pages with strict CSP and trusted types. In isolated contexts, an explicit
+  // check for strict CSP is not required as it enforces a restriction
+  // equivalent to strict CSP (i.e. `script-src self` in combination with
+  // packaging).
+  if (!context->IsIsolatedContext()) {
+    auto csp_check_result = IsCSPEnabled(context);
+    switch (csp_check_result) {
+      case MultiScreenCaptureCSPResult::kStrictEnough:
+        break;
+      case MultiScreenCaptureCSPResult::kNoCSP:
+        [[fallthrough]];
+      case MultiScreenCaptureCSPResult::kNoStrictCSP:
+        [[fallthrough]];
+      case MultiScreenCaptureCSPResult::kNoTrustedTypes:
+        resolver->RecordAndThrowDOMException(
+            exception_state, DOMExceptionCode::kNotAllowedError,
+            String(base::StrCat(
+                {"This document's Content Security Policy does not meet the "
+                 "requirements to use this API. See ",
+                 MultiScreenCaptureCSPResultToHelpLink(csp_check_result),
+                 " for more information."})),
+            UserMediaRequestResult::kInsecureContext);
+        return promise;
+    }
   }
 
   MediaStreamConstraints* constraints = MediaStreamConstraints::Create();
@@ -621,17 +675,18 @@ ScriptPromiseTyped<IDLSequence<MediaStream>> MediaDevices::getAllScreensMedia(
                               constraints, exception_state);
 }
 
-ScriptPromiseTyped<MediaStream> MediaDevices::getDisplayMedia(
+ScriptPromise<MediaStream> MediaDevices::getDisplayMedia(
     ScriptState* script_state,
     const DisplayMediaStreamOptions* options,
     ExceptionState& exception_state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   LocalDOMWindow* const window = DomWindow();
-  // This timeout of base::Seconds(6) is an initial value and based on the data
-  // in Media.MediaDevices.GetDisplayMedia.Latency, it should be iterated upon.
+  // Using timeout of base::Seconds(12) based on the
+  // Media.MediaDevices.GetDisplayMedia.Latency values. With the earlier value
+  // of base::Seconds(6), we got about 25% of results counted as kTimeout.
   auto* resolver = MakeGarbageCollected<
       ScriptPromiseResolverWithTracker<UserMediaRequestResult, MediaStream>>(
-      script_state, "Media.MediaDevices.GetDisplayMedia", base::Seconds(6));
+      script_state, "Media.MediaDevices.GetDisplayMedia", base::Seconds(12));
   auto promise = resolver->Promise();
 
   if (!window) {
@@ -766,101 +821,132 @@ void MediaDevices::setCaptureHandleConfig(ScriptState* script_state,
       .SetCaptureHandleConfig(std::move(config_ptr));
 }
 
-ScriptPromise MediaDevices::ProduceSubCaptureTarget(
+ScriptPromise<CropTarget> MediaDevices::ProduceCropTarget(
     ScriptState* script_state,
     Element* element,
-    ExceptionState& exception_state,
-    SubCaptureTarget::Type type) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  CHECK(type == SubCaptureTarget::Type::kCropTarget ||
-        type == SubCaptureTarget::Type::kRestrictionTarget);
-
+    ExceptionState& exception_state) {
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                     "Unsupported.");
-  return ScriptPromise();
+  return ScriptPromise<CropTarget>();
 #else
-  if (!script_state->ContextIsValid()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                      "Current frame is detached.");
-    RecordUma(type, ProduceTargetFunctionResult::kInvalidContext);
-    return ScriptPromise();
+  if (!MayProduceSubCaptureTarget(script_state, element, exception_state,
+                                  SubCaptureTarget::Type::kCropTarget)) {
+    // Exception thrown by helper.
+    return ScriptPromise<CropTarget>();
   }
 
-  LocalDOMWindow* const window = To<LocalDOMWindow>(GetExecutionContext());
-  if (!window) {
-    RecordUma(type, ProduceTargetFunctionResult::kGenericError);
-    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                      "Missing execution context.");
-    return ScriptPromise();
-  }
-
-  if (!element) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
-                                      "Invalid element.");
-    return ScriptPromise();
-  }
-
-  if (GetExecutionContext() != element->GetExecutionContext()) {
-    RecordUma(type, ProduceTargetFunctionResult::
-                        kElementAndMediaDevicesNotInSameExecutionContext);
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kNotSupportedError,
-        "The Element and the MediaDevices object must be same-window.");
-    return ScriptPromise();
-  }
-
-  if ((type == SubCaptureTarget::Type::kCropTarget &&
-       element->GetRegionCaptureCropId()) ||
-      (type == SubCaptureTarget::Type::kRestrictionTarget &&
-       element->GetRestrictionTargetId())) {
+  if (const RegionCaptureCropId* id = element->GetRegionCaptureCropId()) {
     // A token was produced earlier and associated with the Element.
-    const base::Token token = (type == SubCaptureTarget::Type::kCropTarget)
-                                  ? element->GetRegionCaptureCropId()->value()
-                                  : element->GetRestrictionTargetId()->value();
+    const base::Token token = id->value();
     DCHECK(!token.is_zero());
-    auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+    auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<CropTarget>>(
         script_state, exception_state.GetContext());
-    const ScriptPromise promise = resolver->Promise();
+    const ScriptPromise<CropTarget> promise = resolver->Promise();
     const WTF::String token_str(blink::TokenToGUID(token).AsLowercaseString());
-    if (type == SubCaptureTarget::Type::kCropTarget) {
-      resolver->Resolve(MakeGarbageCollected<CropTarget>(token_str));
-    } else {  // kRestrictionTarget
-      resolver->Resolve(MakeGarbageCollected<RestrictionTarget>(token_str));
-    }
+    resolver->Resolve(MakeGarbageCollected<CropTarget>(token_str));
     RecordUma(
-        type,
+        SubCaptureTarget::Type::kCropTarget,
         ProduceTargetFunctionResult::kDuplicateCallAfterPromiseResolution);
     return promise;
   }
 
-  ElementToResolverMap& map = GetResolverMap(type);
-  const auto it = map.find(element);
-  if (it != map.end()) {
+  const auto it = crop_target_resolvers_.find(element);
+  if (it != crop_target_resolvers_.end()) {
     // The Element does not yet have the SubCaptureTarget attached,
     // but the production of one has already been kicked off, and a response
     // will soon arrive from the browser process.
     // The Promise we return here will be resolved along with the original one.
     RecordUma(
-        type,
+        SubCaptureTarget::Type::kCropTarget,
         ProduceTargetFunctionResult::kDuplicateCallBeforePromiseResolution);
     return it->value->Promise();
   }
 
   // Mints a new ID on the browser process.
   // Resolves after it has been produced and is ready to be used.
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<CropTarget>>(
       script_state, exception_state.GetContext());
-  map.insert(element, resolver);
-  const ScriptPromise promise = resolver->Promise();
+  crop_target_resolvers_.insert(element, resolver);
+  const ScriptPromise<CropTarget> promise = resolver->Promise();
+
+  LocalDOMWindow* const window = To<LocalDOMWindow>(GetExecutionContext());
+  CHECK(window);  // Guaranteed by MayProduceSubCaptureTarget() earlier.
 
   base::OnceCallback callback =
-      WTF::BindOnce(&MediaDevices::ResolveSubCaptureTargetPromise,
-                    WrapPersistent(this), WrapPersistent(element), type);
+      WTF::BindOnce(&MediaDevices::ResolveCropTargetPromise,
+                    WrapPersistent(this), WrapPersistent(element));
   GetDispatcherHost(window->GetFrame())
-      .ProduceSubCaptureTargetId(type, std::move(callback));
+      .ProduceSubCaptureTargetId(SubCaptureTarget::Type::kCropTarget,
+                                 std::move(callback));
+  RecordUma(SubCaptureTarget::Type::kCropTarget,
+            ProduceTargetFunctionResult::kPromiseProduced);
+  return promise;
+#endif
+}
 
-  RecordUma(type, ProduceTargetFunctionResult::kPromiseProduced);
+ScriptPromise<RestrictionTarget> MediaDevices::ProduceRestrictionTarget(
+    ScriptState* script_state,
+    Element* element,
+    ExceptionState& exception_state) {
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                    "Unsupported.");
+  return ScriptPromise<RestrictionTarget>();
+#else
+  if (!MayProduceSubCaptureTarget(script_state, element, exception_state,
+                                  SubCaptureTarget::Type::kRestrictionTarget)) {
+    // Exception thrown by helper.
+    return ScriptPromise<RestrictionTarget>();
+  }
+
+  if (const RestrictionTargetId* id = element->GetRestrictionTargetId()) {
+    // A token was produced earlier and associated with the Element.
+    const base::Token token = id->value();
+    DCHECK(!token.is_zero());
+    auto* resolver =
+        MakeGarbageCollected<ScriptPromiseResolver<RestrictionTarget>>(
+            script_state, exception_state.GetContext());
+    const ScriptPromise<RestrictionTarget> promise = resolver->Promise();
+    const WTF::String token_str(blink::TokenToGUID(token).AsLowercaseString());
+    resolver->Resolve(MakeGarbageCollected<RestrictionTarget>(token_str));
+    RecordUma(
+        SubCaptureTarget::Type::kRestrictionTarget,
+        ProduceTargetFunctionResult::kDuplicateCallAfterPromiseResolution);
+    return promise;
+  }
+
+  const auto it = restriction_target_resolvers_.find(element);
+  if (it != restriction_target_resolvers_.end()) {
+    // The Element does not yet have the SubCaptureTarget attached,
+    // but the production of one has already been kicked off, and a response
+    // will soon arrive from the browser process.
+    // The Promise we return here will be resolved along with the original one.
+    RecordUma(
+        SubCaptureTarget::Type::kRestrictionTarget,
+        ProduceTargetFunctionResult::kDuplicateCallBeforePromiseResolution);
+    return it->value->Promise();
+  }
+
+  // Mints a new ID on the browser process.
+  // Resolves after it has been produced and is ready to be used.
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<RestrictionTarget>>(
+          script_state, exception_state.GetContext());
+  restriction_target_resolvers_.insert(element, resolver);
+  const ScriptPromise<RestrictionTarget> promise = resolver->Promise();
+
+  LocalDOMWindow* const window = To<LocalDOMWindow>(GetExecutionContext());
+  CHECK(window);  // Guaranteed by MayProduceSubCaptureTarget() earlier.
+
+  base::OnceCallback callback =
+      WTF::BindOnce(&MediaDevices::ResolveRestrictionTargetPromise,
+                    WrapPersistent(this), WrapPersistent(element));
+  GetDispatcherHost(window->GetFrame())
+      .ProduceSubCaptureTargetId(SubCaptureTarget::Type::kRestrictionTarget,
+                                 std::move(callback));
+  RecordUma(SubCaptureTarget::Type::kRestrictionTarget,
+            ProduceTargetFunctionResult::kPromiseProduced);
   return promise;
 #endif
 }
@@ -1172,7 +1258,7 @@ void MediaDevices::Trace(Visitor* visitor) const {
   visitor->Trace(receiver_);
   visitor->Trace(scheduled_events_);
   visitor->Trace(enumerate_device_requests_);
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   visitor->Trace(crop_target_resolvers_);
   visitor->Trace(restriction_target_resolvers_);
 #endif
@@ -1182,17 +1268,6 @@ void MediaDevices::Trace(Visitor* visitor) const {
 }
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-MediaDevices::ElementToResolverMap& MediaDevices::GetResolverMap(
-    SubCaptureTarget::Type type) {
-  switch (type) {
-    case SubCaptureTarget::Type::kCropTarget:
-      return crop_target_resolvers_;
-    case SubCaptureTarget::Type::kRestrictionTarget:
-      return restriction_target_resolvers_;
-  }
-  NOTREACHED_NORETURN();
-}
-
 void MediaDevices::EnqueueMicrotaskToCloseFocusWindowOfOpportunity(
     const String& id,
     CaptureController* capture_controller) {
@@ -1228,40 +1303,94 @@ void MediaDevices::CloseFocusWindowOfOpportunity(
   GetDispatcherHost(window->GetFrame()).CloseFocusWindowOfOpportunity(id);
 }
 
-// An empty |id| signals failure; anything else has to be a valid GUID
-// and signals success.
-void MediaDevices::ResolveSubCaptureTargetPromise(Element* element,
-                                                  SubCaptureTarget::Type type,
-                                                  const WTF::String& id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+// Checks whether the production of a SubCaptureTarget of the given type is
+// allowed. Throw an appropriate exception if not.
+bool MediaDevices::MayProduceSubCaptureTarget(ScriptState* script_state,
+                                              Element* element,
+                                              ExceptionState& exception_state,
+                                              SubCaptureTarget::Type type) {
   CHECK(type == SubCaptureTarget::Type::kCropTarget ||
         type == SubCaptureTarget::Type::kRestrictionTarget);
+
+  if (!script_state->ContextIsValid()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                      "Current frame is detached.");
+    RecordUma(type, ProduceTargetFunctionResult::kInvalidContext);
+    return false;
+  }
+
+  LocalDOMWindow* const window = To<LocalDOMWindow>(GetExecutionContext());
+  if (!window) {
+    RecordUma(type, ProduceTargetFunctionResult::kGenericError);
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                      "Missing execution context.");
+    return false;
+  }
+
+  if (!element) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                      "Invalid element.");
+    return false;
+  }
+
+  if (GetExecutionContext() != element->GetExecutionContext()) {
+    RecordUma(type, ProduceTargetFunctionResult::
+                        kElementAndMediaDevicesNotInSameExecutionContext);
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        "The Element and the MediaDevices object must be same-window.");
+    return false;
+  }
+
+  return true;
+}
+
+void MediaDevices::ResolveCropTargetPromise(Element* element,
+                                            const WTF::String& id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(element);  // Persistent.
 
-  ElementToResolverMap& map = GetResolverMap(type);
-  const auto it = map.find(element);
-  DCHECK_NE(it, map.end());
-  ScriptPromiseResolver* const resolver = it->value;
-  map.erase(it);
+  const auto it = crop_target_resolvers_.find(element);
+  DCHECK_NE(it, crop_target_resolvers_.end());
+  ScriptPromiseResolver<CropTarget>* const resolver = it->value;
+  crop_target_resolvers_.erase(it);
 
-  if (id.empty()) {
+  const base::Token token = SubCaptureTargetIdToToken(id);
+  if (token.is_zero()) {
     resolver->Reject();
-    RecordUma(type, ProduceTargetPromiseResult::kPromiseRejected);
+    RecordUma(SubCaptureTarget::Type::kCropTarget,
+              ProduceTargetPromiseResult::kPromiseRejected);
     return;
   }
 
-  const base::Uuid guid = base::Uuid::ParseLowercase(id.Ascii());
-  DCHECK(guid.is_valid());
-  if (type == SubCaptureTarget::Type::kCropTarget) {
-    element->SetRegionCaptureCropId(
-        std::make_unique<RegionCaptureCropId>(blink::GUIDToToken(guid)));
-    resolver->Resolve(MakeGarbageCollected<CropTarget>(id));
-  } else {  // kRestrictionTarget as per earlier CHECK.
-    element->SetRestrictionTargetId(
-        std::make_unique<RestrictionTargetId>(blink::GUIDToToken(guid)));
-    resolver->Resolve(MakeGarbageCollected<RestrictionTarget>(id));
+  element->SetRegionCaptureCropId(std::make_unique<RegionCaptureCropId>(token));
+  resolver->Resolve(MakeGarbageCollected<CropTarget>(id));
+  RecordUma(SubCaptureTarget::Type::kCropTarget,
+            ProduceTargetPromiseResult::kPromiseResolved);
+}
+
+void MediaDevices::ResolveRestrictionTargetPromise(Element* element,
+                                                   const WTF::String& id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(element);  // Persistent.
+
+  const auto it = restriction_target_resolvers_.find(element);
+  DCHECK_NE(it, restriction_target_resolvers_.end());
+  ScriptPromiseResolver<RestrictionTarget>* const resolver = it->value;
+  restriction_target_resolvers_.erase(it);
+
+  const base::Token token = SubCaptureTargetIdToToken(id);
+  if (token.is_zero()) {
+    resolver->Reject();
+    RecordUma(SubCaptureTarget::Type::kRestrictionTarget,
+              ProduceTargetPromiseResult::kPromiseRejected);
+    return;
   }
-  RecordUma(type, ProduceTargetPromiseResult::kPromiseResolved);
+
+  element->SetRestrictionTargetId(std::make_unique<RestrictionTargetId>(token));
+  resolver->Resolve(MakeGarbageCollected<RestrictionTarget>(id));
+  RecordUma(SubCaptureTarget::Type::kRestrictionTarget,
+            ProduceTargetPromiseResult::kPromiseResolved);
 }
 #endif
 

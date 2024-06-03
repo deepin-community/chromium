@@ -210,8 +210,6 @@ extensions::api::downloads::DangerType ConvertDangerType(
           kDeepScannedOpenedDangerous;
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING:
       return extensions::api::downloads::DangerType::kPromptForScanning;
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
-      return extensions::api::downloads::DangerType::kUnsupportedFileType;
     case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE:
       return extensions::api::downloads::DangerType::kAccountCompromise;
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
@@ -219,6 +217,8 @@ extensions::api::downloads::DangerType ConvertDangerType(
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
       return extensions::api::downloads::DangerType::
           kPromptForLocalPasswordScanning;
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
+      return extensions::api::downloads::DangerType::kBlockedScanFailed;
     case download::DOWNLOAD_DANGER_TYPE_MAX:
       NOTREACHED();
       return extensions::api::downloads::DangerType::kMaxValue;

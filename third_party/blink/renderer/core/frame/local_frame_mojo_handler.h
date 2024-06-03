@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FRAME_LOCAL_FRAME_MOJO_HANDLER_H_
 
 #include "build/build_config.h"
+#include "components/viz/common/navigation_id.h"
 #include "third_party/blink/public/mojom/device_posture/device_posture_provider.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
@@ -46,7 +47,6 @@ class LocalFrameMojoHandler
     : public GarbageCollected<LocalFrameMojoHandler>,
       public mojom::blink::LocalFrame,
       public mojom::blink::LocalMainFrame,
-      public mojom::blink::HighPriorityLocalFrame,
       public mojom::blink::FullscreenVideoElementHandler,
       public mojom::blink::DevicePostureClient {
  public:
@@ -92,8 +92,6 @@ class LocalFrameMojoHandler
       mojo::PendingAssociatedReceiver<mojom::blink::LocalFrame> receiver);
   void BindToMainFrameReceiver(
       mojo::PendingAssociatedReceiver<mojom::blink::LocalMainFrame> receiver);
-  void BindToHighPriorityReceiver(
-      mojo::PendingReceiver<mojom::blink::HighPriorityLocalFrame> receiver);
   void BindFullscreenVideoElementReceiver(
       mojo::PendingAssociatedReceiver<
           mojom::blink::FullscreenVideoElementHandler> receiver);
@@ -211,8 +209,11 @@ class LocalFrameMojoHandler
       const std::string& page_state,
       bool is_browser_initiated) final;
   void SnapshotDocumentForViewTransition(
-      mojom::blink::PageConcealEventParamsPtr,
+      const viz::NavigationId& navigation_id,
+      mojom::blink::PageSwapEventParamsPtr,
       SnapshotDocumentForViewTransitionCallback callback) final;
+  void NotifyViewTransitionAbortedToOldDocument() final;
+  void DispatchPageSwap(mojom::blink::PageSwapEventParamsPtr) final;
 
   void AddResourceTimingEntryForFailedSubframeNavigation(
       const FrameToken& subframe_token,
@@ -256,11 +257,6 @@ class LocalFrameMojoHandler
 
   void SetV8CompileHints(base::ReadOnlySharedMemoryRegion data) override;
 
-  // mojom::blink::HighPriorityLocalFrame implementation:
-  void DispatchBeforeUnload(
-      bool is_reload,
-      mojom::blink::LocalFrame::BeforeUnloadCallback callback) final;
-
   // mojom::FullscreenVideoElementHandler implementation:
   void RequestFullscreenVideoElement() final;
 
@@ -301,9 +297,6 @@ class LocalFrameMojoHandler
   HeapMojoAssociatedReceiver<mojom::blink::LocalMainFrame,
                              LocalFrameMojoHandler>
       main_frame_receiver_{this, nullptr};
-  // LocalFrameMojoHandler can be reused by multiple ExecutionContext.
-  HeapMojoReceiver<mojom::blink::HighPriorityLocalFrame, LocalFrameMojoHandler>
-      high_priority_frame_receiver_{this, nullptr};
   // LocalFrameMojoHandler can be reused by multiple ExecutionContext.
   HeapMojoAssociatedReceiver<mojom::blink::FullscreenVideoElementHandler,
                              LocalFrameMojoHandler>

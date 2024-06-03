@@ -29,7 +29,8 @@ namespace ash::input_method {
 EditorMediator::EditorMediator(Profile* profile, std::string_view country_code)
     : profile_(profile),
       panel_manager_(this),
-      editor_switch_(std::make_unique<EditorSwitch>(profile, country_code)),
+      editor_switch_(
+          std::make_unique<EditorSwitch>(this, profile, country_code)),
       metrics_recorder_(
           std::make_unique<EditorMetricsRecorder>(GetEditorOpportunityMode())),
       consent_store_(
@@ -78,9 +79,9 @@ void EditorMediator::SetUpNewEditorService() {
         std::move(system_actuator_remote),
         std::move(text_query_provider_remote));
 
-    // TODO: b:300838514 - We should only bind the native UI with the shared lib when the
-    // Rewrite UI is shown. Consider add a listener to the write/rewrite UI and
-    // move the binding there.
+    // TODO: b:300838514 - We should only bind the native UI with the shared lib
+    // when the Rewrite UI is shown. Consider add a listener to the
+    // write/rewrite UI and move the binding there.
     panel_manager_.BindEditorClient();
   }
 }
@@ -172,6 +173,10 @@ size_t EditorMediator::GetSelectedTextLength() {
   return surrounding_text_.selection_range.length();
 }
 
+void EditorMediator::OnEditorModeChanged(const EditorMode& mode) {
+  panel_manager_.NotifyEditorModeChanged(mode);
+}
+
 void EditorMediator::OnPromoCardDeclined() {
   consent_store_->ProcessPromoCardAction(PromoCardAction::kDeclined);
 }
@@ -208,10 +213,20 @@ void EditorMediator::CacheContext() {
   }
 }
 
+void EditorMediator::FetchAndUpdateInputContext() {
+  GetTextFieldContextualInfo(
+      base::BindOnce(&EditorMediator::OnTextFieldContextualInfoChanged,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
 void EditorMediator::OnTextFieldContextualInfoChanged(
     const TextFieldContextualInfo& info) {
   editor_switch_->OnInputContextUpdated(
       IMEBridge::Get()->GetCurrentInputContext(), info);
+
+  if (system_actuator_ != nullptr) {
+    system_actuator_->OnInputContextUpdated(info.tab_url);
+  }
 }
 
 bool EditorMediator::IsAllowedForUse() {

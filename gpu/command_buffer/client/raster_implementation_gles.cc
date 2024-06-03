@@ -32,6 +32,14 @@ namespace raster {
 
 namespace {
 
+// This is kill-switch for fixing error handling of ReadbackImagePixels
+// function.
+// TODO(crbug.com/40058879): Disable this work-around, once call-sites are
+// handling failures correctly.
+BASE_FEATURE(kDisableErrorHandlingForReadbackGLES,
+             "kDisableErrorHandlingForReadbackGLES",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 GLenum SkColorTypeToGLDataFormat(SkColorType color_type, bool supports_rg) {
   switch (color_type) {
     case kRGBA_8888_SkColorType:
@@ -210,7 +218,6 @@ void RasterImplementationGLES::CopySharedImage(
 void RasterImplementationGLES::WritePixels(const gpu::Mailbox& dest_mailbox,
                                            int dst_x_offset,
                                            int dst_y_offset,
-                                           int dst_plane_index,
                                            GLenum texture_target,
                                            const SkPixmap& src_sk_pixmap) {
   const auto& src_info = src_sk_pixmap.info();
@@ -519,7 +526,7 @@ void RasterImplementationGLES::OnReleaseMailbox(
   std::move(release_mailbox).Run();
 }
 
-void RasterImplementationGLES::ReadbackImagePixels(
+bool RasterImplementationGLES::ReadbackImagePixels(
     const gpu::Mailbox& source_mailbox,
     const SkImageInfo& dst_info,
     GLuint dst_row_bytes,
@@ -535,13 +542,14 @@ void RasterImplementationGLES::ReadbackImagePixels(
   }
 
   GLuint dst_size = dst_info.computeByteSize(dst_row_bytes);
-  gl_->ReadbackARGBImagePixelsINTERNAL(
-      source_mailbox.name,
-      dst_color_space_data ? dst_color_space_data->data() : nullptr,
-      dst_color_space_data ? dst_color_space_data->size() : 0, dst_size,
-      dst_info.width(), dst_info.height(), dst_info.colorType(),
-      dst_info.alphaType(), dst_row_bytes, src_x, src_y, plane_index,
-      dst_pixels);
+  return gl_->ReadbackARGBImagePixelsINTERNAL(
+             source_mailbox.name,
+             dst_color_space_data ? dst_color_space_data->data() : nullptr,
+             dst_color_space_data ? dst_color_space_data->size() : 0, dst_size,
+             dst_info.width(), dst_info.height(), dst_info.colorType(),
+             dst_info.alphaType(), dst_row_bytes, src_x, src_y, plane_index,
+             dst_pixels) ||
+         base::FeatureList::IsEnabled(kDisableErrorHandlingForReadbackGLES);
 }
 
 GLuint RasterImplementationGLES::CreateAndConsumeForGpuRaster(

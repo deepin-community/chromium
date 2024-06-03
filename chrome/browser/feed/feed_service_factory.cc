@@ -6,10 +6,10 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -27,7 +27,6 @@
 #include "components/feed/core/proto/v2/keyvalue_store.pb.h"
 #include "components/feed/core/proto/v2/store.pb.h"
 #include "components/feed/core/v2/public/feed_service.h"
-#include "components/feed/feed_feature_list.h"
 #include "components/offline_pages/core/offline_page_feature.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/version_info/version_info.h"
@@ -48,7 +47,7 @@ const char kEeaCountryOnly[] = "eea_country_only";
 #endif
 
 namespace internal {
-const base::StringPiece GetFollowingFeedFollowCountGroupName(
+const std::string_view GetFollowingFeedFollowCountGroupName(
     size_t follow_count) {
   if (follow_count == 0)
     return "None";
@@ -137,7 +136,7 @@ class FeedServiceDelegateImpl : public FeedService::Delegate {
         "FollowingFeedFollowCount",
         internal::GetFollowingFeedFollowCountGroupName(follow_count));
   }
-  void RegisterFeedUserSettingsFieldTrial(base::StringPiece group) override {
+  void RegisterFeedUserSettingsFieldTrial(std::string_view group) override {
     ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
         "FeedUserSettings", group);
   }
@@ -185,13 +184,6 @@ FeedServiceFactory::~FeedServiceFactory() = default;
 std::unique_ptr<KeyedService>
 FeedServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  // Currently feed service is only supported for kWebUiFeed on desktop.
-  // TODO(jianli): Update all other places that depend on FeedServiceFactory
-  // when we want to roll this out.
-#if !BUILDFLAG(IS_ANDROID)
-  CHECK(base::FeatureList::IsEnabled(feed::kWebUiFeed));
-#endif
-
   Profile* profile = Profile::FromBrowserContext(context);
 
   content::StoragePartition* storage_partition =

@@ -308,6 +308,7 @@ void X11Window::Initialize(PlatformWindowInitProperties properties) {
     case PlatformWindowType::kTooltip:
       window_type = x11::GetAtom("_NET_WM_WINDOW_TYPE_TOOLTIP");
       break;
+    case PlatformWindowType::kBubble:
     case PlatformWindowType::kPopup:
       window_type = x11::GetAtom("_NET_WM_WINDOW_TYPE_NOTIFICATION");
       break;
@@ -1111,24 +1112,17 @@ void X11Window::SetDecorationInsets(const gfx::Insets* insets_px) {
     return;
   }
 
-  // For a window in maximised or minimised state, insets should be re-set to
-  // zero.
-  // On the other hand, non-zero insets should be set when the window is being
-  // initialised and has unknown state, otherwise the bounds will be
-  // unnecessarily inflated at later steps.
-  // See https://crbug.com/1281211 and https://crbug.com/1287212 for details.
-  if (GetPlatformWindowState() == PlatformWindowState::kNormal ||
-      GetPlatformWindowState() == PlatformWindowState::kUnknown) {
-    connection_->SetArrayProperty(
-        xwindow_, atom, x11::Atom::CARDINAL,
-        std::vector<uint32_t>{static_cast<uint32_t>(insets_px->left()),
-                              static_cast<uint32_t>(insets_px->right()),
-                              static_cast<uint32_t>(insets_px->top()),
-                              static_cast<uint32_t>(insets_px->bottom())});
-  } else {
-    connection_->SetArrayProperty(xwindow_, atom, x11::Atom::CARDINAL,
-                                  std::vector<uint32_t>({0, 0, 0, 0}));
-  }
+  // Insets must be zero when the window state is not normal nor unknown.
+  CHECK(GetPlatformWindowState() == PlatformWindowState::kNormal ||
+        GetPlatformWindowState() == PlatformWindowState::kUnknown ||
+        *insets_px == gfx::Insets(0));
+
+  connection_->SetArrayProperty(
+      xwindow_, atom, x11::Atom::CARDINAL,
+      std::vector<uint32_t>{static_cast<uint32_t>(insets_px->left()),
+                            static_cast<uint32_t>(insets_px->right()),
+                            static_cast<uint32_t>(insets_px->top()),
+                            static_cast<uint32_t>(insets_px->bottom())});
 }
 
 void X11Window::SetOpaqueRegion(
@@ -1918,6 +1912,10 @@ void X11Window::Map(bool inactive) {
   size_hints.flags |= x11::SIZE_HINT_P_POSITION;
   size_hints.x = bounds_in_pixels_.x();
   size_hints.y = bounds_in_pixels_.y();
+  // Set STATIC_GRAVITY so that the window position is not affected by the
+  // frame width when running with window manager.
+  size_hints.flags |= x11::SIZE_HINT_P_WIN_GRAVITY;
+  size_hints.win_gravity = x11::WIN_GRAVITY_HINT_STATIC_GRAVITY;
   connection_->SetWmNormalHints(xwindow_, size_hints);
 
   ignore_keyboard_input_ = inactive;

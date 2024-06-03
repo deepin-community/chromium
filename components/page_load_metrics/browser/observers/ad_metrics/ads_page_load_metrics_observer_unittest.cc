@@ -541,6 +541,10 @@ class AdsPageLoadMetricsObserverTest
         blink::mojom::LocalFrame::Name_,
         base::BindRepeating(&FrameRemoteTester::BindPendingReceiver,
                             base::Unretained(&frame_remote_tester_)));
+    // The override above will only apply when a new LocalFrame is bound. Reset the existing
+    // LocalFrame to force binding of a new LocalFrame.
+    RenderFrameHostTester::For(navigation_simulator->GetFinalRenderFrameHost())
+        ->ResetLocalFrame();
 
     return navigation_simulator->GetFinalRenderFrameHost();
   }
@@ -1554,7 +1558,7 @@ TEST_P(AdsPageLoadMetricsObserverTest, MemoryCacheAdBytesRecorded) {
 }
 
 // UKM metrics for ad page load are recorded correctly.
-// TODO(crbug.com/1043619) test is flaky on bots.
+// TODO(crbug.com/40669132) test is flaky on bots.
 TEST_P(AdsPageLoadMetricsObserverTest, AdPageLoadUKM) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   RenderFrameHost* main_frame = NavigateMainFrame(kNonAdUrl);

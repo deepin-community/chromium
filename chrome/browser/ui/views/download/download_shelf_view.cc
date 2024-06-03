@@ -94,8 +94,8 @@ DownloadShelfView::DownloadShelfView(Browser* browser, BrowserView* parent)
   }
 
   views::ViewAccessibility& accessibility = GetViewAccessibility();
-  accessibility.OverrideName(
-      l10n_util::GetStringUTF16(IDS_ACCNAME_DOWNLOADS_BAR));
+  accessibility.SetName(l10n_util::GetStringUTF16(IDS_ACCNAME_DOWNLOADS_BAR),
+                        ax::mojom::NameFrom::kAttribute);
   accessibility.SetRole(ax::mojom::Role::kGroup);
 
   // Delay 5 seconds if the mouse leaves the shelf by way of entering another
@@ -235,7 +235,7 @@ void DownloadShelfView::AnimationEnded(const gfx::Animation* animation) {
   //
   // If we had keyboard focus, calling SetVisible(false) will cause keyboard
   // focus to be completely lost. To prevent this, focus the web contents.
-  // TODO(crbug.com/846466): Fix AccessiblePaneView::SetVisible() or
+  // TODO(crbug.com/41390999): Fix AccessiblePaneView::SetVisible() or
   // FocusManager to make this unnecessary.
   auto* focus_manager = GetFocusManager();
   if (focus_manager && Contains(focus_manager->GetFocusedView()))

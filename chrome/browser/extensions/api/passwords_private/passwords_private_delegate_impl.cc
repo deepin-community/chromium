@@ -18,12 +18,12 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/affiliations/affiliation_service_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/device_reauth/chrome_device_authenticator_factory.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_event_router.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_event_router_factory.h"
 #include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/affiliation_service_factory.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/password_manager/password_sender_service_factory.h"
 #include "chrome/browser/password_manager/profile_password_store_factory.h"
@@ -44,6 +44,7 @@
 #include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/webauthn/change_pin_controller.h"
 #include "chrome/browser/webauthn/passkey_model_factory.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/extensions/api/passwords_private.h"
@@ -327,9 +328,11 @@ PasswordsPrivateDelegateImpl::PasswordsPrivateDelegateImpl(Profile* profile)
 PasswordsPrivateDelegateImpl::~PasswordsPrivateDelegateImpl() {
   saved_passwords_presenter_.RemoveObserver(this);
   install_manager_observation_.Reset();
+#if !BUILDFLAG(IS_WIN)
   if (device_authenticator_) {
     device_authenticator_->Cancel();
   }
+#endif
   device_authenticator_.reset();
 }
 
@@ -363,8 +366,8 @@ void PasswordsPrivateDelegateImpl::GetSavedPasswordsList(
 PasswordsPrivateDelegate::CredentialsGroups
 PasswordsPrivateDelegateImpl::GetCredentialGroups() {
   std::vector<api::passwords_private::CredentialGroup> groups;
-  // TODO(crbug.com/1464264): Migrate away from `ConsentLevel::kSync` on desktop
-  // platforms.
+  // TODO(crbug.com/40067296): Migrate away from `ConsentLevel::kSync` on
+  // desktop platforms.
   bool sync_enabled =
       password_manager::sync_util::IsSyncFeatureEnabledIncludingPasswords(
           SyncServiceFactory::GetForProfile(profile_));
@@ -841,6 +844,13 @@ void PasswordsPrivateDelegateImpl::SetAccountStorageOptIn(
     }
     return;
   }
+
+  if (!password_manager::features_util::AreAccountStorageOptInPromosAllowed()) {
+    // No need to show a reauth dialog in this case, just opt-in directly.
+    client->GetPasswordFeatureManager()->OptInToAccountStorage();
+    return;
+  }
+
   // The opt in pref is automatically set upon successful reauth.
   client->TriggerReauthForPrimaryAccount(
       signin_metrics::ReauthAccessPoint::kPasswordSettings, base::DoNothing());
@@ -922,6 +932,25 @@ void PasswordsPrivateDelegateImpl::ShowExportedFileInShell(
   base::FilePath path(base::UTF8ToWide(file_path));
 #endif
   platform_util::ShowItemInFolder(browser->profile(), path);
+}
+
+void PasswordsPrivateDelegateImpl::ChangePasswordManagerPin(
+    content::WebContents* web_contents) {
+  ChangePinController* controller =
+      ChangePinController::ForWebContents(web_contents);
+  if (controller) {
+    controller->StartChangePin();
+  }
+}
+
+bool PasswordsPrivateDelegateImpl::IsPasswordManagerPinAvailable(
+    content::WebContents* web_contents) {
+  ChangePinController* controller =
+      ChangePinController::ForWebContents(web_contents);
+  if (!controller) {
+    return false;
+  }
+  return controller->IsChangePinFlowAvailable();
 }
 
 base::WeakPtr<PasswordsPrivateDelegate>
@@ -1160,11 +1189,20 @@ void PasswordsPrivateDelegateImpl::AuthenticateUser(
 #else
   CHECK(web_contents);
 
-  // Cancel any ongoing authentication attempt.
+  // Authentication on Windows cannot be canceled.
+  // TODO(crbug.com/40241199): Remove Cancel and instead simply destroy
+  // |device_authenticator_|.
   if (device_authenticator_) {
-    // TODO(crbug.com/1371026): Remove Cancel and instead simply destroy
-    // |device_authenticator_|.
+#if BUILDFLAG(IS_WIN)
+    // `device_authenticator_` lives as long as the authentication is in
+    // progress. Since there is currently no way of canceling authentication
+    // if the new one wants to start, new authentications will be resolved as if
+    // they failed until the pending authentication gets resolved by the user.
+    std::move(callback).Run(false);
+    return;
+#else
     device_authenticator_->Cancel();
+#endif
   }
   device_authenticator_ =
       GetDeviceAuthenticator(web_contents, auth_validity_period);
@@ -1193,7 +1231,12 @@ PasswordsPrivateDelegateImpl::CreatePasswordUiEntryFromCredentialUiEntry(
                           std::back_inserter(entry.affiliated_domains),
                           [](const CredentialUIEntry::DomainInfo& domain) {
                             api::passwords_private::DomainInfo domain_info;
+                            // `domain.name` is used to redirect to the Password
+                            // Manager page for the password represented by the
+                            // current `CredentialUIEntry`.
+                            // LINT.IfChange
                             domain_info.name = domain.name;
+                            // LINT.ThenChange(//chrome/browser/ui/passwords/bubble_controllers/manage_passwords_bubble_controller.cc)
                             domain_info.url = domain.url.spec();
                             domain_info.signon_realm = domain.signon_realm;
                             return domain_info;

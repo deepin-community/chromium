@@ -36,7 +36,6 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TrustedCdn;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
-import org.chromium.chrome.features.start_surface.StartSurfaceState;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -154,9 +153,7 @@ public class LocationBarModel implements ToolbarDataProvider, LocationBarDataPro
     private boolean mIsIncognito;
     private boolean mIsUsingBrandColor;
     private boolean mShouldShowOmniboxInOverviewMode;
-    private boolean mIsShowingTabSwitcher;
     private boolean mIsShowingStartSurface;
-    @StartSurfaceState private int mStartSurfaceState;
 
     private long mNativeLocationBarModelAndroid;
     private ObserverList<LocationBarDataProvider.Observer> mLocationBarDataObservers =
@@ -273,7 +270,7 @@ public class LocationBarModel implements ToolbarDataProvider, LocationBarDataPro
 
     @Override
     public boolean hasTab() {
-        // TODO(https://crbug.com/1147131): Remove the isInitialized() and isDestroyed checks when
+        // TODO(crbug.com/40730536): Remove the isInitialized() and isDestroyed checks when
         // we no longer wait for TAB_CLOSED events to remove this tab.  Otherwise there is a chance
         // we use this tab after {@link Tab#destroy()} is called.
         return mTab != null && mTab.isInitialized() && !mTab.isDestroyed();
@@ -290,7 +287,7 @@ public class LocationBarModel implements ToolbarDataProvider, LocationBarDataPro
     }
 
     @Override
-    // TODO(https://crbug.com/1305374): migrate to GURL.
+    // TODO(crbug.com/40218072): migrate to GURL.
     @Deprecated
     public String getCurrentUrl() {
         return getCurrentGurl().getSpec().trim();
@@ -526,12 +523,7 @@ public class LocationBarModel implements ToolbarDataProvider, LocationBarDataPro
     public boolean isInOverviewAndShowingOmnibox() {
         if (!mShouldShowOmniboxInOverviewMode) return false;
 
-        return mLayoutStateProvider != null
-                && (mIsShowingStartSurface
-                        || mIsShowingTabSwitcher
-                                && (mStartSurfaceState == StartSurfaceState.SHOWN_HOMEPAGE
-                                        || mStartSurfaceState == StartSurfaceState.SHOWING_HOMEPAGE
-                                        || mStartSurfaceState == StartSurfaceState.SHOWING_START));
+        return mLayoutStateProvider != null && mIsShowingStartSurface;
     }
 
     /**
@@ -815,28 +807,15 @@ public class LocationBarModel implements ToolbarDataProvider, LocationBarDataPro
 
     /**
      * Set whether the start surface is showing or not and notify changes.
-     * TODO(1315676): Remove {@link isShowingTabSwitcher} when the Start surface refactoring is
-     * enabled by default.
-     * @param isShowingTabSwitcher Whether tab switcher layout is showing or not.
+     *
      * @param isShowingStartSurface Whether Start surface layout is showing or not.
      */
-    public void updateForNonStaticLayout(
-            boolean isShowingTabSwitcher, boolean isShowingStartSurface) {
-        mIsShowingTabSwitcher = isShowingTabSwitcher;
+    public void updateForNonStaticLayout(boolean isShowingStartSurface) {
         mIsShowingStartSurface = isShowingStartSurface;
         notifyTitleChanged();
         notifyUrlChanged();
         notifyPrimaryColorChanged();
         notifySecurityStateChanged();
-    }
-
-    /**
-     * Sets the current start surface state, which can be used to distinguish between e.g. the
-     * start-based tab switcher and the start surface homepage.
-     */
-    public void setStartSurfaceState(@StartSurfaceState int startSurfaceState) {
-        mStartSurfaceState = startSurfaceState;
-        notifyUrlChanged();
     }
 
     public void notifyDidStartNavigation(boolean isSameDocument) {

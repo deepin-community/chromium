@@ -17,6 +17,8 @@ class ObservableInternalObserver;
 class ScriptState;
 class Subscriber;
 class SubscribeOptions;
+class V8Mapper;
+class V8Predicate;
 class V8SubscribeCallback;
 class V8UnionObserverOrObserverCallback;
 class V8Visitor;
@@ -52,15 +54,34 @@ class CORE_EXPORT Observable final : public ScriptWrappable,
                  V8UnionObserverOrObserverCallback*,
                  SubscribeOptions*);
 
+  static Observable* from(ScriptState* script_state,
+                          ScriptValue value,
+                          ExceptionState& exception_state);
+
   // Observable-returning operators. See
   // https://wicg.github.io/observable/#observable-returning-operators.
   Observable* takeUntil(ScriptState*, Observable*);
+  Observable* map(ScriptState*, V8Mapper*);
+  Observable* filter(ScriptState*, V8Predicate*);
+  Observable* take(ScriptState*, uint64_t);
+  Observable* drop(ScriptState*, uint64_t);
+  // `flatMap()` and `switchMap()` do not actually throw exceptions to script,
+  // but we need access to the `exception_state` to determine if future calls to
+  // `from()` succeeded or failed. In the failure case, we clear the exception
+  // from the stack and report it to the relevant `Subscriber`.
+  Observable* flatMap(ScriptState*, V8Mapper*, ExceptionState& exception_state);
+  Observable* switchMap(ScriptState*,
+                        V8Mapper*,
+                        ExceptionState& exception_state);
 
   // Promise-returning operators. See
   // https://wicg.github.io/observable/#promise-returning-operators.
-  ScriptPromiseTyped<IDLSequence<IDLAny>> toArray(ScriptState*,
-                                                  SubscribeOptions*);
-  ScriptPromise forEach(ScriptState*, V8Visitor*, SubscribeOptions*);
+  ScriptPromise<IDLSequence<IDLAny>> toArray(ScriptState*, SubscribeOptions*);
+  ScriptPromise<IDLUndefined> forEach(ScriptState*,
+                                      V8Visitor*,
+                                      SubscribeOptions*);
+  ScriptPromise<IDLAny> first(ScriptState*, SubscribeOptions*);
+  ScriptPromise<IDLAny> last(ScriptState*, SubscribeOptions*);
 
   void Trace(Visitor*) const override;
 

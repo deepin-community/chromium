@@ -144,8 +144,9 @@ PriceTrackingView::PriceTrackingView(Profile* profile,
                                    : views::MaximumFlexSizeRule::kUnbounded)
           .WithAlignment(views::LayoutAlignment::kEnd));
 
-  label_width = bubble_width - horizontal_spacing * 2 - dialog_insets.right() -
-                GetIconMargin() - GetIconSize().width() -
+  label_width = bubble_width - horizontal_spacing - dialog_insets.left() -
+                dialog_insets.right() - GetIconMargin() -
+                GetIconSize().width() -
                 toggle_button_->GetPreferredSize().width();
   body_label_->SizeToFit(label_width);
   base::RecordAction(base::UserMetricsAction(
@@ -235,7 +236,7 @@ void PriceTrackingView::UpdatePriceTrackingState(const GURL& url) {
 }
 
 void PriceTrackingView::OnPriceTrackingStateUpdated(bool success) {
-  // TODO(crbug.com/1346612): Record latency for the update status.
+  // TODO(crbug.com/40232577): Record latency for the update status.
   if (!success) {
     is_price_track_enabled_ = !is_price_track_enabled_;
     toggle_button_->SetIsOn(is_price_track_enabled_);

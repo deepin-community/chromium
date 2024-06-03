@@ -14,6 +14,7 @@
 #include "ash/app_list/views/app_list_nudge_controller.h"
 #include "ash/app_list/views/search_notifier_controller.h"
 #include "ash/assistant/assistant_controller_impl.h"
+#include "ash/birch/birch_model.h"
 #include "ash/calendar/calendar_controller.h"
 #include "ash/capture_mode/capture_mode_controller.h"
 #include "ash/capture_mode/capture_mode_education_controller.h"
@@ -33,6 +34,7 @@
 #include "ash/metrics/feature_discovery_duration_reporter_impl.h"
 #include "ash/projector/projector_controller_impl.h"
 #include "ash/public/cpp/holding_space/holding_space_prefs.h"
+#include "ash/quick_pair/feature_status_tracker/scanning_enabled_provider.h"
 #include "ash/quick_pair/keyed_service/quick_pair_mediator.h"
 #include "ash/session/fullscreen_controller.h"
 #include "ash/session/session_controller_impl.h"
@@ -70,8 +72,10 @@
 #include "ash/system/unified/quick_settings_footer.h"
 #include "ash/system/unified/unified_system_tray_controller.h"
 #include "ash/system/usb_peripheral/usb_peripheral_notification_controller.h"
+#include "ash/system/video_conference/video_conference_tray_controller.h"
 #include "ash/touch/touch_devices_controller.h"
 #include "ash/user_education/user_education_controller.h"
+#include "ash/wallpaper/sea_pen_wallpaper_manager.h"
 #include "ash/wallpaper/wallpaper_daily_refresh_scheduler.h"
 #include "ash/wallpaper/wallpaper_pref_manager.h"
 #include "ash/wallpaper/wallpaper_time_of_day_scheduler.h"
@@ -79,6 +83,7 @@
 #include "ash/wm/desks/templates/saved_desk_util.h"
 #include "ash/wm/float/tablet_mode_tuck_education.h"
 #include "ash/wm/lock_state_controller.h"
+#include "ash/wm/overview/birch/birch_bar_controller.h"
 #include "ash/wm/window_cycle/window_cycle_controller.h"
 #include "ash/wm/window_util.h"
 #include "chromeos/ash/services/assistant/public/cpp/assistant_prefs.h"
@@ -107,6 +112,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry,
   AutozoomControllerImpl::RegisterProfilePrefs(registry);
   AutozoomNudgeController::RegisterProfilePrefs(registry);
   AmbientController::RegisterProfilePrefs(registry);
+  BirchBarController::RegisterProfilePrefs(registry);
+  BirchModel::RegisterProfilePrefs(registry);
   CalendarController::RegisterProfilePrefs(registry);
   camera_app_prefs::RegisterProfilePrefs(registry);
   CameraEffectsController::RegisterProfilePrefs(registry);
@@ -151,6 +158,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry,
   ProjectorControllerImpl::RegisterProfilePrefs(registry);
   quick_pair::Mediator::RegisterProfilePrefs(registry);
   ScreensaverImagesPolicyHandler::RegisterPrefs(registry);
+  SeaPenWallpaperManager::RegisterProfilePrefs(registry);
   SearchNotifierController::RegisterProfilePrefs(registry);
   ShelfController::RegisterProfilePrefs(registry);
   SnoopingProtectionController::RegisterProfilePrefs(registry);
@@ -159,6 +167,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry,
   UserEducationController::RegisterProfilePrefs(registry);
   MediaTray::RegisterProfilePrefs(registry);
   UsbPeripheralNotificationController::RegisterProfilePrefs(registry);
+  VideoConferenceTrayController::RegisterProfilePrefs(registry);
   VpnDetailedView::RegisterProfilePrefs(registry);
   WallpaperDailyRefreshScheduler::RegisterProfilePrefs(registry);
   WallpaperTimeOfDayScheduler::RegisterProfilePrefs(registry);
@@ -172,6 +181,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry,
     registry->RegisterBooleanPref(prefs::kMouseReverseScroll, false);
     registry->RegisterBooleanPref(prefs::kSendFunctionKeys, false);
     registry->RegisterBooleanPref(prefs::kSuggestedContentEnabled, true);
+    registry->RegisterBooleanPref(prefs::kMahiEnabled, true);
     registry->RegisterBooleanPref(::prefs::kLiveCaptionEnabled, false);
     registry->RegisterListPref(
         chromeos::prefs::kKeepFullscreenWithoutNotificationUrlAllowList);
@@ -188,6 +198,9 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry,
     registry->RegisterIntegerPref(prefs::kKeyEventRemappedToSixPackHome, 0);
     registry->RegisterIntegerPref(prefs::kKeyEventRemappedToSixPackPageUp, 0);
     registry->RegisterIntegerPref(prefs::kKeyEventRemappedToSixPackPageDown, 0);
+    registry->RegisterBooleanPref(prefs::kShouldShowPineOnboarding, false);
+    registry->RegisterIntegerPref(prefs::kPineNudgeShownCount, 0);
+    registry->RegisterTimePref(prefs::kPineNudgeLastShown, base::Time());
   }
 }
 
@@ -208,6 +221,7 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry, bool for_test) {
   KeyboardBacklightColorController::RegisterPrefs(registry);
   BatterySaverController::RegisterLocalStatePrefs(registry);
   PowerSoundsController::RegisterLocalStatePrefs(registry);
+  quick_pair::ScanningEnabledProvider::RegisterLocalStatePrefs(registry);
 
   if (for_test) {
     registry->RegisterBooleanPref(prefs::kOwnerPrimaryMouseButtonRight, false);

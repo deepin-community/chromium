@@ -37,6 +37,7 @@
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/devtools/device/tcp_device_provider.h"
+#include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/devtools/protocol/browser_handler.h"
 #include "chrome/browser/extensions/api/developer_private/developer_private_api.h"
@@ -57,6 +58,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller_impl.h"
@@ -80,6 +82,9 @@
 #include "components/autofill/core/browser/browser_autofill_manager.h"
 #include "components/autofill/core/browser/browser_autofill_manager_test_delegate.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/infobars/content/content_infobar_manager.h"
+#include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "components/javascript_dialogs/app_modal_dialog_controller.h"
 #include "components/javascript_dialogs/app_modal_dialog_view.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
@@ -90,7 +95,10 @@
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
+#include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "components/variations/service/variations_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
@@ -378,7 +386,7 @@ class DevToolsTest : public InProcessBrowserTest {
     return DevToolsWindowTesting::Get(window_)->toolbox_web_contents();
   }
 
-  DevToolsWindow* window_;
+  raw_ptr<DevToolsWindow, DanglingUntriaged> window_;
 };
 
 class SitePerProcessDevToolsTest : public DevToolsTest {
@@ -774,9 +782,11 @@ class DevToolsServiceWorkerExtensionTest : public InProcessBrowserTest {
     DevToolsWindowTesting::CloseDevToolsWindowSync(window_);
   }
 
-  DevToolsWindow* window_ = nullptr;
-  extensions::ExtensionService* extension_service_ = nullptr;
-  extensions::ExtensionRegistry* extension_registry_ = nullptr;
+  raw_ptr<DevToolsWindow, DanglingUntriaged> window_ = nullptr;
+  raw_ptr<extensions::ExtensionService, DanglingUntriaged> extension_service_ =
+      nullptr;
+  raw_ptr<extensions::ExtensionRegistry, DanglingUntriaged>
+      extension_registry_ = nullptr;
 };
 
 // TODO(crbug/1503023): Fix the memory leak and enable the test.
@@ -839,7 +849,7 @@ class WorkerDevToolsTest : public InProcessBrowserTest {
     }
 
     std::string path_;
-    scoped_refptr<DevToolsAgentHost>* out_host_;
+    raw_ptr<scoped_refptr<DevToolsAgentHost>> out_host_;
     base::OnceClosure quit_;
   };
 
@@ -868,7 +878,7 @@ class WorkerDevToolsTest : public InProcessBrowserTest {
     DevToolsWindowTesting::CloseDevToolsWindowSync(window_);
   }
 
-  DevToolsWindow* window_;
+  raw_ptr<DevToolsWindow, DanglingUntriaged> window_;
 };
 
 // Tests that BeforeUnload event gets called on docked devtools if
@@ -1734,7 +1744,10 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionTest,
 }
 
 // Tests that console selector shows correct context names.
-IN_PROC_BROWSER_TEST_F(DevToolsExtensionTest, TestConsoleContextNames) {
+// TODO(crbug.com/328131890): Test is flaky on multiple platforms. Tends to time
+// out when trying to open the devtools window.
+IN_PROC_BROWSER_TEST_F(DevToolsExtensionTest,
+                       DISABLED_TestConsoleContextNames) {
   LoadExtension("simple_content_script");
   RunTest("testConsoleContextNames", kPageWithContentScript);
 }
@@ -2205,7 +2218,7 @@ class BrowserAutofillManagerTestDelegateDevtoolsImpl
   void DidShowSuggestions() override {
     // Set an override for the minimum 500 ms threshold before enter key strokes
     // are accepted.
-    if (base::WeakPtr<autofill::AutofillPopupControllerImpl> controller =
+    if (base::WeakPtr<autofill::AutofillPopupController> controller =
             autofill::ChromeAutofillClient::FromWebContentsForTesting(
                 inspected_contents_.get())
                 ->popup_controller_for_testing()) {
@@ -2989,6 +3002,23 @@ IN_PROC_BROWSER_TEST_F(DevToolsTest, MAYBE_TestOpenInNewTabFilter) {
   CloseDevToolsWindow();
 }
 
+IN_PROC_BROWSER_TEST_F(DevToolsTest, TestOpenSearchResultsInNewTab) {
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  DevToolsUIBindings::Delegate* bindings_delegate_ =
+      static_cast<DevToolsUIBindings::Delegate*>(window_);
+
+  TabStripModel* tabs = browser()->tab_strip_model();
+
+  bindings_delegate_->OpenSearchResultsInNewTab("test query");
+
+  std::string opened_url = tabs->GetWebContentsAt(1)->GetVisibleURL().spec();
+  EXPECT_EQ(
+      opened_url,
+      "https://www.google.com/search?q=test+query&sourceid=chrome&ie=UTF-8");
+
+  CloseDevToolsWindow();
+}
+
 IN_PROC_BROWSER_TEST_F(DevToolsTest, LoadNetworkResourceForFrontend) {
   std::string file_url =
       "file://" + base::PathService::CheckedGet(base::DIR_SRC_TEST_DATA_ROOT)
@@ -3285,8 +3315,14 @@ IN_PROC_BROWSER_TEST_F(DevToolsExtensionHostsPolicyTest,
           base::StrCat({kArbitraryPage, "#", url.spec()}));
 }
 
+// TODO(crbug.com/333791064): Flaky on multiple Mac & Linux builders.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#define MAYBE_CanInspectAllowedHttpHost DISABLED_CanInspectAllowedHttpHost
+#else
+#define MAYBE_CanInspectAllowedHttpHost CanInspectAllowedHttpHost
+#endif
 IN_PROC_BROWSER_TEST_F(DevToolsExtensionHostsPolicyTest,
-                       CanInspectAllowedHttpHost) {
+                       MAYBE_CanInspectAllowedHttpHost) {
   GURL url(
       embedded_test_server()->GetURL("public.example.com", kArbitraryPage));
   extensions::TestExtensionDir dir;
@@ -3741,4 +3777,364 @@ IN_PROC_BROWSER_TEST_F(DevToolsProcessPerSiteUpToMainFrameThresholdTest,
 
   ASSERT_NE(webcontents->GetPrimaryMainFrame()->GetProcess(),
             webcontents2->GetPrimaryMainFrame()->GetProcess());
+}
+
+class DevToolsProcessPerSiteTest : public DevToolsTest {
+ public:
+  DevToolsProcessPerSiteTest() = default;
+
+  ~DevToolsProcessPerSiteTest() override = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    command_line->AppendSwitch(switches::kProcessPerSite);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_{
+      ::features::kDevToolsSharedProcessInfobar};
+};
+
+// TODO(https://crbug.com/328693031): Flaky on Linux dbg.
+#if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
+#define MAYBE_DevToolsSharedProcessInfobar DISABLED_DevToolsSharedProcessInfobar
+#else
+#define MAYBE_DevToolsSharedProcessInfobar DevToolsSharedProcessInfobar
+#endif
+IN_PROC_BROWSER_TEST_F(DevToolsProcessPerSiteTest,
+                       MAYBE_DevToolsSharedProcessInfobar) {
+  const GURL url = embedded_test_server()->GetURL("foo.test", "/hello.html");
+
+  Browser* browser1 = CreateBrowser(browser()->profile());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser1, url));
+
+  Browser* browser2 = CreateBrowser(browser()->profile());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser2, url));
+
+  ASSERT_EQ(browser1->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetPrimaryMainFrame()
+                ->GetProcess(),
+            browser2->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetPrimaryMainFrame()
+                ->GetProcess());
+
+  auto* window = DevToolsWindowTesting::OpenDevToolsWindowSync(
+      browser1->tab_strip_model()->GetActiveWebContents(), true);
+  auto* infobar_manager = infobars::ContentInfoBarManager::FromWebContents(
+      browser1->tab_strip_model()->GetActiveWebContents());
+  ASSERT_EQ(infobar_manager->infobars().size(), 1u);
+  ASSERT_EQ(infobar_manager->infobars()[0]->GetIdentifier(),
+            infobars::InfoBarDelegate::DEV_TOOLS_SHARED_PROCESS_DELEGATE);
+  DevToolsWindowTesting::CloseDevToolsWindowSync(window);
+  ASSERT_EQ(infobar_manager->infobars().size(), 0u);
+
+  // Now try in the undocked case.
+  window = DevToolsWindowTesting::OpenDevToolsWindowSync(
+      browser1->tab_strip_model()->GetActiveWebContents(), false);
+
+  // The infobar should appear in the undocked window.
+  ASSERT_EQ(infobar_manager->infobars().size(), 0u);
+
+  // Retrieve the infobar manager from the devtools window, this is different
+  // than `infobar_maanger` when undocked.
+  auto* undocked_infobar_manager =
+      static_cast<DevToolsUIBindings::Delegate*>(window)->GetInfoBarManager();
+  ASSERT_EQ(undocked_infobar_manager->infobars().size(), 1u);
+  ASSERT_EQ(undocked_infobar_manager->infobars()[0]->GetIdentifier(),
+            infobars::InfoBarDelegate::DEV_TOOLS_SHARED_PROCESS_DELEGATE);
+}
+
+// Observe that the active tab has changed.
+class ActiveTabChangedObserver : public TabStripModelObserver {
+ public:
+  explicit ActiveTabChangedObserver(TabStripModel* tab_strip_model) {
+    tab_strip_model->AddObserver(this);
+  }
+
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override {
+    if (change.type() == TabStripModelChange::kSelectionOnly &&
+        tab_strip_model->active_index() == 0) {
+      loop_.Quit();
+      return;
+    }
+  }
+
+  void Wait() { loop_.Run(); }
+
+ private:
+  base::RunLoop loop_;
+};
+
+IN_PROC_BROWSER_TEST_F(DevToolsProcessPerSiteTest, PausedDebuggerFocus) {
+  const GURL url = embedded_test_server()->GetURL("foo.test", "/hello.html");
+
+  auto* tab_strip_model = browser()->tab_strip_model();
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  auto* devtools_window = DevToolsWindowTesting::OpenDevToolsWindowSync(
+      tab_strip_model->GetWebContentsAt(0), true);
+  ASSERT_TRUE(AddTabAtIndexToBrowser(browser(), 1, url,
+                                     ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false));
+  ASSERT_EQ(2, tab_strip_model->count());
+  ASSERT_EQ(
+      tab_strip_model->GetWebContentsAt(0)->GetPrimaryMainFrame()->GetProcess(),
+      tab_strip_model->GetWebContentsAt(1)
+          ->GetPrimaryMainFrame()
+          ->GetProcess());
+  ASSERT_EQ(1, tab_strip_model->active_index());
+
+  ASSERT_TRUE(content::ExecJs(tab_strip_model->GetWebContentsAt(0),
+                              "setTimeout(() => {debugger;}, 0);"));
+  DispatchOnTestSuite(devtools_window, "waitForDebuggerPaused");
+  ActiveTabChangedObserver active_tab_observer(tab_strip_model);
+  content::SimulateMouseClick(tab_strip_model->GetActiveWebContents(), 0,
+                              blink::WebMouseEvent::Button::kLeft);
+  active_tab_observer.Wait();
+  ASSERT_EQ(0, tab_strip_model->active_index());
+}
+
+class DevToolsConsoleInsightsTest : public DevToolsTest {
+ public:
+  DevToolsConsoleInsightsTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{features::kDevToolsConsoleInsights,
+                              features::kDevToolsConsoleInsightsSettingVisible},
+        /*disabled_features=*/{});
+    policy_provider_.SetDefaultReturns(
+        /*is_initialization_complete_return=*/true,
+        /*is_first_policy_load_complete_return=*/true);
+    policy::BrowserPolicyConnector::SetPolicyProviderForTesting(
+        &policy_provider_);
+  }
+
+  void SetupAccountCapabilities(bool is_minor = false,
+                                bool is_edu = false,
+                                bool is_enterprise = false) {
+    auto* identity_manager =
+        IdentityManagerFactory::GetForProfile(browser()->profile());
+    auto account_info = signin::MakePrimaryAccountAvailable(
+        identity_manager, "test@example.com", signin::ConsentLevel::kSync);
+    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    mutator.set_can_use_devtools_generative_ai_features(!is_minor);
+    mutator.set_can_use_edu_features(is_edu);
+    mutator.set_is_subject_to_enterprise_policies(is_enterprise);
+    signin::UpdateAccountInfoForAccount(identity_manager, account_info);
+  }
+
+  ~DevToolsConsoleInsightsTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
+ protected:
+  testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
+};
+
+bool hasQueryParam(WebContents* wc, std::string query_param) {
+  return std::string::npos !=
+         wc->GetLastCommittedURL().query().find(query_param);
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsTest,
+                       EnterprisePolicyEnabledByDefault) {
+  g_browser_process->variations_service()->OverrideStoredPermanentCountry("us");
+  SetupAccountCapabilities();
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_disabledByDefault=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_disabledByDefault=true"));
+#endif
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByGeo=true"));
+  CloseDevToolsWindow();
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsTest, IsNotEnabledForMinors) {
+  g_browser_process->variations_service()->OverrideStoredPermanentCountry("us");
+  SetupAccountCapabilities(true, false, false);
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+#endif
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByGeo=true"));
+  CloseDevToolsWindow();
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsTest, IsNotEnabledForEduUsers) {
+  g_browser_process->variations_service()->OverrideStoredPermanentCountry("us");
+  SetupAccountCapabilities(false, true, false);
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#endif
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByGeo=true"));
+  CloseDevToolsWindow();
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsTest,
+                       IsNotEnabledForEnterpriseUsers) {
+  g_browser_process->variations_service()->OverrideStoredPermanentCountry("us");
+  SetupAccountCapabilities(true, false, true);
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#endif
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByGeo=true"));
+  CloseDevToolsWindow();
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsTest,
+                       CanBeDisabledByEnterprisePolicy) {
+  g_browser_process->variations_service()->OverrideStoredPermanentCountry("us");
+  SetupAccountCapabilities();
+  // Disable via enterprise policy.
+  policy::PolicyMap policies;
+  policies.Set(policy::key::kDevToolsGenAiSettings,
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD, base::Value(/* disable */ 2),
+               nullptr);
+  policy_provider_.UpdateChromePolicy(policies);
+  base::RunLoop().RunUntilIdle();
+
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#endif
+  CloseDevToolsWindow();
+
+  // Enable via enterprise policy.
+  policies.Set(policy::key::kDevToolsGenAiSettings,
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD, base::Value(/* allow */ 0),
+               nullptr);
+  policy_provider_.UpdateChromePolicy(policies);
+  base::RunLoop().RunUntilIdle();
+
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+#endif
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+  CloseDevToolsWindow();
+}
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsTest,
+                       IsDisabledWhenPolicySetToOne) {
+  g_browser_process->variations_service()->OverrideStoredPermanentCountry("us");
+  policy::PolicyMap policies;
+  // Use value for a potential future "enable and don't store data for model
+  // training" policy to disable via enterprise policy.
+  policies.Set(policy::key::kDevToolsGenAiSettings,
+               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+               policy::POLICY_SOURCE_CLOUD, base::Value(1), nullptr);
+  policy_provider_.UpdateChromePolicy(policies);
+  base::RunLoop().RunUntilIdle();
+
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+#endif
+  CloseDevToolsWindow();
+}
+
+class DevToolsConsoleInsightsBlockedByRegionTest : public DevToolsTest {
+ public:
+  DevToolsConsoleInsightsBlockedByRegionTest() {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        features::kDevToolsConsoleInsightsSettingVisible,
+        {{"blocked_reason", "region"}});
+  }
+
+  ~DevToolsConsoleInsightsBlockedByRegionTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsBlockedByRegionTest,
+                       IsBlockedByGeo) {
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByGeo=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByGeo=true"));
+#endif
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByRollout=true"));
+  CloseDevToolsWindow();
+}
+
+class DevToolsConsoleInsightsBlockedByRolloutTest : public DevToolsTest {
+ public:
+  DevToolsConsoleInsightsBlockedByRolloutTest() {
+    scoped_feature_list_.InitAndEnableFeatureWithParameters(
+        features::kDevToolsConsoleInsightsSettingVisible,
+        {{"blocked_reason", "rollout"}});
+  }
+
+  ~DevToolsConsoleInsightsBlockedByRolloutTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(DevToolsConsoleInsightsBlockedByRolloutTest,
+                       IsBlockedByRollout) {
+  OpenDevToolsWindow(kDebuggerTestPage, false);
+  WebContents* wc = DevToolsWindowTesting::Get(window_)->main_web_contents();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  EXPECT_TRUE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_TRUE(hasQueryParam(wc, "&ci_blockedByRollout=true"));
+#else
+  EXPECT_FALSE(hasQueryParam(wc, "&enableAida=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByRollout=true"));
+#endif
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByAge=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByEnterprisePolicy=true"));
+  EXPECT_FALSE(hasQueryParam(wc, "&ci_blockedByGeo=true"));
+  CloseDevToolsWindow();
 }

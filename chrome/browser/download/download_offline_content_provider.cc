@@ -36,7 +36,10 @@
 #include "chrome/browser/download/android/open_download_dialog_bridge_delegate.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
+#include "components/pdf/common/constants.h"
 #include "content/public/browser/download_item_utils.h"
+#include "content/public/browser/download_manager_delegate.h"
+#include "content/public/common/content_features.h"
 #include "ui/base/device_form_factor.h"
 #endif
 
@@ -62,8 +65,6 @@ const base::TimeDelta kCheckExternallyRemovedDownloadsDelay =
 // Invalid system download Id.
 const int kInvalidSystemDownloadId = -1;
 
-// Pdf MIME type.
-const char kPdfMimeType[] = "application/pdf";
 #endif
 
 bool ShouldShowDownloadItem(const DownloadItem* item) {
@@ -507,10 +508,16 @@ void DownloadOfflineContentProvider::AddCompletedDownloadDone(
     return;
   }
 
+  if (profile_ && profile_->GetDownloadManagerDelegate() &&
+      profile_->GetDownloadManagerDelegate()->ShouldOpenPdfInline() &&
+      item->GetMimeType() == pdf::kPDFMimeType) {
+    return;
+  }
+
   if (DownloadUtils::ShouldAutoOpenDownload(item)) {
     item->OpenDownload();
   } else if (item->IsFromExternalApp()) {
-    if (item->GetMimeType() == kPdfMimeType) {
+    if (item->GetMimeType() == pdf::kPDFMimeType) {
       if (profile_ &&
           DownloadPrefs::FromBrowserContext(profile_)->IsAutoOpenPdfEnabled()) {
         item->OpenDownload();

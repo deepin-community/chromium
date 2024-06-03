@@ -7,7 +7,7 @@ load("//lib/args.star", "args")
 load("//lib/branches.star", "branches")
 load("//lib/builder_config.star", "builder_config")
 load("//lib/builder_health_indicators.star", "health_spec")
-load("//lib/builders.star", "cpu", "os", "reclient", "sheriff_rotations")
+load("//lib/builders.star", "cpu", "os", "reclient", "sheriff_rotations", "siso")
 load("//lib/ci.star", "ci")
 load("//lib/consoles.star", "consoles")
 load("//lib/gn_args.star", "gn_args")
@@ -27,6 +27,12 @@ ci.defaults.set(
     reclient_jobs = reclient.jobs.DEFAULT,
     service_account = ci.DEFAULT_SERVICE_ACCOUNT,
     shadow_service_account = ci.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_configs = ["builder"],
+    siso_enable_cloud_profiler = True,
+    siso_enable_cloud_trace = True,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = reclient.jobs.DEFAULT,
     thin_tester_cores = 8,
 )
 
@@ -67,6 +73,9 @@ ci.builder(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
             apply_configs = [
+                # This is necessary due to child builders running the
+                # telemetry_perf_unittests suite.
+                "chromium_with_telemetry_dependencies",
                 "use_clang_coverage",
             ],
         ),
@@ -215,6 +224,11 @@ ci.builder(
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
+            apply_configs = [
+                # This is necessary due to child builders running the
+                # telemetry_perf_unittests suite.
+                "chromium_with_telemetry_dependencies",
+            ],
         ),
         chromium_config = builder_config.chromium_config(
             config = "chromium",
@@ -383,7 +397,7 @@ ci.thin_tester(
         build_gs_bucket = "chromium-mac-archive",
     ),
     console_view_entry = consoles.console_view_entry(
-        category = "release",
+        category = "mac",
         short_name = "15",
     ),
     cq_mirrors_console_view = "mirrors",
@@ -533,12 +547,6 @@ ios_builder(
     console_view_entry = [
         consoles.console_view_entry(
             category = "ios|default",
-            short_name = "ctl",
-        ),
-        consoles.console_view_entry(
-            branch_selector = branches.selector.MAIN,
-            console_view = "sheriff.ios",
-            category = "chromium.mac",
             short_name = "ctl",
         ),
     ],

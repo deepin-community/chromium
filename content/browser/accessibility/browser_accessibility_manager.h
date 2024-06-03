@@ -19,7 +19,6 @@
 #include "build/build_config.h"
 #include "cc/base/rtree.h"
 #include "content/browser/accessibility/browser_accessibility.h"
-#include "content/browser/accessibility/web_ax_platform_tree_manager_delegate.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/ax_event_notification_details.h"
 #include "third_party/blink/public/mojom/render_accessibility.mojom-forward.h"
@@ -38,6 +37,7 @@
 #include "ui/accessibility/ax_tree_update.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/accessibility/platform/ax_platform_tree_manager.h"
+#include "ui/accessibility/platform/ax_platform_tree_manager_delegate.h"
 #include "ui/base/buildflags.h"
 #include "ui/gfx/native_widget_types.h"
 
@@ -58,9 +58,11 @@ class BrowserAccessibilityManagerMac;
 
 // To be called when a BrowserAccessibilityManager fires a generated event.
 // Provides the host, the event fired, and which node id the event was for.
-class RenderFrameHostImpl;
-using GeneratedEventCallbackForTesting = base::RepeatingCallback<
-    void(RenderFrameHostImpl*, ui::AXEventGenerator::Event, ui::AXNodeID)>;
+class BrowserAccessibilityManager;
+using GeneratedEventCallbackForTesting =
+    base::RepeatingCallback<void(BrowserAccessibilityManager*,
+                                 ui::AXEventGenerator::Event,
+                                 ui::AXNodeID)>;
 
 CONTENT_EXPORT ui::AXTreeUpdate MakeAXTreeUpdateForTesting(
     const ui::AXNodeData& node,
@@ -105,9 +107,9 @@ class CONTENT_EXPORT BrowserAccessibilityManager
   // Creates the platform-specific BrowserAccessibilityManager.
   static BrowserAccessibilityManager* Create(
       const ui::AXTreeUpdate& initial_tree,
-      WebAXPlatformTreeManagerDelegate* delegate);
+      ui::AXPlatformTreeManagerDelegate* delegate);
   static BrowserAccessibilityManager* Create(
-      WebAXPlatformTreeManagerDelegate* delegate);
+      ui::AXPlatformTreeManagerDelegate* delegate);
 
   static BrowserAccessibilityManager* FromID(ui::AXTreeID ax_tree_id);
 
@@ -128,6 +130,15 @@ class CONTENT_EXPORT BrowserAccessibilityManager
   ~BrowserAccessibilityManager() override;
 
   static ui::AXTreeUpdate GetEmptyDocument();
+
+  // Fires the notification event for an ARIA notification posted to the given
+  // `node`. It should be overridden by each platform-specific implementation.
+  virtual void FireAriaNotificationEvent(
+      BrowserAccessibility* node,
+      const std::string& announcement,
+      const std::string& notification_id,
+      ax::mojom::AriaNotificationInterrupt interrupt_property,
+      ax::mojom::AriaNotificationPriority priority_property) {}
 
   virtual void FireBlinkEvent(ax::mojom::Event event_type,
                               BrowserAccessibility* node,
@@ -409,7 +420,7 @@ class CONTENT_EXPORT BrowserAccessibilityManager
   ui::AXPlatformNode* GetPlatformNodeFromTree(const ui::AXNode&) const override;
   ui::AXPlatformNodeDelegate* RootDelegate() const override;
 
-  WebAXPlatformTreeManagerDelegate* delegate() const { return delegate_; }
+  ui::AXPlatformTreeManagerDelegate* delegate() const { return delegate_; }
 
   // If this BrowserAccessibilityManager is a child frame or guest frame,
   // returns the BrowserAccessibilityManager from the root frame. The root frame
@@ -420,9 +431,10 @@ class CONTENT_EXPORT BrowserAccessibilityManager
   // indicate that we don't have access to the manager of the root frame yet.
   BrowserAccessibilityManager* GetManagerForRootFrame() const;
 
-  // Returns the `WebAXPlatformTreeManagerDelegate` from `GetRootManager` above,
-  // or returns nullptr in case we don't have access to the root manager yet.
-  WebAXPlatformTreeManagerDelegate* GetDelegateFromRootManager() const;
+  // Returns the `ui::AXPlatformTreeManagerDelegate` from `GetRootManager`
+  // above, or returns nullptr in case we don't have access to the root manager
+  // yet.
+  ui::AXPlatformTreeManagerDelegate* GetDelegateFromRootManager() const;
 
   // Returns whether this is the root frame.
   bool IsRootFrameManager() const;
@@ -488,7 +500,7 @@ class CONTENT_EXPORT BrowserAccessibilityManager
                            TestShouldFireEventForNode);
 
   explicit BrowserAccessibilityManager(
-      WebAXPlatformTreeManagerDelegate* delegate);
+      ui::AXPlatformTreeManagerDelegate* delegate);
 
   // Send platform-specific notifications to each of these objects that
   // their location has changed. This is called by OnLocationChanges
@@ -508,7 +520,7 @@ class CONTENT_EXPORT BrowserAccessibilityManager
 
   // An object that can retrieve information or perform actions on our behalf,
   // based on which layer this code is running on, Web vs. Views.
-  raw_ptr<WebAXPlatformTreeManagerDelegate> delegate_;
+  raw_ptr<ui::AXPlatformTreeManagerDelegate> delegate_;
 
   // A mapping from a node id to its wrapper of type BrowserAccessibility.
   // This is different from the map in AXTree, which does not contain extra mac

@@ -21,6 +21,7 @@
 #include "content/browser/device_posture/device_posture_provider_impl.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/renderer_host/delegated_frame_host.h"
+#include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/renderer_host/input/mouse_wheel_phase_handler.h"
 #include "content/browser/renderer_host/input/synthetic_gesture_target_base.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
@@ -30,6 +31,7 @@
 #include "content/browser/renderer_host/render_widget_host_owner_delegate.h"
 #include "content/browser/renderer_host/render_widget_host_view_base_observer.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
+#include "content/browser/renderer_host/scoped_view_transition_resources.h"
 #include "content/browser/renderer_host/text_input_manager.h"
 #include "content/browser/renderer_host/visible_time_request_trigger.h"
 #include "content/common/content_switches_internal.h"
@@ -469,6 +471,12 @@ bool RenderWidgetHostViewBase::HasFallbackSurface() const {
   return false;
 }
 
+viz::SurfaceId RenderWidgetHostViewBase::GetFallbackSurfaceIdForTesting()
+    const {
+  NOTREACHED();
+  return viz::SurfaceId();
+}
+
 void RenderWidgetHostViewBase::SetWidgetType(WidgetType widget_type) {
   widget_type_ = widget_type;
 }
@@ -503,7 +511,7 @@ bool RenderWidgetHostViewBase::RequestRepaintForTesting() {
 void RenderWidgetHostViewBase::ProcessAckedTouchEvent(
     const TouchEventWithLatencyInfo& touch,
     blink::mojom::InputEventResultState ack_result) {
-  NOTREACHED();
+  DUMP_WILL_BE_NOTREACHED_NORETURN();
 }
 
 // Send system cursor size to the renderer via UpdateScreenInfo().
@@ -643,6 +651,14 @@ float RenderWidgetHostViewBase::GetDeviceScaleFactor() const {
   return screen_infos_.current().device_scale_factor;
 }
 
+RenderInputRouter* RenderWidgetHostViewBase::GetViewRenderInputRouter() {
+  return host()->GetRenderInputRouter();
+}
+
+RenderWidgetHostViewBase* RenderWidgetHostViewBase::GetParentView() {
+  return nullptr;
+}
+
 void RenderWidgetHostViewBase::SetScaleOverrideForCapture(float scale) {
   DVLOG(1) << __func__ << ": override=" << scale;
   scale_override_for_capture_ = scale;
@@ -668,7 +684,8 @@ RenderWidgetHostViewBase::GetDevicePosturePlatformProvider() {
   }
 
   DevicePostureProviderImpl* posture_provider =
-      host()->delegate()->GetDevicePostureProvider();
+      static_cast<DevicePostureProviderImpl*>(
+          host()->delegate()->GetDevicePostureProvider());
   if (!posture_provider) {
     return nullptr;
   }
@@ -725,6 +742,11 @@ void RenderWidgetHostViewBase::ProcessMouseEvent(
   if (!host())
     return;
 
+  // Ensure the event is not routed to a prerendered page.
+  if (host()->frame_tree() && host()->frame_tree()->is_prerendering()) {
+    NOTREACHED_NORETURN();
+  }
+
   PreProcessMouseEvent(event);
   host()->ForwardMouseEventWithLatencyInfo(event, latency);
 }
@@ -734,6 +756,12 @@ void RenderWidgetHostViewBase::ProcessMouseWheelEvent(
     const ui::LatencyInfo& latency) {
   if (!host())
     return;
+
+  // Ensure the event is not routed to a prerendered page.
+  if (host()->frame_tree() && host()->frame_tree()->is_prerendering()) {
+    NOTREACHED_NORETURN();
+  }
+
   host()->ForwardWheelEventWithLatencyInfo(event, latency);
 }
 
@@ -742,6 +770,11 @@ void RenderWidgetHostViewBase::ProcessTouchEvent(
     const ui::LatencyInfo& latency) {
   if (!host())
     return;
+
+  // Ensure the event is not routed to a prerendered page.
+  if (host()->frame_tree() && host()->frame_tree()->is_prerendering()) {
+    NOTREACHED_NORETURN();
+  }
 
   PreProcessTouchEvent(event);
   host()->ForwardTouchEventWithLatencyInfo(event, latency);
@@ -752,6 +785,12 @@ void RenderWidgetHostViewBase::ProcessGestureEvent(
     const ui::LatencyInfo& latency) {
   if (!host())
     return;
+
+  // Ensure the event is not routed to a prerendered page.
+  if (host()->frame_tree() && host()->frame_tree()->is_prerendering()) {
+    NOTREACHED_NORETURN();
+  }
+
   host()->ForwardGestureEventWithLatencyInfo(event, latency);
 }
 
@@ -791,6 +830,13 @@ void RenderWidgetHostViewBase::Destroy() {
 
 bool RenderWidgetHostViewBase::CanSynchronizeVisualProperties() {
   return true;
+}
+
+// This function is called from host, so host and delegate should be set up.
+double RenderWidgetHostViewBase::GetZoomLevel() const {
+  DCHECK(host());
+  DCHECK(host()->delegate());
+  return host()->delegate()->GetPendingPageZoomLevel();
 }
 
 std::vector<std::unique_ptr<ui::TouchEvent>>
@@ -1135,6 +1181,11 @@ void RenderWidgetHostViewBase::UpdateFrameSinkIdRegistration() {
     // register until ownership has been transferred.
     router->RemoveFrameSinkIdOwner(GetFrameSinkId());
   }
+}
+
+void RenderWidgetHostViewBase::SetViewTransitionResources(
+    std::unique_ptr<ScopedViewTransitionResources> resources) {
+  view_transition_resources_ = std::move(resources);
 }
 
 }  // namespace content

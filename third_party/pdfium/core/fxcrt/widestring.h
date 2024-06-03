@@ -18,12 +18,12 @@
 #include <optional>
 #include <utility>
 
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/retain_ptr.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/string_data_template.h"
 #include "core/fxcrt/string_template.h"
 #include "core/fxcrt/string_view_template.h"
-#include "third_party/base/check.h"
 
 namespace fxcrt {
 
@@ -117,17 +117,10 @@ class WideString : public StringTemplate<wchar_t> {
   void MakeLower();
   void MakeUpper();
 
-  void Trim();
-  void Trim(wchar_t target);
-  void Trim(WideStringView targets);
-
-  void TrimLeft();
-  void TrimLeft(wchar_t target);
-  void TrimLeft(WideStringView targets);
-
-  void TrimRight();
-  void TrimRight(wchar_t target);
-  void TrimRight(WideStringView targets);
+  // Trim a canonical set of characters from the widestring.
+  void TrimWhitespace();
+  void TrimWhitespaceFront();
+  void TrimWhitespaceBack();
 
   int GetInteger() const;
 
@@ -144,10 +137,11 @@ class WideString : public StringTemplate<wchar_t> {
   ByteString ToDefANSI() const;
   ByteString ToUTF8() const;
 
-  // This method will add \0\0 to the end of the string to represent the
-  // wide string terminator. These values are in the string, not just the data,
-  // so GetLength() will include them.
+  // These methods will add \0\0 to the end of the string to represent the
+  // two-byte terminator. These values are part of the string itself, so
+  // GetLength() will include them.
   ByteString ToUTF16LE() const;
+  ByteString ToUCS2LE() const;
 
   // Replace the characters &<>'" with HTML entities.
   WideString EncodeEntities() const;

@@ -229,6 +229,8 @@ void DMFetch::PostRequest(const std::string& request_type,
       result = DMClient::RequestResult::kNotManaged;
     } else if (!storage_->GetDmToken().empty()) {
       result = DMClient::RequestResult::kAlreadyRegistered;
+    } else {
+      storage_->RemoveAllPolicies();
     }
   } else if (storage_->GetDmToken().empty()) {
     result = DMClient::RequestResult::kNoDMToken;
@@ -278,6 +280,7 @@ void DMFetch::OnRequestComplete(std::unique_ptr<std::string> response_body,
     VLOG(1) << "DM request failed due to net error: " << net_error;
     result = DMClient::RequestResult::kNetworkError;
   } else if (http_status_code_ == kHTTPStatusGone) {
+    VLOG(1) << "Got response to delete/invalidate the DM token.";
     if (ShouldDeleteDmToken(*response_body)) {
       storage_->DeleteDMToken();
       result = DMClient::RequestResult::kNoDMToken;
@@ -335,7 +338,9 @@ void OnDMPolicyFetchRequestComplete(
         storage->GetDeviceID(), validation_results);
 
     if (policies.empty()) {
+      VLOG(1) << "No policy passes the validation, reset the policy cache.";
       result = DMClient::RequestResult::kUnexpectedResponse;
+      storage->RemoveAllPolicies();
     } else {
       VLOG(1) << "Policy fetch request completed, got " << policies.size()
               << " new policies.";

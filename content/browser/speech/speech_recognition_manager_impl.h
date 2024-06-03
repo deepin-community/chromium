@@ -43,8 +43,8 @@ class SpeechRecognizer;
 // The SpeechRecognitionManager has the following responsibilities:
 //  - Handles requests received from various render frames and makes sure only
 //    one of them accesses the audio device at any given time.
-//  - Handles the instantiation of SpeechRecognitionEngine objects when
-//    requested by SpeechRecognitionSessions.
+//  - Handles the instantiation of NetworkSpeechRecognitionEngineImpl objects
+//    when requested by SpeechRecognitionSessions.
 //  - Relays recognition results/status/error events of each session to the
 //    corresponding listener (demuxing on the base of their session_id).
 //  - Relays also recognition results/status/error events of every session to
@@ -56,6 +56,11 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   // Returns the current SpeechRecognitionManagerImpl or NULL if the call is
   // issued when it is not created yet or destroyed (by BrowserMainLoop).
   static SpeechRecognitionManagerImpl* GetInstance();
+
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_ANDROID)
+  static bool IsOnDeviceSpeechRecognitionAvailable(
+      const SpeechRecognitionSessionConfig& config);
+#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_ANDROID)
 
   // SpeechRecognitionManager implementation.
   int CreateSession(const SpeechRecognitionSessionConfig& config) override;

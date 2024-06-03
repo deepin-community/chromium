@@ -404,7 +404,9 @@ bool AVCodecContextToAudioDecoderConfig(const AVCodecContext* codec_context,
 
     // TODO(dalecurtis): Just use the profile from the codec context if ffmpeg
     // ever starts supporting xHE-AAC.
-    if (codec_context->profile == FF_PROFILE_UNKNOWN) {
+    // FFmpeg provides the (defined_profile - 1) for AVCodecContext::profile
+    if (codec_context->profile == FF_PROFILE_UNKNOWN ||
+        codec_context->profile == mp4::AAC::kXHeAAcType - 1) {
       // Errors aren't fatal here, so just drop any MediaLog messages.
       NullMediaLog media_log;
       mp4::AAC aac_parser;
@@ -887,14 +889,17 @@ ChannelLayout ChannelLayoutToChromeChannelLayout(int64_t layout, int channels) {
       return CHANNEL_LAYOUT_7_1;
     case AV_CH_LAYOUT_7POINT1_WIDE:
       return CHANNEL_LAYOUT_7_1_WIDE;
-#ifdef AV_CH_LAYOUT_7POINT1_WIDE_BACK
     case AV_CH_LAYOUT_7POINT1_WIDE_BACK:
       return CHANNEL_LAYOUT_7_1_WIDE_BACK;
-#endif
     case AV_CH_LAYOUT_OCTAGONAL:
       return CHANNEL_LAYOUT_OCTAGONAL;
     case AV_CH_LAYOUT_STEREO_DOWNMIX:
       return CHANNEL_LAYOUT_STEREO_DOWNMIX;
+    case AV_CH_FRONT_CENTER | AV_CH_LOW_FREQUENCY:
+      return CHANNEL_LAYOUT_1_1;
+    case AV_CH_FRONT_LEFT | AV_CH_FRONT_RIGHT | AV_CH_LOW_FREQUENCY |
+        AV_CH_BACK_CENTER:
+      return CHANNEL_LAYOUT_3_1_BACK;
     default:
       // FFmpeg channel_layout is 0 for .wav and .mp3.  Attempt to guess layout
       // based on the channel count.
@@ -946,12 +951,9 @@ VideoPixelFormat AVPixelFormatToVideoPixelFormat(AVPixelFormat pixel_format) {
     case AV_PIX_FMT_YUV444P12LE:
       return PIXEL_FORMAT_YUV444P12;
 
-    // When compiled without decoders, FFmpeg won't know the pixel format.
-    case AV_PIX_FMT_NONE:
-      return PIXEL_FORMAT_UNKNOWN;
-
     default:
-      NOTREACHED() << "Unsupported pixel format: " << pixel_format;
+      // FFmpeg knows more pixel formats than Chromium cares about.
+      LOG(ERROR) << "Unsupported pixel format: " << pixel_format;
       return PIXEL_FORMAT_UNKNOWN;
   }
 }

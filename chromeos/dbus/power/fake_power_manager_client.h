@@ -53,6 +53,7 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
   int num_request_restart_calls() const { return num_request_restart_calls_; }
   int num_request_shutdown_calls() const { return num_request_shutdown_calls_; }
   int num_set_policy_calls() const { return num_set_policy_calls_; }
+  int num_request_suspend_calls() const { return num_request_suspend_calls_; }
   int num_set_is_projecting_calls() const {
     return num_set_is_projecting_calls_;
   }
@@ -71,6 +72,15 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
   double keyboard_brightness_percent() const {
     return keyboard_brightness_percent_.value();
   }
+  bool is_ambient_light_sensor_enabled() const {
+    return is_ambient_light_sensor_enabled_;
+  }
+  void set_has_ambient_light_sensor(bool has_ambient_light_sensor) {
+    has_ambient_light_sensor_ = has_ambient_light_sensor;
+  }
+  void set_has_keyboard_backlight(bool has_keyboard_backlight) {
+    has_keyboard_backlight_ = has_keyboard_backlight;
+  }
   bool is_projecting() const { return is_projecting_; }
   bool have_video_activity_report() const {
     return !video_activity_reports_.empty();
@@ -78,6 +88,9 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
   bool backlights_forced_off() const { return backlights_forced_off_; }
   int num_set_backlights_forced_off_calls() const {
     return num_set_backlights_forced_off_calls_;
+  }
+  bool battery_saver_mode_enabled() const {
+    return battery_saver_mode_enabled_;
   }
   void set_enqueue_brightness_changes_on_backlights_forced_off(bool enqueue) {
     enqueue_brightness_changes_on_backlights_forced_off_ = enqueue;
@@ -104,6 +117,9 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
   void SetScreenBrightness(
       const power_manager::SetBacklightBrightnessRequest& request) override;
   void GetScreenBrightnessPercent(DBusMethodCallback<double> callback) override;
+  void SetAmbientLightSensorEnabled(bool enabled) override;
+  void HasAmbientLightSensor(DBusMethodCallback<bool> callback) override;
+  void HasKeyboardBacklight(DBusMethodCallback<bool> callback) override;
   void DecreaseKeyboardBrightness() override;
   void IncreaseKeyboardBrightness() override;
   void GetKeyboardBrightnessPercent(
@@ -116,7 +132,9 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
   void RequestStatusUpdate() override;
   void RequestAllPeripheralBatteryUpdate() override;
   void RequestThermalState() override;
-  void RequestSuspend() override;
+  void RequestSuspend(std::optional<uint64_t> wakeup_count,
+                      int32_t duration_secs,
+                      power_manager::RequestSuspendFlavor flavor) override;
   void RequestRestart(power_manager::RequestRestartReason reason,
                       const std::string& description) override;
   void RequestShutdown(power_manager::RequestShutdownReason reason,
@@ -181,6 +199,10 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
       const power_manager::BacklightBrightnessChange& proto);
   void SendKeyboardBrightnessChanged(
       const power_manager::BacklightBrightnessChange& proto);
+
+  // Notifies observers about changes to the Ambient Light Sensor status.
+  void SendAmbientLightSensorEnabledChanged(
+      const power_manager::AmbientLightSensorChange& proto);
 
   // Notifies observers about the screen idle state changing.
   void SendScreenIdleStateChanged(const power_manager::ScreenIdleState& proto);
@@ -259,6 +281,7 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
   // Number of times that various methods have been called.
   int num_request_restart_calls_ = 0;
   int num_request_shutdown_calls_ = 0;
+  int num_request_suspend_calls_ = 0;
   int num_set_policy_calls_ = 0;
   int num_set_is_projecting_calls_ = 0;
   int num_set_backlights_forced_off_calls_ = 0;
@@ -281,12 +304,22 @@ class COMPONENT_EXPORT(DBUS_POWER) FakePowerManagerClient
   // Initially set to an arbitrary non-null value.
   double requested_screen_brightness_percent_ = 80;
 
+  // Last value set by SetAmbientLightSensorEnabled. Defaults to true to match
+  // system behavior.
+  bool is_ambient_light_sensor_enabled_ = true;
+
+  // True if the device has an ambient light sensor.
+  bool has_ambient_light_sensor_ = true;
+
   // Last projecting state set in SetIsProjecting().
   bool is_projecting_ = false;
 
   // Display and keyboard backlights (if present) forced off state set in
   // SetBacklightsForcedOff().
   bool backlights_forced_off_ = false;
+
+  // True if the device has a keyboard backlight.
+  bool has_keyboard_backlight_ = false;
 
   // Last battery saver mode state set in SetBatterySaverModeState().
   bool battery_saver_mode_enabled_ = false;

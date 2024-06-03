@@ -7,6 +7,7 @@
 
 #include <iosfwd>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/run_loop.h"
@@ -110,7 +111,7 @@ void AccessCookieViaJSIn(content::WebContents* web_contents,
 // OnCookiesAccessed() to be called.
 bool NavigateToSetCookie(content::WebContents* web_contents,
                          const net::EmbeddedTestServer* server,
-                         base::StringPiece host,
+                         std::string_view host,
                          bool is_secure_cookie_set,
                          bool is_ad_tagged);
 
@@ -288,5 +289,9 @@ class OpenedWindowObserver : public content::WebContentsObserver {
   raw_ptr<content::WebContents> window_ = nullptr;
   base::RunLoop run_loop_;
 };
+
+// Simulate a mouse click and wait for the main frame to receive user
+// activation.
+void SimulateMouseClickAndWait(content::WebContents*);
 
 #endif  // CHROME_BROWSER_DIPS_DIPS_TEST_UTILS_H_

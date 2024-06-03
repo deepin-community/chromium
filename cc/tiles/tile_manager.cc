@@ -8,9 +8,9 @@
 #include <stdint.h>
 
 #include <limits>
+#include <optional>
 #include <string>
 
-#include <optional>
 #include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -407,12 +407,14 @@ TileManager::TileManager(
     base::SequencedTaskRunner* origin_task_runner,
     scoped_refptr<base::SequencedTaskRunner> image_worker_task_runner,
     size_t scheduled_raster_task_limit,
+    bool running_on_renderer_process,
     const TileManagerSettings& tile_manager_settings)
     : client_(client),
       task_runner_(origin_task_runner),
       resource_pool_(nullptr),
       tile_task_manager_(nullptr),
       scheduled_raster_task_limit_(scheduled_raster_task_limit),
+      running_on_renderer_process_(running_on_renderer_process),
       tile_manager_settings_(tile_manager_settings),
       use_gpu_rasterization_(false),
       all_tiles_that_need_to_be_rasterized_are_scheduled_(true),
@@ -895,15 +897,12 @@ TileManager::PrioritizedWorkToSchedule TileManager::AssignGpuMemoryToTiles() {
       // in case other operations creep in, while being low enough that
       // performing the analysis is not too costly (and besides, long paint op
       // lists are unlikely to result in easily identifiable solid colored
-      // tiles). This was shows to improve memory usage without regressing
+      // tiles). This was shown to improve memory usage without regressing
       // performance.
-      int max_ops_to_analyze = base::FeatureList::IsEnabled(
-                                   features::kMoreAggressiveSolidColorDetection)
-                                   ? 5
-                                   : RasterSource::kDefault;
+      constexpr int kMaxOpsToAnalyze = 5;
       bool is_solid_color =
           prioritized_tile.raster_source()->PerformSolidColorAnalysis(
-              tile->enclosing_layer_rect(), &color, max_ops_to_analyze);
+              tile->enclosing_layer_rect(), &color, kMaxOpsToAnalyze);
       if (is_solid_color) {
         tile->draw_info().set_solid_color(color);
         client_->NotifyTileStateChanged(tile);
@@ -1060,12 +1059,24 @@ TileManager::PrioritizedWorkToSchedule TileManager::AssignGpuMemoryToTiles() {
   did_oom_on_last_assign_ = !had_enough_memory_to_schedule_tiles_needed_now;
   // Since this is recorded once per frame, subsample these metrics.
   if (metrics_sub_sampler_.ShouldSample(0.01)) {
-    UMA_HISTOGRAM_BOOLEAN("Compositing.TileManager.EnoughMemory",
-                          had_enough_memory_to_schedule_tiles_needed_now);
+    if (running_on_renderer_process_) {
+      UMA_HISTOGRAM_BOOLEAN("Compositing.TileManager.EnoughMemory.Renderer",
+                            had_enough_memory_to_schedule_tiles_needed_now);
+    } else {
+      UMA_HISTOGRAM_BOOLEAN("Compositing.TileManager.EnoughMemory.Browser",
+                            had_enough_memory_to_schedule_tiles_needed_now);
+    }
     if (did_oom_on_last_assign_) {
-      UMA_HISTOGRAM_MEMORY_MEDIUM_MB(
-          "Compositing.TileManager.LimitWhenNotEnoughMemory",
-          hard_memory_limit.memory_bytes() / (1024 * 1024));
+      auto memory_limit = hard_memory_limit.memory_bytes() / (1024 * 1024);
+      if (running_on_renderer_process_) {
+        UMA_HISTOGRAM_MEMORY_MEDIUM_MB(
+            "Compositing.TileManager.LimitWhenNotEnoughMemory.Renderer",
+            memory_limit);
+      } else {
+        UMA_HISTOGRAM_MEMORY_MEDIUM_MB(
+            "Compositing.TileManager.LimitWhenNotEnoughMemory.Browser",
+            memory_limit);
+      }
     }
   }
 

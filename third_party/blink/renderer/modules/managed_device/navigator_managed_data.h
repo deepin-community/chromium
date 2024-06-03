@@ -56,30 +56,31 @@ class MODULES_EXPORT NavigatorManagedData final
   bool HasPendingActivity() const final;
 
   // Managed Configuration API:
-  ScriptPromiseTyped<IDLRecord<IDLString, IDLAny>> getManagedConfiguration(
+  ScriptPromise<IDLRecord<IDLString, IDLAny>> getManagedConfiguration(
       ScriptState* script_state,
       Vector<String> keys);
   DEFINE_ATTRIBUTE_EVENT_LISTENER(managedconfigurationchange,
                                   kManagedconfigurationchange)
 
   // Device Attributes API:
-  ScriptPromise getDirectoryId(ScriptState* script_state);
-  ScriptPromise getHostname(ScriptState* script_state);
-  ScriptPromise getSerialNumber(ScriptState* script_state);
-  ScriptPromise getAnnotatedAssetId(ScriptState* script_state);
-  ScriptPromise getAnnotatedLocation(ScriptState* script_state);
+  ScriptPromise<IDLNullable<IDLString>> getDirectoryId(ScriptState*);
+  ScriptPromise<IDLNullable<IDLString>> getHostname(ScriptState*);
+  ScriptPromise<IDLNullable<IDLString>> getSerialNumber(ScriptState*);
+  ScriptPromise<IDLNullable<IDLString>> getAnnotatedAssetId(ScriptState*);
+  ScriptPromise<IDLNullable<IDLString>> getAnnotatedLocation(ScriptState*);
 
  private:
   // ManagedConfigurationObserver:
   void OnConfigurationChanged() override;
 
   void OnConfigurationReceived(
-      ScriptPromiseResolverTyped<IDLRecord<IDLString, IDLAny>>* scoped_resolver,
+      ScriptPromiseResolver<IDLRecord<IDLString, IDLAny>>* scoped_resolver,
       const std::optional<HashMap<String, String>>& configurations);
 
-  void OnAttributeReceived(ScriptState* script_state,
-                           ScriptPromiseResolver* scoped_resolver,
-                           mojom::blink::DeviceAttributeResultPtr result);
+  void OnAttributeReceived(
+      ScriptState* script_state,
+      ScriptPromiseResolver<IDLNullable<IDLString>>* resolver,
+      mojom::blink::DeviceAttributeResultPtr result);
 
   // Lazily binds mojo interface.
   mojom::blink::DeviceAPIService* GetService();
@@ -97,7 +98,7 @@ class MODULES_EXPORT NavigatorManagedData final
   HeapMojoReceiver<mojom::blink::ManagedConfigurationObserver,
                    NavigatorManagedData>
       configuration_observer_;
-  HeapHashSet<Member<ScriptPromiseResolver>> pending_promises_;
+  HeapHashSet<Member<ScriptPromiseResolverBase>> pending_promises_;
 };
 
 }  // namespace blink

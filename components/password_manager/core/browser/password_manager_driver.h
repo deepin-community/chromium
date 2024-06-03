@@ -69,7 +69,8 @@ class PasswordManagerDriver {
       const autofill::PasswordFormGenerationData& form) {}
 
   // Notifies the driver that the user has accepted a generated password.
-  // TODO(crbug/936011): delete this method. The UI should call the one below.
+  // TODO(crbug.com/40615624): delete this method. The UI should call the one
+  // below.
   virtual void GeneratedPasswordAccepted(const std::u16string& password) = 0;
 
   // Notifies the password manager that the user has accepted a generated
@@ -84,6 +85,11 @@ class PasswordManagerDriver {
   // field after password fields (assuming that password fields are adjacent
   // in account creation).
   virtual void FocusNextFieldAfterPasswords() {}
+
+  // Tells the renderer to fill the given `value` into the field identified by
+  // the `field_id`.
+  virtual void FillField(autofill::FieldRendererId field_id,
+                         const std::u16string& value) {}
 
   // Tells the driver to fill the form with the `username` and `password`.
   virtual void FillSuggestion(const std::u16string& username,
@@ -105,6 +111,11 @@ class PasswordManagerDriver {
   // Triggers form submission on the last interacted web input element.
   virtual void TriggerFormSubmission() {}
 #endif
+
+  // Tells the renderer to preview the given `value` into the field identified
+  // by the `field_id`.
+  virtual void PreviewField(autofill::FieldRendererId field_id,
+                            const std::u16string& value) {}
 
   // Tells the driver to preview filling form with the `username` and
   // `password`.

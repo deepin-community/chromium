@@ -14,10 +14,10 @@ import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
 import 'chrome://resources/cr_elements/cr_icons.css.js';
 import 'chrome://resources/cr_elements/cr_input/cr_input.js';
 import 'chrome://resources/cr_elements/cr_loading_gradient/cr_loading_gradient.js';
+import 'chrome://resources/cr_elements/cr_ripple/cr_ripple.js';
 import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/cr_elements/icons.html.js';
 import 'chrome://resources/cr_components/theme_color_picker/theme_hue_slider_dialog.js';
-import 'chrome://resources/polymer/v3_0/paper-ripple/paper-ripple.js';
 
 import type {SpHeading} from 'chrome://customize-chrome-side-panel.top-chrome/shared/sp_heading.js';
 import type {ThemeHueSliderDialogElement} from 'chrome://resources/cr_components/theme_color_picker/theme_hue_slider_dialog.js';
@@ -394,7 +394,9 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
         this.errorCallback_ = undefined;
         recordStatusChange(WallpaperSearchStatus.kOk);
       } else {
-        this.errorCallback_ = () => this.fetchDescriptors_();
+        // Wallpaper search cannot render properly without descriptors, so the
+        // error callback takes the user back a page.
+        this.errorCallback_ = () => this.dispatchEvent(new Event('back-click'));
         this.status_ = WindowProxy.getInstance().onLine ?
             WallpaperSearchStatus.kError :
             WallpaperSearchStatus.kOffline;
@@ -637,7 +639,9 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
     recordCustomizeChromeAction(
         CustomizeChromeAction.WALLPAPER_SEARCH_HISTORY_IMAGE_SELECTED);
     this.wallpaperSearchHandler_.setBackgroundToHistoryImage(
-        e.model.item.id, e.model.item.descriptors ?? {});
+        e.model.item.id,
+        e.model.item.descriptors ??
+            {subject: null, style: null, mood: null, color: null});
   }
 
   private onInspirationGroupTitleClick_(e: DomRepeatEvent<InspirationGroup>) {
@@ -705,9 +709,9 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
     announcer.announce(this.i18n('wallpaperSearchLoadingA11yMessage'));
     const descriptors: ResultDescriptors = {
       subject: this.selectedDescriptorA_!,
-      style: this.selectedDescriptorB_ ?? undefined,
-      mood: this.selectedDescriptorC_ ?? undefined,
-      color: this.selectedDescriptorD_ ?? undefined,
+      style: this.selectedDescriptorB_ ?? null,
+      mood: this.selectedDescriptorC_ ?? null,
+      color: this.selectedDescriptorD_ ?? null,
     };
     this.resultsPromises_.push(
         this.wallpaperSearchHandler_.getWallpaperSearchResults(descriptors));

@@ -41,7 +41,6 @@
 #include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/browser/geo/phone_number_i18n.h"
 #include "components/autofill/core/browser/geo/state_names.h"
-#include "components/autofill/core/browser/metrics/address_rewriter_in_profile_subset_metrics.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/profile_token_quality.h"
 #include "components/autofill/core/browser/validation.h"
@@ -227,26 +226,12 @@ void GetFieldsForDistinguishingProfiles(
     const std::vector<FieldType>* suggested_fields,
     FieldTypeSet excluded_fields,
     std::vector<FieldType>* distinguishing_fields) {
-  static const FieldType kDefaultDistinguishingFields[] = {
-      NAME_FULL,
-      ADDRESS_HOME_LINE1,
-      ADDRESS_HOME_LINE2,
-      ADDRESS_HOME_DEPENDENT_LOCALITY,
-      ADDRESS_HOME_CITY,
-      ADDRESS_HOME_STATE,
-      ADDRESS_HOME_ZIP,
-      ADDRESS_HOME_SORTING_CODE,
-      ADDRESS_HOME_COUNTRY,
-      EMAIL_ADDRESS,
-      PHONE_HOME_WHOLE_NUMBER,
-      COMPANY_NAME,
-  };
-
   std::vector<FieldType> default_fields;
   if (!suggested_fields) {
     default_fields.assign(
-        kDefaultDistinguishingFields,
-        kDefaultDistinguishingFields + std::size(kDefaultDistinguishingFields));
+        AutofillProfile::kDefaultDistinguishingFieldsForLabels,
+        AutofillProfile::kDefaultDistinguishingFieldsForLabels +
+            std::size(AutofillProfile::kDefaultDistinguishingFieldsForLabels));
     if (excluded_fields.empty()) {
       distinguishing_fields->swap(default_fields);
       return;
@@ -550,7 +535,8 @@ bool AutofillProfile::IsPresentButInvalid(FieldType type) const {
       return country == "US" && !IsValidZip(data);
 
     case PHONE_HOME_WHOLE_NUMBER:
-      return !i18n::PhoneObject(data, country).IsValidNumber();
+      return !i18n::PhoneObject(data, country, /*infer_country_code=*/false)
+                  .IsValidNumber();
 
     case EMAIL_ADDRESS:
       return !IsValidEmailAddress(data);
@@ -658,9 +644,8 @@ bool AutofillProfile::operator==(const AutofillProfile& profile) const {
 
 bool AutofillProfile::IsSubsetOf(const AutofillProfileComparator& comparator,
                                  const AutofillProfile& profile) const {
-  FieldTypeSet supported_types;
-  GetSupportedTypes(&supported_types);
-  return IsSubsetOfForFieldSet(comparator, profile, supported_types);
+  return IsSubsetOfForFieldSet(comparator, profile,
+                               GetDatabaseStoredTypesOfAutofillProfile());
 }
 
 bool AutofillProfile::IsSubsetOfForFieldSet(
@@ -668,9 +653,6 @@ bool AutofillProfile::IsSubsetOfForFieldSet(
     const AutofillProfile& profile,
     const FieldTypeSet& types) const {
   const std::string& app_locale = comparator.app_locale();
-  // TODO(crbug.com/1417975): Remove when
-  // `kAutofillUseAddressRewriterInProfileSubsetComparison` launches.
-  bool has_different_address = false;
   const AddressComponent& address = GetAddress().GetRoot();
   const AddressComponent& other_address = profile.GetAddress().GetRoot();
 
@@ -684,18 +666,16 @@ bool AutofillProfile::IsSubsetOfForFieldSet(
     if (value.empty()) {
       continue;
     }
-
-    // TODO(crbug.com/1417975): Use rewriter rules for all kAddressHome types.
-    if (type == ADDRESS_HOME_ADDRESS || type == ADDRESS_HOME_STREET_ADDRESS ||
-        type == ADDRESS_HOME_LINE1 || type == ADDRESS_HOME_LINE2 ||
-        type == ADDRESS_HOME_LINE3) {
+    // TODO(crbug.com/40257475): Use rewriter rules for all kAddressHome types.
+    if (type == ADDRESS_HOME_STREET_ADDRESS || type == ADDRESS_HOME_LINE1 ||
+        type == ADDRESS_HOME_LINE2 || type == ADDRESS_HOME_LINE3) {
       // This will compare street addresses after applying appropriate address
       // rewriter rules to both values, so that for example US streets like
       // `Main Street` and `main st` evaluate to equal.
-      has_different_address =
-          has_different_address ||
-          (address.GetValueForComparisonForType(type, other_address) !=
-           other_address.GetValueForComparisonForType(type, address));
+      if (address.GetValueForComparisonForType(type, other_address) !=
+          other_address.GetValueForComparisonForType(type, address)) {
+        return false;
+      }
     } else if (type == NAME_FULL) {
       if (!comparator.IsNameVariantOf(
               AutofillProfileComparator::NormalizeForComparison(
@@ -725,15 +705,7 @@ bool AutofillProfile::IsSubsetOfForFieldSet(
       return false;
     }
   }
-  // When `kAutofillUseAddressRewriterInProfileSubsetComparison` is disabled,
-  // Ignore street addresses because comparing addresses such as 200 Elm St and
-  // 200 Elm Street could cause |profile| to not be seen as a subset of |this|.
-  // If the form includes a street address, then it is likely it contains
-  // another address field, e.g. a city or postal code, and comparing these
-  // other address parts is more reliable.
-  return !has_different_address ||
-         !base::FeatureList::IsEnabled(
-             features::kAutofillUseAddressRewriterInProfileSubsetComparison);
+  return true;
 }
 
 bool AutofillProfile::IsStrictSupersetOf(
@@ -950,8 +922,7 @@ void AutofillProfile::CreateInferredLabels(
       labels_to_profiles;
   for (size_t i = 0; i < profiles.size(); ++i) {
     std::u16string label = profiles[i]->ConstructInferredLabel(
-        fields_to_use.data(), fields_to_use.size(), minimal_fields_shown,
-        app_locale);
+        fields_to_use, minimal_fields_shown, app_locale);
     std::u16string main_text =
         triggering_field_type
             ? profiles[i]->GetInfo(*triggering_field_type, app_locale)
@@ -976,8 +947,7 @@ void AutofillProfile::CreateInferredLabels(
 }
 
 std::u16string AutofillProfile::ConstructInferredLabel(
-    const FieldType* included_fields,
-    const size_t included_fields_size,
+    base::span<const FieldType> included_fields,
     size_t num_fields_to_use,
     const std::string& app_locale) const {
   // TODO(estade): use libaddressinput?
@@ -998,7 +968,7 @@ std::u16string AutofillProfile::ConstructInferredLabel(
   AutofillCountry country(address_region_code);
 
   std::vector<FieldType> remaining_fields;
-  for (size_t i = 0; i < included_fields_size && num_fields_to_use > 0; ++i) {
+  for (size_t i = 0; i < included_fields.size() && num_fields_to_use > 0; ++i) {
     if (!country.IsAddressFieldSettingAccessible(included_fields[i]) ||
         included_fields[i] == ADDRESS_HOME_COUNTRY) {
       remaining_fields.push_back(included_fields[i]);
@@ -1177,8 +1147,7 @@ void AutofillProfile::CreateInferredLabelsHelper(
     }
 
     (*labels)[it] = profile->ConstructInferredLabel(
-        label_fields.data(), label_fields.size(), label_fields.size(),
-        app_locale);
+        label_fields, label_fields.size(), app_locale);
   }
 }
 

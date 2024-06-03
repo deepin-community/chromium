@@ -108,10 +108,6 @@ constexpr int kMinimumLengthToAutocomplete = 2;
 // Border insets for SearchBoxView in bubble launcher.
 constexpr auto kBorderInsetsForAppListBubble = gfx::Insets::TLBR(4, 4, 4, 0);
 
-// Margins for the search box text field in bubble launcher.
-constexpr auto kTextFieldMarginsForAppListBubble =
-    gfx::Insets::TLBR(8, 0, 0, 0);
-
 // The default PlaceholderTextTypes used for productivity launcher. Randomly
 // selected when placeholder text would be shown.
 constexpr SearchBoxView::PlaceholderTextType kDefaultPlaceholders[] = {
@@ -277,7 +273,7 @@ class RoundRectPathGenerator : public views::HighlightPathGenerator {
   ~RoundRectPathGenerator() override = default;
 
   // views::HighlightPathGenerator:
-  absl::optional<gfx::RRectF> GetRoundRect(const gfx::RectF& rect) override {
+  std::optional<gfx::RRectF> GetRoundRect(const gfx::RectF& rect) override {
     return gfx::RRectF(rect, radii_);
   }
 
@@ -441,7 +437,6 @@ class FilterMenuAdapter : public views::MenuModelAdapter {
   // Returns the menu item view at `index` in the category filter menu. This
   // should only be called when the menu is opened.
   views::MenuItemView* GetFilterMenuItemByIdx(int index) {
-    CHECK(IsFilterMenuOpen());
     return filter_menu_root_->GetSubmenu()->GetMenuItemAt(index);
   }
 
@@ -574,9 +569,6 @@ void SearchBoxView::InitializeForBubbleLauncher() {
   params.create_background = false;
   params.animate_changing_search_icon = false;
   params.increase_child_view_padding = true;
-  // Add margins to the text field because the BoxLayout vertical centering
-  // does not properly align the text baseline with the icons.
-  params.textfield_margins = kTextFieldMarginsForAppListBubble;
 
   SearchBoxViewBase::Init(params);
 
@@ -1410,8 +1402,10 @@ SearchBoxView::PlaceholderTextType SearchBoxView::SelectPlaceholderText()
   if (use_fixed_placeholder_text_for_test_)
     return kDefaultPlaceholders[0];
 
-  if (chromeos::features::IsCloudGamingDeviceEnabled())
+  if (chromeos::features::IsCloudGamingDeviceEnabled() ||
+      chromeos::features::IsAlmanacLauncherPayloadEnabled()) {
     return kGamingPlaceholders[rand() % std::size(kGamingPlaceholders)];
+  }
 
   return kDefaultPlaceholders[rand() % std::size(kDefaultPlaceholders)];
 }
@@ -1531,13 +1525,16 @@ bool SearchBoxView::HandleKeyEvent(views::Textfield* sender,
     ui::KeyEvent event(key_event);
     SearchResultBaseView* selected_result =
         result_selection_controller_->selected_result();
-    if (selected_result && selected_result->result())
+    if (selected_result) {
       selected_result->OnKeyEvent(&event);
-    // Reset the selected result to the default result.
-    result_selection_controller_->ResetSelection(nullptr,
-                                                 true /* default_selection */);
-    search_box()->SetText(std::u16string());
-    return true;
+      if (event.handled()) {
+        // Reset the selected result to the default result.
+        result_selection_controller_->ResetSelection(
+            nullptr, true /* default_selection */);
+        search_box()->SetText(std::u16string());
+        return true;
+      }
+    }
   }
 
   // Do not handle keys intended for result selection traversal here - these

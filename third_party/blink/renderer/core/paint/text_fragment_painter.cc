@@ -23,21 +23,20 @@
 #include "third_party/blink/renderer/core/layout/text_decoration_offset.h"
 #include "third_party/blink/renderer/core/mobile_metrics/mobile_friendliness_checker.h"
 #include "third_party/blink/renderer/core/paint/box_model_object_painter.h"
-#include "third_party/blink/renderer/core/paint/document_marker_painter.h"
-#include "third_party/blink/renderer/core/paint/line_relative_rect.h"
 #include "third_party/blink/renderer/core/paint/highlight_painter.h"
 #include "third_party/blink/renderer/core/paint/inline_paint_context.h"
-#include "third_party/blink/renderer/core/paint/text_decoration_painter.h"
-#include "third_party/blink/renderer/core/paint/text_painter.h"
+#include "third_party/blink/renderer/core/paint/line_relative_rect.h"
 #include "third_party/blink/renderer/core/paint/object_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_auto_dark_mode.h"
 #include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/paint/selection_bounds_recorder.h"
-#include "third_party/blink/renderer/core/paint/text_painter_base.h"
+#include "third_party/blink/renderer/core/paint/text_decoration_painter.h"
+#include "third_party/blink/renderer/core/paint/text_painter.h"
 #include "third_party/blink/renderer/core/style/applied_text_decoration.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/platform/fonts/character_range.h"
+#include "third_party/blink/renderer/platform/fonts/text_fragment_paint_info.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state_saver.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
@@ -212,19 +211,18 @@ void TextFragmentPainter::PaintSymbol(const LayoutObject* layout_object,
   Color color(layout_object->ResolveColor(GetCSSPropertyColor()));
   if (BoxModelObjectPainter::ShouldForceWhiteBackgroundForPrintEconomy(
           layout_object->GetDocument(), style)) {
-    color = TextPainterBase::TextColorForWhiteBackground(color);
+    color = TextPainter::TextColorForWhiteBackground(color);
   }
   // Apply the color to the list marker text.
   context.SetFillColor(color);
   context.SetStrokeColor(color);
-  context.SetStrokeStyle(kSolidStroke);
-  context.SetStrokeThickness(1.0f);
   const gfx::Rect snapped_rect = ToPixelSnappedRect(marker_rect);
   AutoDarkMode auto_dark_mode(
       PaintAutoDarkMode(style, DarkModeFilter::ElementRole::kListSymbol));
   if (type == keywords::kDisc) {
     context.FillEllipse(gfx::RectF(snapped_rect), auto_dark_mode);
   } else if (type == keywords::kCircle) {
+    context.SetStrokeThickness(1.0f);
     context.StrokeEllipse(gfx::RectF(snapped_rect), auto_dark_mode);
   } else if (type == keywords::kSquare) {
     context.FillRect(snapped_rect, color, auto_dark_mode);
@@ -388,7 +386,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
 
   Node* node = layout_object->GetNode();
   TextPaintStyle text_style =
-      TextPainterBase::TextPaintingStyle(document, style, paint_info);
+      TextPainter::TextPaintingStyle(document, style, paint_info);
   if (UNLIKELY(selection)) {
     selection->ComputeSelectionStyle(document, style, node, paint_info,
                                      text_style);
@@ -409,15 +407,14 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
           ? text_combine->AdjustTextTopForPaint(physical_box.offset.top)
           : physical_box.offset.top + ascent};
 
-  TextPainter text_painter(context, font, visual_rect, text_origin,
-                           is_horizontal);
+  TextPainter text_painter(context, paint_info.GetSvgContextPaints(), font,
+                           visual_rect, text_origin, is_horizontal);
   TextDecorationPainter decoration_painter(text_painter, inline_context_,
                                            paint_info, style, text_style,
                                            rotated_box, selection);
-  HighlightPainter highlight_painter(fragment_paint_info, text_painter,
-                                     decoration_painter, paint_info, cursor_,
-                                     text_item, rotation, physical_box.offset,
-                                     style, text_style, selection);
+  HighlightPainter highlight_painter(
+      fragment_paint_info, text_painter, decoration_painter, paint_info,
+      cursor_, text_item, physical_box.offset, style, text_style, selection);
   if (paint_info.phase == PaintPhase::kForeground) {
     if (auto* mf_checker = MobileFriendlinessChecker::From(document)) {
       if (auto* text = DynamicTo<LayoutText>(*layout_object)) {
@@ -531,7 +528,7 @@ void TextFragmentPainter::Paint(const PaintInfo& paint_info,
     case HighlightPainter::kOverlay:
       // Slow path: paint suppressing text proper where highlighted, then
       // paint each highlight overlay, suppressing unless topmost highlight.
-      highlight_painter.PaintOriginatingText(text_style, node_id);
+      highlight_painter.PaintOriginatingShadow(text_style, node_id);
       highlight_painter.PaintHighlightOverlays(
           text_style, node_id, paint_marker_backgrounds, rotation);
       break;

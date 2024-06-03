@@ -1887,8 +1887,8 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
 
   std::vector<std::wstring> paragraphs = {
       L"start",
-      L"text with [:before] and [:after]content, then a",
-      L"bold element with a [block]before content then a italic",
+      L"text with [:before] and [:after]content, then a\n\xFFFC",
+      L"bold element with a [block]before content then a italic\n\xFFFC",
       L"element with a [block] after content",
       L"end",
   };
@@ -2249,7 +2249,7 @@ IN_PROC_BROWSER_TEST_F(
 
   std::vector<std::wstring> paragraphs = {
       L"start",
-      L"text with [:before] and [:after]content, then a",
+      L"text with [:before] and [:after]content, then a\n\xFFFC",
       L"bold element",
   };
 
@@ -2929,18 +2929,19 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   EXPECT_UIA_TEXTRANGE_EQ(text_range_provider,
                           L"Before frame\nText in iframe\nAfter frame");
 
+  // Traversing by word should include trailing whitespace.
   EXPECT_UIA_MOVE(text_range_provider, TextUnit_Word,
                   /*count*/ 2,
                   /*expected_text*/ L"Text ",
                   /*expected_count*/ 2);
   EXPECT_UIA_MOVE(text_range_provider, TextUnit_Word,
                   /*count*/ -1,
-                  /*expected_text*/ L"frame",
+                  /*expected_text*/ L"frame\n",
                   /*expected_count*/ -1);
   EXPECT_UIA_MOVE_ENDPOINT_BY_UNIT(
       text_range_provider, TextPatternRangeEndpoint_End, TextUnit_Character,
       /*count*/ 2,
-      /*expected_text*/ L"frame\nT",
+      /*expected_text*/ L"frame\nTe",
       /*expected_count*/ 2);
   EXPECT_UIA_MOVE(text_range_provider, TextUnit_Character,
                   /*count*/ 7,
@@ -3656,8 +3657,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
     ASSERT_NE(nullptr, text_range_provider.Get());
     EXPECT_UIA_TEXTRANGE_EQ(text_range_provider, L"Before frame");
 
-    AccessibilityNotificationWaiter waiter(web_contents, ui::kAXModeComplete,
-                                           ax::mojom::Event::kLayoutComplete);
+    AccessibilityNotificationWaiter waiter(web_contents);
 
     // Updating the style on that particular node is going to invalidate the
     // leaf text node and will replace it with a new one with the updated style.
@@ -3684,8 +3684,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
         /*expected_text*/ L"Before frame\nText ",
         /*expected_count*/ 1);
 
-    AccessibilityNotificationWaiter waiter(web_contents, ui::kAXModeComplete,
-                                           ax::mojom::Event::kLayoutComplete);
+    AccessibilityNotificationWaiter waiter(web_contents);
 
     // Updating the style on that particular node is going to invalidate the
     // leaf text node and will replace it with a new one with the updated style.
@@ -4107,9 +4106,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   EXPECT_HRESULT_SUCCEEDED(deletion_text_range_provider->Select());
 
   // Now we delete "world".
-  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
-                                         ui::kAXModeComplete,
-                                         ax::mojom::Event::kLayoutComplete);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents());
   SimulateKeyPress(shell()->web_contents(), ui::DomKey::BACKSPACE,
                    ui::DomCode::BACKSPACE, ui::VKEY_BACK, false, false, false,
                    false);
@@ -4224,9 +4221,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   ASSERT_TRUE(sel_waiter.WaitForNotification());
 
   // Now we delete "hello".
-  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
-                                         ui::kAXModeComplete,
-                                         ax::mojom::Event::kLayoutComplete);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents());
   SimulateKeyPress(shell()->web_contents(), ui::DomKey::BACKSPACE,
                    ui::DomCode::BACKSPACE, ui::VKEY_BACK, /* control */ false,
                    /* shift */ false, /* alt */ false,

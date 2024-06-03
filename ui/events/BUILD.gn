@@ -103,8 +103,6 @@ component("events_base") {
     "event_switches.cc",
     "event_switches.h",
     "events_base_export.h",
-    "events_features.cc",
-    "events_features.h",
     "gesture_curve.h",
     "gesture_event_details.cc",
     "gesture_event_details.h",
@@ -144,7 +142,6 @@ component("events_base") {
 
   deps = [
     ":dom_keycode_converter",
-    "//base/third_party/dynamic_annotations",
     "//build:chromeos_buildflags",
   ]
 
@@ -285,7 +282,6 @@ component("events") {
   deps = [
     ":dom_keycode_converter",
     ":gesture_detection",
-    "//base/third_party/dynamic_annotations",
     "//skia",
     "//ui/base:features",
     "//ui/gfx",
@@ -486,7 +482,6 @@ component("gesture_detection") {
   deps = [
     ":events_base",
     "//base",
-    "//base/third_party/dynamic_annotations",
     "//build:chromeos_buildflags",
     "//ui/base:features",
     "//ui/display",

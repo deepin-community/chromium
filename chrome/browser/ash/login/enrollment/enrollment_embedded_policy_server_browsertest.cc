@@ -29,6 +29,7 @@
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/login/test/test_condition_waiter.h"
 #include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
@@ -113,6 +114,17 @@ class EnrollmentEmbeddedPolicyServerBase : public OobeBaseTest {
                                      FakeGaiaMixin::kFakeRefreshToken);
     policy_server_.SetUpdateDeviceAttributesPermission(false);
     OobeBaseTest::SetUpOnMainThread();
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    OobeBaseTest::SetUpCommandLine(command_line);
+
+    // This will change the verification key to be used by the
+    // CloudPolicyValidator. It will allow for the policy provided by the
+    // PolicyBuilder to pass the signature validation.
+    command_line->AppendSwitchASCII(
+        policy::switches::kPolicyVerificationKey,
+        policy::PolicyBuilder::GetEncodedPolicyVerificationKey());
   }
 
  protected:
@@ -915,12 +927,12 @@ IN_PROC_BROWSER_TEST_F(AutoEnrollmentEmbeddedPolicyServer, Attestation) {
 // Verify able to advance to login screen when error screen is shown.
 IN_PROC_BROWSER_TEST_F(AutoEnrollmentEmbeddedPolicyServer, TestCaptivePortal) {
   network_portal_detector_.SimulateDefaultNetworkState(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_PORTAL);
+      NetworkPortalDetectorMixin::NetworkStatus::kPortal);
   host()->StartWizard(AutoEnrollmentCheckScreenView::kScreenId);
   OobeScreenWaiter(ErrorScreenView::kScreenId).Wait();
 
   network_portal_detector_.SimulateDefaultNetworkState(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
+      NetworkPortalDetectorMixin::NetworkStatus::kOnline);
   OobeScreenWaiter(GetFirstSigninScreen()).Wait();
 }
 
@@ -1365,8 +1377,6 @@ class KioskEnrollmentTest : public EnrollmentEmbeddedPolicyServerBase {
   // EnrollmentEmbeddedPolicyServerBase:
   void SetUp() override {
     needs_background_networking_ = true;
-    skip_splash_wait_override_ =
-        KioskLaunchController::SkipSplashScreenWaitForTesting();
     EnrollmentEmbeddedPolicyServerBase::SetUp();
   }
 
@@ -1378,7 +1388,8 @@ class KioskEnrollmentTest : public EnrollmentEmbeddedPolicyServerBase {
 
  private:
   KioskAppsMixin kiosk_apps_{&mixin_host_, embedded_test_server()};
-  std::unique_ptr<base::AutoReset<bool>> skip_splash_wait_override_;
+  base::AutoReset<bool> skip_splash_wait_override_ =
+      KioskLaunchController::SkipSplashScreenWaitForTesting();
 };
 
 IN_PROC_BROWSER_TEST_F(KioskEnrollmentTest,

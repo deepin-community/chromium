@@ -4,7 +4,6 @@
 
 #include "components/commerce/core/account_checker.h"
 
-#include <optional>
 #include <queue>
 #include <string>
 #include <unordered_map>
@@ -53,7 +52,9 @@ class SpyAccountChecker : public AccountChecker {
       signin::IdentityManager* identity_manager,
       syncer::SyncService* sync_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-      : AccountChecker(pref_service,
+      : AccountChecker("us",
+                       "en-us",
+                       pref_service,
                        identity_manager,
                        sync_service,
                        std::move(url_loader_factory)) {}

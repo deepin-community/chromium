@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_H_
+#ifndef PARTITION_ALLOC_PAGE_ALLOCATOR_H_
+#define PARTITION_ALLOC_PAGE_ALLOCATOR_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +33,9 @@ struct PageAccessibilityConfiguration {
     // that don't support Arm's BTI.
     kReadExecuteProtected,
     kReadExecute,
+    // This flag is mapped to `kReadWriteExecute` on systems that do not support
+    // Arm's BTI.
+    kReadWriteExecuteProtected,
     // This flag is deprecated and will go away soon.
     // TODO(bbudge) Remove this as soon as V8 doesn't need RWX pages.
     kReadWriteExecute,
@@ -388,4 +391,4 @@ bool GetRetryOnCommitFailure();
 
 }  // namespace partition_alloc
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_H_
+#endif  // PARTITION_ALLOC_PAGE_ALLOCATOR_H_

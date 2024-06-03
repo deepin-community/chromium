@@ -11,7 +11,9 @@
 #include "ash/root_window_controller.h"
 #include "ash/shelf/shelf.h"
 #include "ash/style/icon_button.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ash/arc/input_overlay/actions/action.h"
+#include "chrome/browser/ash/arc/input_overlay/arc_input_overlay_metrics.h"
 #include "chrome/browser/ash/arc/input_overlay/db/proto/app_data.pb.h"
 #include "chrome/browser/ash/arc/input_overlay/test/overlay_view_test_base.h"
 #include "chrome/browser/ash/arc/input_overlay/test/test_utils.h"
@@ -27,6 +29,7 @@
 #include "chrome/browser/ash/arc/input_overlay/ui/touch_point.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/view.h"
+#include "ui/views/view_utils.h"
 
 namespace arc::input_overlay {
 
@@ -46,7 +49,7 @@ class ButtonOptionsMenuTest : public OverlayViewTestBase {
     DCHECK(scroll_content);
     for (size_t i = 0; i < scroll_content->children().size(); i++) {
       const auto* list_item =
-          static_cast<ActionViewListItem*>(scroll_content->children()[i]);
+          views::AsViewClass<ActionViewListItem>(scroll_content->children()[i]);
       if (list_item->action() == action) {
         return i;
       }
@@ -105,7 +108,7 @@ class ButtonOptionsMenuTest : public OverlayViewTestBase {
     views::View* scroll_content = editing_list_->scroll_content_;
     DCHECK(scroll_content);
     for (views::View* child : scroll_content->children()) {
-      auto* list_item = static_cast<ActionViewListItem*>(child);
+      auto* list_item = views::AsViewClass<ActionViewListItem>(child);
       DCHECK(list_item);
       if (list_item->action() == action) {
         return true;
@@ -279,6 +282,24 @@ TEST_F(ButtonOptionsMenuTest, TestDisplayRelatedToShelf) {
   // Menu should align to the bottom of the root window if the shelf is hidden.
   EXPECT_EQ(root_window->bounds().bottom(),
             menu->GetWidget()->GetNativeWindow()->bounds().bottom());
+}
+
+TEST_F(ButtonOptionsMenuTest, TestHistograms) {
+  base::HistogramTester histograms;
+  const std::string histogram_name = BuildGameControlsHistogramName(
+      kButtonOptionsMenuFunctionTriggeredHistogram);
+  std::map<ButtonOptionsMenuFunction, int> expected_histogram_values;
+
+  auto* menu = ShowButtonOptionsMenu(tap_action_);
+  PressActionMoveButton(menu);
+  MapIncreaseValueByOne(expected_histogram_values,
+                        ButtonOptionsMenuFunction::kOptionJoystick);
+  VerifyHistogramValues(histograms, histogram_name, expected_histogram_values);
+
+  PressTapButton(menu);
+  MapIncreaseValueByOne(expected_histogram_values,
+                        ButtonOptionsMenuFunction::kOptionSingleButton);
+  VerifyHistogramValues(histograms, histogram_name, expected_histogram_values);
 }
 
 }  // namespace arc::input_overlay

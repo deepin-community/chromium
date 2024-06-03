@@ -149,10 +149,11 @@ void ImageContextImpl::CreateFallbackImage(
     for (int plane_index = 0; plane_index < num_planes; plane_index++) {
       SkISize sk_size =
           gfx::SizeToSkISize(format().GetPlaneSize(plane_index, size()));
-
+      auto tex_info =
+          gpu::FallbackGraphiteBackendTextureInfo(tex_infos[plane_index]);
       graphite_fallback_textures_.push_back(
           context_state->gpu_main_graphite_recorder()->createBackendTexture(
-              sk_size, tex_infos[plane_index]));
+              sk_size, tex_info));
 
       SkColorType color_type =
           ToClosestSkColorType(/*gpu_compositing=*/true, format(), plane_index);
@@ -295,7 +296,7 @@ void ImageContextImpl::BeginAccessIfNecessary(
     texture_passthrough_ =
         gpu::gles2::TexturePassthrough::CheckedCast(texture_base);
   }
-  // TODO(crbug.com/1118166): The case above handles textures with the
+  // TODO(crbug.com/40145280): The case above handles textures with the
   // passthrough command decoder, verify if something is required for the
   // validating command decoder as well.
 }

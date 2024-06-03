@@ -63,6 +63,7 @@ class GPU_GLES2_EXPORT AHardwareBufferImageBackingFactory
       SkAlphaType alpha_type,
       uint32_t usage,
       std::string debug_label,
+      bool is_thread_safe,
       base::span<const uint8_t> pixel_data) override;
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
@@ -92,6 +93,7 @@ class GPU_GLES2_EXPORT AHardwareBufferImageBackingFactory
                    gfx::GpuMemoryBufferType gmb_type,
                    GrContextType gr_context_type,
                    base::span<const uint8_t> pixel_data) override;
+  SharedImageBackingType GetBackingType() override;
   bool IsFormatSupported(viz::SharedImageFormat format);
 
  private:

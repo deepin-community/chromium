@@ -975,6 +975,11 @@ Status HloCostAnalysis::HandleAllToAll(const HloInstruction* hlo) {
   return OkStatus();
 }
 
+Status HloCostAnalysis::HandleCollectiveBroadcast(
+    const HloInstruction* /*hlo*/) {
+  return OkStatus();
+}
+
 Status HloCostAnalysis::HandleCollectivePermute(const HloInstruction* /*hlo*/) {
   return OkStatus();
 }
@@ -1411,8 +1416,8 @@ int64_t HloCostAnalysis::GetBytesWritten(
   return bytes_written;
 }
 
-StatusOr<HloCostAnalysis::Properties> HloCostAnalysis::ProcessSubcomputation(
-    HloComputation* computation) {
+absl::StatusOr<HloCostAnalysis::Properties>
+HloCostAnalysis::ProcessSubcomputation(HloComputation* computation) {
   auto visitor = CreateNestedCostAnalysis();
   visitor->ReserveVisitStates(computation->instruction_count());
   TF_RETURN_IF_ERROR(computation->Accept(visitor.get()));

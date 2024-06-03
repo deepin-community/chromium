@@ -141,7 +141,7 @@ inline EGLDisplay FromXDisplay() {
 namespace ui {
 
 NativePixmapEGLX11Binding::NativePixmapEGLX11Binding(gfx::BufferFormat format)
-    : display_(gl::FromXDisplay()), format_(format) {}
+    : display_(gl::FromXDisplay()) {}
 
 NativePixmapEGLX11Binding::~NativePixmapEGLX11Binding() {
   if (surface_) {
@@ -152,6 +152,11 @@ NativePixmapEGLX11Binding::~NativePixmapEGLX11Binding() {
     auto* connection = x11::Connection::Get();
     connection->FreePixmap({pixmap_});
   }
+}
+
+bool NativePixmapEGLX11Binding::IsBufferFormatSupported(
+    gfx::BufferFormat format) {
+  return gl::IsFormatSupported(format);
 }
 
 bool NativePixmapEGLX11Binding::Initialize(x11::Pixmap pixmap) {
@@ -272,15 +277,6 @@ bool NativePixmapEGLX11Binding::BindTexture(GLenum target, GLuint texture_id) {
   }
 
   return true;
-}
-
-GLuint NativePixmapEGLX11Binding::GetInternalFormat() {
-  return NativePixmapGLBinding::BufferFormatToGLInternalFormatDefaultMapping(
-      format_);
-}
-
-GLenum NativePixmapEGLX11Binding::GetDataType() {
-  return GL_UNSIGNED_BYTE;
 }
 
 }  // namespace ui

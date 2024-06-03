@@ -34,6 +34,7 @@
 #include "cc/base/histograms.h"
 #include "cc/base/math_util.h"
 #include "cc/base/synced_property.h"
+#include "cc/input/browser_controls_offset_manager.h"
 #include "cc/input/page_scale_animation.h"
 #include "cc/input/scrollbar_animation_controller.h"
 #include "cc/layers/effect_tree_layer_list_iterator.h"
@@ -232,21 +233,15 @@ void LayerTreeImpl::DidUpdateScrollOffset(ElementId id) {
     return;
   }
 
-  // This bit controls whether we'll update the transform node based on a
-  // changed scroll offset. We can mutate scroll nodes which have main thread
-  // scrolling reasons, or aren't backed by a layer at all, but in those cases
-  // we don't want to produce any immediate changes in the compositor. Instead
-  // we want the scroll to propagate through Blink in a commit and have Blink
-  // update properties, paint, compositing, etc. Thus, we avoid mutating the
-  // transform tree in this case.
-  bool should_realize_scroll_on_compositor =
-      scroll_tree.CanRealizeScrollsOnCompositor(*scroll_node);
-
-  // A ScrollNode may have an invalid transform_id if its scroller is
-  // unpainted. Since an unpainted scroller would not be visible to the
-  // user, realizing this scroll is a nop.
-  if (should_realize_scroll_on_compositor &&
-      scroll_node->transform_id != kInvalidPropertyNodeId) {
+  // This condition controls whether we'll update the transform node based on a
+  // changed scroll offset. If it's false (e.g. if the scroll node has any main
+  // thread repaint reasons), we can mutate scroll nodes but don't want to
+  // produce any immediate changes in the compositor. Instead we want the scroll
+  // to propagate through Blink in a commit and have Blink update properties,
+  // paint, compositing, etc. Thus, we avoid mutating the transform tree in
+  // this case.
+  if (scroll_tree.CanRealizeScrollsOnCompositor(*scroll_node)) {
+    CHECK_NE(scroll_node->transform_id, kInvalidPropertyNodeId);
     TransformTree& transform_tree = property_trees()->transform_tree_mutable();
     auto* transform_node = transform_tree.Node(scroll_node->transform_id);
     if (transform_node->scroll_offset !=
@@ -632,8 +627,14 @@ void LayerTreeImpl::PullPropertiesFrom(
   TreeSynchronizer::PushLayerProperties(commit_state, unsafe_state, this);
   lifecycle().AdvanceTo(LayerTreeLifecycle::kSyncedLayerProperties);
 
+  for (const ElementId& id : commit_state.scrollers_clobbering_active_value) {
+    property_trees()->scroll_tree_mutable().SetScrollOffsetClobberActiveValue(
+        id);
+  }
+
   // This must happen after synchronizing property trees and after pushing
-  // properties, which updates the clobber_active_value flag.
+  // properties,  which updates the clobber_active_value flag (specifically in
+  // Layer::PushPropertiesTo).
   // TODO(pdr): Enforce this comment with DCHECKS and a lifecycle state.
   property_trees()->scroll_tree_mutable().PushScrollUpdatesFromMainThread(
       unsafe_state.property_trees, this,
@@ -1024,14 +1025,16 @@ LayerTreeImpl::TakePresentationCallbacks() {
 }
 
 void LayerTreeImpl::AddSuccessfulPresentationCallbacks(
-    std::vector<PresentationTimeCallbackBuffer::SuccessfulCallback> callbacks) {
+    std::vector<PresentationTimeCallbackBuffer::SuccessfulCallbackWithDetails>
+        callbacks) {
   base::ranges::move(callbacks,
                      std::back_inserter(successful_presentation_callbacks_));
 }
 
-std::vector<PresentationTimeCallbackBuffer::SuccessfulCallback>
+std::vector<PresentationTimeCallbackBuffer::SuccessfulCallbackWithDetails>
 LayerTreeImpl::TakeSuccessfulPresentationCallbacks() {
-  std::vector<PresentationTimeCallbackBuffer::SuccessfulCallback> callbacks;
+  std::vector<PresentationTimeCallbackBuffer::SuccessfulCallbackWithDetails>
+      callbacks;
   callbacks.swap(successful_presentation_callbacks_);
   return callbacks;
 }
@@ -2898,6 +2901,14 @@ std::string LayerTreeImpl::LayerListAsJson() const {
 
 void LayerTreeImpl::AddViewTransitionRequest(
     std::unique_ptr<ViewTransitionRequest> request) {
+  if (IsActiveTree() && request->type() == ViewTransitionRequest::Type::kSave) {
+    // If the next frame will capture view transition snapshots, the main
+    // thread will have already computed all transforms based on the current
+    // location. Prevent any browser controls animation from ticking which
+    // would make the transition state inconsistent with what is visually
+    // displayed.
+    host_impl_->browser_controls_manager()->ResetAnimations();
+  }
   view_transition_requests_.push_back(std::move(request));
   // We need to send the request to viz.
   SetNeedsRedraw();

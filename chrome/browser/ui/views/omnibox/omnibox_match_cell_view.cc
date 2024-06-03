@@ -18,12 +18,14 @@
 #include "chrome/grit/theme_resources.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
+#include "components/omnibox/browser/omnibox_feature_configs.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/suggestion_answer.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "content/public/common/color_parser.h"
 #include "skia/ext/image_operations.h"
+#include "third_party/omnibox_proto/rich_answer_template.pb.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -218,12 +220,6 @@ void OmniboxMatchCellView::ComputeMatchMaxWidths(
     // behavior of the realbox).
     *description_max_width =
         std::min(description_width, available_width - *contents_max_width);
-    const int kMinimumDescriptionWidth = 75;
-    if (*description_max_width <
-            std::min(description_width, kMinimumDescriptionWidth) &&
-        !OmniboxFieldTrial::IsActionsUISimplificationEnabled()) {
-      *description_max_width = 0;
-    }
     if (*description_max_width == 0) {
       // If we're not going to display the description, the contents can have
       // the space we reserved for the separator.
@@ -260,6 +256,11 @@ int OmniboxMatchCellView::GetTextIndent() {
 
 // static
 bool OmniboxMatchCellView::ShouldDisplayImage(const AutocompleteMatch& match) {
+  if (omnibox_feature_configs::SuggestionAnswerMigration::Get().enabled) {
+    return match.answer_template.has_value() ||
+           match.type == AutocompleteMatchType::CALCULATOR ||
+           !match.image_url.is_empty();
+  }
   return match.answer || match.type == AutocompleteMatchType::CALCULATOR ||
          !match.image_url.is_empty();
 }
@@ -329,14 +330,25 @@ void OmniboxMatchCellView::OnMatchUpdate(const OmniboxResultView* result_view,
     answer_image_view_->SetSize(gfx::Size());
   } else {
     // Determine if we have a local icon (or else it will be downloaded).
-    if (match.answer) {
+    if (omnibox_feature_configs::SuggestionAnswerMigration::Get().enabled &&
+        match.answer_template.has_value()) {
+      if (match.answer_template->answer_type() ==
+          omnibox::RichAnswerTemplate::WEATHER) {
+        // Weather icons are downloaded. We just need to set the correct size.
+        answer_image_view_->SetImageSize(
+            gfx::Size(GetAnswerImageSize(), GetAnswerImageSize()));
+      } else {
+        apply_vector_icon(AutocompleteMatch::AnswerTypeToAnswerIcon(
+            match.answer_template->answer_type()));
+      }
+    } else if (match.answer) {
       if (match.answer->type() == SuggestionAnswer::ANSWER_TYPE_WEATHER) {
         // Weather icons are downloaded. We just need to set the correct size.
         answer_image_view_->SetImageSize(
             gfx::Size(GetAnswerImageSize(), GetAnswerImageSize()));
       } else {
-        apply_vector_icon(
-            AutocompleteMatch::AnswerTypeToAnswerIcon(match.answer->type()));
+        apply_vector_icon(AutocompleteMatch::AnswerTypeToAnswerIconDeprecated(
+            match.answer->type()));
       }
     } else {
       SkColor color = GetColorProvider()->GetColor(
@@ -361,15 +373,11 @@ void OmniboxMatchCellView::OnMatchUpdate(const OmniboxResultView* result_view,
 
 void OmniboxMatchCellView::SetIcon(const gfx::ImageSkia& image,
                                    const AutocompleteMatch& match) {
-  bool is_pedal_suggestion_row =
-      match.type == AutocompleteMatchType::PEDAL &&
-      OmniboxFieldTrial::IsActionsUISimplificationEnabled();
+  bool is_pedal_suggestion_row = match.type == AutocompleteMatchType::PEDAL;
   bool is_journeys_suggestion_row =
-      match.type == AutocompleteMatchType::HISTORY_CLUSTER &&
-      OmniboxFieldTrial::IsActionsUISimplificationEnabled();
+      match.type == AutocompleteMatchType::HISTORY_CLUSTER;
   bool is_instant_keyword_row =
-      match.type == AutocompleteMatchType::STARTER_PACK &&
-      OmniboxFieldTrial::IsKeywordModeRefreshEnabled();
+      match.type == AutocompleteMatchType::STARTER_PACK;
   if (is_pedal_suggestion_row || is_journeys_suggestion_row ||
       is_instant_keyword_row ||
       OmniboxFieldTrial::kSquareSuggestIconIcons.Get()) {
@@ -400,8 +408,12 @@ void OmniboxMatchCellView::SetImage(const gfx::ImageSkia& image,
   // Weather icons are also sourced remotely and therefore fall into this flow.
   // Other answers don't.
   bool is_weather_answer =
-      match.answer &&
-      match.answer->type() == SuggestionAnswer::ANSWER_TYPE_WEATHER;
+      omnibox_feature_configs::SuggestionAnswerMigration::Get().enabled
+          ? (match.answer_template.has_value() &&
+             match.answer_template->answer_type() ==
+                 omnibox::RichAnswerTemplate::WEATHER)
+          : (match.answer &&
+             match.answer->type() == SuggestionAnswer::ANSWER_TYPE_WEATHER);
 
   int width = image.width();
   int height = image.height();
@@ -458,9 +470,7 @@ gfx::Insets OmniboxMatchCellView::GetInsets() const {
     vertical_margin = ChromeLayoutProvider::Get()->GetDistanceMetric(
         DISTANCE_OMNIBOX_TWO_LINE_CELL_VERTICAL_PADDING);
   }
-  const int right_margin = OmniboxFieldTrial::IsActionsUISimplificationEnabled()
-                               ? 7
-                               : OmniboxMatchCellView::kMarginRight;
+  const int right_margin = 7;
   return gfx::Insets::TLBR(vertical_margin, OmniboxMatchCellView::kMarginLeft,
                            vertical_margin, right_margin);
 }
@@ -545,40 +555,18 @@ bool OmniboxMatchCellView::GetCanProcessEventsWithinSubtree() const {
 }
 
 gfx::Size OmniboxMatchCellView::CalculatePreferredSize() const {
-  int height = 0;
-  if (OmniboxFieldTrial::IsActionsUISimplificationEnabled()) {
-    height = GetEntityImageSize() +
-             2 * OmniboxFieldTrial::kRichSuggestionVerticalMargin.Get();
-  } else if (OmniboxFieldTrial::IsChromeRefreshSuggestHoverFillShapeEnabled()) {
-    height = GetEntityImageSize();
-  } else if (OmniboxFieldTrial::IsUniformRowHeightEnabled()) {
-    height = GetEntityImageSize() +
-             2 * OmniboxFieldTrial::kRichSuggestionVerticalMargin.Get();
-  } else {
-    height = content_view_->GetLineHeight() + GetInsets().height();
-  }
+  int height = GetEntityImageSize() +
+               2 * OmniboxFieldTrial::kRichSuggestionVerticalMargin.Get();
   if (layout_style_ == LayoutStyle::TWO_LINE_SUGGESTION)
     height += description_view_->GetHeightForWidth(width() - GetTextIndent());
 
-  // When `kOmniboxActionsUISimplification` is disabled, this view will be
-  // stretched to span the entire width of its parent. Hence, the preferred
-  // width does not need to be computed (since it's not used by the layout
-  // manager).
-  //
-  // However, when `kOmniboxActionsUISimplification` is enabled, this view will
-  // occupy the minimum amount of space needed to render its contents. Hence,
-  // the preferred width must be computed in order to ensure that the proper
-  // amount of space is allocated.
-  int width = 0;
-  if (OmniboxFieldTrial::IsActionsUISimplificationEnabled()) {
-    width += GetInsets().width() + GetTextIndent() +
-             tail_suggest_common_prefix_width_ +
-             content_view_->GetPreferredSize().width();
+  int width = GetInsets().width() + GetTextIndent() +
+              tail_suggest_common_prefix_width_ +
+              content_view_->GetPreferredSize().width();
 
-    const int description_width = description_view_->GetPreferredSize().width();
-    if (description_width > 0) {
-      width += separator_view_->GetPreferredSize().width() + description_width;
-    }
+  const int description_width = description_view_->GetPreferredSize().width();
+  if (description_width > 0) {
+    width += separator_view_->GetPreferredSize().width() + description_width;
   }
 
   return gfx::Size(width, height);

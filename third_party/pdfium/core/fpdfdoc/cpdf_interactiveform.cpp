@@ -29,12 +29,12 @@
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "core/fpdfdoc/cpdf_filespec.h"
 #include "core/fpdfdoc/cpdf_formcontrol.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_codepage.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxge/fx_font.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 namespace {
 
@@ -692,7 +692,7 @@ int CPDF_InteractiveForm::FindFieldInCalculationOrder(
   if (!maybe_found.has_value())
     return -1;
 
-  return pdfium::base::checked_cast<int>(maybe_found.value());
+  return pdfium::checked_cast<int>(maybe_found.value());
 }
 
 RetainPtr<CPDF_Font> CPDF_InteractiveForm::GetFormFont(
@@ -723,9 +723,8 @@ RetainPtr<CPDF_Font> CPDF_InteractiveForm::GetFontForElement(
 }
 
 CPDF_DefaultAppearance CPDF_InteractiveForm::GetDefaultAppearance() const {
-  if (!m_pFormDict)
-    return CPDF_DefaultAppearance();
-  return CPDF_DefaultAppearance(m_pFormDict->GetByteStringFor("DA"));
+  return CPDF_DefaultAppearance(
+      m_pFormDict ? m_pFormDict->GetByteStringFor("DA") : "");
 }
 
 int CPDF_InteractiveForm::GetFormAlignment() const {

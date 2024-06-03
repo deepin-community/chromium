@@ -337,11 +337,10 @@ IN_PROC_BROWSER_TEST_F(LacrosWebAppsControllerBrowserTest, ManifestUpdate) {
     base::RunLoop run_loop;
     provider().install_finalizer().FinalizeUpdate(
         *web_app_info,
-        base::BindLambdaForTesting([&run_loop](const webapps::AppId& app_id,
-                                               webapps::InstallResultCode code,
-                                               OsHooksErrors os_hooks_errors) {
+        base::BindLambdaForTesting([&run_loop](
+                                       const webapps::AppId& app_id,
+                                       webapps::InstallResultCode code) {
           EXPECT_EQ(code, webapps::InstallResultCode::kSuccessAlreadyInstalled);
-          EXPECT_TRUE(os_hooks_errors.none());
           run_loop.Quit();
         }));
 
@@ -554,6 +553,7 @@ IN_PROC_BROWSER_TEST_F(LacrosWebAppsControllerBrowserTest, LaunchWithFiles) {
   const GURL app_url =
       embedded_test_server()->GetURL("/web_apps/file_handler_index.html");
   webapps::AppId app_id = InstallWebAppFromManifest(browser(), app_url);
+  ASSERT_FALSE(app_id.empty());
   EXPECT_EQ(provider().registrar_unsafe().GetAppStartUrl(app_id), app_url);
 
   MockAppPublisher mock_app_publisher(profile());
@@ -733,6 +733,8 @@ IN_PROC_BROWSER_TEST_F(LacrosWebAppsControllerBrowserTest,
 
   auto id = *menu_items->items[5]->id;
 
+  ui_test_utils::BrowserChangeObserver new_app_browser_observer(
+      nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
   base::test::TestFuture<::crosapi::mojom::LaunchResultPtr>
       launch_result_future;
   AsAppController(lacros_web_apps_controller)
@@ -740,6 +742,7 @@ IN_PROC_BROWSER_TEST_F(LacrosWebAppsControllerBrowserTest,
                                  launch_result_future.GetCallback());
   // TODO: handle return value.
   std::ignore = launch_result_future.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(new_app_browser_observer.Wait());
 
   EXPECT_EQ(BrowserList::GetInstance()
                 ->GetLastActive()
@@ -1085,19 +1088,7 @@ IN_PROC_BROWSER_TEST_F(LacrosWebAppsControllerBrowserTest,
   auto app_id = InstallWebAppFromManifest(
       browser(),
       embedded_test_server()->GetURL("/web_app_file_handling/basic_app.html"));
-
-  // Have to call it explicitly due to usage of
-  // OsIntegrationManager::ScopedSuppressForTesting
-  base::RunLoop run_loop;
-  provider()
-      .os_integration_manager()
-      .file_handler_manager()
-      .EnableAndRegisterOsFileHandlers(
-          app_id, base::BindLambdaForTesting([&](Result result) {
-            EXPECT_EQ(result, Result::kOk);
-            run_loop.Quit();
-          }));
-  run_loop.Run();
+  ASSERT_FALSE(app_id.empty());
 
   MockAppPublisher mock_app_publisher(profile());
   LacrosWebAppsController lacros_web_apps_controller(profile());

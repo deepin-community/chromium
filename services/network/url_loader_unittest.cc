@@ -59,6 +59,7 @@
 #include "net/cookies/cookie_access_result.h"
 #include "net/cookies/cookie_change_dispatcher.h"
 #include "net/cookies/cookie_inclusion_status.h"
+#include "net/cookies/cookie_partition_key.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/cookie_util.h"
 #include "net/dns/mock_host_resolver.h"
@@ -97,6 +98,7 @@
 #include "services/network/public/mojom/cookie_access_observer.mojom-forward.h"
 #include "services/network/public/mojom/cookie_access_observer.mojom.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
+#include "services/network/public/mojom/http_raw_headers.mojom.h"
 #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
 #include "services/network/public/mojom/ip_address_space.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -850,14 +852,7 @@ class URLLoaderTest : public testing::Test {
     mojo::Remote<mojom::URLLoader> loader;
     std::unique_ptr<URLLoader> url_loader;
 
-    context().mutable_factory_params().process_id = mojom::kBrowserProcessId;
-    context().mutable_factory_params().is_orb_enabled = orb_enabled_;
-    context().mutable_factory_params().client_security_state.Swap(
-        &factory_client_security_state_);
-    context().mutable_factory_params().isolation_info =
-        net::IsolationInfo::CreateForInternalRequest(
-            url::Origin::Create(request.url));
-    context().mutable_factory_params().is_trusted = is_trusted;
+    SetUpContext(request.url, is_trusted);
 
     URLLoaderOptions url_loader_options;
     url_loader_options.options = options;
@@ -927,6 +922,16 @@ class URLLoaderTest : public testing::Test {
     EXPECT_LT(
         expected.size(),
         static_cast<size_t>(client()->completion_status().encoded_data_length));
+  }
+
+  void SetUpContext(const GURL& url, bool is_trusted) {
+    context().mutable_factory_params().process_id = mojom::kBrowserProcessId;
+    context().mutable_factory_params().is_orb_enabled = orb_enabled_;
+    context().mutable_factory_params().client_security_state.Swap(
+        &factory_client_security_state_);
+    context().mutable_factory_params().isolation_info =
+        net::IsolationInfo::CreateForInternalRequest(url::Origin::Create(url));
+    context().mutable_factory_params().is_trusted = is_trusted;
   }
 
   // Adds a MultipleWritesInterceptor for MultipleWritesInterceptor::GetURL()
@@ -4855,8 +4860,15 @@ TEST_F(URLLoaderTest, BlockAllCookies) {
       loader.InitWithNewPipeAndPassReceiver(), request,
       client()->CreateRemote());
 
-  EXPECT_FALSE(url_loader->AllowCookies(first_party_url, site_for_cookies));
-  EXPECT_FALSE(url_loader->AllowCookies(third_party_url, site_for_cookies));
+  GURL cookie_url = test_server()->GetURL("/");
+  auto cc = net::CanonicalCookie::CreateForTesting(
+      cookie_url, "a=b", base::Time::Now(), absl::nullopt /* server_time */,
+      net::CookiePartitionKey::FromURLForTesting(
+          GURL("https://toplevelsite.com")));
+
+  EXPECT_FALSE(url_loader->AllowCookie(*cc, first_party_url, site_for_cookies));
+  EXPECT_FALSE(url_loader->AllowFullCookies(first_party_url, site_for_cookies));
+  EXPECT_FALSE(url_loader->AllowFullCookies(third_party_url, site_for_cookies));
 }
 
 TEST_F(URLLoaderTest, BlockOnlyThirdPartyCookies) {
@@ -4877,8 +4889,15 @@ TEST_F(URLLoaderTest, BlockOnlyThirdPartyCookies) {
       loader.InitWithNewPipeAndPassReceiver(), request,
       client()->CreateRemote());
 
-  EXPECT_TRUE(url_loader->AllowCookies(first_party_url, site_for_cookies));
-  EXPECT_FALSE(url_loader->AllowCookies(third_party_url, site_for_cookies));
+  GURL cookie_url = test_server()->GetURL("/");
+  auto cc = net::CanonicalCookie::CreateForTesting(
+      cookie_url, "a=b", base::Time::Now(), absl::nullopt /* server_time */,
+      net::CookiePartitionKey::FromURLForTesting(
+          GURL("https://toplevelsite.com")));
+
+  EXPECT_TRUE(url_loader->AllowCookie(*cc, first_party_url, site_for_cookies));
+  EXPECT_TRUE(url_loader->AllowFullCookies(first_party_url, site_for_cookies));
+  EXPECT_FALSE(url_loader->AllowFullCookies(third_party_url, site_for_cookies));
 }
 
 TEST_F(URLLoaderTest, AllowAllCookies) {
@@ -4897,8 +4916,15 @@ TEST_F(URLLoaderTest, AllowAllCookies) {
       loader.InitWithNewPipeAndPassReceiver(), request,
       client()->CreateRemote());
 
-  EXPECT_TRUE(url_loader->AllowCookies(first_party_url, site_for_cookies));
-  EXPECT_TRUE(url_loader->AllowCookies(third_party_url, site_for_cookies));
+  GURL cookie_url = test_server()->GetURL("/");
+  auto cc = net::CanonicalCookie::CreateForTesting(
+      cookie_url, "a=b", base::Time::Now(), absl::nullopt /* server_time */,
+      net::CookiePartitionKey::FromURLForTesting(
+          GURL("https://toplevelsite.com")));
+
+  EXPECT_TRUE(url_loader->AllowCookie(*cc, first_party_url, site_for_cookies));
+  EXPECT_TRUE(url_loader->AllowFullCookies(first_party_url, site_for_cookies));
+  EXPECT_TRUE(url_loader->AllowFullCookies(third_party_url, site_for_cookies));
 }
 
 class URLLoaderCookieSettingOverridesTest
@@ -5376,9 +5402,8 @@ TEST_F(URLLoaderTest, RawRequestCookies) {
     request.devtools_request_id = "TEST";
 
     GURL cookie_url = test_server()->GetURL("/");
-    auto cookie = net::CanonicalCookie::Create(
-        cookie_url, "a=b", base::Time::Now(), std::nullopt /* server_time */,
-        std::nullopt /* cookie_partition_key */);
+    auto cookie = net::CanonicalCookie::CreateForTesting(cookie_url, "a=b",
+                                                         base::Time::Now());
     url_request_context()->cookie_store()->SetCanonicalCookieAsync(
         std::move(cookie), cookie_url, net::CookieOptions::MakeAllInclusive(),
         base::DoNothing());
@@ -5420,10 +5445,8 @@ TEST_F(URLLoaderTest, RawRequestCookiesFlagged) {
 
     // Set the path to an irrelevant url to block the cookie from sending
     GURL cookie_url = test_server()->GetURL("/");
-    auto cookie = net::CanonicalCookie::Create(
-        cookie_url, "a=b;Path=/something-else", base::Time::Now(),
-        std::nullopt /* server_time */,
-        std::nullopt /* cookie_partition_key */);
+    auto cookie = net::CanonicalCookie::CreateForTesting(
+        cookie_url, "a=b;Path=/something-else", base::Time::Now());
     url_request_context()->cookie_store()->SetCanonicalCookieAsync(
         std::move(cookie), cookie_url, net::CookieOptions::MakeAllInclusive(),
         base::DoNothing());
@@ -5748,23 +5771,30 @@ TEST_F(URLLoaderTest, EarlyHints) {
   response_headers[":path"] = kPath;
   std::vector<spdy::Http2HeaderBlock> early_hints;
   spdy::Http2HeaderBlock hints_headers;
-  hints_headers["link"] =
+  std::string preload_link =
       base::StringPrintf("<%s>; rel=preload", kPreloadPath.c_str());
+  hints_headers["link"] = preload_link;
+
   early_hints.push_back(std::move(hints_headers));
   net::QuicSimpleTestServer::AddResponseWithEarlyHints(
       kPath, response_headers, kResponseBody, early_hints);
+
+  MockDevToolsObserver devtools_observer;
+  URLLoaderOptions url_loader_options;
+  url_loader_options.devtools_observer = devtools_observer.Bind();
 
   // Create a loader and a client to request `kPath`. The client should receive
   // an Early Hints which contains a preload link header.
   TestURLLoaderClient loader_client;
   ResourceRequest request = CreateResourceRequest(
       "GET", net::QuicSimpleTestServer::GetFileURL(kPath));
+  request.devtools_request_id = "TEST";
 
   base::RunLoop delete_run_loop;
   mojo::PendingRemote<mojom::URLLoader> loader;
   context().mutable_factory_params().process_id = kProcessId;
   context().mutable_factory_params().is_orb_enabled = false;
-  std::unique_ptr<URLLoader> url_loader = URLLoaderOptions().MakeURLLoader(
+  std::unique_ptr<URLLoader> url_loader = url_loader_options.MakeURLLoader(
       context(), DeleteLoaderCallback(&delete_run_loop, &url_loader),
       loader.InitWithNewPipeAndPassReceiver(), request,
       loader_client.CreateRemote());
@@ -5779,6 +5809,15 @@ TEST_F(URLLoaderTest, EarlyHints) {
   const auto& link_header = hints->headers->link_headers[0];
   EXPECT_EQ(link_header->href,
             net::QuicSimpleTestServer::GetFileURL(kPreloadPath));
+
+  // Test the early hint headers sent to the devtools observer.
+  devtools_observer.WaitUntilEarlyHints();
+  const std::vector<network::mojom::HttpRawHeaderPairPtr>& early_hint_headers =
+      devtools_observer.early_hint_headers();
+  EXPECT_EQ(early_hint_headers.size(), 1UL);
+  network::mojom::HttpRawHeaderPair header_content = *early_hint_headers[0];
+  EXPECT_EQ(header_content.key, "link");
+  EXPECT_EQ(header_content.value, preload_link);
 }
 
 TEST_F(URLLoaderTest, CookieReportingCategories) {
@@ -6781,8 +6820,7 @@ TEST_F(URLLoaderTest, OnRawResponseIPAddressSpace) {
             mojom::IPAddressSpace::kLocal);
 }
 
-TEST_F(URLLoaderMockSocketTest,
-       CorbDoesNotCloseSocketsWhenResourcesNotBlocked) {
+TEST_F(URLLoaderMockSocketTest, OrbDoesNotCloseSocketsWhenResourcesNotBlocked) {
   orb_enabled_ = true;
 
   net::MockConnect kConnect = net::MockConnect(net::ASYNC, net::OK);
@@ -6823,7 +6861,7 @@ TEST_F(URLLoaderMockSocketTest,
   EXPECT_TRUE(socket_data_reads_writes.socket());
 }
 
-TEST_F(URLLoaderMockSocketTest, CorbClosesSocketOnReceivingHeaders) {
+TEST_F(URLLoaderMockSocketTest, OrbClosesSocketOnReceivingHeaders) {
   orb_enabled_ = true;
 
   net::MockConnect kConnect = net::MockConnect(net::ASYNC, net::OK);
@@ -6867,7 +6905,7 @@ TEST_F(URLLoaderMockSocketTest, CorbClosesSocketOnReceivingHeaders) {
 }
 
 TEST_F(URLLoaderMockSocketTest,
-       CorbDoesNotCloseSocketsWhenResourcesNotBlockedAfterSniffingMimeType) {
+       OrbDoesNotCloseSocketsWhenResourcesNotBlockedAfterSniffingMimeType) {
   orb_enabled_ = true;
 
   net::MockConnect kConnect = net::MockConnect(net::ASYNC, net::OK);
@@ -6909,7 +6947,7 @@ TEST_F(URLLoaderMockSocketTest,
   EXPECT_TRUE(socket_data_reads_writes.socket());
 }
 
-TEST_F(URLLoaderMockSocketTest, CorbClosesSocketOnSniffingMimeType) {
+TEST_F(URLLoaderMockSocketTest, OrbClosesSocketOnSniffingMimeType) {
   orb_enabled_ = true;
 
   net::MockConnect kConnect = net::MockConnect(net::ASYNC, net::OK);
@@ -7349,6 +7387,39 @@ TEST_F(URLLoaderTest, CookieSettingOverridesCopiedToURLRequest) {
 
   EXPECT_THAT(Load(url), IsOk());
   EXPECT_TRUE(was_intercepted);
+}
+
+TEST_F(URLLoaderTest, ReadAndDiscardBody) {
+  const std::string file = "simple_page.html";
+  const GURL url = test_server()->GetURL("/" + file);
+  int64_t actual_size = 0;
+  bool got_file_size = base::GetFileSize(GetTestFilePath(file), &actual_size);
+  ASSERT_TRUE(got_file_size);
+
+  TestURLLoaderClient loader_client;
+  ResourceRequest request = CreateResourceRequest("GET", url);
+  SetUpContext(url, /*is_trusted=*/true);
+  URLLoaderOptions url_loader_options;
+  url_loader_options.options = mojom::kURLLoadOptionReadAndDiscardBody;
+  std::unique_ptr<URLLoader> url_loader;
+  base::RunLoop delete_run_loop;
+  mojo::Remote<mojom::URLLoader> loader;
+  url_loader = url_loader_options.MakeURLLoader(
+      context(), DeleteLoaderCallback(&delete_run_loop, &url_loader),
+      loader.BindNewPipeAndPassReceiver(), request,
+      loader_client.CreateRemote());
+  loader_client.RunUntilResponseReceived();
+
+  // Response body should not be set.
+  EXPECT_FALSE(loader_client.response_body().is_valid());
+
+  loader_client.RunUntilComplete();
+  const auto& completion_status = loader_client.completion_status();
+  EXPECT_EQ(completion_status.error_code, net::OK);
+  EXPECT_EQ(completion_status.decoded_body_length, actual_size);
+  EXPECT_EQ(completion_status.encoded_body_length, actual_size);
+
+  delete_run_loop.Run();
 }
 
 class SharedStorageRequestHelperURLLoaderTest : public URLLoaderTest {

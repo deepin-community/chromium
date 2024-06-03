@@ -55,17 +55,20 @@ class ScopedProfileKeepAlive;
 
 namespace web_app {
 
+class IsolatedWebAppInstallSource;
 class IsolatedWebAppUrlInfo;
 class SignedWebBundleMetadata;
 class WebApp;
 class WebAppProvider;
 enum class ApiApprovalState;
+enum class FallbackBehavior;
 enum class IsolatedInstallabilityCheckResult;
 struct ComputedAppSize;
 struct IsolatedWebAppApplyUpdateCommandError;
 struct IsolationData;
 struct SynchronizeOsOptions;
 struct WebAppInstallInfo;
+struct WebAppIconDiagnosticResult;
 
 // The command scheduler is the main API to access the web app system. The
 // scheduler internally ensures:
@@ -85,6 +88,8 @@ class WebAppCommandScheduler {
   using InstallIsolatedWebAppCallback = base::OnceCallback<void(
       base::expected<InstallIsolatedWebAppCommandSuccess,
                      InstallIsolatedWebAppCommandError>)>;
+  using WebAppIconDiagnosticResultCallback =
+      base::OnceCallback<void(std::optional<WebAppIconDiagnosticResult>)>;
 
   explicit WebAppCommandScheduler(Profile& profile);
   virtual ~WebAppCommandScheduler();
@@ -98,7 +103,7 @@ class WebAppCommandScheduler {
                                base::WeakPtr<content::WebContents> contents,
                                WebAppInstallDialogCallback dialog_callback,
                                OnceInstallCallback callback,
-                               bool use_fallback,
+                               FallbackBehavior behavior,
                                const base::Location& location = FROM_HERE);
 
   void FetchInstallInfoFromInstallUrl(
@@ -111,11 +116,12 @@ class WebAppCommandScheduler {
   // manifest.
   // `InstallFromInfo` doesn't install OS hooks. `InstallFromInfoWithParams`
   // install OS hooks when they are set in `install_params`.
-  void InstallFromInfo(std::unique_ptr<WebAppInstallInfo> install_info,
-                       bool overwrite_existing_manifest_fields,
-                       webapps::WebappInstallSource install_surface,
-                       OnceInstallCallback install_callback,
-                       const base::Location& location = FROM_HERE);
+  void InstallFromInfoNoIntegrationForTesting(
+      std::unique_ptr<WebAppInstallInfo> install_info,
+      bool overwrite_existing_manifest_fields,
+      webapps::WebappInstallSource install_surface,
+      OnceInstallCallback install_callback,
+      const base::Location& location = FROM_HERE);
 
   void InstallFromInfoWithParams(
       std::unique_ptr<WebAppInstallInfo> install_info,
@@ -123,17 +129,6 @@ class WebAppCommandScheduler {
       webapps::WebappInstallSource install_surface,
       OnceInstallCallback install_callback,
       const WebAppInstallParams& install_params,
-      const base::Location& location = FROM_HERE);
-
-  void InstallFromInfoWithParams(
-      std::unique_ptr<WebAppInstallInfo> install_info,
-      bool overwrite_existing_manifest_fields,
-      webapps::WebappInstallSource install_surface,
-      base::OnceCallback<void(const webapps::AppId& app_id,
-                              webapps::InstallResultCode code,
-                              bool did_uninstall_and_replace)> install_callback,
-      const WebAppInstallParams& install_params,
-      const std::vector<webapps::AppId>& apps_to_uninstall,
       const base::Location& location = FROM_HERE);
 
   // Install web apps managed by `ExternallyInstalledAppManager`.
@@ -189,7 +184,7 @@ class WebAppCommandScheduler {
   // version does not match.
   virtual void InstallIsolatedWebApp(
       const IsolatedWebAppUrlInfo& url_info,
-      const IsolatedWebAppLocation& location,
+      const IsolatedWebAppInstallSource& install_source,
       const std::optional<base::Version>& expected_version,
       std::unique_ptr<ScopedKeepAlive> optional_keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive,
@@ -304,6 +299,21 @@ class WebAppCommandScheduler {
   void UninstallAllUserInstalledWebApps(
       webapps::WebappUninstallSource uninstall_source,
       UninstallAllUserInstalledWebAppsCommand::Callback callback,
+      const base::Location& location = FROM_HERE);
+
+  // Completely removes the web_app from the database by removing all management
+  // types. Since this is a very destructive operation, prefer invoking
+  // RemoveInstallUrlMaybeUninstall(), RemoveInstallManagementMaybeUninstall(),
+  // RemoveUserUninstallableManagements() or UninstallAllUserInstalledWebApps()
+  // instead.
+  // Currently, only the WebAppSyncBridge is allowed to invoke this for
+  // uninstalling web apps, since it is safe to assume that apps marked with
+  // `is_uninstalling` set to true can be fully removed from the registry.
+  void RemoveAllManagementTypesAndUninstall(
+      base::PassKey<WebAppSyncBridge>,
+      const webapps::AppId& app_id,
+      webapps::WebappUninstallSource uninstall_source,
+      UninstallJob::Callback callback,
       const base::Location& location = FROM_HERE);
 
   // Schedules a command that updates run on os login to provided `login_mode`
@@ -440,6 +450,14 @@ class WebAppCommandScheduler {
       std::optional<SynchronizeOsOptions> synchronize_options = std::nullopt,
       const base::Location& location = FROM_HERE);
 
+  // Sets the user display mode for an app, and also makes sure os integration
+  // is triggered if the new user display mode is one that requires that (i.e.
+  // anything other than "browser").
+  void SetUserDisplayMode(const webapps::AppId& app_id,
+                          mojom::UserDisplayMode user_display_mode,
+                          base::OnceClosure callback,
+                          const base::Location& location = FROM_HERE);
+
   // Finds web apps that share the same install URLs (possibly across different
   // install sources) and dedupes the install URL configs into the most
   // recently installed non-placeholder-like web app.
@@ -458,6 +476,14 @@ class WebAppCommandScheduler {
       const webapps::AppId app_id,
       bool set_to_preferred,
       base::OnceClosure done,
+      const base::Location& location = FROM_HERE);
+
+  // Runs a series of icon health checks for |app_id|. Look into
+  // |WebAppIconDiagnosticResult| for more information on what icon diagnostics
+  // are returned by this command.
+  void RunIconDiagnosticsForApp(
+      const webapps::AppId& app_id,
+      WebAppIconDiagnosticResultCallback result_callback,
       const base::Location& location = FROM_HERE);
 
   base::WeakPtr<WebAppCommandScheduler> GetWeakPtr();

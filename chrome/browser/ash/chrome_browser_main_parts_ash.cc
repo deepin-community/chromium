@@ -57,6 +57,7 @@
 #include "chrome/browser/ash/arc/memory_pressure/container_app_killer.h"
 #include "chrome/browser/ash/arc/session/arc_service_launcher.h"
 #include "chrome/browser/ash/audio/audio_survey_handler.h"
+#include "chrome/browser/ash/bluetooth/bluetooth_log_controller.h"
 #include "chrome/browser/ash/bluetooth/hats_bluetooth_revamp_trigger_impl.h"
 #include "chrome/browser/ash/boot_times_recorder.h"
 #include "chrome/browser/ash/camera/camera_general_survey_handler.h"
@@ -115,7 +116,6 @@
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_manager_registry.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/memory_metrics.h"
 #include "chrome/browser/ash/mojo_service_manager/connection_helper.h"
 #include "chrome/browser/ash/net/apn_migrator.h"
 #include "chrome/browser/ash/net/bluetooth_pref_state_observer.h"
@@ -165,6 +165,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/chromeos/kcer/kcer_factory.h"
+#include "chrome/browser/chromeos/mahi/mahi_web_contents_manager.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_manager_client.h"
 #include "chrome/browser/component_updater/cros_component_installer_chromeos.h"
 #include "chrome/browser/defaults.h"
@@ -217,7 +218,6 @@
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/local_search_service/public/cpp/local_search_service_proxy_factory.h"
 #include "chromeos/ash/components/login/auth/auth_events_recorder.h"
-#include "chromeos/ash/components/login/hibernate/hibernate_manager.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "chromeos/ash/components/network/fast_transition_observer.h"
@@ -232,6 +232,7 @@
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "chromeos/ash/components/tpm/tpm_token_loader.h"
+#include "chromeos/ash/components/wifi_p2p/wifi_p2p_controller.h"
 #include "chromeos/ash/services/cros_healthd/private/cpp/data_collector.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/service_connection.h"
 #include "chromeos/components/sensors/ash/sensor_hal_dispatcher.h"
@@ -533,6 +534,9 @@ class DBusServices {
 
     disks::DiskMountManager::Initialize();
 
+    if (ash::features::IsWifiDirectEnabled()) {
+      WifiP2PController::Initialize();
+    }
     NetworkHandler::Initialize();
 
     chromeos::sensors::SensorHalDispatcher::Initialize();
@@ -564,6 +568,9 @@ class DBusServices {
     rollback_network_config::Shutdown();
     chromeos::sensors::SensorHalDispatcher::Shutdown();
     NetworkHandler::Shutdown();
+    if (ash::features::IsWifiDirectEnabled()) {
+      WifiP2PController::Shutdown();
+    }
     disks::DiskMountManager::Shutdown();
     LoginState::Shutdown();
     NetworkCertLoader::Shutdown();
@@ -859,6 +866,9 @@ void ChromeBrowserMainPartsAsh::PreProfileInit() {
 
   g_browser_process->platform_part()->InitializeUserManager();
 
+  bluetooth_log_controller_ = std::make_unique<ash::BluetoothLogController>(
+      user_manager::UserManager::Get());
+
   if (base::FeatureList::IsEnabled(features::kPerUserMetrics)) {
     // Enable per-user metrics support as soon as user_manager is created.
     g_browser_process->metrics_service()->InitPerUserMetrics();
@@ -944,7 +954,8 @@ void ChromeBrowserMainPartsAsh::PreProfileInit() {
                      chromeos::version_loader::VERSION_FULL),
       base::BindOnce(&ChromeOSVersionCallback));
 
-  kiosk_controller_ = std::make_unique<KioskController>();
+  kiosk_controller_ =
+      std::make_unique<KioskController>(user_manager::UserManager::Get());
 
   if (base::FeatureList::IsEnabled(features::kEnableHostnameSetting)) {
     DeviceNameStore::Initialize(g_browser_process->local_state(),
@@ -965,13 +976,17 @@ void ChromeBrowserMainPartsAsh::PreProfileInit() {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           ::switches::kTestType) ||
       ShouldAutoLaunchKioskApp(*base::CommandLine::ForCurrentProcess(),
-                               g_browser_process->local_state())) {
+                               *g_browser_process->local_state())) {
     WizardController::SetZeroDelays();
   }
 
   // Initialize `SimpleGeolocationProvider` for the system parts.
   SimpleGeolocationProvider::Initialize(
       g_browser_process->shared_url_loader_factory());
+
+  // Instantiate TImeZoneResolverManager here, so it subscribes to
+  // SessionManager and profile creation notification is properly propagated.
+  g_browser_process->platform_part()->GetTimezoneResolverManager();
 
   // On Chrome OS, Chrome does not exit when all browser windows are closed.
   // UnregisterKeepAlive is called from chrome::HandleAppExitingForPlatform.
@@ -1077,6 +1092,7 @@ void ChromeBrowserMainPartsAsh::PreProfileInit() {
 
     session_manager::SessionManager::Get()->CreateSessionForRestart(
         account_id, user_id_hash);
+    ash::Shell::Get()->login_unlock_throughput_recorder()->OnAshRestart();
 
     // If restarting demo session, mark demo session as started before primary
     // profile starts initialization so browser context keyed services created
@@ -1421,18 +1437,11 @@ void ChromeBrowserMainPartsAsh::PostBrowserStart() {
   dark_resume_controller_ = std::make_unique<system::DarkResumeController>(
       std::move(wake_lock_provider));
 
-  HibernateManager::InitializePlatformSupport();
-
   // DiagnosticsBrowserDelegate has to be initialized after ProfilerHelper and
   // UserManager. Initializing in PostProfileInit to ensure Profile data is
   // available and shell has been initialized.
   diagnostics::DiagnosticsLogController::Initialize(
       std::make_unique<diagnostics::DiagnosticsBrowserDelegateImpl>());
-
-  // Start background collection of memory pressure data for Chrome OS.
-  memory_pressure_detail_ = base::MakeRefCounted<MemoryMetrics>(
-      MemoryMetrics::kDefaultPeriodInSeconds);
-  memory_pressure_detail_->Start();
 
   // ARCVM defers to Android's LMK to kill apps in low memory situations because
   // memory can't be reclaimed directly to ChromeOS.
@@ -1455,6 +1464,10 @@ void ChromeBrowserMainPartsAsh::PostBrowserStart() {
       NetworkHandler::Get()->managed_network_configuration_handler(),
       NetworkHandler::Get()->network_state_handler());
 
+  if (chromeos::features::IsMahiEnabled()) {
+    mahi::MahiWebContentsManager::Get()->Initialize();
+  }
+
   ChromeBrowserMainPartsLinux::PostBrowserStart();
 }
 
@@ -1467,11 +1480,6 @@ void ChromeBrowserMainPartsAsh::PostMainMessageLoopRun() {
   video_conference_manager_client_.reset();
 
   arc_container_app_killer_.reset();
-
-  // Do this early to keep logging from taking time during shutdown.
-  if (memory_pressure_detail_ != nullptr) {
-    memory_pressure_detail_->Stop();
-  }
 
   apn_migrator_.reset();
   SystemProxyManager::Shutdown();
@@ -1574,7 +1582,7 @@ void ChromeBrowserMainPartsAsh::PostMainMessageLoopRun() {
   DemoSession::ShutDownIfInitialized();
 
   // Inform |NetworkCertLoader| that it should not notify observers anymore.
-  // TODO(https://crbug.com/894867): Remove this when the root cause of the
+  // TODO(crbug.com/41420425): Remove this when the root cause of the
   // crash is found.
   if (NetworkCertLoader::IsInitialized()) {
     NetworkCertLoader::Get()->set_is_shutting_down();
@@ -1585,6 +1593,8 @@ void ChromeBrowserMainPartsAsh::PostMainMessageLoopRun() {
 
   CHECK(g_browser_process);
   CHECK(g_browser_process->platform_part());
+
+  g_browser_process->platform_part()->session_manager()->Shutdown();
 
   // Let the UserManager unregister itself as an observer of the CrosSettings
   // singleton before it is destroyed. This also ensures that the UserManager
@@ -1716,6 +1726,8 @@ void ChromeBrowserMainPartsAsh::PostMainMessageLoopRun() {
   if (pre_profile_init_called_) {
     network_portal_detector::Shutdown();
   }
+
+  bluetooth_log_controller_.reset();
 
   g_browser_process->platform_part()->ShutdownSessionManager();
   // Ash needs to be closed before UserManager is destroyed.

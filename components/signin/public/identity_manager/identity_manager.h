@@ -22,6 +22,7 @@
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_client.h"
+#include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_mutator.h"
@@ -107,7 +108,7 @@ class IdentityManager : public KeyedService,
     // NOTE: It is not guaranteed that a call to
     // OnRefreshTokenUpdatedForAccount() has previously occurred for this
     // account due to corner cases.
-    // TODO(https://crbug.com/884731): Eliminate these corner cases.
+    // TODO(crbug.com/40593967): Eliminate these corner cases.
     // NOTE: On a signout event, the ordering of this callback wrt the
     // OnPrimaryAccountCleared() callback is undefined.If this lack of ordering
     // is problematic for your use case, please contact blundell@chromium.org.
@@ -118,9 +119,16 @@ class IdentityManager : public KeyedService,
     // changed. Note: It is always called after
     // |OnRefreshTokenUpdatedForAccount| when the refresh token is updated. It
     // is not called when the refresh token is removed.
+    // `token_operation_source` has a default value of
+    // `signin_metrics::SourceForRefreshTokenOperation::Unknown` which means
+    // that either the token did not change (example is when a token becomes
+    // invalid on the server) or that the operation value was not explicitly
+    // set.
     virtual void OnErrorStateOfRefreshTokenUpdatedForAccount(
         const CoreAccountInfo& account_info,
-        const GoogleServiceAuthError& error) {}
+        const GoogleServiceAuthError& error,
+        signin_metrics::SourceForRefreshTokenOperation token_operation_source) {
+    }
 
     // Called after refresh tokens are loaded.
     virtual void OnRefreshTokensLoaded() {}
@@ -173,7 +181,7 @@ class IdentityManager : public KeyedService,
   // the required consent level.
   // TODO(crbug.com/40067058): revisit this once `ConsentLevel::kSync` is
   // removed.
-  // TODO(1046746): Update (./README.md).
+  // TODO(crbug.com/40116578): Update (./README.md).
   CoreAccountInfo GetPrimaryAccountInfo(ConsentLevel consent_level) const;
 
   // Provides access to the account ID of the user's primary account. Simple
@@ -358,7 +366,9 @@ class IdentityManager : public KeyedService,
     std::unique_ptr<DiagnosticsProvider> diagnostics_provider;
     AccountConsistencyMethod account_consistency =
         AccountConsistencyMethod::kDisabled;
-    bool should_verify_scope_access = true;
+    // TODO(crbug.com/325904258): Reconsider whether completely disabling the
+    // scope checking is the right approach in the long run.
+    bool require_sync_consent_for_scope_verification = true;
     raw_ptr<SigninClient> signin_client = nullptr;
 #if BUILDFLAG(IS_CHROMEOS)
     raw_ptr<account_manager::AccountManagerFacade, DanglingUntriaged>
@@ -480,12 +490,15 @@ class IdentityManager : public KeyedService,
   friend AccountInfo MakeAccountAvailable(
       IdentityManager* identity_manager,
       const AccountAvailabilityOptions& options);
+  friend void SetAutomaticIssueOfAccessTokens(IdentityManager* identity_manager,
+                                              bool grant);
   friend void SetRefreshTokenForAccount(IdentityManager* identity_manager,
                                         const CoreAccountId& account_id,
                                         const std::string& token_value);
   friend void SetInvalidRefreshTokenForAccount(
       IdentityManager* identity_manager,
-      const CoreAccountId& account_id);
+      const CoreAccountId& account_id,
+      signin_metrics::SourceForRefreshTokenOperation source);
   friend void RemoveRefreshTokenForAccount(IdentityManager* identity_manager,
                                            const CoreAccountId& account_id);
   friend void UpdateAccountInfoForAccount(IdentityManager* identity_manager,
@@ -531,13 +544,13 @@ class IdentityManager : public KeyedService,
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   // Temporary access to getters (e.g. GetTokenService()).
-  // TODO(https://crbug.com/944127): Remove this friendship by
+  // TODO(crbug.com/40619310): Remove this friendship by
   // extending identity_test_utils.h as needed.
   friend IdentityTestEnvironment;
 
   // IdentityManagerTest reaches into IdentityManager internals in
   // order to drive its behavior.
-  // TODO(https://crbug.com/943135): Find a better way to accomplish this.
+  // TODO(crbug.com/40618872): Find a better way to accomplish this.
   friend IdentityManagerTest;
   FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest, Construct);
   FRIEND_TEST_ALL_PREFIXES(IdentityManagerTest,
@@ -621,7 +634,9 @@ class IdentityManager : public KeyedService,
   void OnRefreshTokensLoaded() override;
   void OnEndBatchChanges() override;
   void OnAuthErrorChanged(const CoreAccountId& account_id,
-                          const GoogleServiceAuthError& auth_error) override;
+                          const GoogleServiceAuthError& auth_error,
+                          signin_metrics::SourceForRefreshTokenOperation
+                              token_operation_source) override;
 
   // GaiaCookieManagerService callbacks:
   void OnGaiaAccountsInCookieUpdated(
@@ -689,7 +704,7 @@ class IdentityManager : public KeyedService,
 
   // TODO(crbug.com/40067025): Remove this field once
   // kReplaceSyncPromosWithSignInPromos launches.
-  const bool should_verify_scope_access_;
+  const bool require_sync_consent_for_scope_verification_;
 
 #if BUILDFLAG(IS_ANDROID)
   // Java-side IdentityManager object.

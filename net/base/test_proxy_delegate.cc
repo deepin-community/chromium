@@ -35,6 +35,10 @@ ProxyChain TestProxyDelegate::proxy_chain() const {
   return *proxy_chain_;
 }
 
+void TestProxyDelegate::MakeOnTunnelHeadersReceivedFail(Error result) {
+  on_tunnel_headers_received_result_ = result;
+}
+
 void TestProxyDelegate::VerifyOnTunnelHeadersReceived(
     const ProxyChain& proxy_chain,
     size_t chain_index,
@@ -70,6 +74,9 @@ void TestProxyDelegate::OnResolveProxy(
   }
 }
 
+void TestProxyDelegate::OnSuccessfulRequestAfterFailures(
+    const ProxyRetryInfoMap& proxy_retry_info) {}
+
 void TestProxyDelegate::OnFallback(const ProxyChain& bad_chain, int net_error) {
 }
 
@@ -102,7 +109,7 @@ Error TestProxyDelegate::OnTunnelHeadersReceived(
 
   on_tunnel_headers_received_proxy_chains_.push_back(proxy_chain);
   on_tunnel_headers_received_chain_indices_.push_back(chain_index);
-  return OK;
+  return on_tunnel_headers_received_result_;
 }
 
 void TestProxyDelegate::SetProxyResolutionService(

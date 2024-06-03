@@ -19,7 +19,8 @@
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/common/fetch/fetch_api_request_headers_map.h"
-#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
+#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-forward.h"
+#include "third_party/blink/public/mojom/loader/referrer.mojom-forward.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include <jni.h>
@@ -155,6 +156,10 @@ WebContents* CreateAndAttachInnerContents(RenderFrameHost* rfh);
 
 // Spins a run loop until IsDocumentOnLoadCompletedInPrimaryMainFrame() is true.
 void AwaitDocumentOnLoadCompleted(WebContents* web_contents);
+
+// Sets the focused frame of `web_contents` to the `rfh` for tests that rely on
+// the focused frame not being null.
+void FocusWebContentsOnFrame(WebContents* web_contents, RenderFrameHost* rfh);
 
 // Helper class to Run and Quit the message loop. Run and Quit can only happen
 // once per instance. Make a new instance for each use. Calling Quit after Run

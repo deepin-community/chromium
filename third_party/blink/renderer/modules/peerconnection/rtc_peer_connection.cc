@@ -232,7 +232,8 @@ RTCIceCandidatePlatform* ConvertToRTCIceCandidatePlatform(
   }
   return MakeGarbageCollected<RTCIceCandidatePlatform>(
       candidate->candidate(), candidate->sdpMid(), sdp_m_line_index,
-      candidate->usernameFragment());
+      candidate->usernameFragment(),
+      /*url can not be reconstruncted*/ std::nullopt);
 }
 
 webrtc::PeerConnectionInterface::IceTransportsType IceTransportPolicyFromString(
@@ -663,18 +664,20 @@ void RTCPeerConnection::Dispose() {
   }
 }
 
-ScriptPromise RTCPeerConnection::createOffer(ScriptState* script_state,
-                                             const RTCOfferOptions* options,
-                                             ExceptionState& exception_state) {
+ScriptPromise<RTCSessionDescriptionInit> RTCPeerConnection::createOffer(
+    ScriptState* script_state,
+    const RTCOfferOptions* options,
+    ExceptionState& exception_state) {
   if (signaling_state_ ==
       webrtc::PeerConnectionInterface::SignalingState::kClosed) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kSignalingStateClosedMessage);
-    return ScriptPromise();
+    return ScriptPromise<RTCSessionDescriptionInit>();
   }
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<RTCSessionDescriptionInit>>(
+          script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
   RTCSessionDescriptionRequest* request =
       RTCSessionDescriptionRequestPromiseImpl::Create(
           this, resolver, "RTCPeerConnection", "createOffer");
@@ -695,7 +698,7 @@ ScriptPromise RTCPeerConnection::createOffer(ScriptState* script_state,
   return promise;
 }
 
-ScriptPromise RTCPeerConnection::createOffer(
+ScriptPromise<IDLUndefined> RTCPeerConnection::createOffer(
     ScriptState* script_state,
     V8RTCSessionDescriptionCallback* success_callback,
     V8RTCPeerConnectionErrorCallback* error_callback,
@@ -711,7 +714,7 @@ ScriptPromise RTCPeerConnection::createOffer(
                     WebFeature::kRTCPeerConnectionCreateOfferLegacyCompliant);
   if (CallErrorCallbackIfSignalingStateClosed(context, signaling_state_,
                                               error_callback))
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
 
   RTCSessionDescriptionRequest* request =
       RTCSessionDescriptionRequestImpl::Create(
@@ -723,26 +726,28 @@ ScriptPromise RTCPeerConnection::createOffer(
   for (auto& platform_transceiver : platform_transceivers)
     CreateOrUpdateTransceiver(std::move(platform_transceiver));
 
-  return ScriptPromise::CastUndefined(script_state);
+  return ToResolvedUndefinedPromise(script_state);
 }
 
-ScriptPromise RTCPeerConnection::createAnswer(ScriptState* script_state,
-                                              const RTCAnswerOptions* options,
-                                              ExceptionState& exception_state) {
+ScriptPromise<RTCSessionDescriptionInit> RTCPeerConnection::createAnswer(
+    ScriptState* script_state,
+    const RTCAnswerOptions* options,
+    ExceptionState& exception_state) {
   if (signaling_state_ ==
       webrtc::PeerConnectionInterface::SignalingState::kClosed) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kSignalingStateClosedMessage);
-    return ScriptPromise();
+    return ScriptPromise<RTCSessionDescriptionInit>();
   }
 
   ExecutionContext* context = ExecutionContext::From(script_state);
   UseCounter::Count(context, WebFeature::kRTCPeerConnectionCreateAnswer);
   UseCounter::Count(context, WebFeature::kRTCPeerConnectionCreateAnswerPromise);
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-      script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<RTCSessionDescriptionInit>>(
+          script_state, exception_state.GetContext());
+  auto promise = resolver->Promise();
   RTCSessionDescriptionRequest* request =
       RTCSessionDescriptionRequestPromiseImpl::Create(
           this, resolver, "RTCPeerConnection", "createAnswer");
@@ -751,7 +756,7 @@ ScriptPromise RTCPeerConnection::createAnswer(ScriptState* script_state,
   return promise;
 }
 
-ScriptPromise RTCPeerConnection::createAnswer(
+ScriptPromise<IDLUndefined> RTCPeerConnection::createAnswer(
     ScriptState* script_state,
     V8RTCSessionDescriptionCallback* success_callback,
     V8RTCPeerConnectionErrorCallback* error_callback,
@@ -767,13 +772,13 @@ ScriptPromise RTCPeerConnection::createAnswer(
 
   if (CallErrorCallbackIfSignalingStateClosed(context, signaling_state_,
                                               error_callback))
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
 
   RTCSessionDescriptionRequest* request =
       RTCSessionDescriptionRequestImpl::Create(
           GetExecutionContext(), this, success_callback, error_callback);
   peer_handler_->CreateAnswer(request, nullptr);
-  return ScriptPromise::CastUndefined(script_state);
+  return ToResolvedUndefinedPromise(script_state);
 }
 
 DOMException* RTCPeerConnection::checkSdpForStateErrors(
@@ -865,7 +870,7 @@ HeapHashSet<Member<RTCIceTransport>> RTCPeerConnection::ActiveIceTransports()
 }
 
 void RTCPeerConnection::GenerateCertificateCompleted(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<RTCCertificate>* resolver,
     rtc::scoped_refptr<rtc::RTCCertificate> certificate) {
   if (!certificate) {
     resolver->Reject();
@@ -884,25 +889,26 @@ void RTCPeerConnection::UpdateIceConnectionState() {
   ChangeIceConnectionState(new_state);
 }
 
-ScriptPromise RTCPeerConnection::setLocalDescription(
+ScriptPromise<IDLUndefined> RTCPeerConnection::setLocalDescription(
     ScriptState* script_state) {
   DCHECK(script_state->ContextIsValid());
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
   auto* request = MakeGarbageCollected<RTCVoidRequestPromiseImpl>(
       this, resolver, "RTCPeerConnection", "setLocalDescription");
   peer_handler_->SetLocalDescription(request);
   return promise;
 }
 
-ScriptPromise RTCPeerConnection::setLocalDescription(
+ScriptPromise<IDLUndefined> RTCPeerConnection::setLocalDescription(
     ScriptState* script_state,
     const RTCSessionDescriptionInit* session_description_init,
     ExceptionState& exception_state) {
   if (closed_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kSignalingStateClosedMessage);
-    return ScriptPromise();
+    return ScriptPromise<IDLUndefined>();
   }
 
   DCHECK(script_state->ContextIsValid());
@@ -934,7 +940,7 @@ ScriptPromise RTCPeerConnection::setLocalDescription(
       exception_state.ThrowDOMException(
           static_cast<DOMExceptionCode>(exception->code()),
           exception->message());
-      return ScriptPromise();
+      return ScriptPromise<IDLUndefined>();
     }
   }
   ExecutionContext* context = ExecutionContext::From(script_state);
@@ -942,16 +948,16 @@ ScriptPromise RTCPeerConnection::setLocalDescription(
   UseCounter::Count(context,
                     WebFeature::kRTCPeerConnectionSetLocalDescriptionPromise);
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
   auto* request = MakeGarbageCollected<RTCVoidRequestPromiseImpl>(
       this, resolver, "RTCPeerConnection", "setLocalDescription");
   peer_handler_->SetLocalDescription(request, std::move(parsed_sdp));
   return promise;
 }
 
-ScriptPromise RTCPeerConnection::setLocalDescription(
+ScriptPromise<IDLUndefined> RTCPeerConnection::setLocalDescription(
     ScriptState* script_state,
     const RTCSessionDescriptionInit* session_description_init,
     V8VoidFunction* success_callback,
@@ -959,7 +965,7 @@ ScriptPromise RTCPeerConnection::setLocalDescription(
   if (CallErrorCallbackIfSignalingStateClosed(
           ExecutionContext::From(script_state), signaling_state_,
           error_callback)) {
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
 
   DCHECK(script_state->ContextIsValid());
@@ -1008,13 +1014,13 @@ ScriptPromise RTCPeerConnection::setLocalDescription(
     if (exception) {
       if (error_callback)
         AsyncCallErrorCallback(context, error_callback, exception);
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
   }
   auto* request = MakeGarbageCollected<RTCVoidRequestImpl>(
       GetExecutionContext(), this, success_callback, error_callback);
   peer_handler_->SetLocalDescription(request, std::move(parsed_sdp));
-  return ScriptPromise::CastUndefined(script_state);
+  return ToResolvedUndefinedPromise(script_state);
 }
 
 RTCSessionDescription* RTCPeerConnection::localDescription() const {
@@ -1030,14 +1036,14 @@ RTCSessionDescription* RTCPeerConnection::pendingLocalDescription() const {
   return pending_local_description_.Get();
 }
 
-ScriptPromise RTCPeerConnection::setRemoteDescription(
+ScriptPromise<IDLUndefined> RTCPeerConnection::setRemoteDescription(
     ScriptState* script_state,
     const RTCSessionDescriptionInit* session_description_init,
     ExceptionState& exception_state) {
   if (closed_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kSignalingStateClosedMessage);
-    return ScriptPromise();
+    return ScriptPromise<IDLUndefined>();
   }
 
   DCHECK(script_state->ContextIsValid());
@@ -1047,7 +1053,7 @@ ScriptPromise RTCPeerConnection::setRemoteDescription(
       webrtc::PeerConnectionInterface::SignalingState::kClosed) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kSignalingStateClosedMessage);
-    return ScriptPromise();
+    return ScriptPromise<IDLUndefined>();
   }
 
   ExecutionContext* context = ExecutionContext::From(script_state);
@@ -1063,16 +1069,16 @@ ScriptPromise RTCPeerConnection::setRemoteDescription(
   if (ContainsCandidate(session_description_init->sdp()))
     DisableBackForwardCache(context);
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
   auto* request = MakeGarbageCollected<RTCVoidRequestPromiseImpl>(
       this, resolver, "RTCPeerConnection", "setRemoteDescription");
   peer_handler_->SetRemoteDescription(request, std::move(parsed_sdp));
   return promise;
 }
 
-ScriptPromise RTCPeerConnection::setRemoteDescription(
+ScriptPromise<IDLUndefined> RTCPeerConnection::setRemoteDescription(
     ScriptState* script_state,
     const RTCSessionDescriptionInit* session_description_init,
     V8VoidFunction* success_callback,
@@ -1080,7 +1086,7 @@ ScriptPromise RTCPeerConnection::setRemoteDescription(
   if (CallErrorCallbackIfSignalingStateClosed(
           ExecutionContext::From(script_state), signaling_state_,
           error_callback)) {
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
 
   DCHECK(script_state->ContextIsValid());
@@ -1115,12 +1121,12 @@ ScriptPromise RTCPeerConnection::setRemoteDescription(
 
   if (CallErrorCallbackIfSignalingStateClosed(context, signaling_state_,
                                               error_callback))
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
 
   auto* request = MakeGarbageCollected<RTCVoidRequestImpl>(
       GetExecutionContext(), this, success_callback, error_callback);
   peer_handler_->SetRemoteDescription(request, std::move(parsed_sdp));
-  return ScriptPromise::CastUndefined(script_state);
+  return ToResolvedUndefinedPromise(script_state);
 }
 
 RTCSessionDescription* RTCPeerConnection::remoteDescription() const {
@@ -1272,7 +1278,7 @@ void RTCPeerConnection::setConfiguration(
   }
 }
 
-ScriptPromise RTCPeerConnection::generateCertificate(
+ScriptPromise<RTCCertificate> RTCPeerConnection::generateCertificate(
     ScriptState* script_state,
     const V8AlgorithmIdentifier* keygen_algorithm,
     ExceptionState& exception_state) {
@@ -1282,7 +1288,7 @@ ScriptPromise RTCPeerConnection::generateCertificate(
   if (!NormalizeAlgorithm(script_state->GetIsolate(), keygen_algorithm,
                           kWebCryptoOperationGenerateKey, crypto_algorithm,
                           exception_state)) {
-    return ScriptPromise();
+    return ScriptPromise<RTCCertificate>();
   }
 
   // Check if |keygenAlgorithm| contains the optional DOMTimeStamp |expires|
@@ -1293,12 +1299,12 @@ ScriptPromise RTCPeerConnection::generateCertificate(
                                      keygen_algorithm->GetAsObject().V8Value(),
                                      exception_state);
     if (exception_state.HadException())
-      return ScriptPromise();
+      return ScriptPromise<RTCCertificate>();
 
     bool has_expires =
         keygen_algorithm_dict.HasProperty("expires", exception_state);
     if (exception_state.HadException())
-      return ScriptPromise();
+      return ScriptPromise<RTCCertificate>();
 
     if (has_expires) {
       v8::Local<v8::Value> expires_value;
@@ -1338,7 +1344,7 @@ ScriptPromise RTCPeerConnection::generateCertificate(
       } else {
         exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                           unsupported_params_string);
-        return ScriptPromise();
+        return ScriptPromise<RTCCertificate>();
       }
       break;
     case kWebCryptoAlgorithmIdEcdsa:
@@ -1350,7 +1356,7 @@ ScriptPromise RTCPeerConnection::generateCertificate(
       } else {
         exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                           unsupported_params_string);
-        return ScriptPromise();
+        return ScriptPromise<RTCCertificate>();
       }
       break;
     default:
@@ -1358,7 +1364,7 @@ ScriptPromise RTCPeerConnection::generateCertificate(
                                         "The 1st argument provided is an "
                                         "AlgorithmIdentifier, but the "
                                         "algorithm is not supported.");
-      return ScriptPromise();
+      return ScriptPromise<RTCCertificate>();
   }
   DCHECK(key_params.has_value());
 
@@ -1369,12 +1375,12 @@ ScriptPromise RTCPeerConnection::generateCertificate(
   if (!certificate_generator->IsSupportedKeyParams(key_params.value())) {
     exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       unsupported_params_string);
-    return ScriptPromise();
+    return ScriptPromise<RTCCertificate>();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<RTCCertificate>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
 
   // Helper closure callback for RTCPeerConnection::generateCertificate.
   auto completion_callback =
@@ -1400,7 +1406,7 @@ ScriptPromise RTCPeerConnection::generateCertificate(
   return promise;
 }
 
-ScriptPromise RTCPeerConnection::addIceCandidate(
+ScriptPromise<IDLUndefined> RTCPeerConnection::addIceCandidate(
     ScriptState* script_state,
     const RTCIceCandidateInit* candidate,
     ExceptionState& exception_state) {
@@ -1409,7 +1415,7 @@ ScriptPromise RTCPeerConnection::addIceCandidate(
       webrtc::PeerConnectionInterface::SignalingState::kClosed) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kSignalingStateClosedMessage);
-    return ScriptPromise();
+    return ScriptPromise<IDLUndefined>();
   }
 
   if (candidate->hasCandidate() && candidate->candidate().empty()) {
@@ -1417,7 +1423,7 @@ ScriptPromise RTCPeerConnection::addIceCandidate(
     // empty or nothing was passed.
     // TODO(crbug.com/978582): Remove this mitigation when the WebRTC layer
     // handles the empty candidate field or the null candidate correctly.
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
 
   RTCIceCandidatePlatform* platform_candidate =
@@ -1427,21 +1433,21 @@ ScriptPromise RTCPeerConnection::addIceCandidate(
   if (IsIceCandidateMissingSdpMidAndMLineIndex(candidate)) {
     exception_state.ThrowTypeError(
         "Candidate missing values for both sdpMid and sdpMLineIndex");
-    return ScriptPromise();
+    return ScriptPromise<IDLUndefined>();
   }
 
   DisableBackForwardCache(GetExecutionContext());
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
       script_state, exception_state.GetContext());
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
   auto* request = MakeGarbageCollected<RTCVoidRequestPromiseImpl>(
       this, resolver, "RTCPeerConnection", "addIceCandidate");
   peer_handler_->AddIceCandidate(request, std::move(platform_candidate));
   return promise;
 }
 
-ScriptPromise RTCPeerConnection::addIceCandidate(
+ScriptPromise<IDLUndefined> RTCPeerConnection::addIceCandidate(
     ScriptState* script_state,
     const RTCIceCandidateInit* candidate,
     V8VoidFunction* success_callback,
@@ -1454,12 +1460,12 @@ ScriptPromise RTCPeerConnection::addIceCandidate(
   if (CallErrorCallbackIfSignalingStateClosed(
           ExecutionContext::From(script_state), signaling_state_,
           error_callback))
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
 
   if (IsIceCandidateMissingSdpMidAndMLineIndex(candidate)) {
     exception_state.ThrowTypeError(
         "Candidate missing values for both sdpMid and sdpMLineIndex");
-    return ScriptPromise();
+    return ScriptPromise<IDLUndefined>();
   }
 
   RTCIceCandidatePlatform* platform_candidate =
@@ -1471,14 +1477,14 @@ ScriptPromise RTCPeerConnection::addIceCandidate(
   // TODO(crbug.com/978582): Remove this mitigation when the WebRTC layer
   // handles the empty candidate field or the null candidate correctly.
   if (platform_candidate->Candidate().empty())
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
 
   DisableBackForwardCache(GetExecutionContext());
 
   auto* request = MakeGarbageCollected<RTCVoidRequestImpl>(
       GetExecutionContext(), this, success_callback, error_callback);
   peer_handler_->AddIceCandidate(request, std::move(platform_candidate));
-  return ScriptPromise::CastUndefined(script_state);
+  return ToResolvedUndefinedPromise(script_state);
 }
 
 String RTCPeerConnection::signalingState() const {
@@ -1586,31 +1592,10 @@ MediaStreamVector RTCPeerConnection::getRemoteStreams() const {
   return remote_streams;
 }
 
-MediaStream* RTCPeerConnection::getRemoteStreamById(const String& id) const {
-  for (const auto& rtp_receiver : rtp_receivers_) {
-    for (const auto& stream : rtp_receiver->streams()) {
-      if (stream->id() == id) {
-        return stream.Get();
-      }
-    }
-  }
-  return nullptr;
-}
-
-bool RTCPeerConnection::IsRemoteStream(MediaStream* stream) const {
-  for (const auto& receiver : rtp_receivers_) {
-    for (const auto& receiver_stream : receiver->streams()) {
-      if (receiver_stream == stream) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-ScriptPromise RTCPeerConnection::getStats(ScriptState* script_state,
-                                          MediaStreamTrack* selector,
-                                          ExceptionState& exception_state) {
+ScriptPromise<RTCStatsReport> RTCPeerConnection::getStats(
+    ScriptState* script_state,
+    MediaStreamTrack* selector,
+    ExceptionState& exception_state) {
   if (!selector) {
     ExecutionContext* context = ExecutionContext::From(script_state);
     UseCounter::Count(context, WebFeature::kRTCPeerConnectionGetStats);
@@ -1619,11 +1604,12 @@ ScriptPromise RTCPeerConnection::getStats(ScriptState* script_state,
       LOG(ERROR) << "Internal error: peer_handler_ has been discarded";
       exception_state.ThrowDOMException(DOMExceptionCode::kOperationError,
                                         "Internal error: release in progress");
-      return ScriptPromise();
+      return ScriptPromise<RTCStatsReport>();
     }
-    auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(
-        script_state, exception_state.GetContext());
-    ScriptPromise promise = resolver->Promise();
+    auto* resolver =
+        MakeGarbageCollected<ScriptPromiseResolver<RTCStatsReport>>(
+            script_state, exception_state.GetContext());
+    auto promise = resolver->Promise();
     if (peer_handler_unregistered_) {
       LOG(ERROR) << "Internal error: context is destroyed";
       // This is needed to have the resolver release its internal resources
@@ -1656,13 +1642,13 @@ ScriptPromise RTCPeerConnection::getStats(ScriptState* script_state,
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidAccessError,
         "There is no sender or receiver for the track.");
-    return ScriptPromise();
+    return ScriptPromise<RTCStatsReport>();
   }
   if (track_uses > 1u) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidAccessError,
         "There are more than one sender or receiver for the track.");
-    return ScriptPromise();
+    return ScriptPromise<RTCStatsReport>();
   }
   // There is just one use of the track, a sender or receiver.
   if (track_sender) {
@@ -2163,7 +2149,7 @@ void RTCPeerConnection::RegisterTrack(MediaStreamTrack* track) {
   tracks_.insert(track->Component(), track);
 }
 
-void RTCPeerConnection::NoteSdpCreated(const RTCSessionDescription& desc) {
+void RTCPeerConnection::NoteSdpCreated(const RTCSessionDescriptionInit& desc) {
   if (desc.type() == "offer") {
     last_offer_ = desc.sdp();
   } else if (desc.type() == "answer") {

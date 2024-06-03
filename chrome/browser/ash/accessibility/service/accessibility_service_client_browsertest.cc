@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/accessibility/service/accessibility_service_client.h"
+
 #include <optional>
 
 #include "ash/accessibility/accessibility_controller.h"
@@ -23,7 +25,6 @@
 #include "base/test/bind.h"
 #include "chrome/browser/accessibility/service/accessibility_service_router_factory.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
-#include "chrome/browser/ash/accessibility/service/accessibility_service_client.h"
 #include "chrome/browser/ash/accessibility/service/automation_client_impl.h"
 #include "chrome/browser/ash/accessibility/service/fake_accessibility_service.h"
 #include "chrome/browser/ash/accessibility/service/speech_recognition_impl.h"
@@ -373,8 +374,8 @@ class AccessibilityServiceClientTest : public InProcessBrowserTest {
       client->automation_client_->Disable();
   }
 
-  // TODO(crbug.com/1493545): Toggle features on AccessibilityManager for client
-  // test.
+  // TODO(crbug.com/40936728): Toggle features on AccessibilityManager for
+  // client test.
   void TurnOnAccessibilityService(AssistiveTechnologyType type) {
     switch (type) {
       case ax::mojom::AssistiveTechnologyType::kUnknown:

@@ -26,7 +26,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/stringprintf.h"
-#include "base/sys_byteorder.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
@@ -256,7 +255,7 @@ class GpuMemoryBufferVideoFramePool::PoolImpl
   const raw_ptr<GpuVideoAcceleratorFactories> gpu_factories_;
 
   // Pool of resources.
-  std::list<FrameResources*> resources_pool_;
+  std::list<raw_ptr<FrameResources, CtnExperimental>> resources_pool_;
 
   GpuVideoAcceleratorFactories::OutputFormat output_format_;
 
@@ -1248,7 +1247,7 @@ scoped_refptr<VideoFrame> GpuMemoryBufferVideoFramePool::PoolImpl::
     return nullptr;
   }
 
-  gpu::MailboxHolder mailbox_holders[VideoFrame::kMaxPlanes];
+  scoped_refptr<gpu::ClientSharedImage> shared_images[VideoFrame::kMaxPlanes];
   bool is_webgpu_compatible = false;
   // Set up the planes creating the mailboxes needed to refer to the textures.
   for (size_t plane = 0; plane < NumSharedImages(output_format_); plane++) {
@@ -1294,9 +1293,6 @@ scoped_refptr<VideoFrame> GpuMemoryBufferVideoFramePool::PoolImpl::
     }
 #endif
 
-    const gfx::BufferFormat buffer_format =
-        GpuMemoryBufferFormat(output_format_, plane);
-    unsigned texture_target = gpu_factories_->ImageTextureTarget(buffer_format);
     // Bind the texture and create or rebind the image. This image may be read
     // via the raster interface for import into canvas and/or 2-copy import into
     // WebGL as well as potentially being read via the GLES interface for 1-copy
@@ -1327,39 +1323,41 @@ scoped_refptr<VideoFrame> GpuMemoryBufferVideoFramePool::PoolImpl::
             plane_resource.needs_external_sampler = true;
           }
         }
-        plane_resource.shared_image = sii->CreateSharedImage(
-            si_format, gpu_memory_buffer->GetSize(), color_space,
-            kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, kDebugLabel,
-            gpu_memory_buffer->CloneHandle());
+        plane_resource.shared_image =
+            sii->CreateSharedImage({si_format, gpu_memory_buffer->GetSize(),
+                                    color_space, usage, kDebugLabel},
+                                   gpu_memory_buffer->CloneHandle());
       } else {
         plane_resource.shared_image = sii->CreateSharedImage(
             gpu_memory_buffer, gpu_factories_->GpuMemoryBufferManager(),
-            GetSharedImageBufferPlane(output_format_, plane), color_space,
-            kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage, kDebugLabel);
+            GetSharedImageBufferPlane(output_format_, plane),
+            {color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage,
+             kDebugLabel});
       }
       CHECK(plane_resource.shared_image);
     } else if (plane_resource.shared_image) {
       sii->UpdateSharedImage(frame_resources->sync_token,
                              plane_resource.shared_image->mailbox());
     }
-    mailbox_holders[plane] =
-        gpu::MailboxHolder(plane_resource.shared_image->mailbox(),
-                           gpu::SyncToken(), texture_target);
+    shared_images[plane] = plane_resource.shared_image;
   }
 
   // Insert a sync_token, this is needed to make sure that the textures the
   // mailboxes refer to will be used only after all the previous commands posted
   // in the SharedImageInterface have been processed.
   gpu::SyncToken sync_token = sii->GenUnverifiedSyncToken();
-  for (size_t plane = 0; plane < NumSharedImages(output_format_); plane++)
-    mailbox_holders[plane].sync_token = sync_token;
+  const gfx::BufferFormat buffer_format =
+      GpuMemoryBufferFormat(output_format_, 0);
+  auto texture_target = shared_images[0]->GetTextureTarget(
+      gfx::BufferUsage::SCANOUT_CPU_READ_WRITE, buffer_format);
 
   VideoPixelFormat frame_format = VideoFormat(output_format_);
 
   // Create the VideoFrame backed by native textures.
-  scoped_refptr<VideoFrame> frame = VideoFrame::WrapNativeTextures(
-      frame_format, mailbox_holders, VideoFrame::ReleaseMailboxCB(), coded_size,
-      visible_rect, natural_size, timestamp);
+  scoped_refptr<VideoFrame> frame = VideoFrame::WrapSharedImages(
+      frame_format, shared_images, sync_token, texture_target,
+      VideoFrame::ReleaseMailboxCB(), coded_size, visible_rect, natural_size,
+      timestamp);
 
   if (!frame) {
     frame_resources->MarkUnused(tick_clock_->NowTicks());
@@ -1451,7 +1449,7 @@ void GpuMemoryBufferVideoFramePool::PoolImpl::Shutdown() {
 
   // Delete all the resources on the media thread.
   in_shutdown_ = true;
-  for (auto* frame_resources : resources_pool_) {
+  for (FrameResources* frame_resources : resources_pool_) {
     // Will be deleted later upon return to pool.
     if (frame_resources->is_used())
       continue;

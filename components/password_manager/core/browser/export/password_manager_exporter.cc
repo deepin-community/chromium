@@ -5,6 +5,7 @@
 #include "components/password_manager/core/browser/export/password_manager_exporter.h"
 
 #include <utility>
+#include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
@@ -87,7 +88,7 @@ void PasswordManagerExporter::PreparePasswordsForExport() {
   std::vector<CredentialUIEntry> credentials =
       presenter_->GetSavedCredentials();
   // Clear blocked credentials.
-  base::EraseIf(credentials, [](const auto& credential) {
+  std::erase_if(credentials, [](const auto& credential) {
     return credential.blocked_by_user;
   });
 
@@ -206,8 +207,8 @@ void PasswordManagerExporter::Cleanup() {
   // executed, e.g. because a new export was initiated. The cleanup should be
   // carried out regardless, so we only schedule tasks which own their
   // arguments.
-  // TODO(crbug.com/811779) When Chrome is overwriting an existing file, cancel
-  // should restore the file rather than delete it.
+  // TODO(crbug.com/41370350) When Chrome is overwriting an existing file,
+  // cancel should restore the file rather than delete it.
   if (!destination_.empty()) {
     task_runner_->PostTask(
         FROM_HERE,

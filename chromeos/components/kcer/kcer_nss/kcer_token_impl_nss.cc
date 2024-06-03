@@ -5,6 +5,7 @@
 #include "chromeos/components/kcer/kcer_nss/kcer_token_impl_nss.h"
 
 #include <certdb.h>
+#include <keythi.h>
 #include <pkcs11.h>
 #include <secerr.h>
 #include <stdint.h>
@@ -12,17 +13,22 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/check_is_test.h"
 #include "base/compiler_specific.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
 #include "build/chromeos_buildflags.h"
+#include "chromeos/components/kcer/cert_cache.h"
 #include "chromeos/components/kcer/chaps/high_level_chaps_client.h"
-#include "chromeos/components/kcer/kcer_nss/cert_cache_nss.h"
+#include "chromeos/components/kcer/helpers/key_helper.h"
+#include "chromeos/components/kcer/helpers/pkcs12_validator.h"
+#include "chromeos/components/kcer/kcer_histograms.h"
 #include "chromeos/components/kcer/kcer_token.h"
 #include "chromeos/components/kcer/kcer_utils.h"
 #include "chromeos/components/kcer/key_permissions.pb.h"
@@ -271,7 +277,8 @@ void ImportCertOnWorkerThread(
         /*did_modify=*/false, base::unexpected(Error::kKeyNotFound));
   }
 
-  if (int res = net::x509_util::ImportUserCert(cert); res != net::OK) {
+  if (int res = net::x509_util::ImportUserCert(cert, std::move(key_slot));
+      res != net::OK) {
     LOG(ERROR) << "Failed to import certificate, error: " << res;
     return std::move(callback).Run(
         /*did_modify=*/false,
@@ -293,8 +300,8 @@ bool ShouldIncludePublicKey(SECKEYPublicKey* public_key) {
     return false;
   }
 
-  base::StringPiece cka_id_str(reinterpret_cast<char*>(cka_id->data),
-                               cka_id->len);
+  std::string_view cka_id_str(reinterpret_cast<char*>(cka_id->data),
+                              cka_id->len);
 
   // Only keys generated/stored by extensions/Chrome should be visible to
   // extensions. Oemcrypto stores its key in the TPM, but that should not
@@ -1073,13 +1080,75 @@ void KcerTokenImplNss::ImportCertFromBytes(CertDer cert_der,
                      std::move(cert_der), std::move(wrapped_callback)));
 }
 
+//==============================================================================
+
 void KcerTokenImplNss::ImportPkcs12Cert(Pkcs12Blob pkcs12_blob,
                                         std::string password,
                                         bool hardware_backed,
+                                        bool mark_as_migrated,
                                         Kcer::StatusCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  // TODO(244408716): Implement.
+
+  if (UNLIKELY(state_ == State::kInitializationFailed)) {
+    return HandleInitializationFailed(std::move(callback));
+  }
+  if (is_blocked_) {
+    return task_queue_.push_back(base::BindOnce(
+        &KcerTokenImplNss::ImportPkcs12Cert, weak_factory_.GetWeakPtr(),
+        std::move(pkcs12_blob), std::move(password), hardware_backed,
+        mark_as_migrated, std::move(callback)));
+  }
+
+  RecordKcerPkcs12ImportUmaEvent(
+      KcerPkcs12ImportEvent::AttemptedPkcs12ChapsImport);
+
+  // Block task queue, attach queue unblocking and notification sending to the
+  // callback.
+  auto wrapped_callback = base::BindPostTask(
+      content::GetIOThreadTaskRunner({}),
+      base::BindOnce(&KcerTokenImplNss::OnCertsModified,
+                     weak_factory_.GetWeakPtr(),
+                     std::move(callback).Then(BlockQueueGetUnblocker())));
+
+  Pkcs12Reader pkcs12_reader;
+  KeyData key_data;
+  bssl::UniquePtr<STACK_OF(X509)> certs;
+  Pkcs12ReaderStatusCode get_key_and_cert_status =
+      pkcs12_reader.GetPkcs12KeyAndCerts(pkcs12_blob.value(), password,
+                                         key_data.key, certs);
+  if (get_key_and_cert_status != Pkcs12ReaderStatusCode::kSuccess) {
+    return std::move(wrapped_callback)
+        .Run(
+            /*did_modify=*/false, base::unexpected(ConvertPkcs12ParsingError(
+                                      get_key_and_cert_status)));
+  }
+
+  Pkcs12ReaderStatusCode enrich_key_data_result =
+      pkcs12_reader.EnrichKeyData(key_data);
+  if ((enrich_key_data_result != Pkcs12ReaderStatusCode::kSuccess) ||
+      key_data.cka_id_value.empty()) {
+    return std::move(wrapped_callback)
+        .Run(/*did_modify=*/false, base::unexpected(Error::kFailedToGetKeyId));
+  }
+
+  std::vector<CertData> certs_data;
+  Pkcs12ReaderStatusCode prepare_certs_status = ValidateAndPrepareCertData(
+      cert_cache_, pkcs12_reader, std::move(certs), key_data, certs_data);
+  if ((prepare_certs_status != Pkcs12ReaderStatusCode::kSuccess) ||
+      certs_data.empty()) {
+    return std::move(wrapped_callback)
+        .Run(/*did_modify=*/false, base::unexpected(Error::kInvalidPkcs12));
+  }
+
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&KcerTokenUtils::ImportPkcs12,
+                     base::Unretained(kcer_utils_.get()), std::move(key_data),
+                     std::move(certs_data), hardware_backed, mark_as_migrated,
+                     std::move(wrapped_callback)));
 }
+
+//==============================================================================
 
 void KcerTokenImplNss::ExportPkcs12Cert(scoped_refptr<const Cert> cert,
                                         Kcer::ExportPkcs12Callback callback) {
@@ -1524,7 +1593,9 @@ void KcerTokenImplNss::UpdateCacheWithCerts(
   // For every cert that was found, either take it from the previous cache or
   // create a kcer::Cert object for it.
   for (const net::ScopedCERTCertificate& new_cert : new_certs) {
-    scoped_refptr<const Cert> cert = cert_cache_.FindCert(new_cert);
+    const base::span<const uint8_t> cert_span(new_cert->derCert.data,
+                                              new_cert->derCert.len);
+    scoped_refptr<const Cert> cert = cert_cache_.FindCert(cert_span);
     if (!cert) {
       cert = BuildKcerCert(token_, new_cert);
     }
@@ -1534,7 +1605,7 @@ void KcerTokenImplNss::UpdateCacheWithCerts(
   // Rebuilding the cache implicitly removes all the certs that are not in the
   // permanent storage anymore. The certs themself will be fully destroyed
   // when the last ref-counting reference to them is destroyed.
-  cert_cache_ = CertCacheNss(new_cache);
+  cert_cache_ = CertCache(new_cache);
   state_ = State::kCacheUpToDate;
 }
 

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_POSIX_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_POSIX_H_
+#ifndef PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_POSIX_H_
+#define PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_POSIX_H_
 
 #include <algorithm>
 #include <atomic>
@@ -170,7 +170,7 @@ uintptr_t SystemAllocPagesInternal(uintptr_t hint,
                                    PageTag page_tag,
                                    int file_descriptor_for_shared_alloc) {
 #if BUILDFLAG(IS_APPLE)
-  // Use a custom tag to make it easier to distinguish Partition Alloc regions
+  // Use a custom tag to make it easier to distinguish PartitionAlloc regions
   // in vmmap(1). Tags between 240-255 are supported.
   int fd = file_descriptor_for_shared_alloc == -1
                ? VM_MAKE_TAG(static_cast<int>(page_tag))
@@ -431,4 +431,4 @@ void DiscardSystemPagesInternal(uintptr_t address, size_t length) {
 
 }  // namespace partition_alloc::internal
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_POSIX_H_
+#endif  // PARTITION_ALLOC_PAGE_ALLOCATOR_INTERNALS_POSIX_H_

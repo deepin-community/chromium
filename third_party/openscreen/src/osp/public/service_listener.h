@@ -31,9 +31,6 @@ class ServiceListener {
   // Holds a set of metrics, captured over a specific range of time, about the
   // behavior of a ServiceListener instance.
   struct Metrics {
-    Metrics();
-    ~Metrics();
-
     // The range of time over which the metrics were collected; end_timestamp >
     // start_timestamp
     timestamp_t start_timestamp = 0;
@@ -84,9 +81,6 @@ class ServiceListener {
   };
 
   struct Config {
-    Config();
-    ~Config();
-
     // A list of network interfaces that the listener should use.
     // By default, all enabled Ethernet and WiFi interfaces are used.
     std::vector<InterfaceInfo> network_interfaces;
@@ -131,8 +125,8 @@ class ServiceListener {
   // (kRunning|kSuspended).
   virtual bool SearchNow() = 0;
 
-  virtual void AddObserver(Observer* observer) = 0;
-  virtual void RemoveObserver(Observer* observer) = 0;
+  virtual void AddObserver(Observer& observer) = 0;
+  virtual void RemoveObserver(Observer& observer) = 0;
 
   // Returns the current state of the listener.
   State state() const { return state_; }

@@ -95,7 +95,7 @@ class PresubmitApi(recipe_api.RecipeApi):
                    infra_step=False)
 
     if self._runhooks:
-      with self.m.context(cwd=self.m.path['checkout']):
+      with self.m.context(cwd=self.m.path.checkout_dir):
         self.m.gclient.runhooks()
 
     return bot_update_step
@@ -141,7 +141,7 @@ class PresubmitApi(recipe_api.RecipeApi):
         '--verbose'
         ])
 
-    if self.m.cq.active and self.m.cq.run_mode == self.m.cq.DRY_RUN:
+    if self.m.cv.active and self.m.cv.run_mode == self.m.cv.DRY_RUN:
       presubmit_args.append('--dry_run')
 
     additionalArgs = ['--root', abs_root,'--commit']
@@ -274,10 +274,8 @@ def _createSummaryMarkdown(step_json):
   warning_count = len(step_json['warnings'])
   notif_count = len(step_json['notifications'])
   description = (
-    '#### There are %d error(s), %d warning(s),'
-    ' and %d notifications(s). Here are the errors:') % (
-      len(errors), warning_count, notif_count
-  )
+      f'#### There are {len(errors)} error(s), {warning_count} warning(s), '
+      f'and {notif_count} notifications(s).')
   error_messages = []
 
   for error in errors:

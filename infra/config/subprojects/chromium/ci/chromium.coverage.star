@@ -4,13 +4,13 @@
 
 load("//lib/branches.star", "branches")
 load("//lib/builder_config.star", "builder_config")
-load("//lib/builders.star", "cpu", "os", "reclient")
+load("//lib/builders.star", "cpu", "os", "reclient", "siso")
 load("//lib/ci.star", "ci")
 load("//lib/consoles.star", "consoles")
 load("//lib/gn_args.star", "gn_args")
 load("//lib/xcode.star", "xcode")
 load("//project.star", "settings")
-load("//lib/builder_health_indicators.star", "health_spec")
+load("//lib/builder_health_indicators.star", "blank_low_value_thresholds", "health_spec", "modified_default")
 
 # crbug/1408581 - The code coverage CI builders are expected to be triggered
 # off the same ref every 24 hours. This poller is configured with a schedule
@@ -38,6 +38,12 @@ ci.defaults.set(
     reclient_jobs = reclient.jobs.DEFAULT,
     service_account = ci.DEFAULT_SERVICE_ACCOUNT,
     shadow_service_account = ci.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_configs = ["builder"],
+    siso_enable_cloud_profiler = True,
+    siso_enable_cloud_trace = True,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = reclient.jobs.DEFAULT,
 )
 
 consoles.console_view(
@@ -112,7 +118,13 @@ coverage_builder(
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
-            apply_configs = ["android", "enable_wpr_tests"],
+            apply_configs = [
+                "android",
+                # This is necessary due to this builder running the
+                # telemetry_perf_unittests suite.
+                "chromium_with_telemetry_dependencies",
+                "enable_wpr_tests",
+            ],
         ),
         chromium_config = builder_config.chromium_config(
             config = "android",
@@ -199,6 +211,56 @@ coverage_builder(
             short_name = "ann",
         ),
     ],
+    coverage_test_types = ["overall", "unit"],
+    export_coverage_to_zoss = True,
+    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
+    use_clang_coverage = True,
+)
+
+coverage_builder(
+    name = "android-cronet-code-coverage-native",
+    description_html = "Builder for Cronet clang coverage",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                "android",
+                "use_clang_coverage",
+            ],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "android",
+            apply_configs = [
+                "cronet_builder",
+                "mb",
+            ],
+            build_config = builder_config.build_config.DEBUG,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.ANDROID,
+        ),
+        android_config = builder_config.android_config(config = "x64_builder"),
+        build_gs_bucket = "chromium-fyi-archive",
+    ),
+    # No symbols to prevent linker file too large error on
+    # android_webview_unittests target.
+    gn_args = gn_args.config(
+        configs = [
+            "android_builder_without_codecs",
+            "cronet_android",
+            "debug_static_builder",
+            "reclient",
+            "x64",
+            "use_clang_coverage",
+        ],
+    ),
+    os = os.LINUX_DEFAULT,
+    console_view_entry = [
+        consoles.console_view_entry(
+            category = "cronet",
+            short_name = "x64",
+        ),
+    ],
+    contact_team_email = "woa-engprod@google.com",
     coverage_test_types = ["overall", "unit"],
     export_coverage_to_zoss = True,
     reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
@@ -452,7 +514,12 @@ coverage_builder(
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
-            apply_configs = ["use_clang_coverage"],
+            apply_configs = [
+                # This is necessary due to this builder running the
+                # telemetry_perf_unittests suite.
+                "chromium_with_telemetry_dependencies",
+                "use_clang_coverage",
+            ],
         ),
         chromium_config = builder_config.chromium_config(
             config = "chromium",
@@ -523,6 +590,9 @@ coverage_builder(
         ),
     ],
     coverage_test_types = ["overall", "unit"],
+    health_spec = modified_default({
+        "Low Value": blank_low_value_thresholds,
+    }),
     reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
     use_clang_coverage = True,
 )

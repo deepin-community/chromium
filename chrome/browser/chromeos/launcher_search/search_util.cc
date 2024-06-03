@@ -4,12 +4,14 @@
 
 #include "chrome/browser/chromeos/launcher_search/search_util.h"
 
+#include <string_view>
+
 #include "base/functional/callback_helpers.h"
-#include "base/strings/string_piece.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
+#include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/autocomplete_provider_client.h"
 #include "components/omnibox/browser/favicon_cache.h"
 #include "components/omnibox/browser/suggestion_answer.h"
@@ -188,15 +190,35 @@ SearchResultPtr CreateBaseResult(const AutocompleteMatch& match,
 }  // namespace
 
 int ProviderTypes() {
-  // We use all the default providers except for the document provider, which
-  // suggests Drive files on enterprise devices. This is disabled to avoid
-  // duplication with search results from DriveFS.
+  // We use all the default providers except for the document provider,
+  // which suggests Drive files on enterprise devices. This is disabled to
+  // avoid duplication with search results from DriveFS.
   int providers = AutocompleteClassifier::DefaultOmniboxProviders() &
                   ~AutocompleteProvider::TYPE_DOCUMENT;
 
-  // The open tab provider is not included in the default providers, so add it
-  // in manually.
+  // The open tab provider is not included in the default providers, so add
+  // it in manually.
   providers |= AutocompleteProvider::TYPE_OPEN_TAB;
+
+  return providers;
+}
+
+int ProviderTypesPicker(bool bookmarks, bool history, bool open_tabs) {
+  int providers = 0;
+
+  if (bookmarks) {
+    providers |= AutocompleteProvider::TYPE_BOOKMARK;
+  }
+
+  if (history) {
+    providers |= AutocompleteProvider::TYPE_HISTORY_QUICK |
+                 AutocompleteProvider::TYPE_HISTORY_URL |
+                 AutocompleteProvider::TYPE_HISTORY_FUZZY;
+  }
+
+  if (open_tabs) {
+    providers |= AutocompleteProvider::TYPE_OPEN_TAB;
+  }
 
   return providers;
 }
@@ -217,7 +239,7 @@ ui::PageTransition PageTransitionToUiPageTransition(
 
 SearchResultPtr CreateAnswerResult(const AutocompleteMatch& match,
                                    AutocompleteController* controller,
-                                   base::StringPiece16 query,
+                                   std::u16string_view query,
                                    const AutocompleteInput& input) {
   SearchResultPtr result = CreateBaseResult(match, controller, input);
 

@@ -274,23 +274,8 @@ void AppHomePageHandler::LaunchAppInternal(
 void AppHomePageHandler::SetUserDisplayMode(
     const std::string& app_id,
     web_app::mojom::UserDisplayMode user_display_mode) {
-  web_app_provider_->scheduler().ScheduleCallback(
-      "AppHomePageHandler::SetWebAppDisplayMode",
-      web_app::AppLockDescription(app_id),
-      base::BindOnce(
-          [](const webapps::AppId& app_id,
-             web_app::mojom::UserDisplayMode user_display_mode,
-             web_app::AppLock& lock, base::Value::Dict& debug_value) {
-            if (lock.registrar().IsLocallyInstalled(app_id)) {
-              debug_value.Set("user_display_mode",
-                              base::ToString(user_display_mode));
-              lock.sync_bridge().SetAppUserDisplayMode(app_id,
-                                                       user_display_mode,
-                                                       /*is_user_action=*/true);
-            }
-          },
-          app_id, user_display_mode),
-      /*on_complete=*/base::DoNothing());
+  web_app_provider_->scheduler().SetUserDisplayMode(app_id, user_display_mode,
+                                                    base::DoNothing());
 }
 
 app_home::mojom::AppInfoPtr AppHomePageHandler::GetApp(
@@ -391,8 +376,7 @@ app_home::mojom::AppInfoPtr AppHomePageHandler::CreateAppInfoPtrFromExtension(
   app_info->start_url = start_url;
 
   bool deprecated_app = false;
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   auto* context = extension_system_->extension_service()->GetBrowserContext();
   deprecated_app =
       extensions::IsExtensionUnsupportedDeprecatedApp(context, extension->id());
@@ -455,8 +439,7 @@ void AppHomePageHandler::FillExtensionInfoList(
       continue;
     }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
     auto* context = extension_system_->extension_service()->GetBrowserContext();
     const bool is_deprecated_app =
         extensions::IsExtensionUnsupportedDeprecatedApp(context,

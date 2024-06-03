@@ -94,6 +94,18 @@ void NetworkServiceDevToolsObserver::OnRawResponse(
                    http_status_code, cookie_partition_key);
 }
 
+void NetworkServiceDevToolsObserver::OnEarlyHintsResponse(
+    const std::string& devtools_request_id,
+    std::vector<network::mojom::HttpRawHeaderPairPtr> headers) {
+  auto* host = GetDevToolsAgentHost();
+  if (!host) {
+    return;
+  }
+  DispatchToAgents(host,
+                   &protocol::NetworkHandler::OnResponseReceivedEarlyHints,
+                   devtools_request_id, headers);
+}
+
 void NetworkServiceDevToolsObserver::OnTrustTokenOperationDone(
     const std::string& devtools_request_id,
     network::mojom::TrustTokenOperationResultPtr result) {
@@ -257,7 +269,7 @@ void NetworkServiceDevToolsObserver::OnCorsError(
   devtools_instrumentation::ReportBrowserInitiatedIssue(rfhi, issue.get());
 }
 
-void NetworkServiceDevToolsObserver::OnCorbError(
+void NetworkServiceDevToolsObserver::OnOrbError(
     const std::optional<std::string>& devtools_request_id,
     const GURL& url) {
   RenderFrameHostImpl* rfhi = GetRenderFrameHostImplFrom(frame_tree_node_id_);

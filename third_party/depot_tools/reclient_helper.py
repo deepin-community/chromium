@@ -170,7 +170,8 @@ def datetime_now():
 # Deletes the tree at dir if it exists.
 def rmtree_if_exists(rm_dir):
     if os.path.exists(rm_dir) and os.path.isdir(rm_dir):
-        shutil.rmtree(rm_dir)
+        shutil.rmtree(rm_dir, ignore_errors=True)
+
 
 def set_reproxy_path_flags(out_dir, make_dirs=True):
     """Helper to setup the logs and cache directories for reclient.
@@ -273,13 +274,44 @@ def set_mac_defaults():
     os.environ.setdefault("RBE_deps_cache_max_mb", "1024")
 
 
+def is_win_ctop():
+    if not sys.platform.startswith("win"):
+        return False
+    import winreg
+    try:
+        bios = winreg.OpenKeyEx(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\\GWindows")
+        model = winreg.QueryValueEx(bios, "Model")
+        val = len(model) > 0 and model[0] == 'Google Compute Engine'
+        if bios:
+            winreg.CloseKey(bios)
+        return val
+    except OSError:
+        return False
+
+
 def set_win_defaults():
     # Enable the deps cache on windows.  This makes a notable improvement
     # in performance at the cost of a ~200MB cache file.
     os.environ.setdefault("RBE_enable_deps_cache", "true")
-    # Reduce local resource fraction used to do local compile actions on
-    # windows, to try and prevent machine saturation.
-    os.environ.setdefault("RBE_local_resource_fraction", "0.05")
+    if is_win_ctop():
+        # Reduce local resource fraction used to do local compile actions on
+        # windows, to try and prevent machine saturation.
+        os.environ.setdefault("RBE_local_resource_fraction", "0.05")
+
+
+def workspace_is_cog():
+    return sys.platform == "linux" and os.path.realpath(
+        os.getcwd()).startswith("/google/cog")
+
+
+# pylint: disable=line-too-long
+def reclient_setup_docs_url():
+    if sys.platform == "darwin":
+        return "https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md#use-reclient"
+    if sys.platform.startswith("win"):
+        return "https://chromium.googlesource.com/chromium/src/+/main/docs/windows_build_instructions.md#use-reclient"
+    return "https://chromium.googlesource.com/chromium/src/+/main/docs/linux/build_instructions.md#use-reclient"
 
 
 @contextlib.contextmanager
@@ -318,6 +350,10 @@ def build_context(argv, tool):
 
     remote_disabled = os.environ.get('RBE_remote_disabled')
     if remote_disabled not in ('1', 't', 'T', 'true', 'TRUE', 'True'):
+        # If we are building inside a Cog workspace, racing is likely not a
+        # performance improvement, so we disable it by default.
+        if workspace_is_cog():
+            os.environ.setdefault("RBE_exec_strategy", "remote_local_fallback")
         set_racing_defaults()
         if sys.platform == "darwin":
             set_mac_defaults()
@@ -333,6 +369,11 @@ def build_context(argv, tool):
         elapsed = time.time() - start
         print('%1.3f s to start reproxy' % elapsed)
     if reproxy_ret_code != 0:
+        print(f'''Failed to start reproxy!
+See above error message for details.
+Ensure you have completed the reproxy setup instructions:
+{reclient_setup_docs_url()}''',
+              file=sys.stderr)
         yield reproxy_ret_code
         return
     try:

@@ -19,9 +19,9 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/cursor/cursor.h"
@@ -53,6 +53,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/selection_bound.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/touch_selection/touch_selection_metrics.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -96,7 +97,6 @@
 #endif
 
 #if BUILDFLAG(IS_MAC)
-#include "ui/base/cocoa/defaults_utils.h"
 #include "ui/base/cocoa/secure_password_input.h"
 #endif
 
@@ -204,21 +204,7 @@ const float kOpaque = 1.0;
 
 // static
 base::TimeDelta Textfield::GetCaretBlinkInterval() {
-#if BUILDFLAG(IS_WIN)
-  static const size_t system_value = ::GetCaretBlinkTime();
-  if (system_value != 0) {
-    return (system_value == INFINITE) ? base::TimeDelta()
-                                      : base::Milliseconds(system_value);
-  }
-#elif BUILDFLAG(IS_MAC)
-  // If there's insertion point flash rate info in NSUserDefaults, use the
-  // blink period derived from that.
-  std::optional<base::TimeDelta> system_value(
-      ui::TextInsertionCaretBlinkPeriodFromDefaults());
-  if (system_value)
-    return *system_value;
-#endif
-  return base::Milliseconds(500);
+  return ui::NativeTheme::GetInstanceForNativeUi()->GetCaretBlinkInterval();
 }
 
 // static
@@ -236,7 +222,7 @@ Textfield::Textfield()
   GetViewAccessibility().set_needs_ax_tree_manager(true);
   auto cursor_view = std::make_unique<View>();
   cursor_view->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
-  cursor_view->GetViewAccessibility().OverrideIsIgnored(true);
+  cursor_view->GetViewAccessibility().SetIsIgnored(true);
   cursor_view_ = AddChildView(std::move(cursor_view));
   GetRenderText()->SetFontList(GetDefaultFontList());
   UpdateDefaultBorder();
@@ -282,7 +268,7 @@ Textfield::Textfield()
   // the cursor, inside the text field. These should always be ignored by
   // accessibility since a plain text field should always be a leaf node in the
   // accessibility trees of all the platforms we support.
-  GetViewAccessibility().OverrideIsLeaf(true);
+  GetViewAccessibility().SetIsLeaf(true);
 }
 
 Textfield::~Textfield() {
@@ -437,6 +423,14 @@ void Textfield::SetBackgroundColor(SkColor color) {
   background_color_ = color;
   if (GetWidget())
     UpdateBackgroundColor();
+}
+
+bool Textfield::GetBackgroundEnabled() const {
+  return is_background_enabled_;
+}
+
+void Textfield::SetBackgroundEnabled(bool enabled) {
+  is_background_enabled_ = enabled;
 }
 
 SkColor Textfield::GetSelectionTextColor() const {
@@ -1069,7 +1063,7 @@ void Textfield::GetAccessibleNodeData(ui::AXNodeData* node_data) {
       node_data->GetString16Attribute(ax::mojom::StringAttribute::kValue);
   // If the accessible value changed since the last time we computed the text
   // offsets, we need to recompute them.
-  if (::features::IsUiaProviderEnabled() &&
+  if (::ui::AXPlatform::GetInstance().IsUiaProviderEnabled() &&
       (ax_value_used_to_compute_offsets_ != ax_value ||
        needs_ax_text_offsets_update_)) {
     GetViewAccessibility().ClearTextOffsets();
@@ -1087,12 +1081,12 @@ void Textfield::RefreshAccessibleTextOffsets() {
     return;
   }
 
-  GetViewAccessibility().OverrideCharacterOffsets(
+  GetViewAccessibility().SetCharacterOffsets(
       ComputeTextOffsets(GetRenderText()));
 
   WordBoundaries boundaries = ComputeWordBoundaries(GetText());
-  GetViewAccessibility().OverrideWordStarts(boundaries.starts);
-  GetViewAccessibility().OverrideWordEnds(boundaries.ends);
+  GetViewAccessibility().SetWordStarts(boundaries.starts);
+  GetViewAccessibility().SetWordEnds(boundaries.ends);
 }
 #endif  // BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
 
@@ -1239,7 +1233,7 @@ void Textfield::WriteDragDataForView(View* sender,
   Label label(selected_text, {GetFontList()});
   label.SetBackgroundColor(GetBackgroundColor());
   label.SetSubpixelRenderingEnabled(false);
-  gfx::Size size(label.GetPreferredSize());
+  gfx::Size size(label.GetPreferredSize({}));
   gfx::NativeView native_view = GetWidget()->GetNativeView();
   display::Display display =
       display::Screen::GetScreen()->GetDisplayNearestView(native_view);
@@ -2603,6 +2597,16 @@ void Textfield::UpdateSelectionClipboard() {
 }
 
 void Textfield::UpdateBackgroundColor() {
+  if (!is_background_enabled_) {
+    if (GetBackground()) {
+      SetBackground(nullptr);
+      // If the parent for this textfield creates a non-opaque background they
+      // are responsible for disabling subpixel rendering.
+      GetRenderText()->set_subpixel_rendering_suppressed(false);
+    }
+    return;
+  }
+
   const SkColor color = GetBackgroundColor();
   SetBackground(CreateBackgroundFromPainter(
       Painter::CreateSolidRoundRectPainter(color, GetCornerRadius())));
@@ -2984,8 +2988,7 @@ void Textfield::DropDraggedText(
 
   gfx::SelectionModel drop_destination_model =
       render_text->FindCursorPosition(event.location());
-  std::u16string new_text;
-  event.data().GetString(&new_text);
+  std::u16string new_text = event.data().GetString().value_or(std::u16string());
 
   // Delete the current selection for a drag and drop within this view.
   const bool move = initiating_drag_ && !event.IsControlDown() &&
@@ -3187,6 +3190,7 @@ ADD_PROPERTY_METADATA(SkColor,
                       SelectionTextColor,
                       ui::metadata::SkColorConverter)
 ADD_PROPERTY_METADATA(SkColor, BackgroundColor, ui::metadata::SkColorConverter)
+ADD_PROPERTY_METADATA(bool, BackgroundEnabled)
 ADD_PROPERTY_METADATA(SkColor,
                       SelectionBackgroundColor,
                       ui::metadata::SkColorConverter)

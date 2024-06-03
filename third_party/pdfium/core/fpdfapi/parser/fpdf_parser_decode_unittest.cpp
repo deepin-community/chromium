@@ -285,8 +285,9 @@ TEST(ParserDecodeTest, A85Decode) {
     std::unique_ptr<uint8_t, FxFreeDeleter> result;
     uint32_t result_size = 0;
     EXPECT_EQ(test_case.processed_size,
-              A85Decode({test_case.input, test_case.input_size}, &result,
-                        &result_size))
+              A85Decode(UNSAFE_BUFFERS(pdfium::make_span(test_case.input,
+                                                         test_case.input_size)),
+                        &result, &result_size))
         << "for case " << test_case.input;
     ASSERT_EQ(test_case.expected_size, result_size);
     const uint8_t* result_ptr = result.get();
@@ -320,8 +321,9 @@ TEST(ParserDecodeTest, HexDecode) {
     std::unique_ptr<uint8_t, FxFreeDeleter> result;
     uint32_t result_size = 0;
     EXPECT_EQ(test_case.processed_size,
-              HexDecode({test_case.input, test_case.input_size}, &result,
-                        &result_size))
+              HexDecode(UNSAFE_BUFFERS(pdfium::make_span(test_case.input,
+                                                         test_case.input_size)),
+                        &result, &result_size))
         << "for case " << test_case.input;
     ASSERT_EQ(test_case.expected_size, result_size);
     const uint8_t* result_ptr = result.get();
@@ -429,7 +431,7 @@ TEST(ParserDecodeTest, RoundTripText) {
   for (int pdf_code_point = 0; pdf_code_point < 256; ++pdf_code_point) {
     ByteString original(static_cast<char>(pdf_code_point));
     ByteString reencoded =
-        PDF_EncodeText(PDF_DecodeText(original.raw_span()).AsStringView());
+        PDF_EncodeText(PDF_DecodeText(original.unsigned_span()).AsStringView());
 
     switch (pdf_code_point) {
       case 0x7F:

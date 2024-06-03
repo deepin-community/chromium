@@ -54,7 +54,6 @@ namespace network {
 namespace mojom {
 class NetworkContext;
 }
-class PendingSharedURLLoaderFactory;
 class SharedURLLoaderFactory;
 }  // namespace network
 
@@ -95,6 +94,10 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   static base::FilePath GetCookieFilePathForTesting();
 
   static base::FilePath GetBaseFilename();
+
+  // Helper function to determine if a user meets the requirements to be shown
+  // a ESB promo.
+  static bool IsUserEligibleForESBPromo(Profile* profile);
 
   // Called on the UI thread to initialize the service.
   void Initialize();
@@ -141,6 +144,11 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   // Flushes above two interfaces to avoid races in tests.
   void FlushNetworkInterfaceForTesting(
       content::BrowserContext* browser_context);
+
+  void SetURLLoaderFactoryForTesting(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+    url_loader_factory_for_testing_ = url_loader_factory;
+  }
 
   const scoped_refptr<SafeBrowsingUIManager>& ui_manager() const;
 
@@ -192,6 +200,14 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   // Sends download report to backend. Returns true if the report is sent
   // successfully.
   virtual bool SendDownloadReport(
+      download::DownloadItem* download,
+      ClientSafeBrowsingReportRequest::ReportType report_type,
+      bool did_proceed,
+      std::optional<bool> show_download_in_folder);
+
+  // Persists download report on disk and sends it to backend on next startup.
+  // Returns true if the report is persisted successfully.
+  virtual bool PersistDownloadReportAndSendOnNextStartup(
       download::DownloadItem* download,
       ClientSafeBrowsingReportRequest::ReportType report_type,
       bool did_proceed,
@@ -259,20 +275,6 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   friend class SendNotificationsAcceptedTest;
 
   void SetDatabaseManagerForTest(SafeBrowsingDatabaseManager* database_manager);
-
-  // Called to initialize objects that are used on the io_thread. This may be
-  // called multiple times during the life of the SafeBrowsingService.
-  // |sb_url_loader_factory| is a SharedURLLoaderFactory attached to the Safe
-  // Browsing NetworkContexts, and |browser_url_loader_factory| is attached to
-  // the global browser process.
-  void StartOnIOThread(std::unique_ptr<network::PendingSharedURLLoaderFactory>
-                           browser_url_loader_factory);
-
-  // Called to stop or shutdown operations on the io_thread. This may be called
-  // multiple times to stop during the life of the SafeBrowsingService. If
-  // shutdown is true, then the operations on the io thread are shutdown
-  // permanently and cannot be restarted.
-  void StopOnIOThread(bool shutdown);
 
   // Start up SafeBrowsing objects. This can be called at browser start, or when
   // the user checks the "Enable SafeBrowsing" option in the Advanced options
@@ -364,6 +366,9 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   std::unique_ptr<TriggerManager> trigger_manager_;
 
   bool url_is_allowlisted_for_testing_ = false;
+
+  scoped_refptr<network::SharedURLLoaderFactory>
+      url_loader_factory_for_testing_;
 };
 
 SafeBrowsingServiceFactory* GetSafeBrowsingServiceFactory();

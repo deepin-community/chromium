@@ -21,7 +21,6 @@
 #include "chrome/browser/ash/ownership/owner_key_loader.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
 #include "chrome/browser/ash/ownership/ownership_histograms.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_provider.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/browser/net/fake_nss_service.h"
@@ -29,6 +28,7 @@
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "crypto/nss_key_util.h"
 #include "crypto/signature_verifier.h"
@@ -336,6 +336,34 @@ TEST_F(OwnerSettingsServiceAshTest, AccountPrefUsersBothLists) {
             device_policy_->payload().user_allowlist().user_allowlist(0));
   EXPECT_EQ(0,
             device_policy_->payload().user_whitelist().user_whitelist().size());
+}
+
+TEST_F(OwnerSettingsServiceAshTest, DeviceExtendedAutoUpdateEnabledSetValue) {
+  device_policy_->payload().clear_deviceextendedautoupdateenabled();
+  ASSERT_FALSE(device_policy_->payload().has_deviceextendedautoupdateenabled());
+
+  OwnerSettingsServiceAsh::UpdateDeviceSettings(
+      kDeviceExtendedAutoUpdateEnabled, base::Value(true),
+      device_policy_->payload());
+
+  EXPECT_TRUE(
+      device_policy_->payload().deviceextendedautoupdateenabled().value());
+}
+
+TEST_F(OwnerSettingsServiceAshTest,
+       DeviceExtendedAutoUpdateEnabledSetValueWithPreviouslySet) {
+  device_policy_->payload()
+      .mutable_deviceextendedautoupdateenabled()
+      ->set_value(false);
+  ASSERT_FALSE(
+      device_policy_->payload().deviceextendedautoupdateenabled().value());
+
+  OwnerSettingsServiceAsh::UpdateDeviceSettings(
+      kDeviceExtendedAutoUpdateEnabled, base::Value(true),
+      device_policy_->payload());
+
+  EXPECT_TRUE(
+      device_policy_->payload().deviceextendedautoupdateenabled().value());
 }
 
 // Test that OwnerSettingsServiceAsh can successfully sign a policy and that the

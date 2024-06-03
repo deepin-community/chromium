@@ -13,6 +13,7 @@
 #include "ash/app_list/app_list_model_provider.h"
 #include "ash/app_list/app_list_presenter_impl.h"
 #include "ash/app_list/app_list_view_delegate.h"
+#include "ash/app_list/apps_collections_controller.h"
 #include "ash/app_list/model/search/search_box_model.h"
 #include "ash/app_list/quick_app_access_model.h"
 #include "ash/app_list/views/app_list_item_view.h"
@@ -44,7 +45,6 @@
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
-#include "ash/scoped_animation_disabler.h"
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/home_button.h"
@@ -81,6 +81,7 @@
 #include "ui/display/screen.h"
 #include "ui/display/util/display_util.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/wm/core/scoped_animation_disabler.h"
 #include "ui/wm/core/window_animations.h"
 
 namespace ash {
@@ -278,7 +279,9 @@ AppListControllerImpl::AppListControllerImpl()
     : model_provider_(std::make_unique<AppListModelProvider>()),
       fullscreen_presenter_(std::make_unique<AppListPresenterImpl>(this)),
       bubble_presenter_(std::make_unique<AppListBubblePresenter>(this)),
-      badge_controller_(std::make_unique<AppListBadgeController>()) {
+      badge_controller_(std::make_unique<AppListBadgeController>()),
+      apps_collections_controller_(
+          std::make_unique<AppsCollectionsController>()) {
   SessionControllerImpl* session_controller =
       Shell::Get()->session_controller();
   session_controller->AddObserver(this);
@@ -341,6 +344,7 @@ void AppListControllerImpl::RegisterProfilePrefs(PrefRegistrySimple* registry) {
 
 void AppListControllerImpl::SetClient(AppListClient* client) {
   client_ = client;
+  apps_collections_controller_->SetClient(client);
 }
 
 AppListClient* AppListControllerImpl::GetClient() {
@@ -561,6 +565,9 @@ void AppListControllerImpl::UpdateAppListWithNewTemporarySortOrder(
       new_order, is_tablet_mode && animate,
       is_tablet_mode ? std::move(update_position_closure)
                      : base::NullCallback());
+
+  // Notify the AppsCollectionsController that there was a reorder.
+  apps_collections_controller_->SetAppsReordered();
 }
 
 ShelfAction AppListControllerImpl::ToggleAppList(
@@ -631,7 +638,7 @@ bool AppListControllerImpl::GoHome(int64_t display_id) {
   if (split_view_active) {
     foreground_windows = {split_view_controller->primary_window(),
                           split_view_controller->secondary_window()};
-    base::EraseIf(foreground_windows,
+    std::erase_if(foreground_windows,
                   [](aura::Window* window) { return !window; });
   } else if (!windows.empty() && !WindowState::Get(windows[0])->IsMinimized()) {
     foreground_windows.push_back(windows[0]);
@@ -676,10 +683,11 @@ bool AppListControllerImpl::GoHome(int64_t display_id) {
     //
     // TODO(https://crbug.com/1019531): This can be removed once transitions
     // between in-app state and home do not cause work area updates.
-    std::vector<std::unique_ptr<ScopedAnimationDisabler>> animation_disablers;
+    std::vector<std::unique_ptr<wm::ScopedAnimationDisabler>>
+        animation_disablers;
     for (aura::Window* window : foreground_windows) {
       animation_disablers.push_back(
-          std::make_unique<ScopedAnimationDisabler>(window));
+          std::make_unique<wm::ScopedAnimationDisabler>(window));
     }
 
     OnHomeLauncherPositionChanged(/*percent_shown=*/100, display_id);
@@ -1231,6 +1239,7 @@ void AppListControllerImpl::OpenSearchResult(const std::string& result_id,
       case AppListLaunchedFrom::kLaunchedFromShelf:
       case AppListLaunchedFrom::kLaunchedFromContinueTask:
       case AppListLaunchedFrom::kLaunchedFromQuickAppAccess:
+      case AppListLaunchedFrom::kLaunchedFromAppsCollections:
         break;
       case AppListLaunchedFrom::DEPRECATED_kLaunchedFromSuggestionChip:
         NOTREACHED();
@@ -1263,6 +1272,7 @@ void AppListControllerImpl::OpenSearchResult(const std::string& result_id,
     case AppListLaunchedFrom::kLaunchedFromShelf:
     case AppListLaunchedFrom::DEPRECATED_kLaunchedFromSuggestionChip:
     case AppListLaunchedFrom::kLaunchedFromQuickAppAccess:
+    case AppListLaunchedFrom::kLaunchedFromAppsCollections:
       NOTREACHED();
       break;
   }
@@ -1325,7 +1335,10 @@ void AppListControllerImpl::ActivateItem(const std::string& id,
                                     is_tablet_mode, last_show_timestamp_);
       break;
     case AppListLaunchedFrom::kLaunchedFromQuickAppAccess:
-      // Metrics for quick app launch already recorded at RecordApplaunched().
+    // Metrics for quick app launch already recorded at RecordApplaunched().
+    case AppListLaunchedFrom::kLaunchedFromAppsCollections:
+      // Metrics for apps collections launch recorded by the
+      // AppListViewDelegate.
       break;
     case AppListLaunchedFrom::kLaunchedFromContinueTask:
     case AppListLaunchedFrom::kLaunchedFromSearchBox:

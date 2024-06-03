@@ -427,14 +427,28 @@ class ViewTransitionStyleTracker::ImageWrapperPseudoElement
   }
 };
 
-ViewTransitionStyleTracker::ViewTransitionStyleTracker(Document& document)
+ViewTransitionStyleTracker::ViewTransitionStyleTracker(
+    Document& document,
+    const viz::TransitionId& transition_id)
     : document_(document),
-      device_pixel_ratio_(DevicePixelRatioFromDocument(document)) {}
+      transition_id_(transition_id),
+      device_pixel_ratio_(DevicePixelRatioFromDocument(document)) {
+  CHECK(!transition_id.is_empty());
+}
 
 ViewTransitionStyleTracker::ViewTransitionStyleTracker(
     Document& document,
     ViewTransitionState transition_state)
-    : document_(document), state_(State::kCaptured), deserialized_(true) {
+    : document_(document),
+      state_(State::kCaptured),
+      transition_id_(transition_state.transition_id),
+      deserialized_(true) {
+  CHECK(!transition_id_.is_empty());
+  auto* supplement = ViewTransitionSupplement::FromIfExists(document);
+  CHECK(supplement);
+  supplement->InitializeResourceIdSequence(
+      transition_state.next_element_resource_id);
+
   device_pixel_ratio_ = transition_state.device_pixel_ratio;
   captured_name_count_ = static_cast<int>(transition_state.elements.size());
   snapshot_root_layout_size_at_capture_ =
@@ -700,7 +714,7 @@ bool ViewTransitionStyleTracker::FlattenAndVerifyElements(
   return true;
 }
 
-bool ViewTransitionStyleTracker::Capture() {
+bool ViewTransitionStyleTracker::Capture(bool snap_browser_controls) {
   DCHECK_EQ(state_, State::kIdle);
 
   // Flatten `pending_transition_element_names_` into a vector of names and
@@ -711,6 +725,16 @@ bool ViewTransitionStyleTracker::Capture() {
   bool success = FlattenAndVerifyElements(elements, transition_names);
   if (!success)
     return false;
+
+  // In a cross-document transition, top controls are animated to shown when
+  // the navigation starts. When capturing the outgoing snapshots, the
+  // animation may still be in progress. Ensure controls are snapped to fully
+  // showing before capturing. This ensures the root clip is at the correct
+  // size and that fixed elements are positioned by layout in the same way they
+  // will be on the incoming view.
+  if (snap_browser_controls) {
+    SnapBrowserControlsToFullyShown();
+  }
 
   // Now we know that we can start a transition. Update the state and populate
   // `element_data_map_`.
@@ -733,7 +757,7 @@ bool ViewTransitionStyleTracker::Capture() {
             .insert(element, viz::ViewTransitionElementResourceId())
             .stored_value->value;
     if (!snapshot_id.IsValid()) {
-      snapshot_id = viz::ViewTransitionElementResourceId::Generate();
+      snapshot_id = GenerateResourceId();
       capture_resource_ids_.push_back(snapshot_id);
     }
 
@@ -867,8 +891,9 @@ bool ViewTransitionStyleTracker::Start() {
         element_snapshot_ids
             .insert(element, viz::ViewTransitionElementResourceId())
             .stored_value->value;
-    if (!snapshot_id.IsValid())
-      snapshot_id = viz::ViewTransitionElementResourceId::Generate();
+    if (!snapshot_id.IsValid()) {
+      snapshot_id = GenerateResourceId();
+    }
 
     auto& element_data = element_data_map_.find(name)->value;
     DCHECK(!element_data->target_element);
@@ -1148,7 +1173,7 @@ bool ViewTransitionStyleTracker::RunPostPrePaintSteps() {
           CSSProperty::Get(id).CSSValueFromComputedStyle(
               layout_object->StyleRef(),
               /*layout_object=*/nullptr,
-              /*allow_visited_style=*/false);
+              /*allow_visited_style=*/false, CSSValuePhase::kComputedValue);
 
       if (!css_value) {
         continue;
@@ -1495,14 +1520,15 @@ gfx::Outsets GetFixedToSnapshotViewportOutsets(Document& document) {
   int left = 0;
 
   if (document.GetFrame()->IsOutermostMainFrame()) {
-    // TODO(bokan): This assumes any shown ratio implies controls are shown. We
-    // many need to do some synchronization to make this work seamlessly with
-    // URL bar animations.
     BrowserControls& controls = document.GetPage()->GetBrowserControls();
-    if (controls.TopShownRatio())
+    // If Blink's size is currently smaller to accommodate the browser controls,
+    // outset the snapshot root to include the area occupied by browser
+    // controls. Note: for cross-document transitions, this relies on the
+    // browser resizing Blink before requesting the outgoing document snapshot.
+    if (controls.ShrinkViewport()) {
       top += controls.TopHeight() - controls.TopMinHeight();
-    if (controls.BottomShownRatio())
       bottom += controls.BottomHeight() - controls.BottomMinHeight();
+    }
 
     bottom += document.GetFrame()
                   ->GetWidgetForLocalRoot()
@@ -1623,6 +1649,16 @@ ViewTransitionState ViewTransitionStyleTracker::GetViewTransitionState() const {
       element.class_list.push_back(class_name.Utf8());
     }
   }
+
+  // Preserve the transition id for the new document.
+  transition_state.transition_id = transition_id_;
+
+  // To ensure the any new resources generated by the new document don't
+  // collide in id with this document's resources, pass the next sequence id so
+  // the new document can continue the sequence.
+  transition_state.next_element_resource_id = GenerateResourceId().local_id();
+
+  state_extracted_ = true;
 
   // TODO(khushalsagar): Need to send offsets to retain positioning of
   // ::view-transition.
@@ -1989,6 +2025,60 @@ const char* ViewTransitionStyleTracker::StateToString(State state) {
   }
   NOTREACHED();
   return "???";
+}
+
+viz::ViewTransitionElementResourceId
+ViewTransitionStyleTracker::GenerateResourceId() const {
+  // If we've already send the state to the incoming document, generating a new
+  // ID now would collide with IDs generated by that document.
+  CHECK(!state_extracted_);
+  auto* supplement = ViewTransitionSupplement::FromIfExists(*document_);
+  CHECK(supplement);
+  return supplement->GenerateResourceId(transition_id_);
+}
+
+void ViewTransitionStyleTracker::SnapBrowserControlsToFullyShown() {
+  CHECK(document_->GetFrame()->IsOutermostMainFrame());
+  BrowserControls& controls = document_->GetPage()->GetBrowserControls();
+  ScrollableArea& root_scroller = *document_->View()->GetScrollableArea();
+
+  // If (and only if) the page is scrolled to a non-0 offset, the top controls
+  // animation keeps content from moving by producing a "counter-scroll" as the
+  // controls animate. Preemptively perform this counter-scroll now, so that it
+  // is included when snapshot transforms are computed.
+  if (root_scroller.ScrollPosition().y()) {
+    float counter_scroll = controls.TopHeight() - controls.ContentOffset();
+
+    // Without FractionalScrollOffsets, the compositor commits only integer
+    // values of scroll delta, but it always sends exact browser controls
+    // delta. This means our computed counter-scroll does not include the
+    // fractional part remaining in the compositor delta. The full counter
+    // scroll will be an integer, since the compositor rounds the sent
+    // offset, we round the counter-scroll as well which snaps it in the
+    // opposing direction the compositor snapped to account for the missing
+    // (or additional) pixel in the compositor's committed delta.
+    if (!RuntimeEnabledFeatures::FractionalScrollOffsetsEnabled()) {
+      counter_scroll = base::ClampRound(counter_scroll);
+    }
+
+    // Fully show the controls also ensures scroll bounds can accommodate the
+    // counter-scroll so do this before scrolling.
+    controls.SetShownRatio(1, 1);
+    root_scroller.ScrollBy(ScrollOffset(0, counter_scroll),
+                           mojom::blink::ScrollType::kCompositor);
+
+    // The next commit should overwrite any scrolling that occurred on the
+    // compositor thread since it last committed values. Since the compositor
+    // may still be animating the browser controls, and we add the full
+    // controls distance here, any deltas that have occurred since this
+    // BeginMainFrame would be double-applied. More generally, the snapshot
+    // transform matrices will be computed in this Blink frame; any deltas
+    // that have occurred on the compositor since this frame was issued won't
+    // be accounted for in snapshot transforms.
+    root_scroller.DropCompositorScrollDeltaNextCommit();
+  } else {
+    controls.SetShownRatio(1, 1);
+  }
 }
 
 }  // namespace blink

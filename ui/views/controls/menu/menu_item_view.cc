@@ -556,6 +556,10 @@ void MenuItemView::SetIcon(const ui::ImageModel& icon) {
   SetIconView(std::move(icon_view));
 }
 
+const ui::ImageModel MenuItemView::GetIcon() const {
+  return icon_view_ ? icon_view_->GetImageModel() : ui::ImageModel();
+}
+
 void MenuItemView::SetIconView(std::unique_ptr<ImageView> icon_view) {
   {
     // See comment in `update_selection_based_state_in_view_herarchy_changed_`
@@ -578,7 +582,7 @@ void MenuItemView::SetIconView(std::unique_ptr<ImageView> icon_view) {
 }
 
 gfx::Size MenuItemView::GetIconPreferredSize() const {
-  return icon_view_ ? icon_view_->GetPreferredSize() : gfx::Size();
+  return icon_view_ ? icon_view_->GetPreferredSize({}) : gfx::Size();
 }
 
 void MenuItemView::OnDropOrSelectionStatusMayHaveChanged() {
@@ -598,7 +602,7 @@ gfx::Size MenuItemView::CalculatePreferredSize() const {
 int MenuItemView::GetHeightForWidth(int width) const {
   // If this isn't a container, we can just use the preferred size's height.
   if (!IsContainer()) {
-    return GetPreferredSize().height();
+    return GetPreferredSize(SizeBounds(width, {})).height();
   }
 
   const gfx::Insets margins = GetContainerMargins();
@@ -748,7 +752,7 @@ void MenuItemView::Layout(PassKey) {
         continue;
       if (vertical_separator_ == child)
         continue;
-      int width = child->GetPreferredSize().width();
+      int width = child->GetPreferredSize({}).width();
       child->SetBounds(child_end - width, 0, width, height());
       child_end -= width + kChildXPadding;
     }
@@ -763,7 +767,7 @@ void MenuItemView::Layout(PassKey) {
     }
     if (icon_view_) {
       icon_view_->SizeToPreferredSize();
-      gfx::Size size = icon_view_->GetPreferredSize();
+      gfx::Size size = icon_view_->GetPreferredSize({});
       int x = (config.icons_in_label ? submenu->label_start() : icon_x) +
               ((submenu->icon_area_width() - size.width()) / 2);
       // If this is a checkbox or radio, then it needs space for both the
@@ -788,7 +792,8 @@ void MenuItemView::Layout(PassKey) {
     }
 
     if (vertical_separator_) {
-      const gfx::Size preferred_size = vertical_separator_->GetPreferredSize();
+      const gfx::Size preferred_size =
+          vertical_separator_->GetPreferredSize({});
       int x = width() - config.actionable_submenu_width -
               config.actionable_submenu_vertical_separator_width;
       int y = (height() - preferred_size.height()) / 2;
@@ -1217,7 +1222,7 @@ gfx::Size MenuItemView::GetChildPreferredSize() const {
     return gfx::Size();
 
   if (IsContainer())
-    return children().front()->GetPreferredSize();
+    return children().front()->GetPreferredSize({});
 
   const auto add_width = [this](int width, const View* child) {
     if (child == icon_view_ || child == radio_check_image_view_ ||
@@ -1225,14 +1230,14 @@ gfx::Size MenuItemView::GetChildPreferredSize() const {
       return width;
     if (width)
       width += kChildXPadding;
-    return width + child->GetPreferredSize().width();
+    return width + child->GetPreferredSize({}).width();
   };
   const int width =
       std::accumulate(children().cbegin(), children().cend(), 0, add_width);
 
   // If there is no icon view it returns a height of 0 to indicate that
   // we should use the title height instead.
-  const int height = icon_view_ ? icon_view_->GetPreferredSize().height() : 0;
+  const int height = icon_view_ ? icon_view_->GetPreferredSize({}).height() : 0;
 
   return gfx::Size(width, height);
 }
@@ -1285,7 +1290,7 @@ MenuItemView::MenuItemDimensions MenuItemView::CalculateDimensions() const {
     if (icon_view_) {
       dimensions.height =
           std::max(dimensions.height,
-                   icon_view_->GetPreferredSize().height() +
+                   icon_view_->GetPreferredSize({}).height() +
                        2 * config.vertical_touchable_menu_item_padding);
     }
     return dimensions;
@@ -1368,7 +1373,7 @@ int MenuItemView::GetLabelStartForThisItem() const {
   // past it.
   const int icon_width = icons_in_label
                              ? submenu->icon_area_width()
-                             : icon_view_->GetPreferredSize().width();
+                             : icon_view_->GetPreferredSize({}).width();
   return submenu->label_start() + icon_width +
          LayoutProvider::Get()->GetDistanceMetric(
              DISTANCE_RELATED_LABEL_HORIZONTAL);

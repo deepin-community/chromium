@@ -21,6 +21,7 @@
 #include "components/grit/components_scaled_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/bubble/tooltip_icon.h"
 #include "ui/views/controls/label.h"
@@ -254,10 +255,10 @@ VirtualCardEnrollBubbleViews::CreateLoadingProgressRow() {
   // visible after the user accepts virtual card enrollment.
   progress_loading_row->SetVisible(false);
 
-  progress_loading_row->SetOrientation(
-      views::BoxLayout::Orientation::kHorizontal);
   progress_loading_row->SetMainAxisAlignment(
       views::BoxLayout::MainAxisAlignment::kEnd);
+  progress_loading_row->SetInsideBorderInsets(gfx::Insets::TLBR(10, 0, 0, 30));
+
   loading_throbber_ =
       progress_loading_row->AddChildView(std::make_unique<views::Throbber>());
   loading_throbber_->SetID(DialogViewId::LOADING_THROBBER);
@@ -273,9 +274,14 @@ void VirtualCardEnrollBubbleViews::SwitchToLoadingState() {
   if (loading_progress_row_ == nullptr) {
     return;
   }
+  SetButtons(ui::DIALOG_BUTTON_NONE);
+
   loading_throbber_->Start();
   loading_progress_row_->SetVisible(true);
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+  loading_throbber_->GetViewAccessibility().AnnounceText(
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_VIRTUAL_CARD_ENROLL_LOADING_THROBBER_ACCESSIBLE_NAME));
+
   DialogModelChanged();
 }
 

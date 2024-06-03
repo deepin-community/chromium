@@ -24,7 +24,6 @@
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "build/chromeos_buildflags.h"
-#include "content/common/set_process_title.h"
 #include "content/public/common/content_switches.h"
 #include "media/gpu/buildflags.h"
 #include "sandbox/linux/bpf_dsl/policy.h"
@@ -426,7 +425,7 @@ void AddVulkanICDPermissions(std::vector<BrokerFilePermission>* permissions) {
 
   static const char* const kReadOnlyICDList[] = {
       "intel_icd.x86_64.json", "nvidia_icd.json", "radeon_icd.x86_64.json",
-      "mali_icd.json"};
+      "mali_icd.json", "freedreno_icd.aarch64.json"};
 
   for (std::string prefix : kReadOnlyICDPrefixes) {
     permissions->push_back(BrokerFilePermission::ReadOnly(prefix));
@@ -615,6 +614,7 @@ void LoadVulkanLibraries() {
   dlopen("libvulkan_radeon.so", dlopen_flag);
   dlopen("libvulkan_intel.so", dlopen_flag);
   dlopen("libGLX_nvidia.so.0", dlopen_flag);
+  dlopen("libvulkan_freedreno.so", dlopen_flag);
 }
 
 void LoadChromecastV4L2Libraries() {
@@ -665,21 +665,11 @@ sandbox::syscall_broker::BrokerCommandSet CommandSetForGPU(
   return command_set;
 }
 
-bool BrokerProcessPreSandboxHook(
-    sandbox::policy::SandboxLinux::Options options) {
-  // Oddly enough, we call back into gpu to invoke this service manager
-  // method, since it is part of the embedder component, and the service
-  // mananger's sandbox component is a lower layer that can't depend on it.
-  SetProcessTitleFromCommandLine(nullptr);
-  return true;
-}
-
 }  // namespace
 
 bool GpuPreSandboxHook(sandbox::policy::SandboxLinux::Options options) {
   sandbox::policy::SandboxLinux::GetInstance()->StartBrokerProcess(
-      CommandSetForGPU(options), FilePermissionsForGpu(options),
-      base::BindOnce(BrokerProcessPreSandboxHook), options);
+      CommandSetForGPU(options), FilePermissionsForGpu(options), options);
 
   if (!LoadLibrariesForGpu(options))
     return false;

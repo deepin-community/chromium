@@ -14,7 +14,6 @@ import type {Gesture, PinchEventDetail} from './gesture_detector.js';
 import {GestureDetector} from './gesture_detector.js';
 import type {PdfPluginElement} from './internal_plugin.js';
 import {SwipeDetector, SwipeDirection} from './swipe_detector.js';
-import type {ViewportInterface} from './viewport_scroller.js';
 import type {ZoomManager} from './zoom_manager.js';
 import {InactiveZoomManager} from './zoom_manager.js';
 
@@ -92,7 +91,7 @@ type HtmlElementWithExtras = HTMLElement&{
 };
 
 // TODO(crbug.com/1276456): Would Viewport be better as a Polymer element?
-export class Viewport implements ViewportInterface {
+export class Viewport {
   private window_: HTMLElement;
   private scrollContent_: ScrollContent;
   private defaultZoom_: number;
@@ -1970,12 +1969,11 @@ class ScrollContent {
   }
 
   get overlayScrollbarWidth(): number {
-    let overlayScrollbarWidth = 0;
+    // Default width for overlay scrollbars to avoid painting the page indicator
+    // over the scrollbar parts.
+    let overlayScrollbarWidth = 16;
 
-    // TODO(crbug.com/1286009): Support overlay scrollbars on all platforms.
-    // <if expr="is_macosx">
-    overlayScrollbarWidth = 16;
-    // </if>
+    // MacOS has a fixed width independent of the presence of a pdf plugin.
     // <if expr="not is_macosx">
     if (this.plugin_) {
       overlayScrollbarWidth = this.scrollbarWidth_;

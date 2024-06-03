@@ -164,12 +164,11 @@ class KeepAliveURLLoaderService::KeepAliveURLLoaderFactoriesBase {
         // caller renderer is already unloaded, meaning `loader` also needs to
         // hold another refptr to ensure `PolicyContainerHost` alive.
         context->policy_container_host, context->weak_document_ptr,
-        service_->browser_context_, CreateThrottles(resource_request),
+        service_->browser_context_,
+        base::BindRepeating(&KeepAliveURLLoaderFactoriesBase::CreateThrottles,
+                            base::Unretained(this), resource_request),
         base::PassKey<KeepAliveURLLoaderService>(),
-        // TODO(https://crbug.com/1519211): Determine whether to integrate ARA
-        // in fetch later requests.
-        (!resource_request.is_fetch_later_api &&
-         context->attribution_context.has_value())
+        context->attribution_context.has_value()
             ? KeepAliveAttributionRequestHelper::CreateIfNeeded(
                   resource_request.attribution_reporting_eligibility,
                   resource_request.url,

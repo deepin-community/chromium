@@ -116,10 +116,14 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
   AtomicString popoverTargetAction() const;
   void setPopoverTargetAction(const AtomicString& value);
 
-  HTMLElement* invokeTargetElement();
+  Element* invokeTargetElement();
 
   AtomicString invokeAction() const;
-  void setInvokeAction(const AtomicString& value);
+  InvokeAction GetInvokeAction() const;
+
+  Element* interestTargetElement() override;
+
+  AtomicString interestAction() const override;
 
   void DefaultEventHandler(Event&) override;
 
@@ -148,14 +152,7 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
   bool IsPreviewed() const {
     return autofill_state_ == WebAutofillState::kPreviewed;
   }
-  bool HighlightAutofilled() const {
-    return IsAutofilled() && !PreventHighlightingOfAutofilledFields();
-  }
   void SetAutofillState(WebAutofillState = WebAutofillState::kAutofilled);
-  void SetPreventHighlightingOfAutofilledFields(bool prevent_highlighting);
-  bool PreventHighlightingOfAutofilledFields() const {
-    return prevent_highlighting_of_autofilled_fields_;
-  }
 
   // The autofill section to which this element belongs (e.g. billing address,
   // shipping address, .. .)
@@ -215,7 +212,6 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
 
   WebString autofill_section_;
   enum WebAutofillState autofill_state_;
-  bool prevent_highlighting_of_autofilled_fields_ : 1;
 
   bool blocks_form_submission_ : 1;
 };

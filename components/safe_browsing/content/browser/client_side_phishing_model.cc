@@ -153,11 +153,6 @@ void CloseModelFile(base::File model_file) {
   model_file.Close();
 }
 
-int* GetLiveClientPhishingModelCount() {
-  static int count = 0;
-  return &count;
-}
-
 }  // namespace
 
 // --- ClientSidePhishingModel methods ---
@@ -171,10 +166,6 @@ ClientSidePhishingModel::ClientSidePhishingModel(
   opt_guide_->AddObserverForOptimizationTargetModel(
       optimization_guide::proto::OPTIMIZATION_TARGET_CLIENT_SIDE_PHISHING,
       /*model_metadata=*/std::nullopt, this);
-  *GetLiveClientPhishingModelCount() += 1;
-  base::UmaHistogramCounts1000(
-      "SBClientPhishing.LiveClientPhishingModelCountAtCreation",
-      *GetLiveClientPhishingModelCount());
 }
 
 void ClientSidePhishingModel::OnModelUpdated(
@@ -303,6 +294,7 @@ void ClientSidePhishingModel::OnModelAndVisualTfLiteFileLoaded(
         if (!VerifyCSDFlatBufferIndicesAndFields(flatbuffer_model)) {
           VLOG(0) << "Failed to verify CSD Flatbuffer indices and fields";
         } else {
+          trigger_model_version_ = flatbuffer_model->version();
           if (tflite_valid) {
             thresholds_.clear();  // Clear the previous model's thresholds
                                   // before adding on the new ones
@@ -351,7 +343,7 @@ void ClientSidePhishingModel::OnModelAndVisualTfLiteFileLoaded(
     }
 
     if (client_side_phishing_model_metadata.has_value()) {
-      trigger_model_version_ =
+      trigger_model_opt_guide_metadata_image_embedding_version_ =
           client_side_phishing_model_metadata->image_embedding_model_version();
     } else {
       VLOG(1) << "Client side phishing model metadata is missing an image "
@@ -389,7 +381,7 @@ void ClientSidePhishingModel::OnImageEmbeddingModelLoaded(
   }
 
   if (image_embedding_model_metadata.has_value()) {
-    embedding_model_version_ =
+    embedding_model_opt_guide_metadata_image_embedding_version_ =
         image_embedding_model_metadata->image_embedding_model_version();
   } else {
     VLOG(1) << "Image embedding model metadata is missing a version value";
@@ -405,9 +397,13 @@ void ClientSidePhishingModel::OnImageEmbeddingModelLoaded(
 }
 
 bool ClientSidePhishingModel::IsModelMetadataImageEmbeddingVersionMatching() {
-  return trigger_model_version_.has_value() &&
-         embedding_model_version_.has_value() &&
-         trigger_model_version_.value() == embedding_model_version_.value();
+  return trigger_model_opt_guide_metadata_image_embedding_version_
+             .has_value() &&
+         embedding_model_opt_guide_metadata_image_embedding_version_
+             .has_value() &&
+         trigger_model_opt_guide_metadata_image_embedding_version_.value() ==
+             embedding_model_opt_guide_metadata_image_embedding_version_
+                 .value();
 }
 
 int ClientSidePhishingModel::GetTriggerModelVersion() {
@@ -442,8 +438,6 @@ ClientSidePhishingModel::~ClientSidePhishingModel() {
   }
 
   opt_guide_ = nullptr;
-
-  *GetLiveClientPhishingModelCount() -= 1;
 }
 
 base::CallbackListSubscription ClientSidePhishingModel::RegisterCallback(

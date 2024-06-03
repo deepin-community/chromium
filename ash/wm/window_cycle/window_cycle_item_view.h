@@ -6,6 +6,7 @@
 #define ASH_WM_WINDOW_CYCLE_WINDOW_CYCLE_ITEM_VIEW_H_
 
 #include "ash/ash_export.h"
+#include "ash/wm/scoped_layer_tree_synchronizer.h"
 #include "ash/wm/window_mini_view.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -36,7 +37,7 @@ class ASH_EXPORT WindowCycleItemView : public WindowMiniView {
   explicit WindowCycleItemView(aura::Window* window);
   WindowCycleItemView(const WindowCycleItemView&) = delete;
   WindowCycleItemView& operator=(const WindowCycleItemView&) = delete;
-  ~WindowCycleItemView() override = default;
+  ~WindowCycleItemView() override;
 
   // All previews are the same height (this is achieved via a combination of
   // scaling and padding).
@@ -47,6 +48,8 @@ class ASH_EXPORT WindowCycleItemView : public WindowMiniView {
   bool OnMousePressed(const ui::MouseEvent& event) override;
   gfx::Size GetPreviewViewSize() const override;
   void Layout(PassKey) override;
+
+  // views::View:
   gfx::Size CalculatePreferredSize() const override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
 
@@ -54,6 +57,7 @@ class ASH_EXPORT WindowCycleItemView : public WindowMiniView {
   void RefreshItemVisuals() override;
 
  private:
+  std::unique_ptr<ScopedLayerTreeSynchronizer> layer_tree_synchronizer_;
   const raw_ptr<WindowCycleController> window_cycle_controller_;
 };
 
@@ -88,6 +92,10 @@ class GroupContainerCycleView : public WindowMiniViewBase {
 
  private:
   std::vector<raw_ptr<WindowCycleItemView, VectorExperimental>> mini_views_;
+
+  // True if the `SnapGroup` represented by `this` has horizontal window layout,
+  // false otherwise.
+  bool is_layout_horizontal_ = false;
 
   // True if `this` is the first time a focus selection request is made to this
   // item.

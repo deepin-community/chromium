@@ -4,8 +4,8 @@
 
 #include "content/browser/webid/test/webid_test_content_browser_client.h"
 
-#include "content/browser/webid/digital_credentials/digital_identity_provider.h"
 #include "content/browser/webid/test/mock_modal_dialog_view_delegate.h"
+#include "content/public/browser/digital_identity_provider.h"
 
 namespace content {
 
@@ -22,6 +22,14 @@ WebIdTestContentBrowserClient::CreateIdentityRequestDialogController(
 void WebIdTestContentBrowserClient::SetIdentityRequestDialogController(
     std::unique_ptr<IdentityRequestDialogController> controller) {
   test_dialog_controller_ = std::move(controller);
+}
+
+void WebIdTestContentBrowserClient::ShowDigitalIdentityInterstitialIfNeeded(
+    content::WebContents& web_contents,
+    const url::Origin& origin,
+    DigitalIdentityInterstitialCallback callback) {
+  std::move(callback).Run(
+      DigitalIdentityProvider::RequestStatusForMetrics::kSuccess);
 }
 
 std::unique_ptr<DigitalIdentityProvider>

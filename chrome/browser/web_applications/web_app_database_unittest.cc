@@ -18,6 +18,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_storage_location.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
@@ -26,6 +27,7 @@
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
+#include "chrome/browser/web_applications/user_display_mode.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
@@ -140,23 +142,24 @@ class WebAppDatabaseTest : public WebAppTest,
 
   void EnsureHasUserDisplayModeForCurrentPlatform(WebApp& app) {
     if (!base::FeatureList::IsEnabled(kSeparateUserDisplayModeForCrOS)) {
-      DCHECK(app.user_display_mode_default());
+      ASSERT_TRUE(app.sync_proto().has_user_display_mode_default());
       return;
     }
     // Avoid using `WebApp::user_display_mode` because it DCHECKs for a valid
     // UDM.
 #if BUILDFLAG(IS_CHROMEOS)
-    if (app.user_display_mode_cros()) {
+    if (app.sync_proto().has_user_display_mode_cros()) {
       return;
     }
 #else
-    if (app.user_display_mode_default()) {
+    if (app.sync_proto().has_user_display_mode_default()) {
       return;
     }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-    app.SetUserDisplayMode(app.user_display_mode_cros().value_or(
-        app.user_display_mode_default().value_or(
-            mojom::UserDisplayMode::kStandalone)));
+    app.SetUserDisplayMode(ToMojomUserDisplayMode(
+        app.sync_proto().has_user_display_mode_default()
+            ? app.sync_proto().user_display_mode_default()
+            : sync_pb::WebAppSpecifics_UserDisplayMode_STANDALONE));
   }
 
  protected:
@@ -403,28 +406,29 @@ TEST_P(WebAppDatabaseTest, UserDisplayModeCrosOnly_MigratesToCurrentPlatform) {
   if (!base::FeatureList::IsEnabled(kSeparateUserDisplayModeForCrOS)) {
     // Default to standalone if we don't have a platform-specific value and the
     // flag is turned off. Safer than trying to migrate back.
-    EXPECT_EQ(app->user_display_mode().value(),
-              mojom::UserDisplayMode::kStandalone);
-    EXPECT_EQ(new_proto->sync_data().user_display_mode_default(),
-              sync_pb::WebAppSpecifics_UserDisplayMode_STANDALONE);
-    EXPECT_FALSE(new_proto->sync_data().has_user_display_mode_cros());
+    EXPECT_EQ(app->user_display_mode(), mojom::UserDisplayMode::kStandalone);
+    // Proto values are preserved.
+    EXPECT_EQ(new_proto->sync_data().user_display_mode_cros(),
+              sync_pb::WebAppSpecifics_UserDisplayMode_BROWSER);
+    EXPECT_FALSE(new_proto->sync_data().has_user_display_mode_default());
     return;
   }
 
-  // Regardless of platform, the current platform's UDM should be set.
-  EXPECT_EQ(app->user_display_mode().value(), mojom::UserDisplayMode::kBrowser);
-
 #if BUILDFLAG(IS_CHROMEOS)
-  // On CrOS, the non-CrOS field should remain absent.
+  // On CrOS, the default field should remain absent.
   EXPECT_EQ(new_proto->sync_data().user_display_mode_cros(),
             sync_pb::WebAppSpecifics_UserDisplayMode_BROWSER);
   EXPECT_FALSE(new_proto->sync_data().has_user_display_mode_default());
+  EXPECT_EQ(app->user_display_mode(), mojom::UserDisplayMode::kBrowser);
 #else
   // On non-CrOS, both platform's fields should now be populated.
   EXPECT_EQ(new_proto->sync_data().user_display_mode_cros(),
             sync_pb::WebAppSpecifics_UserDisplayMode_BROWSER);
+  // Default value doesn't migrate from CrOS value so should fall back to
+  // standalone.
   EXPECT_EQ(new_proto->sync_data().user_display_mode_default(),
-            sync_pb::WebAppSpecifics_UserDisplayMode_BROWSER);
+            sync_pb::WebAppSpecifics_UserDisplayMode_STANDALONE);
+  EXPECT_EQ(app->user_display_mode(), mojom::UserDisplayMode::kStandalone);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
@@ -446,8 +450,9 @@ TEST_P(WebAppDatabaseTest,
 
   const WebApp* app = registrar().GetAppById(base_app->app_id());
 
-  // Regardless of platform, the current platform's UDM should be set.
-  EXPECT_EQ(app->user_display_mode().value(), mojom::UserDisplayMode::kBrowser);
+  // Regardless of platform, the current platform's UDM should be set: the
+  // default value should have been migrated in CrOS.
+  EXPECT_EQ(app->user_display_mode(), mojom::UserDisplayMode::kBrowser);
 
   std::unique_ptr<WebAppProto> new_proto =
       WebAppDatabase::CreateWebAppProto(*app);
@@ -514,10 +519,10 @@ TEST_P(WebAppDatabaseTest, WebAppWithoutOptionalFields) {
   EXPECT_TRUE(app->downloaded_icon_sizes(IconPurpose::MONOCHROME).empty());
   EXPECT_FALSE(app->is_generated_icon());
   EXPECT_FALSE(app->is_from_sync_and_pending_installation());
-  EXPECT_TRUE(app->sync_fallback_data().name.empty());
-  EXPECT_FALSE(app->sync_fallback_data().theme_color.has_value());
-  EXPECT_FALSE(app->sync_fallback_data().scope.is_valid());
-  EXPECT_TRUE(app->sync_fallback_data().icon_infos.empty());
+  EXPECT_FALSE(app->sync_proto().has_name());
+  EXPECT_FALSE(app->sync_proto().has_theme_color());
+  EXPECT_FALSE(app->sync_proto().has_scope());
+  EXPECT_EQ(app->sync_proto().icon_infos_size(), 0);
   EXPECT_TRUE(app->file_handlers().empty());
   EXPECT_FALSE(app->share_target().has_value());
   EXPECT_TRUE(app->additional_search_terms().empty());
@@ -589,10 +594,10 @@ TEST_P(WebAppDatabaseTest, WebAppWithoutOptionalFields) {
   EXPECT_TRUE(app_copy->downloaded_icon_sizes(IconPurpose::MONOCHROME).empty());
   EXPECT_FALSE(app_copy->is_generated_icon());
   EXPECT_FALSE(app_copy->is_from_sync_and_pending_installation());
-  EXPECT_TRUE(app_copy->sync_fallback_data().name.empty());
-  EXPECT_FALSE(app_copy->sync_fallback_data().theme_color.has_value());
-  EXPECT_FALSE(app_copy->sync_fallback_data().scope.is_valid());
-  EXPECT_TRUE(app_copy->sync_fallback_data().icon_infos.empty());
+  EXPECT_FALSE(app_copy->sync_proto().has_name());
+  EXPECT_FALSE(app_copy->sync_proto().has_theme_color());
+  EXPECT_FALSE(app_copy->sync_proto().has_scope());
+  EXPECT_EQ(app_copy->sync_proto().icon_infos_size(), 0);
   EXPECT_TRUE(app_copy->file_handlers().empty());
   EXPECT_FALSE(app_copy->share_target().has_value());
   EXPECT_TRUE(app_copy->additional_search_terms().empty());
@@ -809,59 +814,56 @@ TEST_F(WebAppDatabaseProtoDataTest, DoesNotSetIsolationDataIfNotIsolated) {
                                        &WebApp::isolation_data, std::nullopt)));
 }
 
-TEST_F(WebAppDatabaseProtoDataTest, SavesInstalledBundleIsolationData) {
-  base::FilePath path(FILE_PATH_LITERAL("bundle_path"));
+TEST_F(WebAppDatabaseProtoDataTest, SavesOwnedBundleIsolationData) {
+  std::string dir_name_ascii = "folder_name";
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      InstalledBundle{.path = path}, base::Version("1.0.0")));
+      IwaStorageOwnedBundle{dir_name_ascii, /*dev_mode=*/false},
+      base::Version("1.0.0")));
 
   std::unique_ptr<WebApp> protoed_web_app = ToAndFromProto(*web_app);
   EXPECT_THAT(*web_app, Eq(*protoed_web_app));
   EXPECT_THAT(web_app->isolation_data()->location,
-              VariantWith<InstalledBundle>(
-                  Field("path", &InstalledBundle::path, Eq(path))));
+              IwaStorageOwnedBundle(dir_name_ascii, /*dev_mode=*/false));
   EXPECT_THAT(web_app->isolation_data()->version, Eq(base::Version("1.0.0")));
 }
 
-TEST_F(WebAppDatabaseProtoDataTest,
-       HandlesCorruptedInstalledBundleIsolationData) {
-  base::FilePath path(FILE_PATH_LITERAL("bundle_path"));
+TEST_F(WebAppDatabaseProtoDataTest, HandlesCorruptedOwnedBundleIsolationData) {
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      InstalledBundle{.path = path}, base::Version("1.0.0")));
+      IwaStorageOwnedBundle{"folder_name", /*dev_mode=*/false},
+      base::Version("1.0.0")));
 
   std::unique_ptr<WebAppProto> web_app_proto =
       WebAppDatabase::CreateWebAppProto(*web_app);
   ASSERT_THAT(web_app_proto, NotNull());
 
-  // The path is encoded with Pickle, thus setting some non-pickle data here
-  // should break deserialization.
+  // Setting non-ASCII characters should break deserialization.
   web_app_proto->mutable_isolation_data()
-      ->mutable_installed_bundle()
-      ->mutable_path()
-      ->assign("foo");
+      ->mutable_owned_bundle()
+      ->mutable_dir_name_ascii()
+      ->assign("日本");
 
   std::unique_ptr<WebApp> protoed_web_app =
       WebAppDatabase::CreateWebApp(*web_app_proto);
   EXPECT_THAT(protoed_web_app, IsNull());
 }
 
-TEST_F(WebAppDatabaseProtoDataTest, SavesDevModeBundleIsolationData) {
+TEST_F(WebAppDatabaseProtoDataTest, SavesUnownedBundleIsolationData) {
   base::FilePath path(FILE_PATH_LITERAL("dev_bundle_path"));
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      DevModeBundle{.path = path}, base::Version("1.0.0")));
+      IwaStorageUnownedBundle{path}, base::Version("1.0.0")));
 
   std::unique_ptr<WebApp> protoed_web_app = ToAndFromProto(*web_app);
   EXPECT_THAT(*web_app, Eq(*protoed_web_app));
   EXPECT_THAT(web_app->isolation_data()->location,
-              VariantWith<DevModeBundle>(
-                  Field("path", &DevModeBundle::path, Eq(path))));
+              IwaStorageUnownedBundle{path});
   EXPECT_THAT(web_app->isolation_data()->version, Eq(base::Version("1.0.0")));
 }
 
 TEST_F(WebAppDatabaseProtoDataTest,
-       HandlesCorruptedDevModeBundleIsolationData) {
+       HandlesCorruptedUnownedBundleIsolationData) {
   base::FilePath path(FILE_PATH_LITERAL("bundle_path"));
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      DevModeBundle{.path = path}, base::Version("1.0.0")));
+      IwaStorageUnownedBundle{path}, base::Version("1.0.0")));
 
   std::unique_ptr<WebAppProto> web_app_proto =
       WebAppDatabase::CreateWebAppProto(*web_app);
@@ -870,7 +872,7 @@ TEST_F(WebAppDatabaseProtoDataTest,
   // The path is encoded with Pickle, thus setting some non-pickle data here
   // should break deserialization.
   web_app_proto->mutable_isolation_data()
-      ->mutable_dev_mode_bundle()
+      ->mutable_unowned_bundle()
       ->mutable_path()
       ->assign("foo");
 
@@ -879,26 +881,24 @@ TEST_F(WebAppDatabaseProtoDataTest,
   EXPECT_THAT(protoed_web_app, IsNull());
 }
 
-TEST_F(WebAppDatabaseProtoDataTest, SavesDevModeProxyIsolationData) {
+TEST_F(WebAppDatabaseProtoDataTest, SavesProxyIsolationData) {
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      DevModeProxy{.proxy_url =
-                       url::Origin::Create(GURL("https://proxy-example.com/"))},
+      IwaStorageProxy{url::Origin::Create(GURL("https://proxy-example.com/"))},
       base::Version("1.0.0")));
 
   std::unique_ptr<WebApp> protoed_web_app = ToAndFromProto(*web_app);
   EXPECT_THAT(*web_app, Eq(*protoed_web_app));
   EXPECT_THAT(
       web_app->isolation_data()->location,
-      VariantWith<DevModeProxy>(
-          Field("proxy_url", &DevModeProxy::proxy_url,
-                Eq(url::Origin::Create(GURL("https://proxy-example.com/"))))));
+      IwaStorageProxy{url::Origin::Create(GURL("https://proxy-example.com/"))});
   EXPECT_THAT(web_app->isolation_data()->version, Eq(base::Version("1.0.0")));
 }
 
-TEST_F(WebAppDatabaseProtoDataTest, HandlesCorruptedDevModeProxyIsolationData) {
+TEST_F(WebAppDatabaseProtoDataTest, HandlesCorruptedProxyIsolationData) {
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      DevModeProxy{.proxy_url =
-                       url::Origin::Create(GURL("https://example.com"))},
+      IwaStorageProxy{
+
+          url::Origin::Create(GURL("https://proxy-example.com/"))},
       base::Version("1.0.0")));
 
   std::unique_ptr<WebAppProto> web_app_proto =
@@ -906,7 +906,7 @@ TEST_F(WebAppDatabaseProtoDataTest, HandlesCorruptedDevModeProxyIsolationData) {
   ASSERT_THAT(web_app_proto, NotNull());
 
   web_app_proto->mutable_isolation_data()
-      ->mutable_dev_mode_proxy()
+      ->mutable_proxy()
       ->mutable_proxy_url()
       ->assign("");
 
@@ -916,9 +916,9 @@ TEST_F(WebAppDatabaseProtoDataTest, HandlesCorruptedDevModeProxyIsolationData) {
 }
 
 TEST_F(WebAppDatabaseProtoDataTest, HandlesCorruptedIsolationDataVersion) {
-  base::FilePath path(FILE_PATH_LITERAL("bundle_path"));
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      InstalledBundle{.path = path}, base::Version("1.2.3")));
+      IwaStorageOwnedBundle{"folder_name", /*dev_mode=*/false},
+      base::Version("1.2.3")));
 
   std::unique_ptr<WebAppProto> web_app_proto =
       WebAppDatabase::CreateWebAppProto(*web_app);
@@ -932,11 +932,12 @@ TEST_F(WebAppDatabaseProtoDataTest, HandlesCorruptedIsolationDataVersion) {
 
 TEST_F(WebAppDatabaseProtoDataTest,
        HandlesCorruptedIsolationDataPendingUpdateVersion) {
-  base::FilePath path(FILE_PATH_LITERAL("bundle_path"));
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      InstalledBundle{.path = path}, base::Version("1.2.3"), {},
-      WebApp::IsolationData::PendingUpdateInfo(InstalledBundle{.path = path},
-                                               base::Version("1.2.3"))));
+      IwaStorageOwnedBundle{"folder_name", /*dev_mode=*/false},
+      base::Version("1.2.3"), {},
+      WebApp::IsolationData::PendingUpdateInfo(
+          IwaStorageOwnedBundle{"folder_name", /*dev_mode=*/false},
+          base::Version("1.2.3"))));
 
   std::unique_ptr<WebAppProto> web_app_proto =
       WebAppDatabase::CreateWebAppProto(*web_app);
@@ -952,46 +953,84 @@ TEST_F(WebAppDatabaseProtoDataTest,
 }
 
 TEST_F(WebAppDatabaseProtoDataTest,
-       HandlesMismatchedIsolationDataPendingUpdateLocation) {
-  base::FilePath path(FILE_PATH_LITERAL("bundle_path"));
+       HandlesDifferentTypeOfIsolationDataPendingUpdateLocation) {
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      InstalledBundle{.path = path}, base::Version("1.0.0"), {},
-      WebApp::IsolationData::PendingUpdateInfo(InstalledBundle{.path = path},
-                                               base::Version("2.0.0"))));
+      IwaStorageOwnedBundle{"folder_name", /*dev_mode*/ true},
+      base::Version("1.0.0"), {},
+      WebApp::IsolationData::PendingUpdateInfo(
+          IwaStorageProxy{url::Origin::Create(GURL("https://example.com"))},
+          base::Version("2.0.0"))));
 
   std::unique_ptr<WebAppProto> web_app_proto =
       WebAppDatabase::CreateWebAppProto(*web_app);
-  ASSERT_THAT(web_app_proto, NotNull());
-  web_app_proto->mutable_isolation_data()
-      ->mutable_pending_update_info()
-      ->clear_location();
-  web_app_proto->mutable_isolation_data()
-      ->mutable_pending_update_info()
-      ->mutable_dev_mode_proxy()
-      ->set_proxy_url("https://example.com");
-
   std::unique_ptr<WebApp> protoed_web_app =
       WebAppDatabase::CreateWebApp(*web_app_proto);
-  EXPECT_THAT(protoed_web_app, IsNull());
+  EXPECT_THAT(protoed_web_app, NotNull());
+}
+
+TEST_F(WebAppDatabaseProtoDataTest,
+       HandlesMismatchedIsolationDataPendingUpdateLocation) {
+  std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
+      IwaStorageOwnedBundle{"folder_name", /*dev_mode*/ false},
+      base::Version("1.0.0"), {},
+      WebApp::IsolationData::PendingUpdateInfo(
+          IwaStorageOwnedBundle{"folder_name", /*dev_mode*/ false},
+          base::Version("2.0.0"))));
+
+  // Test what happens if both are owned bundles, but one is dev mode and
+  // the other one is not.
+  {
+    std::unique_ptr<WebAppProto> web_app_proto =
+        WebAppDatabase::CreateWebAppProto(*web_app);
+    ASSERT_THAT(web_app_proto, NotNull());
+    web_app_proto->mutable_isolation_data()
+        ->mutable_pending_update_info()
+        ->mutable_owned_bundle()
+        ->set_dev_mode(true);
+    web_app_proto->mutable_isolation_data()
+        ->mutable_pending_update_info()
+        ->mutable_proxy();
+
+    std::unique_ptr<WebApp> protoed_web_app =
+        WebAppDatabase::CreateWebApp(*web_app_proto);
+    EXPECT_THAT(protoed_web_app, IsNull());
+  }
+
+  // Test what happens if one is an owned non-dev-mode bundle, but the other one
+  // is a proxy.
+  {
+    std::unique_ptr<WebAppProto> web_app_proto =
+        WebAppDatabase::CreateWebAppProto(*web_app);
+    ASSERT_THAT(web_app_proto, NotNull());
+    web_app_proto->mutable_isolation_data()
+        ->mutable_pending_update_info()
+        ->clear_location();
+    web_app_proto->mutable_isolation_data()
+        ->mutable_pending_update_info()
+        ->mutable_proxy()
+        ->set_proxy_url("https://example.com");
+
+    std::unique_ptr<WebApp> protoed_web_app =
+        WebAppDatabase::CreateWebApp(*web_app_proto);
+    EXPECT_THAT(protoed_web_app, IsNull());
+  }
 }
 
 TEST_F(WebAppDatabaseProtoDataTest, SavesIsolationDataUpdateInfo) {
   base::FilePath path(FILE_PATH_LITERAL("bundle_path"));
   base::FilePath update_path(FILE_PATH_LITERAL("update_path"));
   std::unique_ptr<WebApp> web_app = CreateIsolatedWebApp(WebApp::IsolationData(
-      InstalledBundle{.path = path}, base::Version("1.0.0"), {},
+      IwaStorageUnownedBundle{path}, base::Version("1.0.0"), {},
       WebApp::IsolationData::PendingUpdateInfo(
-          InstalledBundle{.path = update_path}, base::Version("2.0.0"))));
+          IwaStorageUnownedBundle{update_path}, base::Version("2.0.0"))));
 
   std::unique_ptr<WebApp> protoed_web_app = ToAndFromProto(*web_app);
   EXPECT_THAT(*web_app, Eq(*protoed_web_app));
   EXPECT_THAT(web_app->isolation_data()->location,
-              VariantWith<InstalledBundle>(
-                  Field("path", &InstalledBundle::path, Eq(path))));
+              IwaStorageUnownedBundle{path});
   EXPECT_THAT(web_app->isolation_data()->version, Eq(base::Version("1.0.0")));
   EXPECT_THAT(web_app->isolation_data()->pending_update_info()->location,
-              VariantWith<InstalledBundle>(
-                  Field("path", &InstalledBundle::path, Eq(update_path))));
+              IwaStorageUnownedBundle{update_path});
   EXPECT_THAT(web_app->isolation_data()->pending_update_info()->version,
               Eq(base::Version("2.0.0")));
 }

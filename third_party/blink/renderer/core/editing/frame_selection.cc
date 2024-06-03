@@ -77,6 +77,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input/context_menu_allowed_scope.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
+#include "third_party/blink/renderer/core/layout/geometry/box_strut.h"
 #include "third_party/blink/renderer/core/layout/hit_test_request.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
@@ -430,6 +431,12 @@ bool FrameSelection::Modify(SelectionModifyAlteration alter,
           DispatchEventResult::kNotCanceled) {
     return false;
   }
+
+  // |DispatchSelectStart()| can change document hosted by |frame_|.
+  if (!IsAvailable()) {
+    return false;
+  }
+
   if (!modified) {
     if (set_selection_by == SetSelectionBy::kSystem)
       return false;
@@ -740,11 +747,12 @@ void FrameSelection::SelectFrameElementInParentIfFullySelected() {
   if (!owner_element->isConnected() ||
       owner_element->GetDocument() != parent_local_frame->GetDocument())
     return;
-  parent_local_frame->Selection().SetSelectionAndEndTyping(
+  parent_local_frame->Selection().SetSelection(
       SelectionInDOMTree::Builder()
           .SetBaseAndExtent(Position::BeforeNode(*owner_element),
                             Position::AfterNode(*owner_element))
-          .Build());
+          .Build(),
+      SetSelectionOptions());
 }
 
 // Returns a shadow tree node for legacy shadow trees, a child of the
@@ -1142,9 +1150,10 @@ void FrameSelection::SetSelectionFromNone() {
     return;
   if (HTMLBodyElement* body =
           Traversal<HTMLBodyElement>::FirstChild(*document_element)) {
-    SetSelectionAndEndTyping(SelectionInDOMTree::Builder()
-                                 .Collapse(FirstPositionInOrBeforeNode(*body))
-                                 .Build());
+    SetSelection(SelectionInDOMTree::Builder()
+                     .Collapse(FirstPositionInOrBeforeNode(*body))
+                     .Build(),
+                 SetSelectionOptions());
   }
 }
 

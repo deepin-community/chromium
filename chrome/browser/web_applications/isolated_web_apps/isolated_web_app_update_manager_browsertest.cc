@@ -5,12 +5,12 @@
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_update_manager.h"
 
 #include <optional>
+#include <string_view>
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/gmock_expected_support.h"
@@ -23,7 +23,8 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_install_source.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_storage_location.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_constants.h"
@@ -70,9 +71,9 @@ inline constexpr uint8_t kTestPrivateKey[] = {
     0x7D, 0xBD, 0x00, 0x43, 0x61, 0x10, 0x1A, 0x92, 0xD4, 0x02, 0x72, 0xFE,
     0x2B, 0xCE, 0x81, 0xBB, 0x3B, 0x71, 0x3F, 0x2D};
 
-constexpr base::StringPiece kUpdateManifestFileName = "update_manifest.json";
-constexpr base::StringPiece kBundle304FileName = "bundle304.swbn";
-constexpr base::StringPiece kBundle706FileName = "bundle706.swbn";
+constexpr std::string_view kUpdateManifestFileName = "update_manifest.json";
+constexpr std::string_view kBundle304FileName = "bundle304.swbn";
+constexpr std::string_view kBundle706FileName = "bundle706.swbn";
 
 class ServiceWorkerVersionStartedRunningWaiter
     : public content::ServiceWorkerContextObserver {
@@ -172,12 +173,10 @@ class IsolatedWebAppUpdateManagerBrowserTest
         });
       )");
     base::FilePath bundle_304_path = temp_dir_.Append(kBundle304FileName);
-    std::vector<uint8_t> bundle_304_contents =
-        builder.BuildInMemoryBundle(key_pair);
-    CHECK(base::WriteFile(bundle_304_path, bundle_304_contents));
+    bundle_304_ = builder.BuildBundle(bundle_304_path, key_pair);
 
     base::FilePath bundle_706_path = temp_dir_.Append(kBundle706FileName);
-    std::vector<uint8_t> bundle_706_contents =
+    bundle_706_ =
         IsolatedWebAppBuilder(
             ManifestBuilder().SetName("app-7.0.6").SetVersion("7.0.6"))
             .AddHtml("/", R"(
@@ -188,8 +187,7 @@ class IsolatedWebAppUpdateManagerBrowserTest
                   <h1>Hello from version 7.0.6</h1>
                 </body>
             )")
-            .BuildInMemoryBundle(key_pair);
-    CHECK(base::WriteFile(bundle_706_path, bundle_706_contents));
+            .BuildBundle(bundle_706_path, key_pair);
 
     EXPECT_TRUE(base::WriteFile(
         temp_dir_.Append(kUpdateManifestFileName),
@@ -212,6 +210,8 @@ class IsolatedWebAppUpdateManagerBrowserTest
   std::optional<IsolatedWebAppUrlInfo> url_info_;
   base::FilePath temp_dir_;
   net::EmbeddedTestServer iwa_server_;
+  std::unique_ptr<BundledIsolatedWebApp> bundle_304_;
+  std::unique_ptr<BundledIsolatedWebApp> bundle_706_;
 };
 
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppUpdateManagerBrowserTest, Succeeds) {
@@ -231,7 +231,10 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppUpdateManagerBrowserTest, Succeeds) {
         future;
     provider().scheduler().InstallIsolatedWebApp(
         url_info_.value(),
-        InstalledBundle{.path = temp_dir_.Append(kBundle304FileName)},
+        IsolatedWebAppInstallSource::FromExternalPolicy(
+            IwaSourceBundleProdModeWithFileOp(
+                temp_dir_.Append(kBundle304FileName),
+                IwaSourceBundleProdFileOp::kCopy)),
         base::Version("3.0.4"), /*optional_keep_alive=*/nullptr,
         /*optional_profile_keep_alive=*/nullptr, future.GetCallback());
     EXPECT_THAT(future.Take(), HasValue());
@@ -249,7 +252,9 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppUpdateManagerBrowserTest, Succeeds) {
   EXPECT_THAT(web_app,
               test::IwaIs(Eq("app-7.0.6"),
                           test::IsolationDataIs(
-                              VariantWith<InstalledBundle>(_),
+                              Property("variant",
+                                       &IsolatedWebAppStorageLocation::variant,
+                                       VariantWith<IwaStorageOwnedBundle>(_)),
                               Eq(base::Version("7.0.6")),
                               /*controlled_frame_partitions=*/_,
                               /*pending_update_info=*/Eq(std::nullopt))));
@@ -273,7 +278,10 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppUpdateManagerBrowserTest,
         future;
     provider().scheduler().InstallIsolatedWebApp(
         url_info_.value(),
-        InstalledBundle{.path = temp_dir_.Append(kBundle304FileName)},
+        IsolatedWebAppInstallSource::FromExternalPolicy(
+            IwaSourceBundleProdModeWithFileOp(
+                temp_dir_.Append(kBundle304FileName),
+                IwaSourceBundleProdFileOp::kCopy)),
         base::Version("3.0.4"), /*optional_keep_alive=*/nullptr,
         /*optional_profile_keep_alive=*/nullptr, future.GetCallback());
     EXPECT_THAT(future.Take(), HasValue());
@@ -313,7 +321,9 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppUpdateManagerBrowserTest,
   EXPECT_THAT(web_app,
               test::IwaIs(Eq("app-7.0.6"),
                           test::IsolationDataIs(
-                              VariantWith<InstalledBundle>(_),
+                              Property("variant",
+                                       &IsolatedWebAppStorageLocation::variant,
+                                       VariantWith<IwaStorageOwnedBundle>(_)),
                               Eq(base::Version("7.0.6")),
                               /*controlled_frame_partitions=*/_,
                               /*pending_update_info=*/Eq(std::nullopt))));
@@ -348,7 +358,10 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppUpdateManagerBrowserTest,
         future;
     provider().scheduler().InstallIsolatedWebApp(
         url_info_.value(),
-        InstalledBundle{.path = temp_dir_.Append(kBundle304FileName)},
+        IsolatedWebAppInstallSource::FromExternalPolicy(
+            IwaSourceBundleProdModeWithFileOp(
+                temp_dir_.Append(kBundle304FileName),
+                IwaSourceBundleProdFileOp::kCopy)),
         base::Version("3.0.4"), /*optional_keep_alive=*/nullptr,
         /*optional_profile_keep_alive=*/nullptr, future.GetCallback());
     EXPECT_THAT(future.Take(), HasValue());
@@ -388,7 +401,9 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppUpdateManagerBrowserTest,
   EXPECT_THAT(provider().registrar_unsafe().GetAppById(url_info_->app_id()),
               test::IwaIs(Eq("app-7.0.6"),
                           test::IsolationDataIs(
-                              VariantWith<InstalledBundle>(_),
+                              Property("variant",
+                                       &IsolatedWebAppStorageLocation::variant,
+                                       VariantWith<IwaStorageOwnedBundle>(_)),
                               Eq(base::Version("7.0.6")),
                               /*controlled_frame_partitions=*/_,
                               /*pending_update_info=*/Eq(std::nullopt))));

@@ -563,10 +563,10 @@ class SellerWorkletTest : public testing::Test {
     SCOPED_TRACE(javascript);
     AddJavascriptResponse(&url_loader_factory_, decision_logic_url_,
                           javascript);
-    RunReportResultExpectingResult(expected_signals_for_winner,
-                                   expected_report_url, expected_ad_beacon_map,
-                                   std::move(expected_pa_requests),
-                                   expected_errors);
+    RunReportResultExpectingResult(
+        expected_signals_for_winner, expected_report_url,
+        expected_ad_beacon_map, std::move(expected_pa_requests),
+        /*expected_reporting_latency_timeout=*/false, expected_errors);
   }
 
   // Loads and runs a report_result() script, expecting the supplied result.
@@ -603,6 +603,7 @@ class SellerWorkletTest : public testing::Test {
                const base::flat_map<std::string, GURL>& expected_ad_beacon_map,
                PrivateAggregationRequests expected_pa_requests,
                bool expected_reporting_latency_timeout,
+               std::optional<base::TimeDelta> reporting_timeout,
                const std::vector<std::string>& expected_errors,
                base::OnceClosure done_closure,
                const std::optional<std::string>& signals_for_winner,
@@ -628,15 +629,19 @@ class SellerWorkletTest : public testing::Test {
                 // We only know that about the time of the timeout should have
                 // elapsed, and there may also be some thread skew.
                 EXPECT_GE(reporting_latency,
-                          AuctionV8Helper::kScriptTimeout * 0.9);
+                          (reporting_timeout.has_value()
+                               ? reporting_timeout.value()
+                               : AuctionV8Helper::kScriptTimeout) *
+                              0.9);
               }
               EXPECT_EQ(expected_errors, errors);
               std::move(done_closure).Run();
             },
             expected_signals_for_winner, expected_report_url,
             expected_ad_beacon_map, std::move(expected_pa_requests),
-            expected_reporting_latency_timeout, expected_errors,
-            std::move(done_closure)));
+            expected_reporting_latency_timeout,
+            auction_ad_config_non_shared_params_.reporting_timeout,
+            expected_errors, std::move(done_closure)));
   }
 
   void RunReportResultExpectingCallbackNeverInvoked(
@@ -675,6 +680,7 @@ class SellerWorkletTest : public testing::Test {
       const base::flat_map<std::string, GURL>& expected_ad_beacon_map =
           base::flat_map<std::string, GURL>(),
       PrivateAggregationRequests expected_pa_requests = {},
+      bool expected_reporting_latency_timeout = false,
       const std::vector<std::string>& expected_errors =
           std::vector<std::string>()) {
     auto seller_worklet = CreateWorklet();
@@ -684,7 +690,7 @@ class SellerWorkletTest : public testing::Test {
     RunReportResultExpectingResultAsync(
         seller_worklet.get(), expected_signals_for_winner, expected_report_url,
         expected_ad_beacon_map, std::move(expected_pa_requests),
-        /*expected_reporting_latency_timeout=*/false, expected_errors,
+        expected_reporting_latency_timeout, expected_errors,
         run_loop.QuitClosure());
     run_loop.Run();
   }
@@ -3351,6 +3357,13 @@ TEST_F(SellerWorkletTest, ReportResultAuctionConfigParam) {
       blink::AuctionConfig::MaybePromiseBuyerTimeouts::FromValue(
           std::move(buyer_cumulative_timeouts));
 
+  std::vector<blink::AuctionConfig::AdKeywordReplacement> example_replacement =
+      {blink::AuctionConfig::AdKeywordReplacement({"${SELLER}", "ExampleSSP"})};
+
+  auction_ad_config_non_shared_params_.deprecated_render_url_replacements =
+      blink::AuctionConfig::MaybePromiseDeprecatedRenderURLReplacements::
+          FromValue(std::move(example_replacement));
+
   blink::AuctionConfig::BuyerCurrencies buyer_currencies;
   buyer_currencies.per_buyer_currencies.emplace();
   buyer_currencies.per_buyer_currencies
@@ -3384,7 +3397,8 @@ TEST_F(SellerWorkletTest, ReportResultAuctionConfigParam) {
           "perBuyerTimeouts":{"https://a.com":100,"*":150},
           "perBuyerCumulativeTimeouts":{"https://a.com":101,"*":151},
           "perBuyerPrioritySignals":{"https://a.com":{"signals_c":0.5},
-                                     "*":            {"signals_d":0}}
+                                     "*":            {"signals_d":0}},
+          "deprecatedRenderURLReplacements": {"${SELLER}":"ExampleSSP"}
         })";
   RunReportResultCreatedScriptExpectingResult(
       "auctionConfig", /*extra_code=*/std::string(), kExpectedJson1,
@@ -3770,6 +3784,9 @@ TEST_F(SellerWorkletTest, ReportResultLoadCompletionOrder) {
 // Subsequent runs of the same script should not affect each other. Same is true
 // for different scripts, but it follows from the single script case.
 TEST_F(SellerWorkletTest, ScriptIsolation) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      blink::features::kFledgeAlwaysReuseSellerContext);
   // Use arrays so that all values are references, to catch both the case where
   // variables are persisted, and the case where what they refer to is
   // persisted, but variables are overwritten between runs.
@@ -3865,6 +3882,156 @@ TEST_F(SellerWorkletTest, ScriptIsolation) {
               }));
       run_loop.Run();
     }
+  }
+}
+
+TEST_F(SellerWorkletTest,
+       ContextIsReusedIfFledgeAlwaysReuseSellerContextEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      blink::features::kFledgeAlwaysReuseSellerContext);
+  AddJavascriptResponse(&url_loader_factory_, decision_logic_url_,
+                        R"(
+        // Globally scoped variable.
+        if (!globalThis.var1)
+          globalThis.var1 = [1];
+        scoreAd = function() {
+          // Value only visible within this closure.
+          var var2 = [2];
+          return function() {
+            if (2 == ++globalThis.var1[0] && 3 == ++var2[0])
+              return 2;
+            return 1;
+          }
+        }();
+
+        reportResult = scoreAd;
+      )");
+  auto seller_worklet = CreateWorklet();
+  ASSERT_TRUE(seller_worklet);
+  std::vector<double> expected_scores = {2, 1, 1};
+  for (int i = 0; i < 3; ++i) {
+    double expected_score = expected_scores[i];
+    base::RunLoop run_loop;
+    seller_worklet->ScoreAd(
+        ad_metadata_, bid_, bid_currency_, auction_ad_config_non_shared_params_,
+        direct_from_seller_seller_signals_,
+        direct_from_seller_seller_signals_header_ad_slot_,
+        direct_from_seller_auction_signals_,
+        direct_from_seller_auction_signals_header_ad_slot_,
+        browser_signals_other_seller_.Clone(), component_expect_bid_currency_,
+        browser_signal_interest_group_owner_, browser_signal_render_url_,
+        browser_signal_ad_components_, browser_signal_bidding_duration_msecs_,
+        browser_signal_for_debugging_only_in_cooldown_or_lockout_,
+        seller_timeout_,
+        /*trace_id=*/1,
+        TestScoreAdClient::Create(base::BindLambdaForTesting(
+            [&run_loop, &expected_score](
+                double score, mojom::RejectReason reject_reason,
+                mojom::ComponentAuctionModifiedBidParamsPtr
+                    component_auction_modified_bid_params,
+                std::optional<double> bid_in_seller_currency,
+                std::optional<uint32_t> scoring_signals_data_version,
+                const std::optional<GURL>& debug_loss_report_url,
+                const std::optional<GURL>& debug_win_report_url,
+                PrivateAggregationRequests pa_requests,
+                base::TimeDelta scoring_latency,
+                mojom::ScoreAdDependencyLatenciesPtr
+                    score_ad_dependency_latencies,
+                const std::vector<std::string>& errors) {
+              EXPECT_EQ(expected_score, score);
+              EXPECT_FALSE(scoring_signals_data_version.has_value());
+              EXPECT_TRUE(errors.empty());
+              run_loop.Quit();
+            })));
+    run_loop.Run();
+  }
+
+  // The Report worklet should still get a fresh context.
+  base::RunLoop run_loop;
+  seller_worklet->ReportResult(
+      auction_ad_config_non_shared_params_, direct_from_seller_seller_signals_,
+      direct_from_seller_seller_signals_header_ad_slot_,
+      direct_from_seller_auction_signals_,
+      direct_from_seller_auction_signals_header_ad_slot_,
+      browser_signals_other_seller_.Clone(),
+      browser_signal_interest_group_owner_,
+      browser_signal_buyer_and_seller_reporting_id_, browser_signal_render_url_,
+      bid_, bid_currency_, browser_signal_desireability_,
+      browser_signal_highest_scoring_other_bid_,
+      browser_signal_highest_scoring_other_bid_currency_,
+      browser_signals_component_auction_report_result_params_.Clone(),
+      browser_signal_data_version_,
+      /*trace_id=*/1,
+      base::BindLambdaForTesting(
+          [&run_loop](const std::optional<std::string>& signals_for_winner,
+                      const std::optional<GURL>& report_url,
+                      const base::flat_map<std::string, GURL>& ad_beacon_map,
+                      PrivateAggregationRequests pa_requests,
+                      base::TimeDelta reporting_latency,
+                      const std::vector<std::string>& errors) {
+            EXPECT_EQ("2", signals_for_winner);
+            EXPECT_TRUE(errors.empty());
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+}
+
+TEST_F(SellerWorkletTest, ContextReuseDoesNotCrashLazyFiller) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      blink::features::kFledgeAlwaysReuseSellerContext);
+  AddJavascriptResponse(&url_loader_factory_, decision_logic_url_,
+                        R"(
+        scoreAd = function(adMetadata, bid, auctionConfig){
+            if (!globalThis.auctionConfig) {
+                globalThis.auctionConfig = auctionConfig;
+            } else {
+                // Access a lazily loaded attribute from a prior run
+                // of this function.
+                console.log(globalThis.auctionConfig.decisionLogicUrl);
+            }
+            return 1;
+        };
+        reportResult = scoreAd;
+      )");
+  auto seller_worklet = CreateWorklet();
+  ASSERT_TRUE(seller_worklet);
+  for (int i = 0; i < 3; ++i) {
+    double expected_score = 1;
+    base::RunLoop run_loop;
+    seller_worklet->ScoreAd(
+        ad_metadata_, bid_, bid_currency_, auction_ad_config_non_shared_params_,
+        direct_from_seller_seller_signals_,
+        direct_from_seller_seller_signals_header_ad_slot_,
+        direct_from_seller_auction_signals_,
+        direct_from_seller_auction_signals_header_ad_slot_,
+        browser_signals_other_seller_.Clone(), component_expect_bid_currency_,
+        browser_signal_interest_group_owner_, browser_signal_render_url_,
+        browser_signal_ad_components_, browser_signal_bidding_duration_msecs_,
+        browser_signal_for_debugging_only_in_cooldown_or_lockout_,
+        seller_timeout_,
+        /*trace_id=*/1,
+        TestScoreAdClient::Create(base::BindLambdaForTesting(
+            [&run_loop, &expected_score](
+                double score, mojom::RejectReason reject_reason,
+                mojom::ComponentAuctionModifiedBidParamsPtr
+                    component_auction_modified_bid_params,
+                std::optional<double> bid_in_seller_currency,
+                std::optional<uint32_t> scoring_signals_data_version,
+                const std::optional<GURL>& debug_loss_report_url,
+                const std::optional<GURL>& debug_win_report_url,
+                PrivateAggregationRequests pa_requests,
+                base::TimeDelta scoring_latency,
+                mojom::ScoreAdDependencyLatenciesPtr
+                    score_ad_dependency_latencies,
+                const std::vector<std::string>& errors) {
+              EXPECT_EQ(expected_score, score);
+              EXPECT_FALSE(scoring_signals_data_version.has_value());
+              EXPECT_TRUE(errors.empty());
+              run_loop.Quit();
+            })));
+    run_loop.Run();
   }
 }
 
@@ -4967,7 +5134,7 @@ class SellerWorkletRealTimeTest : public SellerWorkletTest {
 
 // `scoreAd` should time out due to AuctionV8Helper's default script timeout (50
 // ms).
-TEST_F(SellerWorkletRealTimeTest, ScoreAdTimedOut) {
+TEST_F(SellerWorkletRealTimeTest, ScoreAdDefaultTimeout) {
   AddJavascriptResponse(
       &url_loader_factory_, decision_logic_url_,
       CreateScoreAdScript(/*raw_return_value=*/"", R"(while (1))"));
@@ -4989,6 +5156,14 @@ TEST_F(SellerWorkletRealTimeTest, ScoreAdTimedOut) {
       /*expected_signals_fetch_latency=*/std::nullopt,
       /*expected_code_ready_latency=*/std::nullopt, run_loop.QuitClosure());
   run_loop.Run();
+}
+
+// Test that seller timeout zero results in no score produced.
+TEST_F(SellerWorkletRealTimeTest, ScoreAdZeroTimeout) {
+  seller_timeout_ = base::TimeDelta();
+  RunScoreAdWithReturnValueExpectingResult(
+      "10", /*expected_score=*/0,
+      /*expected_errors=*/{"scoreAd() aborted due to zero timeout."});
 }
 
 TEST_F(SellerWorkletRealTimeTest, ScoreAdSellerTimeoutFromAuctionConfig) {
@@ -5031,26 +5206,66 @@ TEST_F(SellerWorkletRealTimeTest, ScoreAdSellerTimeoutFromAuctionConfig) {
   run_loop.Run();
 }
 
+// Tests both reporting latency, and default reporting timeout.
 TEST_F(SellerWorkletRealTimeTest, ReportResultLatency) {
   // We use an infinite loop since we have some notion of how long a timeout
   // should take.
   AddJavascriptResponse(&url_loader_factory_, decision_logic_url_,
                         CreateReportToScript("1", "while (true) {}"));
 
-  mojo::Remote<mojom::SellerWorklet> seller_worklet = CreateWorklet();
-
-  base::RunLoop run_loop;
-  RunReportResultExpectingResultAsync(
-      seller_worklet.get(),
+  RunReportResultExpectingResult(
       /*expected_signals_for_winner=*/std::nullopt,
       /*expected_report_url=*/std::nullopt,
       /*expected_ad_beacon_map=*/{},
       /*expected_pa_requests=*/{},
       /*expected_reporting_latency_timeout=*/true,
       /*expected_errors=*/
-      {"https://url.test/ execution of `reportResult` timed out."},
-      run_loop.QuitClosure());
-  run_loop.Run();
+      {"https://url.test/ execution of `reportResult` timed out."});
+}
+
+TEST_F(SellerWorkletRealTimeTest, ReportResultZeroTimeout) {
+  AddJavascriptResponse(&url_loader_factory_, decision_logic_url_,
+                        CreateReportToScript("1", "throw 'something'"));
+
+  auction_ad_config_non_shared_params_.reporting_timeout = base::TimeDelta();
+  RunReportResultExpectingResult(
+      /*expected_signals_for_winner=*/std::nullopt,
+      /*expected_report_url=*/std::nullopt,
+      /*expected_ad_beacon_map=*/{},
+      /*expected_pa_requests=*/{},
+      /*expected_reporting_latency_timeout=*/true,
+      /*expected_errors=*/
+      {"reportResult() aborted due to zero timeout."});
+}
+
+TEST_F(SellerWorkletRealTimeTest, ReportResultTimeoutFromAuctionConfig) {
+  // Use a very long default script timeout, and a short reporting timeout, so
+  // that if the reportResult() script with endless loop times out, we know that
+  // the reporting timeout overwrote the default script timeout and worked.
+  const base::TimeDelta kScriptTimeout = base::Days(360);
+  v8_helper_->v8_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](scoped_refptr<AuctionV8Helper> v8_helper,
+             const base::TimeDelta script_timeout) {
+            v8_helper->set_script_timeout_for_testing(script_timeout);
+          },
+          v8_helper_, kScriptTimeout));
+  // Make sure set_script_timeout_for_testing is called.
+  task_environment_.RunUntilIdle();
+
+  auction_ad_config_non_shared_params_.reporting_timeout =
+      base::Milliseconds(50);
+  AddJavascriptResponse(&url_loader_factory_, decision_logic_url_,
+                        CreateReportToScript("1", "while (true) {}"));
+  RunReportResultExpectingResult(
+      /*expected_signals_for_winner=*/std::nullopt,
+      /*expected_report_url=*/std::nullopt,
+      /*expected_ad_beacon_map=*/{},
+      /*expected_pa_requests=*/{},
+      /*expected_reporting_latency_timeout=*/true,
+      /*expected_errors=*/
+      {"https://url.test/ execution of `reportResult` timed out."});
 }
 
 class SellerWorkletBiddingAndScoringDebugReportingAPIEnabledTest
@@ -5387,14 +5602,16 @@ TEST_F(SellerWorkletPrivateAggregationEnabledTest, ScoreAd) {
       mojom::AggregatableReportContribution::NewHistogramContribution(
           blink::mojom::AggregatableReportHistogramContribution::New(
               /*bucket=*/123,
-              /*value=*/45)),
+              /*value=*/45,
+              /*filtering_id=*/std::nullopt)),
       blink::mojom::AggregationServiceMode::kDefault,
       blink::mojom::DebugModeDetails::New());
   mojom::PrivateAggregationRequest kExpectedRequest2(
       mojom::AggregatableReportContribution::NewHistogramContribution(
           blink::mojom::AggregatableReportHistogramContribution::New(
               /*bucket=*/absl::MakeInt128(/*high=*/1, /*low=*/0),
-              /*value=*/1)),
+              /*value=*/1,
+              /*filtering_id=*/std::nullopt)),
       blink::mojom::AggregationServiceMode::kDefault,
       blink::mojom::DebugModeDetails::New());
 
@@ -5605,14 +5822,16 @@ TEST_F(SellerWorkletPrivateAggregationEnabledTest, ReportResult) {
       mojom::AggregatableReportContribution::NewHistogramContribution(
           blink::mojom::AggregatableReportHistogramContribution::New(
               /*bucket=*/123,
-              /*value=*/45)),
+              /*value=*/45,
+              /*filtering_id=*/std::nullopt)),
       blink::mojom::AggregationServiceMode::kDefault,
       blink::mojom::DebugModeDetails::New());
   mojom::PrivateAggregationRequest kExpectedRequest2(
       mojom::AggregatableReportContribution::NewHistogramContribution(
           blink::mojom::AggregatableReportHistogramContribution::New(
               /*bucket=*/absl::MakeInt128(/*high=*/1, /*low=*/0),
-              /*value=*/1)),
+              /*value=*/1,
+              /*filtering_id=*/std::nullopt)),
       blink::mojom::AggregationServiceMode::kDefault,
       blink::mojom::DebugModeDetails::New());
   mojom::PrivateAggregationRequest kExpectedForEventRequest(
@@ -5874,6 +6093,45 @@ TEST_F(SellerWorkletPrivateAggregationDisabledTest, ReportResult) {
       /*expected_errors=*/
       {"https://url.test/:10 Uncaught ReferenceError: privateAggregation is "
        "not defined."});
+}
+
+class SellerWorkletDeprecatedRenderURLReplacementsEnabledTest
+    : public SellerWorkletTest {
+ public:
+  SellerWorkletDeprecatedRenderURLReplacementsEnabledTest() {
+    feature_list_.InitAndEnableFeature(
+        blink::features::kFledgeDeprecatedRenderURLReplacements);
+  }
+
+ protected:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(SellerWorkletDeprecatedRenderURLReplacementsEnabledTest,
+       DeprecatedRenderURLReplacementsArePresentInScoreAdJavascript) {
+  const std::vector<blink::AuctionConfig::AdKeywordReplacement>
+      example_replacement = {blink::AuctionConfig::AdKeywordReplacement(
+          {"${SELLER}", "ExampleSSP"})};
+
+  auction_ad_config_non_shared_params_.deprecated_render_url_replacements =
+      blink::AuctionConfig::MaybePromiseDeprecatedRenderURLReplacements::
+          FromValue(std::move(example_replacement));
+
+  std::string render_url_replacements_validator =
+      R"(
+        const replacementsJson =
+    JSON.stringify(auctionConfig.deprecatedRenderURLReplacements);
+        if (!(replacementsJson === "{\"${SELLER}\":\"ExampleSSP\"}")) {
+          throw new Error('deprecatedRenderURLReplacements is incorrect' +
+          'or missing.');
+        })";
+
+  RunScoreAdWithJavascriptExpectingResult(
+      CreateScoreAdScript("1", render_url_replacements_validator), 1,
+      /*expected_errors=*/{}, mojom::ComponentAuctionModifiedBidParamsPtr(),
+      /*expected_data_version=*/std::nullopt,
+      /*expected_debug_loss_report_url=*/std::nullopt,
+      /*expected_debug_win_report_url=*/std::nullopt);
 }
 
 }  // namespace

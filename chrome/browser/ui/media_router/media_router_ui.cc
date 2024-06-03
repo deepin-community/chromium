@@ -5,9 +5,9 @@
 #include "chrome/browser/ui/media_router/media_router_ui.h"
 
 #include <utility>
+#include <vector>
 
 #include "base/atomic_sequence_num.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -261,7 +261,7 @@ bool MediaRouterUI::CreateRoute(const MediaSink::Id& sink_id,
 
   media_route_starter()->StartRoute(std::move(params));
 
-  // TODO(crbug.com/1015203): This call to UpdateSinks() was originally in
+  // TODO(crbug.com/40103608): This call to UpdateSinks() was originally in
   // StartCasting(), but it causes Chrome to crash when the desktop picker
   // dialog is shown, so for now we just don't call it in that case.  Move it
   // back once the problem is resolved.
@@ -293,7 +293,7 @@ std::vector<MediaSinkWithCastModes> MediaRouterUI::GetEnabledSinks() const {
   const std::string display_sink_id =
       WiredDisplayMediaRouteProvider::GetSinkIdForDisplay(
           display_observer_->GetCurrentDisplay());
-  base::EraseIf(enabled_sinks,
+  std::erase_if(enabled_sinks,
                 [&display_sink_id](const MediaSinkWithCastModes& sink) {
                   return sink.sink.id() == display_sink_id;
                 });

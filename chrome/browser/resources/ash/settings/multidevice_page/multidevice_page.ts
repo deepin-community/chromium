@@ -24,8 +24,8 @@ import './multidevice_subpage.js';
 import './multidevice_forget_device_dialog.js';
 
 import {NearbyShareSettingsMixin} from '/shared/nearby_share_settings_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {Visibility} from 'chrome://resources/mojo/chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom-webui.js';
@@ -702,7 +702,8 @@ export class SettingsMultidevicePageElement extends
     // element if the element is still focusable and within the viewport,
     // otherwise move the focus to <body>. Therefore, we need to move focus
     // manually to the subpage.
-    this.shadowRoot!.querySelector('settings-multidevice-subpage')!.focus();
+    this.shadowRoot!.getElementById(
+                        'settingsMultideviceSubpageWrapper')!.focus();
   }
 
   private onPinNumberSelected_(e: CustomEvent<{isPinNumberSelected: boolean}>):

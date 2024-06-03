@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {loadTimeData} from './i18n_setup.js';
 
 /**
  * Specifies page visibility based on incognito status and Chrome OS guest mode.
@@ -31,7 +31,7 @@ export interface PageVisibility {
 export interface AppearancePageVisibility {
   bookmarksBar: boolean;
   homeButton: boolean;
-  hoverCardImages: boolean;
+  hoverCard: boolean;
   pageZoom: boolean;
   setTheme: boolean;
   sidePanel: boolean;
@@ -84,7 +84,7 @@ if (loadTimeData.getBoolean('isGuest')) {
     appearance: {
       setTheme: false,
       homeButton: false,
-      hoverCardImages: false,
+      hoverCard: false,
       bookmarksBar: false,
       pageZoom: false,
       sidePanel: false,

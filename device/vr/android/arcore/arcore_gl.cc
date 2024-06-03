@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <limits>
 #include <utility>
+
 #include "base/android/android_hardware_buffer_compat.h"
 #include "base/android/jni_android.h"
 #include "base/containers/contains.h"
@@ -16,6 +17,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/angle_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -33,7 +35,6 @@
 #include "device/vr/util/transform_utils.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/gpu_fence.h"
 #include "ui/gl/gl_bindings.h"
@@ -592,10 +593,10 @@ void ArCoreGl::RecalculateUvsAndProjection() {
 
   // VRFieldOfView wants positive angles.
   mojom::VRFieldOfViewPtr field_of_view = mojom::VRFieldOfView::New();
-  field_of_view->left_degrees = gfx::RadToDeg(atanf(-left / depth_near));
-  field_of_view->right_degrees = gfx::RadToDeg(atanf(right / depth_near));
-  field_of_view->down_degrees = gfx::RadToDeg(atanf(-bottom / depth_near));
-  field_of_view->up_degrees = gfx::RadToDeg(atanf(top / depth_near));
+  field_of_view->left_degrees = base::RadToDeg(atanf(-left / depth_near));
+  field_of_view->right_degrees = base::RadToDeg(atanf(right / depth_near));
+  field_of_view->down_degrees = base::RadToDeg(atanf(-bottom / depth_near));
+  field_of_view->up_degrees = base::RadToDeg(atanf(top / depth_near));
   DVLOG(3) << " fov degrees up=" << field_of_view->up_degrees
            << " down=" << field_of_view->down_degrees
            << " left=" << field_of_view->left_degrees
@@ -717,12 +718,15 @@ void ArCoreGl::GetFrameData(
     // Note that even though the buffers are re-used this does not leak data
     // as the decision of whether or not the renderer gets camera frames is made
     // on a per-session and not a per-frame basis.
-    gpu::MailboxHolder camera_image_buffer_holder =
+    WebXrSharedBuffer* shared_buffer =
         ar_image_transport_->TransferCameraImageFrame(
             webxr_.get(), camera_image_size_, uv_transform_);
+    CHECK(shared_buffer);
 
     if (IsFeatureEnabled(device::mojom::XRSessionFeature::CAMERA_ACCESS)) {
-      frame_data->camera_image_buffer_holder = camera_image_buffer_holder;
+      frame_data->camera_image_buffer_shared_image =
+          shared_buffer->shared_image->Export();
+      frame_data->camera_image_buffer_sync_token = shared_buffer->sync_token;
       frame_data->camera_image_size = camera_image_size_;
     }
   }
@@ -753,9 +757,11 @@ void ArCoreGl::GetFrameData(
   if (ArImageTransport::UseSharedBuffer()) {
     // Set up a shared buffer for the renderer to draw into, it'll be sent
     // alongside the frame pose.
-    gpu::MailboxHolder buffer_holder = ar_image_transport_->TransferFrame(
+    WebXrSharedBuffer* shared_buffer = ar_image_transport_->TransferFrame(
         webxr_.get(), transfer_size_, uv_transform_);
-    frame_data->buffer_holder = buffer_holder;
+    CHECK(shared_buffer);
+    frame_data->buffer_shared_image = shared_buffer->shared_image->Export();
+    frame_data->buffer_sync_token = shared_buffer->sync_token;
   }
 
   // Create the frame data to return to the renderer.

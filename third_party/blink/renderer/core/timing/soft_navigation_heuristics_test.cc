@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
 
+#include <memory>
+
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -13,7 +15,6 @@
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/scheduler/public/task_attribution_info.h"
 #include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
@@ -59,10 +60,13 @@ TEST_F(SoftNavigationHeuristicsTest,
       test_heuristics->CreateEventScope(
           SoftNavigationHeuristics::EventScope::Type::kKeyboard,
           /*is_new_interaction=*/false));
+  auto* tracker = scheduler::TaskAttributionTracker::From(
+      GetScriptStateForTest()->GetIsolate());
+  ASSERT_TRUE(tracker);
   // NextId() required so that the first task ID is non-zero (because we hash on
   // key).
-  auto* task = MakeGarbageCollected<scheduler::TaskAttributionInfo>(
-      scheduler::TaskAttributionId().NextId(), nullptr);
+  auto* task = tracker->CreateTaskAttributionInfoForTest(
+      scheduler::TaskAttributionId().NextId());
   test_heuristics->OnCreateTaskScope(*task);
   ASSERT_TRUE(test_heuristics->GetInitialInteractionEncounteredForTest());
 }
@@ -132,10 +136,12 @@ TEST_F(SoftNavigationHeuristicsTest, UmaHistogramRecording) {
 TEST_F(SoftNavigationHeuristicsTest, ResetHeuristicOnSetBecameEmpty) {
   auto* heuristics = CreateSoftNavigationHeuristicsForTest();
   ASSERT_TRUE(heuristics);
-  auto* tracker = ThreadScheduler::Current()->GetTaskAttributionTracker();
-  ASSERT_TRUE(tracker);
 
   auto* script_state = GetScriptStateForTest();
+  auto* tracker =
+      scheduler::TaskAttributionTracker::From(script_state->GetIsolate());
+  ASSERT_TRUE(tracker);
+
   Persistent<scheduler::TaskAttributionInfo> root_task = nullptr;
   // Simulate a click.
   {
@@ -143,9 +149,9 @@ TEST_F(SoftNavigationHeuristicsTest, ResetHeuristicOnSetBecameEmpty) {
         heuristics->CreateEventScope(
             SoftNavigationHeuristics::EventScope::Type::kClick,
             /*is_new_interaction=*/true));
-    std::unique_ptr<TaskScope> task_scope = tracker->CreateTaskScope(
+    TaskScope task_scope = tracker->CreateTaskScope(
         script_state, /*parent_task=*/nullptr, TaskScopeType::kCallback);
-    root_task = tracker->RunningTask(script_state->GetIsolate());
+    root_task = tracker->RunningTask();
   }
   EXPECT_TRUE(root_task);
   EXPECT_GT(heuristics->GetLastInteractionTaskIdForTest(), 0u);
@@ -153,9 +159,9 @@ TEST_F(SoftNavigationHeuristicsTest, ResetHeuristicOnSetBecameEmpty) {
   // Simulate a descendant task.
   Persistent<scheduler::TaskAttributionInfo> descendant_task = nullptr;
   {
-    std::unique_ptr<TaskScope> task_scope = tracker->CreateTaskScope(
-        script_state, root_task, TaskScopeType::kCallback);
-    descendant_task = tracker->RunningTask(script_state->GetIsolate());
+    TaskScope task_scope = tracker->CreateTaskScope(script_state, root_task,
+                                                    TaskScopeType::kCallback);
+    descendant_task = tracker->RunningTask();
   }
   EXPECT_TRUE(descendant_task);
 
@@ -180,8 +186,11 @@ TEST_F(SoftNavigationHeuristicsTest, NestedEventScopesAreMerged) {
       heuristics->CreateEventScope(
           SoftNavigationHeuristics::EventScope::Type::kClick,
           /*is_new_interaction=*/true));
-  auto* task1 = MakeGarbageCollected<scheduler::TaskAttributionInfo>(
-      current_task_id, nullptr);
+  auto* tracker = scheduler::TaskAttributionTracker::From(
+      GetScriptStateForTest()->GetIsolate());
+  ASSERT_TRUE(tracker);
+
+  auto* task1 = tracker->CreateTaskAttributionInfoForTest(current_task_id);
   heuristics->OnCreateTaskScope(*task1);
 
   scheduler::TaskAttributionIdType interaction_id1 =
@@ -195,8 +204,7 @@ TEST_F(SoftNavigationHeuristicsTest, NestedEventScopesAreMerged) {
       heuristics->CreateEventScope(
           SoftNavigationHeuristics::EventScope::Type::kNavigate,
           /*is_new_interaction=*/true));
-  auto* task2 = MakeGarbageCollected<scheduler::TaskAttributionInfo>(
-      current_task_id, nullptr);
+  auto* task2 = tracker->CreateTaskAttributionInfoForTest(current_task_id);
   heuristics->OnCreateTaskScope(*task2);
 
   scheduler::TaskAttributionIdType interaction_id2 =

@@ -16,6 +16,7 @@
 #include "osp/msgs/osp_messages.h"
 #include "osp/public/network_service_manager.h"
 #include "osp/public/testing/message_demuxer_test_support.h"
+#include "platform/base/span.h"
 #include "platform/test/fake_clock.h"
 #include "platform/test/fake_task_runner.h"
 #include "util/osp_logging.h"
@@ -46,7 +47,7 @@ class UrlAvailabilityRequesterTest : public Test {
  public:
   UrlAvailabilityRequesterTest()
       : fake_clock_(Clock::time_point(std::chrono::milliseconds(1298424))),
-        task_runner_(&fake_clock_),
+        task_runner_(fake_clock_),
         quic_bridge_(task_runner_, FakeClock::now) {
     info1_ = {service_id_, friendly_name_, 1, quic_bridge_.kReceiverEndpoint};
   }
@@ -89,7 +90,7 @@ class UrlAvailabilityRequesterTest : public Test {
               ssize_t request_result_size =
                   msgs::DecodePresentationUrlAvailabilityRequest(
                       buffer, buffer_size, request);
-              OSP_DCHECK_GT(request_result_size, 0);
+              OSP_CHECK_GT(request_result_size, 0);
               return request_result_size;
             }));
   }
@@ -98,28 +99,27 @@ class UrlAvailabilityRequesterTest : public Test {
       const msgs::PresentationUrlAvailabilityRequest& request,
       std::vector<msgs::UrlAvailability>&& availabilities,
       ProtocolConnection* stream) {
-    msgs::PresentationUrlAvailabilityResponse response;
-    response.request_id = request.request_id;
-    response.url_availabilities = std::move(availabilities);
+    msgs::PresentationUrlAvailabilityResponse response = {
+        .request_id = request.request_id,
+        .url_availabilities = std::move(availabilities)};
     msgs::CborEncodeBuffer buffer;
     ssize_t encode_result =
         msgs::EncodePresentationUrlAvailabilityResponse(response, &buffer);
     ASSERT_GT(encode_result, 0);
-    stream->Write(buffer.data(), buffer.size());
+    stream->Write(ByteView(buffer.data(), buffer.size()));
   }
 
   void SendAvailabilityEvent(
       uint64_t watch_id,
       std::vector<msgs::UrlAvailability>&& availabilities,
       ProtocolConnection* stream) {
-    msgs::PresentationUrlAvailabilityEvent event;
-    event.watch_id = watch_id;
-    event.url_availabilities = std::move(availabilities);
+    msgs::PresentationUrlAvailabilityEvent event = {
+        .watch_id = watch_id, .url_availabilities = std::move(availabilities)};
     msgs::CborEncodeBuffer buffer;
     ssize_t encode_result =
         msgs::EncodePresentationUrlAvailabilityEvent(event, &buffer);
     ASSERT_GT(encode_result, 0);
-    stream->Write(buffer.data(), buffer.size());
+    stream->Write(ByteView(buffer.data(), buffer.size()));
   }
 
   FakeClock fake_clock_;

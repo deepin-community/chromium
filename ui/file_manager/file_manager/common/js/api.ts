@@ -6,7 +6,7 @@
  * @fileoverview Helpers for APIs used within Files app.
  */
 
-import {FilesAppDirEntry, FilesAppEntry} from '../../common/js/files_app_entry_types.js';
+import type {FilesAppDirEntry, FilesAppEntry} from '../../common/js/files_app_entry_types.js';
 
 import {unwrapEntry} from './entry_utils.js';
 import {promisify} from './util.js';
@@ -292,4 +292,15 @@ export async function getEntryProperties(
   return promisify(
       chrome.fileManagerPrivate.getEntryProperties, entries.map(unwrapEntry),
       properties);
+}
+
+export async function getMaterializedViews():
+    Promise<chrome.fileManagerPrivate.MaterializedView[]> {
+  try {
+    const views = await chrome.fileManagerPrivate.getMaterializedViews();
+    return views;
+  } catch (error: any) {
+    console.warn(error);
+    return [];
+  }
 }

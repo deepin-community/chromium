@@ -177,7 +177,16 @@ int av1_get_sb_cols_in_tile(const AV1_COMMON *cm, const TileInfo *tile) {
                            cm->seq_params->mib_size_log2);
 }
 
-void av1_get_uniform_tile_size(const AV1_COMMON *cm, int *w, int *h) {
+// Section 7.3.1 of the AV1 spec says, on pages 200-201:
+//   It is a requirement of bitstream conformance that the following conditions
+//   are met:
+//     ...
+//     * TileHeight is equal to (use_128x128_superblock ? 128 : 64) for all
+//       tiles (i.e. the tile is exactly one superblock high)
+//     * TileWidth is identical for all tiles and is an integer multiple of
+//       TileHeight (i.e. the tile is an integer number of superblocks wide)
+//     ...
+bool av1_get_uniform_tile_size(const AV1_COMMON *cm, int *w, int *h) {
   const CommonTileParams *const tiles = &cm->tiles;
   if (tiles->uniform_spacing) {
     *w = tiles->width;
@@ -187,7 +196,10 @@ void av1_get_uniform_tile_size(const AV1_COMMON *cm, int *w, int *h) {
       const int tile_width_sb =
           tiles->col_start_sb[i + 1] - tiles->col_start_sb[i];
       const int tile_w = tile_width_sb * cm->seq_params->mib_size;
-      assert(i == 0 || tile_w == *w);  // ensure all tiles have same dimension
+      // ensure all tiles have same dimension
+      if (i != 0 && tile_w != *w) {
+        return false;
+      }
       *w = tile_w;
     }
 
@@ -195,10 +207,14 @@ void av1_get_uniform_tile_size(const AV1_COMMON *cm, int *w, int *h) {
       const int tile_height_sb =
           tiles->row_start_sb[i + 1] - tiles->row_start_sb[i];
       const int tile_h = tile_height_sb * cm->seq_params->mib_size;
-      assert(i == 0 || tile_h == *h);  // ensure all tiles have same dimension
+      // ensure all tiles have same dimension
+      if (i != 0 && tile_h != *h) {
+        return false;
+      }
       *h = tile_h;
     }
   }
+  return true;
 }
 
 int av1_is_min_tile_width_satisfied(const AV1_COMMON *cm) {

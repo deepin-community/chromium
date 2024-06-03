@@ -18,6 +18,8 @@
 #include "core/fpdfdoc/cpdf_formcontrol.h"
 #include "core/fpdfdoc/cpdf_formfield.h"
 #include "core/fpdfdoc/cpdf_interactiveform.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/span.h"
 #include "fpdfsdk/cpdfsdk_formfillenvironment.h"
 #include "fpdfsdk/cpdfsdk_interactiveform.h"
@@ -29,8 +31,6 @@
 #include "fxjs/cjs_icon.h"
 #include "fxjs/fxv8.h"
 #include "fxjs/js_resources.h"
-#include "third_party/base/check.h"
-#include "third_party/base/notreached.h"
 #include "v8/include/v8-container.h"
 
 namespace {
@@ -144,7 +144,7 @@ std::optional<FieldNameData> ParseFieldName(const WideString& field_name) {
   WideString suffixal = field_name.Last(reverse_it - field_name.rbegin());
   int control_index = FXSYS_wtoi(suffixal.c_str());
   if (control_index == 0) {
-    suffixal.TrimRight(L' ');
+    suffixal.TrimBack(L' ');
     if (suffixal != L"0") {
       return std::nullopt;
     }
@@ -2146,7 +2146,7 @@ CJS_Result CJS_Field::get_value_as_string(CJS_Runtime* pRuntime) {
     if (!pFormField->CountControls())
       return CJS_Result::Failure(JSMessage::kBadObjectError);
     return CJS_Result::Success(pRuntime->NewString(
-        pFormField->GetControl(0)->IsChecked() ? L"Yes" : L"Off"));
+        pFormField->GetControl(0)->IsChecked() ? "Yes" : "Off"));
   }
 
   if (pFormField->GetFieldType() == FormFieldType::kRadioButton &&

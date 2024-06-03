@@ -7,15 +7,8 @@
 #include "base/apple/foundation_util.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/callback_forward.h"
+#import "components/remote_cocoa/app_shim/NSToolbar+Private.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
-
-// Access the private view that backs the toolbar.
-// TODO(http://crbug.com/40261565): Remove when FB12010731 is fixed in AppKit.
-@interface NSToolbar (ToolbarView)
-// The current usage of this property is readonly. Mark it as such here so we
-// don't invite other usages without a thoughtful change.
-@property(readonly) NSView* _toolbarView;
-@end
 
 namespace remote_cocoa {
 
@@ -25,6 +18,9 @@ ImmersiveModeTabbedControllerCocoa::ImmersiveModeTabbedControllerCocoa(
     NativeWidgetMacNSWindow* tab_window)
     : ImmersiveModeControllerCocoa(browser_window, overlay_window) {
   tab_window_ = tab_window;
+#ifndef NDEBUG
+  tab_window_.title = @"tab overlay";
+#endif  // NDEBUG
 
   browser_window.titleVisibility = NSWindowTitleHidden;
 
@@ -207,8 +203,7 @@ void ImmersiveModeTabbedControllerCocoa::TitlebarReveal() {
   // and re-add the tab controller so its view is z-order above the toolbar
   // view. See http://crbug/40283902 for details.
   // TODO(http://crbug.com/40261565): Remove when FB12010731 is fixed in AppKit.
-  if ([toolbar respondsToSelector:@selector(_toolbarView)]) {
-    NSView* toolbar_view = toolbar._toolbarView;
+  if (NSView* toolbar_view = toolbar.privateToolbarView) {
     [toolbar_view.superview addSubview:toolbar_view
                             positioned:NSWindowBelow
                             relativeTo:nil];
@@ -268,7 +263,12 @@ void ImmersiveModeTabbedControllerCocoa::OrderTabWindowZOrderOnTop() {
   // window to always be z-order on top of overlay window children.
   // Practically this allows for the tab preview hover card to be z-order on top
   // of omnibox results popup.
-  if (overlay_window().childWindows.lastObject != tab_window_) {
+  // If the tab window does not have a parent or the parent is not the overlay
+  // window, do not perform the shuffle. Otherwise we could throw off the child
+  // window counts in NativeWidgetNSWindowBridge::NotifyVisibilityChangeDown
+  // during immersive fullscreen exit.
+  if (tab_window_.parentWindow == overlay_window() &&
+      overlay_window().childWindows.lastObject != tab_window_) {
     [overlay_window() removeChildWindow:tab_window_];
     [overlay_window() addChildWindow:tab_window_ ordered:NSWindowAbove];
   }

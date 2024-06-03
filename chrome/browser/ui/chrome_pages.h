@@ -127,6 +127,9 @@ enum FeedbackSource {
   kFeedbackSourceLogin,
   kFeedbackSourceAI,
   kFeedbackSourceFocusMode,
+  kFeedbackSourceOverview,
+  kFeedbackSourceSnapGroups,
+  kFeedbackSourceBirch,
 
   // ATTENTION: Before making any changes or adding to feedback collection,
   // please ensure the teams that operationalize feedback are aware and
@@ -208,6 +211,8 @@ void ShowSettingsSubPageInTabbedBrowser(Browser* browser,
                                         const std::string& sub_page);
 void ShowClearBrowsingDataDialog(Browser* browser);
 void ShowPasswordManager(Browser* browser);
+void ShowPasswordDetailsPage(Browser* browser,
+                             const std::string& password_domain_name);
 void ShowPasswordCheck(Browser* browser);
 void ShowSafeBrowsingEnhancedProtection(Browser* browser);
 void ShowSafeBrowsingEnhancedProtectionWithIph(
@@ -229,9 +234,6 @@ void ShowAllSitesSettingsFilteredByFpsOwner(
 // Shows the enterprise management info page in a browser tab.
 void ShowEnterpriseManagementPageInTabbedBrowser(Browser* browser);
 
-// Constructs an OS settings GURL for the specified |sub_page|.
-GURL GetOSSettingsUrl(const std::string& sub_page);
-
 void ShowAppManagementPage(Profile* profile,
                            const std::string& app_id,
                            ash::settings::AppManagementEntryPoint entry_point);
@@ -239,6 +241,9 @@ void ShowAppManagementPage(Profile* profile,
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
+// Constructs an OS settings GURL for the specified `sub_page`.
+GURL GetOSSettingsUrl(const std::string& sub_page);
+
 void ShowPrintManagementApp(Profile* profile);
 
 void ShowConnectivityDiagnosticsApp(Profile* profile);

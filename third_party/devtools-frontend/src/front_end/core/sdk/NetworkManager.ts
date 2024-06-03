@@ -537,6 +537,10 @@ export class NetworkDispatcher implements ProtocolProxyApi.NetworkDispatcher {
       networkRequest.setFromPrefetchCache();
     }
 
+    if (response.fromEarlyHints) {
+      networkRequest.setFromEarlyHints();
+    }
+
     if (response.cacheStorageCacheName) {
       networkRequest.setResponseCacheStorageCacheName(response.cacheStorageCacheName);
     }
@@ -901,6 +905,13 @@ export class NetworkDispatcher implements ProtocolProxyApi.NetworkDispatcher {
     this.getExtraInfoBuilder(requestId).addRequestExtraInfo(extraRequestInfo);
   }
 
+  responseReceivedEarlyHints({
+    requestId,
+    headers,
+  }: Protocol.Network.ResponseReceivedEarlyHintsEvent): void {
+    this.getExtraInfoBuilder(requestId).setEarlyHintsHeaders(this.headersMapToHeadersArray(headers));
+  }
+
   responseReceivedExtraInfo({
     requestId,
     blockedCookies,
@@ -927,6 +938,7 @@ export class NetworkDispatcher implements ProtocolProxyApi.NetworkDispatcher {
       cookiePartitionKeyOpaque,
       exemptedResponseCookies: exemptedCookies?.map(exemptedCookie => ({
                                                       cookie: Cookie.fromProtocolCookie(exemptedCookie.cookie),
+                                                      cookieLine: exemptedCookie.cookieLine,
                                                       exemptionReason: exemptedCookie.exemptionReason,
                                                     })),
     };
@@ -1031,7 +1043,6 @@ export class NetworkDispatcher implements ProtocolProxyApi.NetworkDispatcher {
         networkRequest.setTransferSize(encodedDataLength);
       }
     }
-    networkRequest.addBlockedRequestCookiesToModel();
     this.#manager.dispatchEventToListeners(Events.RequestFinished, networkRequest);
     MultitargetNetworkManager.instance().inflightMainResourceRequests.delete(networkRequest.requestId());
 
@@ -1358,14 +1369,21 @@ export class MultitargetNetworkManager extends Common.ObjectWrapper.ObjectWrappe
   private updateNetworkConditions(networkAgent: ProtocolProxyApi.NetworkApi): void {
     const conditions = this.#networkConditionsInternal;
     if (!this.isThrottling()) {
-      void networkAgent.invoke_emulateNetworkConditions(
-          {offline: false, latency: 0, downloadThroughput: 0, uploadThroughput: 0});
+      void networkAgent.invoke_emulateNetworkConditions({
+        offline: false,
+        latency: 0,
+        downloadThroughput: 0,
+        uploadThroughput: 0,
+      });
     } else {
       void networkAgent.invoke_emulateNetworkConditions({
         offline: this.isOffline(),
         latency: conditions.latency,
         downloadThroughput: conditions.download < 0 ? 0 : conditions.download,
         uploadThroughput: conditions.upload < 0 ? 0 : conditions.upload,
+        packetLoss: (conditions.packetLoss ?? 0) < 0 ? 0 : conditions.packetLoss,
+        packetQueueLength: conditions.packetQueueLength,
+        packetReordering: conditions.packetReordering,
         connectionType: NetworkManager.connectionType(conditions),
       });
     }
@@ -1801,6 +1819,7 @@ class ExtraInfoBuilder {
   readonly #requests: NetworkRequest[];
   #requestExtraInfos: (ExtraRequestInfo|null)[];
   #responseExtraInfos: (ExtraResponseInfo|null)[];
+  #responseEarlyHintsHeaders: NameValue[];
   #finishedInternal: boolean;
   #webBundleInfo: WebBundleInfo|null;
   #webBundleInnerRequestInfo: WebBundleInnerRequestInfo|null;
@@ -1808,6 +1827,7 @@ class ExtraInfoBuilder {
   constructor() {
     this.#requests = [];
     this.#requestExtraInfos = [];
+    this.#responseEarlyHintsHeaders = [];
     this.#responseExtraInfos = [];
     this.#finishedInternal = false;
     this.#webBundleInfo = null;
@@ -1827,6 +1847,11 @@ class ExtraInfoBuilder {
   addResponseExtraInfo(info: ExtraResponseInfo): void {
     this.#responseExtraInfos.push(info);
     this.sync(this.#responseExtraInfos.length - 1);
+  }
+
+  setEarlyHintsHeaders(earlyHintsHeaders: NameValue[]): void {
+    this.#responseEarlyHintsHeaders = earlyHintsHeaders;
+    this.updateFinalRequest();
   }
 
   setWebBundleInfo(info: WebBundleInfo): void {
@@ -1881,6 +1906,7 @@ class ExtraInfoBuilder {
     const finalRequest = this.finalRequest();
     finalRequest?.setWebBundleInfo(this.#webBundleInfo);
     finalRequest?.setWebBundleInnerRequestInfo(this.#webBundleInnerRequestInfo);
+    finalRequest?.setEarlyHintsHeaders(this.#responseEarlyHintsHeaders);
   }
 }
 
@@ -1911,13 +1937,17 @@ export function networkConditionsEqual(first: Conditions, second: Conditions): b
   const firstTitle = typeof first.title === 'function' ? first.title() : first.title;
   const secondTitle = typeof second.title === 'function' ? second.title() : second.title;
   return second.download === first.download && second.upload === first.upload && second.latency === first.latency &&
-      secondTitle === firstTitle;
+      first.packetLoss === second.packetLoss && first.packetQueueLength === second.packetQueueLength &&
+      first.packetReordering === second.packetReordering && secondTitle === firstTitle;
 }
 
 export interface Conditions {
   download: number;
   upload: number;
   latency: number;
+  packetLoss?: number;
+  packetQueueLength?: number;
+  packetReordering?: boolean;
   // TODO(crbug.com/1219425): In the future, it might be worthwhile to
   // consider avoiding mixing up presentation state (e.g.: displayed
   // titles) with behavioral state (e.g.: the throttling amounts). In

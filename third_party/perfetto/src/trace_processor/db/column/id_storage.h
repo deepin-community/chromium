@@ -48,22 +48,16 @@ class IdStorage final : public DataLayer {
                                     SqlValue,
                                     uint32_t) const override;
 
-    UniqueSearchResult UniqueSearch(FilterOp,
-                                    SqlValue,
-                                    uint32_t*) const override;
-
     SearchValidationResult ValidateSearchConstraints(FilterOp,
                                                      SqlValue) const override;
 
     RangeOrBitVector SearchValidated(FilterOp, SqlValue, Range) const override;
 
-    RangeOrBitVector IndexSearchValidated(FilterOp,
-                                          SqlValue,
-                                          Indices) const override;
+    void IndexSearchValidated(FilterOp, SqlValue, Indices&) const override;
 
     Range OrderedIndexSearchValidated(FilterOp,
                                       SqlValue,
-                                      Indices) const override;
+                                      const OrderedIndices&) const override;
 
     void StableSort(SortToken* start,
                     SortToken* end,

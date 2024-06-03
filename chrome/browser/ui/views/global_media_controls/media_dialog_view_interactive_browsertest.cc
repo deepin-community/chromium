@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -1240,6 +1239,11 @@ IN_PROC_BROWSER_TEST_F(MediaDialogViewWithBackForwardCacheBrowserTest,
             rfh->GetLifecycleState());
   EXPECT_FALSE(ui_.IsDialogVisible());
 
+  // The restored page is paused, and we do not expect the toolbar icon to be
+  // present until the playback restarts.
+  EXPECT_TRUE(ui_.WaitForToolbarIconHidden());
+  StartPlayback();
+  WaitForStart();
   EXPECT_TRUE(ui_.WaitForToolbarIconShown());
   ui_.ClickToolbarIcon();
   EXPECT_TRUE(ui_.WaitForDialogOpened());

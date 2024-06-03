@@ -107,16 +107,16 @@ namespace internal {
 #define DECOMPRESS_POINTER_BY_ADDRESSING_MODE false
 #endif
 
-#ifdef V8_COMPRESS_POINTERS_IN_ISOLATE_CAGE
-#define COMPRESS_POINTERS_IN_ISOLATE_CAGE_BOOL true
-#else
-#define COMPRESS_POINTERS_IN_ISOLATE_CAGE_BOOL false
-#endif
-
 #ifdef V8_COMPRESS_POINTERS_IN_SHARED_CAGE
 #define COMPRESS_POINTERS_IN_SHARED_CAGE_BOOL true
 #else
 #define COMPRESS_POINTERS_IN_SHARED_CAGE_BOOL false
+#endif
+
+#if COMPRESS_POINTERS_BOOL && !COMPRESS_POINTERS_IN_SHARED_CAGE_BOOL
+#define COMPRESS_POINTERS_IN_MULTIPLE_CAGES_BOOL true
+#else
+#define COMPRESS_POINTERS_IN_MULTIPLE_CAGES_BOOL false
 #endif
 
 #if defined(V8_SHARED_RO_HEAP) &&                     \
@@ -253,11 +253,6 @@ const size_t kShortBuiltinCallsOldSpaceSizeThreshold = size_t{2} * GB;
 //    OS::DiscardSystemPages() instead of using OS::DecommitPages() or setting
 //    permissions to kNoAccess because the latter two are not allowed by the
 //    MacOS (see (2)).
-// 5) since code space page headers are allocated as RWX pages it's also
-//   necessary to switch between W^X modes when updating the data in the
-//   page headers (i.e. when marking, updating stats, wiring pages in
-//   lists, etc.). The new CodePageHeaderModificationScope class is used
-//   in the respective places. On unrelated configurations it's a no-op.
 //
 // This is applicable only to MacOS on ARM64 ("Apple M1"/Apple Silicon) which
 // has a APRR/MAP_JIT machinery for fast W^X permission switching (see
@@ -276,6 +271,14 @@ const size_t kShortBuiltinCallsOldSpaceSizeThreshold = size_t{2} * GB;
 #define V8_HEAP_USE_PTHREAD_JIT_WRITE_PROTECT true
 #else
 #define V8_HEAP_USE_PTHREAD_JIT_WRITE_PROTECT false
+#endif
+
+// Protect the JavaScript heap with BrowserEngineKit APIs.
+#if V8_HAS_BECORE_JIT_WRITE_PROTECT && \
+    !(defined(V8_COMPRESS_POINTERS) && !defined(V8_EXTERNAL_CODE_SPACE))
+#define V8_HEAP_USE_BECORE_JIT_WRITE_PROTECT true
+#else
+#define V8_HEAP_USE_BECORE_JIT_WRITE_PROTECT false
 #endif
 
 // Protect the JavaScript heap with memory protection keys.
@@ -535,6 +538,15 @@ static_assert(kExternalPointerSlotSize == kTaggedSize);
 static_assert(kExternalPointerSlotSize == kSystemPointerSize);
 #endif
 
+// The storage type for pointers referring to CppHeap objects stored on the V8
+// heap.
+constexpr int kCppHeapPointerSlotSize = sizeof(CppHeapPointer_t);
+#ifdef V8_COMPRESS_POINTERS
+static_assert(kCppHeapPointerSlotSize == sizeof(uint32_t));
+#else
+static_assert(kCppHeapPointerSlotSize == kSystemPointerSize);
+#endif
+
 constexpr int kIndirectPointerSize = sizeof(IndirectPointerHandle);
 // When the sandbox is enabled, trusted pointers are implemented as indirect
 // pointers (indices into the trusted pointer table). Otherwise they are regular
@@ -545,6 +557,11 @@ constexpr int kTrustedPointerSize = kIndirectPointerSize;
 constexpr int kTrustedPointerSize = kTaggedSize;
 #endif
 constexpr int kCodePointerSize = kTrustedPointerSize;
+
+// Pointers between trusted objects use compressed pointers with the trusted
+// space base when the sandbox is enabled. Otherwise, they are regular tagged
+// pointers. Either way, they are always kTaggedSize fields.
+constexpr int kProtectedPointerSize = kTaggedSize;
 
 constexpr int kEmbedderDataSlotSize = kSystemPointerSize;
 
@@ -862,8 +879,8 @@ const Address kWeakHeapObjectMask = 1 << 1;
 // for cleared weak reference.
 // Note, that real heap objects can't have lower 32 bits equal to 3 because
 // this offset belongs to page header. So, in either case it's enough to
-// compare only the lower 32 bits of a MaybeObject value in order to figure
-// out if it's a cleared reference or not.
+// compare only the lower 32 bits of a Tagged<MaybeObject> value in order to
+// figure out if it's a cleared reference or not.
 const uint32_t kClearedWeakHeapObjectLower32 = 3;
 
 // Zap-value: The value used for zapping dead objects.
@@ -950,7 +967,6 @@ using DirectHandle = Handle<T>;
 #endif
 class Heap;
 class HeapObject;
-class HeapObjectReference;
 class IC;
 template <typename T>
 using IndirectHandle = Handle<T>;
@@ -976,7 +992,6 @@ using MaybeDirectHandle = MaybeHandle<T>;
 #endif
 template <typename T>
 using MaybeIndirectHandle = MaybeHandle<T>;
-class MaybeObject;
 #ifdef V8_ENABLE_DIRECT_HANDLE
 class MaybeObjectDirectHandle;
 #endif
@@ -985,7 +1000,9 @@ class MaybeObjectHandle;
 using MaybeObjectDirectHandle = MaybeObjectHandle;
 #endif
 using MaybeObjectIndirectHandle = MaybeObjectHandle;
-class MemoryChunk;
+template <typename T>
+class MaybeWeak;
+class MutablePageMetadata;
 class MessageLocation;
 class ModuleScope;
 class Name;
@@ -1046,6 +1063,9 @@ namespace compiler {
 class AccessBuilder;
 }
 
+using MaybeObject = MaybeWeak<Object>;
+using HeapObjectReference = MaybeWeak<HeapObject>;
+
 // Slots are either full-pointer slots or compressed slots depending on whether
 // pointer compression is enabled or not.
 struct SlotTraits {
@@ -1081,12 +1101,13 @@ struct SlotTraits {
 using ObjectSlot = SlotTraits::TObjectSlot;
 
 // A MaybeObjectSlot instance describes a kTaggedSize-sized on-heap field
-// ("slot") holding MaybeObject (smi or weak heap object or strong heap object).
+// ("slot") holding Tagged<MaybeObject> (smi or weak heap object or strong heap
+// object).
 using MaybeObjectSlot = SlotTraits::TMaybeObjectSlot;
 
 // A HeapObjectSlot instance describes a kTaggedSize-sized field ("slot")
 // holding a weak or strong pointer to a heap object (think:
-// HeapObjectReference).
+// Tagged<HeapObjectReference>).
 using HeapObjectSlot = SlotTraits::THeapObjectSlot;
 
 // An OffHeapObjectSlot instance describes a kTaggedSize-sized field ("slot")
@@ -1399,6 +1420,11 @@ enum class ExternalBackingStoreType {
   kArrayBuffer,
   kExternalString,
   kNumValues
+};
+
+enum class NewJSObjectType : uint8_t {
+  kNoAPIWrapper,
+  kAPIWrapper,
 };
 
 bool inline IsBaselineCodeFlushingEnabled(base::EnumSet<CodeFlushMode> mode) {
@@ -1851,8 +1877,12 @@ inline bool IsSerializableVariableMode(VariableMode mode) {
          IsPrivateMethodOrAccessorVariableMode(mode);
 }
 
-inline bool IsConstVariableMode(VariableMode mode) {
-  return mode == VariableMode::kConst ||
+inline bool IsImmutableLexicalVariableMode(VariableMode mode) {
+  return mode == VariableMode::kConst || mode == VariableMode::kUsing;
+}
+
+inline bool IsImmutableLexicalOrPrivateVariableMode(VariableMode mode) {
+  return IsImmutableLexicalVariableMode(mode) ||
          IsPrivateMethodOrAccessorVariableMode(mode);
 }
 
@@ -1988,6 +2018,8 @@ class BinaryOperationFeedback {
     kString = 0x10,
     kBigInt64 = 0x20,
     kBigInt = 0x60,
+    kStringWrapper = 0x80,
+    kStringOrStringWrapper = 0x90,
     kAny = 0x7F
   };
 };
@@ -2139,6 +2171,7 @@ enum ExternalArrayType {
   kExternalUint16Array,
   kExternalInt32Array,
   kExternalUint32Array,
+  kExternalFloat16Array,
   kExternalFloat32Array,
   kExternalFloat64Array,
   kExternalUint8ClampedArray,

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/toolbar/app_menu.h"
+
 #include <optional>
 #include <string>
 #include <utility>
@@ -33,7 +35,6 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/app_menu_button_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -113,7 +114,7 @@ void AppMenuBrowserTest::ShowUi(const std::string& name) {
       {"profile_menu_in_app_menu_signin_not_allowed",
        IDC_PROFILE_MENU_IN_APP_MENU},
   });
-  const auto* const id_entry = kSubmenus.find(name);
+  const auto id_entry = kSubmenus.find(name);
   if (id_entry == kSubmenus.end()) {
     ADD_FAILURE() << "Unknown submenu " << name;
     return;
@@ -244,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTestRefreshOnly,
 #endif
 
 IN_PROC_BROWSER_TEST_F(AppMenuBrowserTestRefreshOnly, InvokeUi_main_guest) {
-// TODO(crbug.com/1427667): ChromeOS specific profile logic still needs to be
+// TODO(crbug.com/40899974): ChromeOS specific profile logic still needs to be
 // updated, setup this test for a Guest user session with appropriate command
 // line switches afterwards.
 #if !BUILDFLAG(IS_CHROMEOS_ASH)

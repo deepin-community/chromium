@@ -244,14 +244,14 @@ fuzzer_test("browser_accessibility_fuzzer") {
     "//mojo/core/embedder",
     "//services/network:test_support",
     "//storage/browser:test_support",
+    "//ui/accessibility:test_support",
   ]
 }
 
 source_set("indexed_db_fuzzer_support") {
   public_deps = [
     "//base",
-    "//content/browser",
-    "//content/public/browser:browser_sources",
+    "//content/browser/indexed_db",
     "//third_party/blink/public/common:headers",
   ]
   testonly = true

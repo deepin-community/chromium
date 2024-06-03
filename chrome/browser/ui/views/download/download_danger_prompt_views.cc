@@ -220,7 +220,6 @@ std::u16string DownloadDangerPromptViews::GetMessageBody() const {
             IDS_PROMPT_DOWNLOAD_CHANGES_SETTINGS,
             download_->GetFileNameToReportUser().LossyDisplayName());
       }
-      case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
       case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING:
       case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
       case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING:
@@ -236,6 +235,7 @@ std::u16string DownloadDangerPromptViews::GetMessageBody() const {
       case download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT:
       case download::DOWNLOAD_DANGER_TYPE_USER_VALIDATED:
       case download::DOWNLOAD_DANGER_TYPE_ALLOWLISTED_BY_POLICY:
+      case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
       case download::DOWNLOAD_DANGER_TYPE_MAX: {
         break;
       }

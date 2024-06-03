@@ -228,7 +228,7 @@ export class CookiesTable extends UI.Widget.VBox {
       },
     ] as DataGrid.DataGrid.ColumnDescriptor[];
 
-    if (Root.Runtime.experiments.isEnabled('experimentalCookieFeatures')) {
+    if (Root.Runtime.experiments.isEnabled('experimental-cookie-features')) {
       const additionalColumns = [
         {
           id: SDK.Cookie.Attribute.SourceScheme,
@@ -365,6 +365,7 @@ export class CookiesTable extends UI.Widget.VBox {
   }
 
   private rebuildTable(): void {
+    const restoreFocus = this.dataGrid.element?.contains(document.activeElement);
     const selectionCookies = this.getSelectionCookies();
     const lastEditedColumnId = this.lastEditedColumnId;
     this.lastEditedColumnId = null;
@@ -404,6 +405,9 @@ export class CookiesTable extends UI.Widget.VBox {
     }
     if (this.saveCallback) {
       this.dataGrid.addCreationNode(false);
+    }
+    if (restoreFocus) {
+      this.dataGrid.element.focus();
     }
   }
 
@@ -731,12 +735,12 @@ export class CookiesTable extends UI.Widget.VBox {
         },
       ]);
       void Common.Revealer.reveal(requestFilter);
-    });
+    }, {jslogContext: 'show-requests-with-this-cookie'});
     if (IssuesManager.RelatedIssue.hasIssues(cookie)) {
       contextMenu.revealSection().appendItem(i18nString(UIStrings.showIssueAssociatedWithThis), () => {
         // TODO(chromium:1077719): Just filter for the cookie instead of revealing one of the associated issues.
         void IssuesManager.RelatedIssue.reveal(cookie);
-      });
+      }, {jslogContext: 'show-issue-associated-with-this'});
     }
   }
 }

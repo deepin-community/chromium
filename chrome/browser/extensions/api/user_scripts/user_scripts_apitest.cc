@@ -5,10 +5,12 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/background_script_executor.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/script_executor.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/features/feature_developer_mode_only.h"
 #include "extensions/test/extension_test_message_listener.h"
@@ -62,15 +64,16 @@ class UserScriptsAPITest : public ExtensionApiTest {
 UserScriptsAPITest::UserScriptsAPITest() {
   scoped_feature_list_.InitWithFeatures(
       {extensions_features::kApiUserScripts,
+       extensions_features::kApiUserScriptsMultipleWorlds,
        // Also enable the dev mode restriction feature to gate the API on
        // developer mode.
-       // TODO(https://crbug.com/1495451): Remove this when the feature is
+       // TODO(crbug.com/40286550): Remove this when the feature is
        // enabled by default.
        extensions_features::kRestrictDeveloperModeAPIs},
       /*disabled_features=*/{});
 }
 
-// TODO(crbug.com/1491361): Flaky on Linux debug.
+// TODO(crbug.com/40935741): Flaky on Linux debug.
 #if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
 #define MAYBE_RegisterUserScripts DISABLED_RegisterUserScripts
 #else

@@ -47,7 +47,6 @@
 
 class GURL;
 class HistoryQuickProviderTest;
-class HistoryURLProvider;
 class InMemoryURLIndexTest;
 class SkBitmap;
 
@@ -113,6 +112,9 @@ class HistoryService : public KeyedService,
   bool Init(const HistoryDatabaseParams& history_database_params) {
     return Init(false, history_database_params);
   }
+
+  // Returns the directory containing the History databases.
+  const base::FilePath& history_dir() const { return history_dir_; }
 
   // Triggers the backend to load if it hasn't already, and then returns whether
   // it's finished loading.
@@ -261,6 +263,11 @@ class HistoryService : public KeyedService,
       const std::vector<std::string>& related_searches,
       VisitID visit_id);
 
+  // Returns the salt used to hash visited links from this origin. If we have
+  // not previously navigated to this origin, a new <origin, salt> pair will be
+  // added, and that new salt value is returned.
+  std::optional<uint64_t> GetOrAddOriginSalt(const url::Origin& origin);
+
   // Updates the history database with the search metadata for a search-like
   // visit. Virtual for testing.
   virtual void AddSearchMetadataForVisit(const GURL& search_normalized_url,
@@ -278,6 +285,15 @@ class HistoryService : public KeyedService,
                                            VisitID visit_id);
 
   // Querying ------------------------------------------------------------------
+
+  // Returns the most recent visit associated with each url. Similar to
+  // QueryURL but it sends a vector of visits to the caller instead of a
+  // QueryResult.
+  // Note: Virtual needed for mocking.
+  virtual base::CancelableTaskTracker::TaskId GetMostRecentVisitForEachURL(
+      const std::vector<GURL>& urls,
+      base::OnceCallback<void(std::map<GURL, VisitRow>)> callback,
+      base::CancelableTaskTracker* tracker);
 
   // Returns the information about the requested URL. If the URL is found,
   // success will be true and the information will be in the URLRow parameter.
@@ -322,7 +338,7 @@ class HistoryService : public KeyedService,
   // Queries all history with the given options (see QueryOptions in
   // history_types.h).  If empty, all results matching the given options
   // will be returned.
-  base::CancelableTaskTracker::TaskId QueryHistory(
+  virtual base::CancelableTaskTracker::TaskId QueryHistory(
       const std::u16string& text_query,
       const QueryOptions& options,
       QueryHistoryCallback callback,
@@ -426,6 +442,13 @@ class HistoryService : public KeyedService,
                                        GetUniqueDomainsVisitedCallback callback,
                                        base::CancelableTaskTracker* tracker);
 
+  // Gets all the app IDs used in the database entries. The callback will be
+  // invoked with a struct containing a vector of the IDs.
+  using GetAllAppIdsCallback = base::OnceCallback<void(GetAllAppIdsResult)>;
+
+  virtual void GetAllAppIds(GetAllAppIdsCallback callback,
+                            base::CancelableTaskTracker* tracker);
+
   using GetLastVisitCallback = base::OnceCallback<void(HistoryLastVisitResult)>;
 
   // Gets the last time any webpage on the given host was visited within the
@@ -470,6 +493,15 @@ class HistoryService : public KeyedService,
       base::Time begin_time,
       base::Time end_time,
       GetDailyVisitsToHostCallback callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Generic operations --------------------------------------------------------
+
+  // Returns the `URLRow` and most recent `VisitRow`s for `url`.
+  base::CancelableTaskTracker::TaskId GetMostRecentVisitsForGurl(
+      GURL url,
+      int max_visits,
+      QueryURLCallback callback,
       base::CancelableTaskTracker* tracker);
 
   // Database management operations --------------------------------------------
@@ -734,6 +766,14 @@ class HistoryService : public KeyedService,
       std::unique_ptr<HistoryDBTask> task,
       base::CancelableTaskTracker* tracker);
 
+  // Called by the HistoryURLProvider class to schedule an autocomplete, or by
+  // the HistoryEmbeddingsService to fill in details for user searches. The
+  // `callback` will be called with the history database so it can query.
+  // See history_url_provider.h for a diagram. This is similar to above
+  // `ScheduleDBTask` but uses a callback instead of interface inheritance.
+  void ScheduleDBTaskForUI(
+      base::OnceCallback<void(HistoryBackend*, URLDatabase*)> callback);
+
   // Callback for when favicon data changes. Contains a std::set of page URLs
   // (e.g. http://www.google.com) for which the favicon data has changed and the
   // icon URL (e.g. http://www.google.com/favicon.ico) for which the favicon
@@ -834,7 +874,6 @@ class HistoryService : public KeyedService,
   friend class HistoryQueryTest;
   friend class ::HistoryQuickProviderTest;
   friend class HistoryServiceTest;
-  friend class ::HistoryURLProvider;
   friend class HQPPerfTestOnePopularURL;
   friend class ::InMemoryURLIndexTest;
   friend std::unique_ptr<HistoryService> CreateHistoryService(
@@ -855,12 +894,6 @@ class HistoryService : public KeyedService,
   // Low-level Init().  Same as the public version, but adds a `no_db` parameter
   // that is only set by unittests which causes the backend to not init its DB.
   bool Init(bool no_db, const HistoryDatabaseParams& history_database_params);
-
-  // Called by the HistoryURLProvider class to schedule an autocomplete, it will
-  // be called back with the history database so it can query. See
-  // history_url_provider.h for a diagram.
-  void ScheduleAutocomplete(
-      base::OnceCallback<void(HistoryBackend*, URLDatabase*)> callback);
 
   // Notification from the backend that it has finished loading. Sends
   // notification (NOTIFY_HISTORY_LOADED) and sets backend_loaded_ to true.
@@ -888,7 +921,7 @@ class HistoryService : public KeyedService,
 
   // Notify all HistoryServiceObservers registered that URLs have been deleted.
   // `deletion_info` describes the urls that have been removed from history.
-  void NotifyURLsDeleted(const DeletionInfo& deletion_info);
+  void NotifyDeletions(const DeletionInfo& deletion_info);
 
   // Notify all HistoryServiceObservers registered that the
   // HistoryService has finished loading.
@@ -1120,6 +1153,9 @@ class HistoryService : public KeyedService,
   void LogTransitionMetricsForVisit(ui::PageTransition transition);
 
   SEQUENCE_CHECKER(sequence_checker_);
+
+  // The directory containing the History databases.
+  base::FilePath history_dir_;
 
   // The TaskRunner to which HistoryBackend tasks are posted. Nullptr once
   // Cleanup() is called.

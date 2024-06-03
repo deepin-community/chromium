@@ -66,14 +66,7 @@ class KcerFactory : public ProfileKeyedServiceFactory {
       base::OnceCallback<void(base::WeakPtr<internal::KcerToken>,
                               base::WeakPtr<internal::KcerToken>)>;
 
-  // Returns whether HighLevelChapsClient was initialized. The method is mostly
-  // needed just for testing.
-  static bool IsHighLevelChapsClientInitialized();
-
-  // Should be called on shutdown to avoid dangling pointers.
-  static void Shutdown();
-
- protected:
+  // Public for Pkcs12Migrator unit tests.
   struct KcerService : public KeyedService {
     explicit KcerService(std::unique_ptr<internal::KcerImpl> kcer_instance);
     ~KcerService() override;
@@ -81,6 +74,19 @@ class KcerFactory : public ProfileKeyedServiceFactory {
     std::unique_ptr<internal::KcerImpl> kcer;
   };
 
+  // Returns whether HighLevelChapsClient was initialized. The method is mostly
+  // needed just for testing.
+  static bool IsHighLevelChapsClientInitialized();
+
+  // Creates an entry in user preferences in Ash that a PKCS#12 file was
+  // dual-written. This will be used in case a rollback for the related
+  // experiment is needed.
+  static void RecordPkcs12CertDualWritten();
+
+  // Should be called on shutdown to avoid dangling pointers.
+  static void Shutdown();
+
+ protected:
   KcerFactory();
   ~KcerFactory() override;
 
@@ -108,17 +114,20 @@ class KcerFactory : public ProfileKeyedServiceFactory {
   // Initializes `high_level_chaps_client_` when necessary. Returns true if
   // `high_level_chaps_client_` is initialized.
   virtual bool EnsureHighLevelChapsClientInitialized() = 0;
+  // Implements RecordPkcs12CertDualWritten(). Ash needs to write into the
+  // preferences of the active user. Lacros needs to send a notification to Ash.
+  virtual void RecordPkcs12CertDualWrittenImpl() = 0;
 
   // Initializes each token for `kcer_service` with `user_token_id` and
   // `device_token_id` respectively, initializes `kcer_service` with the tokens.
   void InitializeKcerInstanceWithoutNss(
       base::WeakPtr<internal::KcerImpl> kcer_service,
-      absl::optional<SessionChapsClient::SlotId> user_token_id,
-      absl::optional<SessionChapsClient::SlotId> device_token_id);
+      std::optional<SessionChapsClient::SlotId> user_token_id,
+      std::optional<SessionChapsClient::SlotId> device_token_id);
 
   // Initializes a single token.
   base::WeakPtr<internal::KcerToken> GetTokenWithoutNss(
-      absl::optional<SessionChapsClient::SlotId> token_id,
+      std::optional<SessionChapsClient::SlotId> token_id,
       Token token_type);
 
   // Returns whether the Kcer-without-NSS experiment is enabled.

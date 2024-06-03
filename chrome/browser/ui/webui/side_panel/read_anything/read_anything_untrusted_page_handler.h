@@ -18,6 +18,7 @@
 #include "chrome/browser/ui/views/side_panel/read_anything/read_anything_model.h"
 #include "chrome/browser/ui/views/side_panel/read_anything/read_anything_side_panel_controller.h"
 #include "chrome/common/accessibility/read_anything.mojom.h"
+#include "components/translate/core/browser/translate_client.h"
 #include "content/public/browser/ax_event_notification_details.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -53,6 +54,7 @@ class ReadAnythingWebContentsObserver : public content::WebContentsObserver {
   void AccessibilityEventReceived(
       const content::AXEventNotificationDetails& details) override;
   void PrimaryPageChanged(content::Page& page) override;
+  void WebContentsDestroyed() override;
 
   // base::SafeRef used since the lifetime of ReadAnythingWebContentsObserver is
   // completely contained by page_handler_. See
@@ -79,6 +81,7 @@ class ReadAnythingUntrustedPageHandler
       public ReadAnythingModel::Observer,
       public ReadAnythingCoordinator::Observer,
       public ReadAnythingSidePanelController::Observer,
+      public translate::TranslateDriver::LanguageDetectionObserver,
       public TabStripModelObserver {
  public:
   ReadAnythingUntrustedPageHandler(
@@ -95,8 +98,14 @@ class ReadAnythingUntrustedPageHandler
   void AccessibilityEventReceived(
       const content::AXEventNotificationDetails& details);
   void PrimaryPageChanged();
+  void WebContentsDestroyed();
 
  private:
+  // TranslateDriver::LanguageDetectionObserver:
+  void OnLanguageDetermined(
+      const translate::LanguageDetectionDetails& details) override;
+  void OnTranslateDriverDestroyed(translate::TranslateDriver* driver) override;
+
   // ui::AXActionHandlerObserver:
   void TreeRemoved(ui::AXTreeID ax_tree_id) override;
 
@@ -125,7 +134,6 @@ class ReadAnythingUntrustedPageHandler
                          ui::AXNodeID focus_node_id,
                          int focus_offset) override;
   void OnCollapseSelection() override;
-  void EnablePDFContentAccessibility(const ui::AXTreeID& ax_tree_id) override;
 
   // ReadAnythingModel::Observer:
   void OnReadAnythingThemeChanged(
@@ -145,6 +153,11 @@ class ReadAnythingUntrustedPageHandler
   void Activate(bool active) override;
   void OnCoordinatorDestroyed() override;
   void SetDefaultLanguageCode(const std::string& code) override;
+
+  // Sends the language code of the new page, or the default if a language can't
+  // be determined.
+  void SetLanguageCode(const std::string& code);
+
   // ReadAnythingSidePanelController::Observer:
   void OnSidePanelControllerDestroyed() override;
 
@@ -164,9 +177,9 @@ class ReadAnythingUntrustedPageHandler
   // 2. Notifies the model that the AXTreeID has changed.
   void OnActiveWebContentsChanged();
 
-  // force_update_state will tell the UI to update the state even if the active
-  // tree id does not change.
-  void OnActiveAXTreeIDChanged(bool force_update_state = false);
+  void SetUpPdfObserver();
+
+  void OnActiveAXTreeIDChanged();
 
   // Logs the current visual settings values.
   void LogTextStyle();
@@ -206,6 +219,7 @@ class ReadAnythingUntrustedPageHandler
   // Whether the Read Anything feature is currently active. The feature is
   // active when it is currently shown in the Side Panel.
   bool active_ = true;
+  std::string default_language_code_ = "en-US";
 
   // Observes the AXActionHandlerRegistry for AXTree removals.
   base::ScopedObservation<ui::AXActionHandlerRegistry,
@@ -213,6 +227,12 @@ class ReadAnythingUntrustedPageHandler
       ax_action_handler_observer_{this};
 
   void OnScreenAIServiceInitialized(bool successful);
+
+  // Observes LanguageDetectionObserver, which notifies us when the language of
+  // the contents of the current page has been determined.
+  base::ScopedObservation<translate::TranslateDriver,
+                          translate::TranslateDriver::LanguageDetectionObserver>
+      translate_observation_{this};
 
   base::WeakPtrFactory<ReadAnythingUntrustedPageHandler> weak_factory_{this};
 };

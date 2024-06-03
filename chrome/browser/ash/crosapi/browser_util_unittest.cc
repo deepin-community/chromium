@@ -494,85 +494,6 @@ TEST_F(BrowserUtilTest, MetadataNewVersion) {
       browser_util::DoesMetadataSupportNewAccountManager(&value.value()));
 }
 
-TEST_F(BrowserUtilTest, GetMissingDataVer) {
-  std::string user_id_hash = "1234";
-  base::Version version = browser_util::GetDataVer(local_state(), user_id_hash);
-  EXPECT_FALSE(version.IsValid());
-}
-
-TEST_F(BrowserUtilTest, GetCorruptDataVer) {
-  base::Value::Dict dictionary_value;
-  std::string user_id_hash = "1234";
-  dictionary_value.Set(user_id_hash, "corrupted");
-  local_state()->Set(browser_util::kDataVerPref,
-                     base::Value(std::move(dictionary_value)));
-  base::Version version = browser_util::GetDataVer(local_state(), user_id_hash);
-  EXPECT_FALSE(version.IsValid());
-}
-
-TEST_F(BrowserUtilTest, GetDataVer) {
-  base::Value::Dict dictionary_value;
-  std::string user_id_hash = "1234";
-  base::Version version{"1.1.1.1"};
-  dictionary_value.Set(user_id_hash, version.GetString());
-  local_state()->Set(browser_util::kDataVerPref,
-                     base::Value(std::move(dictionary_value)));
-
-  base::Version result_version =
-      browser_util::GetDataVer(local_state(), user_id_hash);
-  EXPECT_EQ(version, result_version);
-}
-
-TEST_F(BrowserUtilTest, RecordDataVer) {
-  std::string user_id_hash = "1234";
-  base::Version version{"1.1.1.1"};
-  browser_util::RecordDataVer(local_state(), user_id_hash, version);
-
-  base::Value::Dict expected;
-  expected.Set(user_id_hash, version.GetString());
-  const base::Value::Dict& dict =
-      local_state()->GetDict(browser_util::kDataVerPref);
-  EXPECT_EQ(dict, expected);
-}
-
-TEST_F(BrowserUtilTest, RecordDataVerOverrides) {
-  std::string user_id_hash = "1234";
-
-  base::Version version1{"1.1.1.1"};
-  base::Version version2{"1.1.1.2"};
-  browser_util::RecordDataVer(local_state(), user_id_hash, version1);
-  browser_util::RecordDataVer(local_state(), user_id_hash, version2);
-
-  base::Value::Dict expected;
-  expected.Set(user_id_hash, version2.GetString());
-
-  const base::Value::Dict& dict =
-      local_state()->GetDict(browser_util::kDataVerPref);
-  EXPECT_EQ(dict, expected);
-}
-
-TEST_F(BrowserUtilTest, RecordDataVerWithMultipleUsers) {
-  std::string user_id_hash_1 = "1234";
-  std::string user_id_hash_2 = "2345";
-  base::Version version1{"1.1.1.1"};
-  base::Version version2{"1.1.1.2"};
-  browser_util::RecordDataVer(local_state(), user_id_hash_1, version1);
-  browser_util::RecordDataVer(local_state(), user_id_hash_2, version2);
-
-  EXPECT_EQ(version1, browser_util::GetDataVer(local_state(), user_id_hash_1));
-  EXPECT_EQ(version2, browser_util::GetDataVer(local_state(), user_id_hash_2));
-
-  base::Version version3{"3.3.3.3"};
-  browser_util::RecordDataVer(local_state(), user_id_hash_1, version3);
-
-  base::Value::Dict expected;
-  expected.Set(user_id_hash_1, version3.GetString());
-  expected.Set(user_id_hash_2, version2.GetString());
-
-  const base::Value::Dict& dict =
-      local_state()->GetDict(browser_util::kDataVerPref);
-  EXPECT_EQ(dict, expected);
-}
 
 TEST_F(BrowserUtilTest, GetRootfsLacrosVersionMayBlock) {
   base::ScopedTempDir tmp_dir;
@@ -642,21 +563,21 @@ TEST_F(BrowserUtilTest, StatefulLacrosSelectionUpdateChannel) {
   cmdline->RemoveSwitch(browser_util::kLacrosStabilitySwitch);
 }
 
-TEST_F(BrowserUtilTest, GetMigrationStatus) {
+TEST_F(BrowserUtilTest, GetMigrationStatusForUser) {
   using ash::standalone_browser::migrator_util::MigrationMode;
-  using browser_util::GetMigrationStatus;
+  using browser_util::GetMigrationStatusForUser;
   using browser_util::MigrationStatus;
 
   const user_manager::User* const user = AddRegularUser("user@test.com");
 
-  EXPECT_EQ(GetMigrationStatus(local_state(), user),
+  EXPECT_EQ(GetMigrationStatusForUser(local_state(), user),
             MigrationStatus::kLacrosNotEnabled);
 
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
       {ash::standalone_browser::features::kLacrosOnly}, {});
 
-  EXPECT_EQ(GetMigrationStatus(local_state(), user),
+  EXPECT_EQ(GetMigrationStatusForUser(local_state(), user),
             MigrationStatus::kUncompleted);
 
   {
@@ -668,7 +589,7 @@ TEST_F(BrowserUtilTest, GetMigrationStatus) {
                                              user->username_hash());
     }
 
-    EXPECT_EQ(GetMigrationStatus(local_state(), user),
+    EXPECT_EQ(GetMigrationStatusForUser(local_state(), user),
               MigrationStatus::kMaxAttemptReached);
 
     ash::standalone_browser::migrator_util::ClearMigrationAttemptCountForUser(
@@ -680,7 +601,7 @@ TEST_F(BrowserUtilTest, GetMigrationStatus) {
         local_state(), user->username_hash(),
         ash::standalone_browser::migrator_util::MigrationMode::kCopy);
 
-    EXPECT_EQ(GetMigrationStatus(local_state(), user),
+    EXPECT_EQ(GetMigrationStatusForUser(local_state(), user),
               MigrationStatus::kCopyCompleted);
 
     ash::standalone_browser::migrator_util::
@@ -693,7 +614,7 @@ TEST_F(BrowserUtilTest, GetMigrationStatus) {
         local_state(), user->username_hash(),
         ash::standalone_browser::migrator_util::MigrationMode::kMove);
 
-    EXPECT_EQ(GetMigrationStatus(local_state(), user),
+    EXPECT_EQ(GetMigrationStatusForUser(local_state(), user),
               MigrationStatus::kMoveCompleted);
 
     ash::standalone_browser::migrator_util::
@@ -706,7 +627,7 @@ TEST_F(BrowserUtilTest, GetMigrationStatus) {
         local_state(), user->username_hash(),
         ash::standalone_browser::migrator_util::MigrationMode::kSkipForNewUser);
 
-    EXPECT_EQ(GetMigrationStatus(local_state(), user),
+    EXPECT_EQ(GetMigrationStatusForUser(local_state(), user),
               MigrationStatus::kSkippedForNewUser);
 
     ash::standalone_browser::migrator_util::

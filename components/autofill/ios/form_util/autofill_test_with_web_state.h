@@ -17,12 +17,8 @@ class AutofillTestWithWebState : public web::WebTestWithWebState {
  protected:
   AutofillTestWithWebState(std::unique_ptr<web::WebClient> web_client);
 
-  // Injects initial renderer is value into the |frame| and waits for
-  // completion.
-  void SetUpForUniqueIds(web::WebFrame* frame);
-
   // Toggles tracking form mutations in a |frame| and waits for completion.
-  void TrackFormMutations(web::WebFrame* frame);
+  void TrackFormMutations(web::WebFrame* frame, bool allow_batching = false);
 
   // web::WebTestWithWebState:
   id ExecuteJavaScript(NSString* script) override;

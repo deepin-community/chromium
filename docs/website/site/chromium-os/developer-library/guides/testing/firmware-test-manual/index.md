@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/guides
-  - Chromium OS > Developer Library > Guides
+  - ChromiumOS > Developer Library > Guides
 page_name: firmware-test-manual
 title: Firmware test manual
 ---
@@ -58,7 +58,7 @@ to that interface.
     *   `Return ~~` and return to exit.
 *   Screen
     *   Run `screen /dev/pts/{PTS} 115200`.
-    *   Press `Ctrl+A` and quit to exit
+    *   Press `Ctrl+A` and `q` to exit
 
 ## Device Precondition
 
@@ -357,12 +357,6 @@ If the DUT is connected via a servo to a workstation (and servod is running on
 your workstation):
 
 `sudo futility update --servo -i PATH_TO/image.bin`
-
-or
-
-`sudo futility update --ccd -i PATH_TO/image.bin`
-
-if you are using [Case Closed Debugging].
 
 ### Re-signing the Firmware
 
@@ -1097,22 +1091,22 @@ contents of the kernel log is to look at the content of the file /var/log/messag
 /var/log/messages includes all the system messages including from the boot process
 of the chromeOS along with dmesg output.
 
-[Boot from your USB disk]: developer_guide.md#boot-from-your-usb-disk
+[Boot from your USB disk]: /chromium-os/developer-library/guides/development/developer-guide/#boot-from-your-usb-disk
 [Chromebox pinhole example]: https://storage.googleapis.com/support-kms-prod/SNP_A5E29551DE747AFC2885B00F04E711DFD82C_6010520_en_v0
 [ChromeOS Firmware Concepts]: https://dev.chromium.org/chromium-os/firmware-porting-guide/2-concepts
 [chromeos-hwid repository]: https://chrome-internal.googlesource.com/chromeos/chromeos-hwid/
 [Case Closed Debugging]: https://chromium.googlesource.com/chromiumos/platform/ec/+/cr50_stab/docs/case_closed_debugging_cr50.md
 [Configuring Automounting]: https://help.ubuntu.com/community/Mount/USB#Configuring_Automounting
 [data_fmap_expect_p.txt]: https://chromium.googlesource.com/chromiumos/platform/vboot_reference/+/HEAD/tests/futility/data_fmap_expect_p.txt
-[developer-guide]: ./developer_guide.md
+[developer-guide]: /chromium-os/developer-library/guides/development/developer-guide/
 [Disk format]: https://www.chromium.org/chromium-os/chromiumos-design-docs/disk-format
 [EC documentation]: https://chromium.googlesource.com/chromiumos/platform/ec/+/HEAD/README.md
 [FAFT]: https://chromium.googlesource.com/chromiumos/third_party/autotest/+/HEAD/docs/faft-how-to-run-doc.md
 [firmware_LockedME]: https://chromium.googlesource.com/chromiumos/third_party/autotest/+/HEAD/client/site_tests/firmware_LockedME/control
 [Firmware Updater]: https://chromium.googlesource.com/chromiumos/platform/firmware/+/HEAD/README.md
 [Firmware Updater Package]: https://chromium.googlesource.com/chromiumos/platform/firmware/+/HEAD/pack/README.md
-[Firmware Write Protection]: ./write_protection.md
+[Firmware Write Protection]: /chromium-os/developer-library/reference/security/write-protection/
 [GBB flags]: https://chromium.googlesource.com/chromiumos/platform/vboot_reference/+/HEAD/firmware/2lib/include/2gbb_flags.h
 [Latest Chromebook requirements]: https://chromeos.google.com/partner/dlm/docs/latest-requirements/chromebook.html
-[Put your image on a USB disk]: developer_guide.md#put-your-image-on-a-usb-disk
-[Write Protection]: ./write_protection.md
+[Put your image on a USB disk]: /chromium-os/developer-library/guides/development/developer-guide/#put-your-image-on-a-usb-disk
+[Write Protection]: /chromium-os/developer-library/reference/security/write-protection/

@@ -23,6 +23,7 @@
 #include "ash/ambient/util/ambient_util.h"
 #include "ash/ambient/util/time_of_day_utils.h"
 #include "ash/assistant/assistant_interaction_controller_impl.h"
+#include "ash/constants/ambient_time_of_day_constants.h"
 #include "ash/constants/ambient_video.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_paths.h"
@@ -30,6 +31,7 @@
 #include "ash/login/ui/lock_screen.h"
 #include "ash/public/cpp/ambient/ambient_prefs.h"
 #include "ash/public/cpp/ambient/ambient_ui_model.h"
+#include "ash/public/cpp/ambient/fake_ambient_backend_controller_impl.h"
 #include "ash/public/cpp/assistant/controller/assistant_interaction_controller.h"
 #include "ash/public/cpp/personalization_app/time_of_day_test_utils.h"
 #include "ash/public/cpp/test/in_process_data_decoder.h"
@@ -70,6 +72,7 @@
 #include "ui/events/platform/platform_event_source.h"
 #include "ui/events/pointer_details.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/events/test/test_event_handler.h"
 #include "ui/events/types/event_type.h"
 
 namespace ash {
@@ -82,6 +85,11 @@ constexpr char kUser1[] = "user1@gmail.com";
 constexpr char kUser2[] = "user2@gmail.com";
 constexpr base::FilePath::CharType kTestDlcRootPath[] =
     FILE_PATH_LITERAL("/test/time_of_day");
+
+// Expects argument of type `dlcservice::DlcsWithContent::DlcInfo`.
+MATCHER(HasVideoDlcPackageId, "") {
+  return arg.id() == kTimeOfDayDlcId;
+}
 
 std::vector<base::OnceClosure> GetEventGeneratorCallbacks(
     ui::test::EventGenerator* event_generator) {
@@ -900,13 +908,43 @@ TEST_P(AmbientControllerTestForAnyUiSettings,
   CloseAmbientScreen();
 
   // When ambient is shown, OnUserActivity() should ignore key event.
-  ambient_controller()->SetUiVisibilityShouldShow();
+  SetAmbientShownAndWaitForWidgets();
   EXPECT_TRUE(ambient_controller()->ShouldShowAmbientUi());
 
   // General key press will exit ambient mode.
   // Simulate key press to close the widget.
+  ui::test::TestEventHandler event_handler;
+  Shell::GetPrimaryRootWindow()->AddPreTargetHandler(&event_handler);
   PressAndReleaseKey(ui::VKEY_A);
   EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
+  // First key press event should be consumed by ambient mode when closing the
+  // UI. Only the key release event gets propagated to the rest of the system.
+  EXPECT_EQ(event_handler.num_key_events(), 1);
+  Shell::GetPrimaryRootWindow()->RemovePreTargetHandler(&event_handler);
+}
+
+TEST_F(AmbientControllerTest, ShouldPropagateKeyPressIfNotRendering) {
+  // Force ambient mode to be in a state where it's trying to download photos
+  // but has not started rendering yet. In this state, the user should hit the
+  // keyboard and see the effect in the existing UI (probably the lock screen).
+  // The key stroke should also dismiss ambient mode.
+  SetAmbientTheme(AmbientTheme::kSlideshow);
+  DisableBackupCacheDownloads();
+  backend_controller()->SetFetchScreenUpdateInfoResponseSize(0);
+
+  ambient_controller()->SetUiVisibilityShouldShow();
+  ASSERT_TRUE(ambient_controller()->ShouldShowAmbientUi());
+  ASSERT_FALSE(GetContainerView());
+
+  ui::test::TestEventHandler event_handler;
+  Shell::GetPrimaryRootWindow()->AddPreTargetHandler(&event_handler);
+  PressAndReleaseKey(ui::VKEY_A);
+  EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
+  // Unlike the `ShouldDismissContainerViewOnKeyEvent` test case, both key
+  // events (press and release) should be propagated to the `event_handler` in
+  // the background.
+  EXPECT_EQ(event_handler.num_key_events(), 2);
+  Shell::GetPrimaryRootWindow()->RemovePreTargetHandler(&event_handler);
 }
 
 TEST_P(AmbientControllerTestForAnyUiSettings, ShowThenImmediatelyClose) {
@@ -1691,6 +1729,31 @@ TEST_F(AmbientControllerTest, ShouldDismissScreenSaverPreviewOnTouch) {
   GetEventGenerator()->PressTouch();
   GetEventGenerator()->ReleaseTouch();
   EXPECT_FALSE(ambient_controller()->ShouldShowAmbientUi());
+}
+
+TEST_F(AmbientControllerTest, InstallsVideoDlcInBackground) {
+  task_environment()->FastForwardBy(kAmbientDlcBackgroundInstallMinDelay * 2);
+  ASSERT_FALSE(ambient_controller()->ShouldShowAmbientUi());
+  base::test::TestFuture<const std::string&, const dlcservice::DlcsWithContent&>
+      future;
+  dlcservice_client_.GetExistingDlcs(future.GetCallback());
+  ASSERT_EQ(future.Get<0>(), dlcservice::kErrorNone);
+  EXPECT_THAT(future.Get<1>().dlc_infos(),
+              testing::Contains(HasVideoDlcPackageId()));
+}
+
+TEST_F(AmbientControllerTest, DoesNotInstallVideoDlcInBackground) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(/*enabled_features=*/{},
+                                       {features::kTimeOfDayDlc});
+  task_environment()->FastForwardBy(kAmbientDlcBackgroundInstallMinDelay * 2);
+  ASSERT_FALSE(ambient_controller()->ShouldShowAmbientUi());
+  base::test::TestFuture<const std::string&, const dlcservice::DlcsWithContent&>
+      future;
+  dlcservice_client_.GetExistingDlcs(future.GetCallback());
+  ASSERT_EQ(future.Get<0>(), dlcservice::kErrorNone);
+  EXPECT_THAT(future.Get<1>().dlc_infos(),
+              testing::Not(testing::Contains(HasVideoDlcPackageId())));
 }
 
 class AmbientControllerForManagedScreensaverTest : public AmbientAshTestBase {

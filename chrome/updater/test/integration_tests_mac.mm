@@ -83,11 +83,13 @@ base::FilePath GetSetupExecutablePath() {
 void EnterTestMode(const GURL& update_url,
                    const GURL& crash_upload_url,
                    const GURL& device_management_url,
+                   const GURL& app_logo_url,
                    const base::TimeDelta& idle_timeout) {
   ASSERT_TRUE(ExternalConstantsBuilder()
                   .SetUpdateURL(std::vector<std::string>{update_url.spec()})
                   .SetCrashUploadURL(crash_upload_url.spec())
                   .SetDeviceManagementURL(device_management_url.spec())
+                  .SetAppLogoURL(app_logo_url.spec())
                   .SetUseCUP(false)
                   .SetInitialDelay(base::Milliseconds(100))
                   .SetServerKeepAliveTime(base::Seconds(2))
@@ -419,7 +421,7 @@ void SetPlatformPolicies(const base::Value::Dict& values) {
     ASSERT_TRUE([[NSDictionary dictionaryWithObject:all_policies
                                              forKey:@"updatePolicies"]
         writeToURL:managed_preferences_url
-        atomically:YES])
+             error:nil])
         << "Failed to write " << managed_preferences_url;
   }
   ASSERT_TRUE(CFPreferencesSynchronize(domain, kCFPreferencesAnyUser,

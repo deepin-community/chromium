@@ -10,7 +10,6 @@
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/web_applications/jobs/uninstall/web_app_uninstall_and_replace_job.h"
-#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
@@ -95,6 +94,7 @@ void InstallFromInfoJob::Start(WithAppResources* lock_with_app_resources) {
     options.bypass_os_hooks = true;
   }
 
+  debug_value_->Set("options.bypass_os_hooks", options.bypass_os_hooks);
   lock_with_app_resources_->install_finalizer().FinalizeInstall(
       *install_info_, options,
       base::BindOnce(&InstallFromInfoJob::OnInstallCompleted,
@@ -102,11 +102,10 @@ void InstallFromInfoJob::Start(WithAppResources* lock_with_app_resources) {
 }
 
 void InstallFromInfoJob::OnInstallCompleted(const webapps::AppId& app_id,
-                                            webapps::InstallResultCode code,
-                                            OsHooksErrors os_hook_errors) {
+                                            webapps::InstallResultCode code) {
   debug_value_->Set("result_code", base::ToString(code));
   CHECK(callback_);
-  std::move(callback_).Run(app_id_, code, os_hook_errors);
+  std::move(callback_).Run(app_id_, code);
 }
 
 }  // namespace web_app

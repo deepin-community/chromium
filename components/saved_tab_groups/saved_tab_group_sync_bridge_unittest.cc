@@ -41,7 +41,9 @@
 
 using testing::_;
 
+namespace tab_groups {
 namespace {
+
 // Discard orphaned tabs after 30 days if the associated group cannot be found.
 constexpr base::TimeDelta kDiscardOrphanedTabsThreshold = base::Days(30);
 
@@ -57,6 +59,9 @@ bool AreGroupSpecificsEqual(const sync_pb::SavedTabGroupSpecifics& sp1,
     return false;
   if (sp1.group().position() != sp2.group().position())
     return false;
+  if (sp1.group().pinned_position() != sp2.group().pinned_position()) {
+    return false;
+  }
   if (sp1.creation_time_windows_epoch_micros() !=
       sp2.creation_time_windows_epoch_micros()) {
     return false;
@@ -819,3 +824,5 @@ TEST_F(SavedTabGroupSyncBridgeTest, ReorderGroupLocally) {
 
   saved_tab_group_model_.ReorderGroupLocally(group_guid, 1);
 }
+
+}  // namespace tab_groups

@@ -11,7 +11,6 @@
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -298,8 +297,8 @@ void AccountTrackerService::NotifyAccountRemoved(
 
 void AccountTrackerService::StartTrackingAccount(
     const CoreAccountId& account_id) {
-  // TODO(crbug.com/1488401): Change into a CHECK once there are no crash reports for
-  // tracking empty account ids.
+  // TODO(crbug.com/40283610): Change into a CHECK once there are no crash
+  // reports for tracking empty account ids.
   DUMP_WILL_BE_CHECK(!account_id.empty());
   if (!base::Contains(accounts_, account_id)) {
     DVLOG(1) << "StartTracking " << account_id;
@@ -381,14 +380,11 @@ void AccountTrackerService::SetAccountCapabilities(
 
 #if !(BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS))
   // Set the child account status based on the account capabilities.
-  if (supervised_user::IsChildAccountSupervisionEnabled()) {
-    modified =
-        UpdateAccountInfoChildStatus(
-            account_info,
-            account_info.capabilities.is_subject_to_parental_controls() ==
-                signin::Tribool::kTrue) ||
-        modified;
-  }
+  modified = UpdateAccountInfoChildStatus(
+                 account_info,
+                 account_info.capabilities.is_subject_to_parental_controls() ==
+                     signin::Tribool::kTrue) ||
+             modified;
 #endif
 
   if (!modified) {
@@ -935,6 +931,14 @@ bool AccountTrackerService::UpdateAccountInfoChildStatus(
 base::android::ScopedJavaLocalRef<jobject>
 AccountTrackerService::GetJavaObject() {
   return base::android::ScopedJavaLocalRef<jobject>(java_ref_);
+}
+
+// static
+AccountTrackerService* AccountTrackerService::FromAccountTrackerServiceAndroid(
+    const jni_zero::JavaRef<jobject>& j_account_tracker_service) {
+  return reinterpret_cast<AccountTrackerService*>(
+      signin::Java_AccountTrackerService_getNativePointer(
+          jni_zero::AttachCurrentThread(), j_account_tracker_service));
 }
 
 void AccountTrackerService::LegacySeedAccountsInfo(

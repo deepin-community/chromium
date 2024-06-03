@@ -15,6 +15,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/commerce/product_specifications/product_specifications_service_factory.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -26,6 +27,7 @@
 #include "chrome/browser/power_bookmarks/power_bookmark_service_factory.h"
 #include "chrome/browser/prefs/pref_service_syncable_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/reading_list/reading_list_model_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/security_events/security_event_recorder.h"
@@ -34,6 +36,7 @@
 #include "chrome/browser/sharing/sharing_message_bridge_factory.h"
 #include "chrome/browser/sharing/sharing_message_model_type_controller.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
 #include "chrome/browser/sync/account_bookmark_sync_service_factory.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
 #include "chrome/browser/sync/local_or_syncable_bookmark_sync_service_factory.h"
@@ -48,7 +51,7 @@
 #include "chrome/browser/trusted_vault/trusted_vault_service_factory.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_paths.h"
@@ -61,11 +64,13 @@
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/sharing/password_receiver_service.h"
 #include "components/password_manager/core/browser/sharing/password_sender_service.h"
+#include "components/password_manager/core/common/password_manager_pref_names.h"
+#include "components/plus_addresses/webdata/plus_address_webdata_service.h"
 #include "components/prefs/pref_service.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
-#include "components/supervised_user/core/common/buildflags.h"
+#include "components/supervised_user/core/browser/supervised_user_settings_service.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/model_type.h"
 #include "components/sync/base/pref_names.h"
@@ -96,13 +101,6 @@
 #include "chrome/browser/web_applications/web_app_utils.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
-#include "components/supervised_user/core/browser/supervised_user_settings_model_type_controller.h"
-#include "components/supervised_user/core/browser/supervised_user_settings_service.h"
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
-
 #if BUILDFLAG(ENABLE_SPELLCHECK)
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_service.h"
@@ -113,6 +111,10 @@
     BUILDFLAG(IS_WIN)
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_keyed_service.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_service_factory.h"
+#elif BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+#include "components/saved_tab_groups/features.h"
+#include "components/saved_tab_groups/tab_group_sync_service.h"
 #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
         // BUILDFLAG(IS_WIN)
 
@@ -241,12 +243,9 @@ ChromeSyncClient::ChromeSyncClient(Profile* profile)
           profile_, ServiceAccessType::IMPLICIT_ACCESS);
 
   supervised_user::SupervisedUserSettingsService*
-      supervised_user_settings_service = nullptr;
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-  supervised_user_settings_service =
-      SupervisedUserSettingsServiceFactory::GetForKey(
-          profile_->GetProfileKey());
-#endif
+      supervised_user_settings_service =
+          SupervisedUserSettingsServiceFactory::GetForKey(
+              profile_->GetProfileKey());
 
   component_factory_ = std::make_unique<SyncApiComponentFactoryImpl>(
       this, chrome::GetChannel(), content::GetUIThreadTaskRunner({}),
@@ -255,7 +254,11 @@ ChromeSyncClient::ChromeSyncClient(Profile* profile)
       LocalOrSyncableBookmarkSyncServiceFactory::GetForProfile(profile_),
       AccountBookmarkSyncServiceFactory::GetForProfile(profile_),
       PowerBookmarkServiceFactory::GetForBrowserContext(profile_),
-      supervised_user_settings_service);
+      supervised_user_settings_service,
+      WebDataServiceFactory::GetPlusAddressWebDataForProfile(
+          profile_, ServiceAccessType::IMPLICIT_ACCESS),
+      commerce::ProductSpecificationsServiceFactory::GetForBrowserContext(
+          profile_));
 }
 
 ChromeSyncClient::~ChromeSyncClient() = default;
@@ -353,10 +356,11 @@ ChromeSyncClient::GetPasswordSenderService() {
   return PasswordSenderServiceFactory::GetForProfile(profile_);
 }
 
-syncer::DataTypeController::TypeVector
-ChromeSyncClient::CreateDataTypeControllers(syncer::SyncService* sync_service) {
-  syncer::DataTypeController::TypeVector controllers =
-      component_factory_->CreateCommonDataTypeControllers(
+syncer::ModelTypeController::TypeVector
+ChromeSyncClient::CreateModelTypeControllers(
+    syncer::SyncService* sync_service) {
+  syncer::ModelTypeController::TypeVector controllers =
+      component_factory_->CreateCommonModelTypeControllers(
           GetDisabledCommonDataTypes(), sync_service);
 
   const base::RepeatingClosure dump_stack = GetDumpStackClosure();
@@ -455,17 +459,25 @@ ChromeSyncClient::CreateDataTypeControllers(syncer::SyncService* sync_service) {
                 kLegacyFullSyncModeOnly));
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+    // Tab group sync is enabled via separate feature flags on different
+    // platforms.
+    bool enable_tab_group_sync = false;
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)
-    if (base::FeatureList::IsEnabled(features::kTabGroupsSave)) {
+    enable_tab_group_sync = true;
+#elif BUILDFLAG(IS_ANDROID)
+    enable_tab_group_sync =
+        base::FeatureList::IsEnabled(tab_groups::kTabGroupSyncAndroid);
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+        // BUILDFLAG(IS_WIN)
+
+    if (enable_tab_group_sync) {
       controllers.push_back(std::make_unique<syncer::ModelTypeController>(
           syncer::SAVED_TAB_GROUP,
           std::make_unique<syncer::ForwardingModelTypeControllerDelegate>(
               GetControllerDelegateForModelType(syncer::SAVED_TAB_GROUP).get()),
           /*delegate_for_transport_mode=*/nullptr));
     }
-#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
-        // BUILDFLAG(IS_WIN)
 
 // Chrome prefers OS provided spell checkers where they exist. So only sync the
 // custom dictionary on platforms that typically don't provide one.
@@ -624,17 +636,28 @@ ChromeSyncClient::GetSyncableServiceForType(syncer::ModelType type) {
 base::WeakPtr<syncer::ModelTypeControllerDelegate>
 ChromeSyncClient::GetControllerDelegateForModelType(syncer::ModelType type) {
   switch (type) {
+    case syncer::SAVED_TAB_GROUP: {
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)
-    case syncer::SAVED_TAB_GROUP: {
-      DCHECK(base::FeatureList::IsEnabled(features::kTabGroupsSave));
-      return SavedTabGroupServiceFactory::GetForProfile(profile_)
+      auto* keyed_service =
+          tab_groups::SavedTabGroupServiceFactory::GetForProfile(profile_);
+      CHECK(keyed_service);
+      return keyed_service->bridge()
+          ->change_processor()
+          ->GetControllerDelegate();
+#elif BUILDFLAG(IS_ANDROID)
+      DCHECK(base::FeatureList::IsEnabled(tab_groups::kTabGroupSyncAndroid));
+      return tab_groups::TabGroupSyncServiceFactory::GetForProfile(profile_)
           ->bridge()
           ->change_processor()
           ->GetControllerDelegate();
-    }
+#else
+      NOTREACHED();
+      return base::WeakPtr<syncer::ModelTypeControllerDelegate>();
 #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
         // BUILDFLAG(IS_WIN)
+    }
+
 #if BUILDFLAG(IS_CHROMEOS_ASH)
     case syncer::PRINTERS:
       return ash::SyncedPrintersManagerFactory::GetForBrowserContext(profile_)
@@ -720,7 +743,6 @@ ChromeSyncClient::GetSyncApiComponentFactory() {
 }
 
 bool ChromeSyncClient::IsCustomPassphraseAllowed() {
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   supervised_user::SupervisedUserSettingsService*
       supervised_user_settings_service =
           SupervisedUserSettingsServiceFactory::GetForKey(
@@ -728,7 +750,6 @@ bool ChromeSyncClient::IsCustomPassphraseAllowed() {
   if (supervised_user_settings_service) {
     return supervised_user_settings_service->IsCustomPassphraseAllowed();
   }
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
   return true;
 }
 
@@ -740,6 +761,34 @@ void ChromeSyncClient::OnLocalSyncTransportDataCleared() {
   if (google_groups_updater != nullptr) {
     google_groups_updater->ClearSigninScopedState();
   }
+}
+
+bool ChromeSyncClient::IsPasswordSyncAllowed() {
+#if BUILDFLAG(IS_ANDROID)
+  return profile_->GetPrefs()->GetInteger(
+             password_manager::prefs::kPasswordsUseUPMLocalAndSeparateStores) !=
+         static_cast<int>(
+             password_manager::prefs::UseUpmLocalAndSeparateStoresState::
+                 kOffAndMigrationPending);
+#else
+  return true;
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
+void ChromeSyncClient::SetPasswordSyncAllowedChangeCb(
+    const base::RepeatingClosure& cb) {
+#if BUILDFLAG(IS_ANDROID)
+  CHECK(!upm_pref_change_registrar_.prefs())
+      << "SetPasswordSyncAllowedChangeCb() must be called at most once";
+  upm_pref_change_registrar_.Init(profile_->GetPrefs());
+  // This overfires: the kPasswordsUseUPMLocalAndSeparateStores pref might have
+  // changed value, but not IsPasswordSyncAllowed(). That's fine, `cb` should
+  // handle this case.
+  upm_pref_change_registrar_.Add(
+      password_manager::prefs::kPasswordsUseUPMLocalAndSeparateStores, cb);
+#else
+  // IsPasswordSyncAllowed() doesn't change outside of Android.
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)

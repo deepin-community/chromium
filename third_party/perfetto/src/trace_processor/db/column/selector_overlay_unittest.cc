@@ -17,12 +17,11 @@
 #include "src/trace_processor/db/column/selector_overlay.h"
 
 #include <cstdint>
-#include <limits>
 #include <vector>
 
+#include "data_layer.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "src/trace_processor/containers/bit_vector.h"
-#include "src/trace_processor/db/column/data_layer.h"
 #include "src/trace_processor/db/column/fake_storage.h"
 #include "src/trace_processor/db/column/numeric_storage.h"
 #include "src/trace_processor/db/column/types.h"
@@ -35,6 +34,9 @@ namespace {
 using testing::ElementsAre;
 using testing::IsEmpty;
 
+using Indices = DataLayerChain::Indices;
+using OrderedIndices = DataLayerChain::OrderedIndices;
+
 TEST(SelectorOverlay, SingleSearch) {
   BitVector selector{0, 1, 1, 0, 0, 1, 1, 0};
   auto fake = FakeStorageChain::SearchSubset(8, Range(2, 5));
@@ -44,38 +46,6 @@ TEST(SelectorOverlay, SingleSearch) {
   ASSERT_EQ(chain->SingleSearch(FilterOp::kGe, SqlValue::Long(0u), 1),
             SingleSearchResult::kMatch);
   ASSERT_EQ(chain->SingleSearch(FilterOp::kGe, SqlValue::Long(0u), 0),
-            SingleSearchResult::kNoMatch);
-}
-
-TEST(SelectorOverlay, UniqueSearch) {
-  BitVector selector{0, 1, 1, 0, 0, 1, 1, 0};
-  auto fake = FakeStorageChain::SearchSubset(8, Range(2, 3));
-  SelectorOverlay storage(&selector);
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kGe, SqlValue::Long(0u), &row),
-            UniqueSearchResult::kMatch);
-  ASSERT_EQ(row, 1u);
-}
-
-TEST(SelectorOverlay, UniqueSearchNotSet) {
-  BitVector selector{0, 1, 1, 0, 0, 1, 1, 0};
-  auto fake = FakeStorageChain::SearchSubset(8, Range(4, 5));
-  SelectorOverlay storage(&selector);
-  auto chain = storage.MakeChain(std::move(fake));
-
-  ASSERT_EQ(chain->SingleSearch(FilterOp::kGe, SqlValue::Long(0u), 1),
-            SingleSearchResult::kNoMatch);
-}
-
-TEST(SelectorOverlay, UniqueSearchOutOfBounds) {
-  BitVector selector{0, 1, 1, 0, 0, 1, 1, 0};
-  auto fake = FakeStorageChain::SearchSubset(9, Range(8, 9));
-  SelectorOverlay storage(&selector);
-  auto chain = storage.MakeChain(std::move(fake));
-
-  ASSERT_EQ(chain->SingleSearch(FilterOp::kGe, SqlValue::Long(0u), 1),
             SingleSearchResult::kNoMatch);
 }
 
@@ -127,12 +97,10 @@ TEST(SelectorOverlay, IndexSearch) {
   SelectorOverlay storage(&selector);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{1u, 0u, 3u};
-  RangeOrBitVector res = chain->IndexSearch(
-      FilterOp::kGe, SqlValue::Long(0u),
-      Indices{table_idx.data(), static_cast<uint32_t>(table_idx.size()),
-              Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), ElementsAre(1u));
+  auto indices = Indices::CreateWithIndexPayloadForTesting(
+      {1u, 0u, 3u}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kGe, SqlValue::Long(0u), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), ElementsAre(1u));
 }
 
 TEST(SelectorOverlay, OrderedIndexSearchTrivial) {
@@ -144,8 +112,8 @@ TEST(SelectorOverlay, OrderedIndexSearchTrivial) {
   std::vector<uint32_t> table_idx{1u, 0u, 2u};
   Range res = chain->OrderedIndexSearch(
       FilterOp::kGe, SqlValue::Long(0u),
-      Indices{table_idx.data(), static_cast<uint32_t>(table_idx.size()),
-              Indices::State::kNonmonotonic});
+      OrderedIndices{table_idx.data(), static_cast<uint32_t>(table_idx.size()),
+                     Indices::State::kNonmonotonic});
   ASSERT_EQ(res.start, 0u);
   ASSERT_EQ(res.end, 3u);
 }
@@ -159,8 +127,8 @@ TEST(SelectorOverlay, OrderedIndexSearchNone) {
   std::vector<uint32_t> table_idx{1u, 0u, 2u};
   Range res = chain->OrderedIndexSearch(
       FilterOp::kGe, SqlValue::Long(0u),
-      Indices{table_idx.data(), static_cast<uint32_t>(table_idx.size()),
-              Indices::State::kNonmonotonic});
+      OrderedIndices{table_idx.data(), static_cast<uint32_t>(table_idx.size()),
+                     Indices::State::kNonmonotonic});
   ASSERT_EQ(res.size(), 0u);
 }
 

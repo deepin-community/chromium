@@ -290,7 +290,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewTest, MAYBE_FullscreenShowBookmarkBar) {
   EXPECT_TRUE(browser_view->IsBookmarkBarVisible());
 }
 
-// TODO(crbug.com/897177): Only Aura platforms use the WindowActivated
+// TODO(crbug.com/40598906): Only Aura platforms use the WindowActivated
 // accessibility event. We need to harmonize the firing of accessibility events
 // between platforms.
 #if BUILDFLAG(ENABLE_DESKTOP_AURA)
@@ -338,8 +338,18 @@ class BrowserViewTestWithStopLoadingAnimationForHiddenWindow
   base::test::ScopedFeatureList feature_list_;
 };
 
+// TODO(b/326134178): Disable the flaky test on branded Lacros builder
+// (ci/linux-lacros-chrome).
+// TODO(crbug.com/41484767): Disable flaky test on Lacros.
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+#define MAYBE_LoadingAnimationChangeOnMinimizeAndRestore \
+  DISABLED_LoadingAnimationChangeOnMinimizeAndRestore
+#else
+#define MAYBE_LoadingAnimationChangeOnMinimizeAndRestore \
+  LoadingAnimationChangeOnMinimizeAndRestore
+#endif
 IN_PROC_BROWSER_TEST_F(BrowserViewTestWithStopLoadingAnimationForHiddenWindow,
-                       LoadingAnimationChangeOnMinimizeAndRestore) {
+                       MAYBE_LoadingAnimationChangeOnMinimizeAndRestore) {
   auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
   content::TestNavigationObserver navigation_watcher(
       contents, 1, content::MessageLoopRunner::QuitMode::DEFERRED);

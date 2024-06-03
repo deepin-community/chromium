@@ -11,7 +11,6 @@
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
 namespace blink {
 
@@ -42,6 +41,10 @@ class PLATFORM_EXPORT PushPullFIFO {
   USING_FAST_MALLOC(PushPullFIFO);
 
  public:
+  // Maximum FIFO length. (512 render quanta)
+  static const uint32_t kMaxFIFOLength;
+
+  // |fifo_length| cannot exceed |kMaxFIFOLength|. Otherwise it crashes.
   // ||render_quantum_frames| is the render size used by the audio graph.  It
   // |defaults to 128, the original and default render size.
   explicit PushPullFIFO(unsigned number_of_channels,

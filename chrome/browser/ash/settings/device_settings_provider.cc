@@ -29,13 +29,13 @@
 #include "chrome/browser/ash/policy/handlers/device_dlc_predownload_list_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/system_proxy_handler.h"
 #include "chrome/browser/ash/policy/off_hours/off_hours_proto_parser.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_cache.h"
 #include "chrome/browser/ash/settings/hardware_data_usage_controller.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
 #include "chrome/browser/ash/tpm_firmware_update.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/policy/core/common/chrome_schema.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
@@ -86,6 +86,8 @@ const char* const kKnownSettings[] = {
     kDeviceDlcPredownloadList,
     kDeviceDockMacAddressSource,
     kDeviceEncryptedReportingPipelineEnabled,
+    kDeviceExtendedAutoUpdateEnabled,
+    kDeviceExtensionsSystemLogEnabled,
     kDeviceHindiInscriptLayoutEnabled,
     kDeviceHostnameTemplate,
     kDeviceHostnameUserConfigurable,
@@ -113,7 +115,6 @@ const char* const kKnownSettings[] = {
     kDeviceUnaffiliatedCrostiniAllowed,
     kDeviceWebBasedAttestationAllowedUrls,
     kDeviceWiFiAllowed,
-    kDeviceWilcoDtcAllowed,
     kDisplayRotationDefault,
     kExtensionCacheSize,
     kFeatureFlags,
@@ -681,6 +682,15 @@ void DecodeAutoUpdatePolicies(const em::ChromeDeviceSettingsProto& policy,
                            new_values_cache);
     }
   }
+
+  if (policy.has_deviceextendedautoupdateenabled()) {
+    const em::BooleanPolicyProto& container(
+        policy.deviceextendedautoupdateenabled());
+    if (container.has_value()) {
+      new_values_cache->SetValue(kDeviceExtendedAutoUpdateEnabled,
+                                 base::Value(container.value()));
+    }
+  }
 }
 
 void DecodeReportingPolicies(const em::ChromeDeviceSettingsProto& policy,
@@ -1179,16 +1189,6 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
     }
   }
 
-  if (policy.has_device_wilco_dtc_allowed()) {
-    const em::DeviceWilcoDtcAllowedProto& container(
-        policy.device_wilco_dtc_allowed());
-    if (container.has_device_wilco_dtc_allowed()) {
-      new_values_cache->SetValue(
-          kDeviceWilcoDtcAllowed,
-          base::Value(container.device_wilco_dtc_allowed()));
-    }
-  }
-
   int dock_mac_address_source =
       em::DeviceDockMacAddressSourceProto::DOCK_NIC_MAC_ADDRESS;
   if (policy.has_device_dock_mac_address_source() &&
@@ -1326,6 +1326,15 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
     SetDeviceDlcPredownloadListSetting(
         policy.device_dlc_predownload_list().value().entries(),
         new_values_cache);
+  }
+
+  if (policy.has_deviceextensionssystemlogenabled()) {
+    const em::BooleanPolicyProto& container(
+        policy.deviceextensionssystemlogenabled());
+    if (container.has_value()) {
+      new_values_cache->SetValue(kDeviceExtensionsSystemLogEnabled,
+                                 base::Value(container.value()));
+    }
   }
 }
 
@@ -1684,9 +1693,7 @@ bool DeviceSettingsProvider::UpdateFromService() {
         break;
       [[fallthrough]];
     case DeviceSettingsService::STORE_KEY_UNAVAILABLE:
-      if (base::FeatureList::IsEnabled(
-              ownership::kChromeSideOwnerKeyGeneration) &&
-          user_manager::UserManager::Get()->GetOwnerEmail().has_value()) {
+      if (user_manager::UserManager::Get()->GetOwnerEmail().has_value()) {
         // On the consumer owned device Chrome is responsible for generating a
         // new key and/or policy if they are missing (which happens after the
         // user session starts).

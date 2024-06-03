@@ -10,8 +10,10 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/webauthn/authenticator_request_sheet_view.h"
+#include "chrome/browser/ui/views/webauthn/pin_options_button.h"
 #include "chrome/browser/ui/views/webauthn/sheet_view_factory.h"
 #include "chrome/browser/ui/webauthn/authenticator_request_sheet_model.h"
+#include "chrome/browser/webauthn/authenticator_request_dialog_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/strings/grit/components_strings.h"
@@ -47,8 +49,11 @@ void ShowAuthenticatorRequestDialog(content::WebContents* web_contents,
 
 AuthenticatorRequestDialogView::~AuthenticatorRequestDialogView() {
   if (model_) {
-    model_->RemoveObserver(this);
+    model_->observers.RemoveObserver(this);
   }
+
+  // TODO(enclave): the below comment hasn't been true for some time. It can
+  // probably be removed, but we didn't want to remove it in a refactoring CL.
 
   // AuthenticatorRequestDialogView is a WidgetDelegate, owned by views::Widget.
   // It's only destroyed by Widget::OnNativeWidgetDestroyed() invoking
@@ -58,9 +63,10 @@ AuthenticatorRequestDialogView::~AuthenticatorRequestDialogView() {
   // be okay to destroy the |sheet_| immediately after this line.
   //
   // However, as AuthenticatorRequestDialogModel is owned by |this|, and
-  // ObservableAuthenticatorList is owned by AuthenticatorRequestDialogModel,
-  // destroy all view components that might own models observing the list prior
-  // to destroying AuthenticatorRequestDialogModel.
+  // ObservableAuthenticatorList is owned by
+  // AuthenticatorRequestDialogModel, destroy all view components that
+  // might own models observing the list prior to destroying
+  // AuthenticatorRequestDialogModel.
   RemoveAllChildViews();
 }
 
@@ -110,6 +116,22 @@ void AuthenticatorRequestDialogView::UpdateUIForCurrentSheet() {
             &AuthenticatorRequestDialogView::ManageDevicesButtonPressed,
             base::Unretained(this)),
         l10n_util::GetStringUTF16(IDS_WEBAUTHN_MANAGE_DEVICES)));
+  } else if (sheet_->model()->IsForgotGPMPinButtonVisible()) {
+    SetExtraView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(
+            &AuthenticatorRequestDialogView::ForgotGPMPinPressed,
+            base::Unretained(this)),
+        u"Forgot PIN (UNTRANSLATED)"));
+  } else if (sheet_->model()->IsGPMPinOptionsButtonVisible()) {
+    PinOptionsButton::CommandId checked_command_id =
+        model_->step() ==
+                AuthenticatorRequestDialogModel::Step::kGPMCreateArbitraryPin
+            ? PinOptionsButton::CommandId::CHOOSE_ARBITRARY_PIN
+            : PinOptionsButton::CommandId::CHOOSE_SIX_DIGIT_PIN;
+    SetExtraView(std::make_unique<PinOptionsButton>(
+        u"PIN options (UT)", checked_command_id,
+        base::BindRepeating(&AuthenticatorRequestDialogView::GPMPinOptionChosen,
+                            base::Unretained(this))));
   } else {
     SetExtraView(std::make_unique<views::View>());
   }
@@ -273,7 +295,7 @@ AuthenticatorRequestDialogView::AuthenticatorRequestDialogView(
                            content::Visibility::HIDDEN) {
   SetShowTitle(false);
   DCHECK(!model_->should_dialog_be_closed());
-  model_->AddObserver(this);
+  model_->observers.AddObserver(this);
 
   SetCloseCallback(
       base::BindOnce(&AuthenticatorRequestDialogView::OnDialogClosing,
@@ -318,6 +340,14 @@ void AuthenticatorRequestDialogView::ManageDevicesButtonPressed() {
   sheet_->model()->OnManageDevices();
 }
 
+void AuthenticatorRequestDialogView::ForgotGPMPinPressed() {
+  sheet_->model()->OnForgotGPMPin();
+}
+
+void AuthenticatorRequestDialogView::GPMPinOptionChosen(bool is_arbitrary) {
+  sheet_->model()->OnGPMPinOptionChosen(is_arbitrary);
+}
+
 void AuthenticatorRequestDialogView::OnDialogClosing() {
   // To keep the UI responsive, always allow immediately closing the dialog when
   // desired; but still trigger cancelling the AuthenticatorRequest unless it is
@@ -330,14 +360,14 @@ void AuthenticatorRequestDialogView::OnDialogClosing() {
   //   views::DialogClientView::CanClose()
   //   views::Widget::Close()
   //   AuthenticatorRequestDialogView::OnStepTransition()
-  //   AuthenticatorRequestDialogModel::SetCurrentStep()
-  //   AuthenticatorRequestDialogModel::OnRequestComplete()
+  //   AuthenticatorRequestDialogController::SetCurrentStep()
+  //   AuthenticatorRequestDialogController::OnRequestComplete()
   //   ChromeAuthenticatorRequestDelegate::~ChromeAuthenticatorRequestDelegate()
   //   content::AuthenticatorImpl::InvokeCallbackAndCleanup()
   //   content::AuthenticatorImpl::FailWithNotAllowedErrorAndCleanup()
   //   <<invoke callback>>
   //   ChromeAuthenticatorRequestDelegate::OnCancelRequest()
-  //   AuthenticatorRequestDialogModel::Cancel()
+  //   AuthenticatorRequestDialogController::Cancel()
   //   AuthenticatorRequestDialogView::Cancel()
   //   AuthenticatorRequestDialogView::Close()  [initial call]
   //

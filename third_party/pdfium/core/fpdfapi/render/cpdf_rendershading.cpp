@@ -24,8 +24,11 @@
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "core/fpdfapi/render/cpdf_devicebuffer.h"
 #include "core/fpdfapi/render/cpdf_renderoptions.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/numerics/clamped_math.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxcrt/unowned_ptr.h"
@@ -34,8 +37,6 @@
 #include "core/fxge/cfx_path.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/dib/fx_dib.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 namespace {
 
@@ -46,7 +47,7 @@ uint32_t CountOutputsFromFunctions(
   FX_SAFE_UINT32 total = 0;
   for (const auto& func : funcs) {
     if (func)
-      total += func->CountOutputs();
+      total += func->OutputCount();
   }
   return total.ValueOrDefault(0);
 }
@@ -55,7 +56,7 @@ uint32_t GetValidatedOutputsCount(
     const std::vector<std::unique_ptr<CPDF_Function>>& funcs,
     const RetainPtr<CPDF_ColorSpace>& pCS) {
   uint32_t funcs_outputs = CountOutputsFromFunctions(funcs);
-  return funcs_outputs ? std::max(funcs_outputs, pCS->CountComponents()) : 0;
+  return funcs_outputs ? std::max(funcs_outputs, pCS->ComponentCount()) : 0;
 }
 
 std::array<FX_ARGB, kShadingSteps> GetShadingSteps(
@@ -65,8 +66,8 @@ std::array<FX_ARGB, kShadingSteps> GetShadingSteps(
     const RetainPtr<CPDF_ColorSpace>& pCS,
     int alpha,
     size_t results_count) {
-  DCHECK(results_count >= CountOutputsFromFunctions(funcs));
-  DCHECK(results_count >= pCS->CountComponents());
+  CHECK_GE(results_count, CountOutputsFromFunctions(funcs));
+  CHECK_GE(results_count, pCS->ComponentCount());
   std::array<FX_ARGB, kShadingSteps> shading_steps;
   std::vector<float> result_array(results_count);
   float diff = t_max - t_min;
@@ -285,8 +286,8 @@ void DrawFuncShading(const RetainPtr<CFX_DIBitmap>& pBitmap,
   int width = pBitmap->GetWidth();
   int height = pBitmap->GetHeight();
 
-  DCHECK(total_results >= CountOutputsFromFunctions(funcs));
-  DCHECK(total_results >= pCS->CountComponents());
+  CHECK_GE(total_results, CountOutputsFromFunctions(funcs));
+  CHECK_GE(total_results, pCS->ComponentCount());
   std::vector<float> result_array(total_results);
   for (int row = 0; row < height; ++row) {
     uint32_t* dib_buf =
@@ -359,19 +360,22 @@ void DrawGouraud(const RetainPtr<CFX_DIBitmap>& pBitmap,
     float g[3];
     float b[3];
     for (int i = 0; i < 3; i++) {
-      CPDF_MeshVertex& vertex1 = triangle[i];
-      CPDF_MeshVertex& vertex2 = triangle[(i + 1) % 3];
-      CFX_PointF& position1 = vertex1.position;
-      CFX_PointF& position2 = vertex2.position;
+      const CPDF_MeshVertex& vertex1 = triangle[i];
+      const CPDF_MeshVertex& vertex2 = triangle[(i + 1) % 3];
+      const CFX_PointF& position1 = vertex1.position;
+      const CFX_PointF& position2 = vertex2.position;
       bool bIntersect =
           GetScanlineIntersect(y, position1, position2, &inter_x[nIntersects]);
       if (!bIntersect)
         continue;
 
       float y_dist = (y - position1.y) / (position2.y - position1.y);
-      r[nIntersects] = vertex1.r + ((vertex2.r - vertex1.r) * y_dist);
-      g[nIntersects] = vertex1.g + ((vertex2.g - vertex1.g) * y_dist);
-      b[nIntersects] = vertex1.b + ((vertex2.b - vertex1.b) * y_dist);
+      r[nIntersects] =
+          vertex1.rgb.red + ((vertex2.rgb.red - vertex1.rgb.red) * y_dist);
+      g[nIntersects] = vertex1.rgb.green +
+                       ((vertex2.rgb.green - vertex1.rgb.green) * y_dist);
+      b[nIntersects] =
+          vertex1.rgb.blue + ((vertex2.rgb.blue - vertex1.rgb.blue) * y_dist);
       nIntersects++;
     }
     if (nIntersects != 2)
@@ -395,12 +399,14 @@ void DrawGouraud(const RetainPtr<CFX_DIBitmap>& pBitmap,
 
     int start_x = std::clamp(min_x, 0, pBitmap->GetWidth());
     int end_x = std::clamp(max_x, 0, pBitmap->GetWidth());
-    float r_unit = (r[end_index] - r[start_index]) / (max_x - min_x);
-    float g_unit = (g[end_index] - g[start_index]) / (max_x - min_x);
-    float b_unit = (b[end_index] - b[start_index]) / (max_x - min_x);
-    float r_result = r[start_index] + (start_x - min_x) * r_unit;
-    float g_result = g[start_index] + (start_x - min_x) * g_unit;
-    float b_result = b[start_index] + (start_x - min_x) * b_unit;
+    const int range_x = pdfium::ClampSub(max_x, min_x);
+    float r_unit = (r[end_index] - r[start_index]) / range_x;
+    float g_unit = (g[end_index] - g[start_index]) / range_x;
+    float b_unit = (b[end_index] - b[start_index]) / range_x;
+    const int diff_x = pdfium::ClampSub(start_x, min_x);
+    float r_result = r[start_index] + diff_x * r_unit;
+    float g_result = g[start_index] + diff_x * g_unit;
+    float b_result = b[start_index] + diff_x * b_unit;
     pdfium::span<uint8_t> dib_span =
         pBitmap->GetWritableScanline(y).subspan(start_x * 4);
 
@@ -842,15 +848,12 @@ void DrawCoonPatchMeshes(
       if (!stream.CanReadColor())
         break;
 
-      float r;
-      float g;
-      float b;
-      std::tie(r, g, b) = stream.ReadColor();
-
-      patch.patch_colors[i].comp[0] = static_cast<int32_t>(r * 255);
-      patch.patch_colors[i].comp[1] = static_cast<int32_t>(g * 255);
-      patch.patch_colors[i].comp[2] = static_cast<int32_t>(b * 255);
+      FX_RGB<float> rgb = stream.ReadColor();
+      patch.patch_colors[i].comp[0] = static_cast<int32_t>(rgb.red * 255);
+      patch.patch_colors[i].comp[1] = static_cast<int32_t>(rgb.green * 255);
+      patch.patch_colors[i].comp[2] = static_cast<int32_t>(rgb.blue * 255);
     }
+
     CFX_FloatRect bbox =
         CFX_FloatRect::GetBBox(pdfium::make_span(coords).first(point_count));
     if (bbox.right <= 0 || bbox.left >= (float)pBitmap->GetWidth() ||
@@ -893,9 +896,9 @@ void CPDF_RenderShading::Draw(CFX_RenderDevice* pDevice,
       pPattern->GetShadingObject()->GetDict();
   if (!pPattern->IsShadingObject() && pDict->KeyExist("Background")) {
     RetainPtr<const CPDF_Array> pBackColor = pDict->GetArrayFor("Background");
-    if (pBackColor && pBackColor->size() >= pColorSpace->CountComponents()) {
+    if (pBackColor && pBackColor->size() >= pColorSpace->ComponentCount()) {
       std::vector<float> comps = ReadArrayElementsToVector(
-          pBackColor.Get(), pColorSpace->CountComponents());
+          pBackColor.Get(), pColorSpace->ComponentCount());
 
       float R = 0.0f;
       float G = 0.0f;

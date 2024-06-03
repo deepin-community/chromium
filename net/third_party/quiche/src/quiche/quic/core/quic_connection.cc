@@ -361,11 +361,6 @@ QuicConnection::QuicConnection(
   // TODO(ianswett): Supply the NetworkChangeVisitor as a constructor argument
   // and make it required non-null, because it's always used.
   sent_packet_manager_.SetNetworkChangeVisitor(this);
-  if (GetQuicRestartFlag(quic_offload_pacing_to_usps2)) {
-    sent_packet_manager_.SetPacingAlarmGranularity(QuicTime::Delta::Zero());
-    release_time_into_future_ =
-        QuicTime::Delta::FromMilliseconds(kMinReleaseTimeIntoFutureMs);
-  }
   // Allow the packet writer to potentially reduce the packet size to a value
   // even smaller than kDefaultMaxPacketSize.
   SetMaxPacketLength(perspective_ == Perspective::IS_SERVER
@@ -2679,9 +2674,9 @@ void QuicConnection::ProcessUdpPacket(const QuicSocketAddress& self_address,
   if (!default_path_.self_address.IsInitialized()) {
     default_path_.self_address = last_received_packet_info_.destination_address;
   } else if (default_path_.self_address != self_address &&
-             sent_server_preferred_address_.IsInitialized() &&
+             expected_server_preferred_address_.IsInitialized() &&
              self_address.Normalized() ==
-                 sent_server_preferred_address_.Normalized()) {
+                 expected_server_preferred_address_.Normalized()) {
     // If the packet is received at the preferred address, treat it as if it is
     // received on the original server address.
     last_received_packet_info_.destination_address = default_path_.self_address;
@@ -2940,11 +2935,22 @@ void QuicConnection::SetDefaultPathState(PathState new_path_state) {
   packet_creator_.SetServerConnectionId(default_path_.server_connection_id);
 }
 
+// TODO(wub): Inline this function when deprecating
+// --quic_test_peer_addr_change_after_normalize.
+bool QuicConnection::PeerAddressChanged() const {
+  if (quic_test_peer_addr_change_after_normalize_) {
+    return direct_peer_address_.Normalized() !=
+           last_received_packet_info_.source_address.Normalized();
+  }
+
+  return direct_peer_address_ != last_received_packet_info_.source_address;
+}
+
 bool QuicConnection::ProcessValidatedPacket(const QuicPacketHeader& header) {
   if (perspective_ == Perspective::IS_CLIENT && version().HasIetfQuicFrames() &&
       direct_peer_address_.IsInitialized() &&
       last_received_packet_info_.source_address.IsInitialized() &&
-      direct_peer_address_ != last_received_packet_info_.source_address &&
+      PeerAddressChanged() &&
       !IsKnownServerAddress(last_received_packet_info_.source_address)) {
     // Discard packets received from unseen server addresses.
     return false;
@@ -2966,8 +2972,8 @@ bool QuicConnection::ProcessValidatedPacket(const QuicPacketHeader& header) {
             "Self address migration is not supported at the server, current "
             "address: ",
             default_path_.self_address.ToString(),
-            ", server preferred address: ",
-            sent_server_preferred_address_.ToString(),
+            ", expected server preferred address: ",
+            expected_server_preferred_address_.ToString(),
             ", received packet address: ",
             last_received_packet_info_.destination_address.ToString(),
             ", size: ", last_received_packet_info_.length,
@@ -3003,7 +3009,7 @@ bool QuicConnection::ProcessValidatedPacket(const QuicPacketHeader& header) {
     // different sockets to the server's preferred address before handshake
     // gets confirmed. In this case, do not kick off client address migration
     // detection.
-    QUICHE_DCHECK(sent_server_preferred_address_.IsInitialized());
+    QUICHE_DCHECK(expected_server_preferred_address_.IsInitialized());
     last_received_packet_info_.source_address = direct_peer_address_;
   }
 
@@ -3171,20 +3177,37 @@ bool QuicConnection::ShouldGeneratePacket(
   return connected_ && !HandleWriteBlocked();
 }
 
-void QuicConnection::MaybeBundleOpportunistically() {
-  if (!ack_frequency_sent_ && sent_packet_manager_.CanSendAckFrequency()) {
-    if (packet_creator_.NextSendingPacketNumber() >=
-        FirstSendingPacketNumber() + kMinReceivedBeforeAckDecimation) {
+void QuicConnection::MaybeBundleOpportunistically(
+    TransmissionType transmission_type) {
+  if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data4)) {
+    QUIC_RESTART_FLAG_COUNT_N(quic_opport_bundle_qpack_decoder_data4, 1, 4);
+
+    const bool should_bundle_ack_frequency =
+        !ack_frequency_sent_ && sent_packet_manager_.CanSendAckFrequency() &&
+        transmission_type == NOT_RETRANSMISSION &&
+        packet_creator_.NextSendingPacketNumber() >=
+            FirstSendingPacketNumber() + kMinReceivedBeforeAckDecimation;
+
+    if (should_bundle_ack_frequency) {
       QUIC_RELOADABLE_FLAG_COUNT_N(quic_can_send_ack_frequency, 3, 3);
       ack_frequency_sent_ = true;
       auto frame = sent_packet_manager_.GetUpdatedAckFrequencyFrame();
       visitor_->SendAckFrequency(frame);
     }
-  }
 
-  if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data3)) {
-    QUIC_RESTART_FLAG_COUNT_N(quic_opport_bundle_qpack_decoder_data3, 1, 4);
-    visitor_->MaybeBundleOpportunistically();
+    if (transmission_type == NOT_RETRANSMISSION) {
+      visitor_->MaybeBundleOpportunistically();
+    }
+  } else {
+    if (!ack_frequency_sent_ && sent_packet_manager_.CanSendAckFrequency()) {
+      if (packet_creator_.NextSendingPacketNumber() >=
+          FirstSendingPacketNumber() + kMinReceivedBeforeAckDecimation) {
+        QUIC_RELOADABLE_FLAG_COUNT_N(quic_can_send_ack_frequency, 3, 3);
+        ack_frequency_sent_ = true;
+        auto frame = sent_packet_manager_.GetUpdatedAckFrequencyFrame();
+        visitor_->SendAckFrequency(frame);
+      }
+    }
   }
 
   if (packet_creator_.has_ack() || !CanWrite(NO_RETRANSMITTABLE_DATA)) {
@@ -3385,16 +3408,16 @@ bool QuicConnection::WritePacket(SerializedPacket* packet) {
   QuicSocketAddress send_to_address = packet->peer_address;
   QuicSocketAddress send_from_address = self_address();
   if (perspective_ == Perspective::IS_SERVER &&
-      sent_server_preferred_address_.IsInitialized() &&
+      expected_server_preferred_address_.IsInitialized() &&
       received_client_addresses_cache_.Lookup(send_to_address) ==
           received_client_addresses_cache_.end()) {
     // Given server has not received packets from send_to_address to
     // self_address(), most NATs do not allow packets from self_address() to
     // send_to_address to go through. Override packet's self address to
-    // sent_server_preferred_address_.
+    // expected_server_preferred_address_.
     // TODO(b/262386897): server should validate reverse path before changing
     // self address of packets to send.
-    send_from_address = sent_server_preferred_address_;
+    send_from_address = expected_server_preferred_address_;
   }
   // Self address is always the default self address on this code path.
   const bool send_on_current_path = send_to_address == peer_address();
@@ -5811,8 +5834,8 @@ void QuicConnection::SendAllPendingAcks() {
       uber_received_packet_manager_.GetEarliestAckTimeout();
   QUIC_BUG_IF(quic_bug_12714_32, !earliest_ack_timeout.IsInitialized());
   MaybeBundleCryptoDataWithAcks();
-  if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data3)) {
-    QUIC_RESTART_FLAG_COUNT_N(quic_opport_bundle_qpack_decoder_data3, 2, 4);
+  if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data4)) {
+    QUIC_RESTART_FLAG_COUNT_N(quic_opport_bundle_qpack_decoder_data4, 2, 4);
     visitor_->MaybeBundleOpportunistically();
   }
   earliest_ack_timeout = uber_received_packet_manager_.GetEarliestAckTimeout();
@@ -5849,14 +5872,13 @@ void QuicConnection::SendAllPendingAcks() {
     if (!flushed) {
       // Connection is write blocked.
       QUIC_BUG_IF(quic_bug_12714_33,
-                  !writer_->IsWriteBlocked() &&
+                  connected_ && !writer_->IsWriteBlocked() &&
                       !LimitedByAmplificationFactor(
                           packet_creator_.max_packet_length()) &&
                       !IsMissingDestinationConnectionID())
           << "Writer not blocked and not throttled by amplification factor, "
              "but ACK not flushed for packet space:"
           << PacketNumberSpaceToString(static_cast<PacketNumberSpace>(i))
-          << ", connected: " << connected_
           << ", fill_coalesced_packet: " << fill_coalesced_packet_
           << ", blocked_by_no_connection_id: "
           << (peer_issued_cid_manager_ != nullptr &&

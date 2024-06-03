@@ -4,9 +4,10 @@
 
 #include "components/password_manager/core/browser/password_store/get_logins_with_affiliations_request_handler.h"
 
+#include <vector>
+
 #include "base/barrier_callback.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -61,7 +62,7 @@ bool IsExtendedPublicSuffixDomainMatch(
 }
 
 // Do post-processing on forms and mark PSL matches as such.
-LoginsResultOrError ProccessExactAndPSLForms(
+LoginsResultOrError ProcessExactAndPSLForms(
     const PasswordFormDigest& digest,
     const base::flat_set<std::string>& psl_extensions,
     LoginsResultOrError logins_or_error) {
@@ -114,7 +115,7 @@ void InjectAffiliationAndBrandingInformation(
 // Transforms federated credentials into non zero-click ones.
 void TrimUsernameOnlyCredentials(std::vector<PasswordForm>& credentials) {
   // Remove username-only credentials which are not federated.
-  base::EraseIf(credentials, [](const PasswordForm& form) {
+  std::erase_if(credentials, [](const PasswordForm& form) {
     return form.scheme == PasswordForm::Scheme::kUsernameOnly &&
            form.federation_origin.opaque();
   });
@@ -176,7 +177,7 @@ void GetLoginsHelper::Init(AffiliatedMatchHelper* affiliated_match_helper,
     // If |affiliated_match_helper| is unavailable return only exact and PSL
     // matches.
     backend_->FillMatchingLoginsAsync(
-        base::BindOnce(&ProccessExactAndPSLForms, requested_digest_,
+        base::BindOnce(&ProcessExactAndPSLForms, requested_digest_,
                        base::flat_set<std::string>())
             .Then(std::move(callback)),
         FormSupportsPSL(requested_digest_), {requested_digest_});
@@ -210,7 +211,7 @@ void GetLoginsHelper::OnPSLExtensionsReceived(
     return;
   }
   backend_->FillMatchingLoginsAsync(
-      base::BindOnce(&ProccessExactAndPSLForms, requested_digest_,
+      base::BindOnce(&ProcessExactAndPSLForms, requested_digest_,
                      psl_extensions)
           .Then(std::move(forms_received_callback)),
       FormSupportsPSL(requested_digest_), {requested_digest_});
@@ -292,20 +293,12 @@ LoginsResultOrError GetLoginsHelper::MergeResults(
     }
   }
   // Erase any form which has no match_type assigned. This can happen if PSL
-  // matched form was not marked as such inside ProccessExactAndPSLForms()
+  // matched form was not marked as such inside ProcessExactAndPSLForms()
   // because of PSL extension list.
-  base::EraseIf(final_result,
+  std::erase_if(final_result,
                 [](const auto& form) { return !form.match_type.has_value(); });
 
   TrimUsernameOnlyCredentials(final_result);
-  password_manager::metrics_util::LogGroupedPasswordsResults(final_result);
-  // Remove grouped only matches if filling across groups is disabled.
-  if (!base::FeatureList::IsEnabled(
-          password_manager::features::kFillingAcrossGroupedSites)) {
-    base::EraseIf(final_result, [](const auto& form) {
-      return form.match_type == PasswordForm::MatchType::kGrouped;
-    });
-  }
 
   return final_result;
 }

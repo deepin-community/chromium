@@ -4,7 +4,7 @@
 """Definitions of builders in the tryserver.chromium.swangle builder group."""
 
 load("//lib/branches.star", "branches")
-load("//lib/builders.star", "cpu", "os", "reclient")
+load("//lib/builders.star", "cpu", "os", "reclient", "siso")
 load("//lib/consoles.star", "consoles")
 load("//lib/try.star", "try_")
 
@@ -14,11 +14,18 @@ try_.defaults.set(
     pool = try_.DEFAULT_POOL,
     builderless = False,
     os = os.LINUX_DEFAULT,
+    check_for_flakiness = False,
+    check_for_flakiness_with_resultdb = False,
     contact_team_email = "chrome-gpu-infra@google.com",
     execution_timeout = try_.DEFAULT_EXECUTION_TIMEOUT,
     reclient_instance = reclient.instance.DEFAULT_UNTRUSTED,
     reclient_jobs = reclient.jobs.LOW_JOBS_FOR_CQ,
     service_account = try_.gpu.SERVICE_ACCOUNT,
+    siso_configs = ["builder"],
+    siso_enable_cloud_profiler = True,
+    siso_enable_cloud_trace = True,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_UNTRUSTED,
 )
 
 consoles.list_view(
@@ -122,9 +129,10 @@ try_.builder(
     branch_selector = branches.selector.MAC_BRANCHES,
     description_html = "Runs Dawn tests on Apple silicon at Chromium's pinned Dawn revision",
     mirrors = [
+        "ci/Dawn Mac arm64 DEPS Builder",
         "ci/Dawn Mac arm64 DEPS Release (Apple M2)",
     ],
-    gn_args = "ci/Dawn Mac arm64 DEPS Release (Apple M2)",
+    gn_args = "ci/Dawn Mac arm64 DEPS Builder",
     os = os.MAC_ANY,
     cpu = cpu.ARM64,
     main_list_view = "try",
@@ -221,6 +229,8 @@ try_.builder(
     ],
     gn_args = "ci/Dawn Win10 x86 DEPS Builder",
     os = os.WINDOWS_ANY,
+    check_for_flakiness = False,
+    check_for_flakiness_with_resultdb = False,
     main_list_view = "try",
     test_presentation = resultdb.test_presentation(
         grouping_keys = ["status", "v.test_suite", "v.gpu"],
@@ -284,6 +294,42 @@ try_.builder(
 )
 
 try_.builder(
+    # This is not part of "android-dawn-arm64-rel" at the moment since there is
+    # not sufficient S24 capacity for that.
+    name = "android-dawn-arm64-s24-rel",
+    description_html = "Runs ToT Dawn tests on Samsung S24 devices",
+    mirrors = [
+        "ci/Dawn Android arm64 Builder",
+        "ci/Dawn Android arm64 Release (Samsung S24)",
+    ],
+    gn_args = "ci/Dawn Android arm64 Builder",
+    # TODO(crbug.com/333424893): Change this to a dedicated S24 pool once
+    # additional GCE quota is available.
+    pool = "luci.chromium.gpu.android.s23.try",
+    builderless = True,
+    os = os.LINUX_DEFAULT,
+    test_presentation = resultdb.test_presentation(
+        grouping_keys = ["status", "v.test_suite", "v.gpu"],
+    ),
+)
+
+try_.builder(
+    name = "linux-dawn-intel-exp-rel",
+    description_html = "Runs ToT Dawn tests on experimental Linux/Intel configs",
+    mirrors = [
+        "ci/Dawn Linux x64 Builder",
+        "ci/Dawn Linux x64 Experimental Release (Intel UHD 630)",
+    ],
+    gn_args = "ci/Dawn Linux x64 Builder",
+    pool = "luci.chromium.gpu.linux.intel.try",
+    builderless = True,
+    os = os.LINUX_DEFAULT,
+    test_presentation = resultdb.test_presentation(
+        grouping_keys = ["status", "v.test_suite", "v.gpu"],
+    ),
+)
+
+try_.builder(
     name = "linux-dawn-rel",
     mirrors = [
         "ci/Dawn Linux x64 Builder",
@@ -300,9 +346,10 @@ try_.builder(
     name = "mac-arm64-dawn-rel",
     description_html = "Runs Dawn tests on Apple silicon on Dawn ToT",
     mirrors = [
+        "ci/Dawn Mac arm64 Builder",
         "ci/Dawn Mac arm64 Release (Apple M2)",
     ],
-    gn_args = "ci/Dawn Mac arm64 Release (Apple M2)",
+    gn_args = "ci/Dawn Mac arm64 Builder",
     os = os.MAC_ANY,
     cpu = None,
     test_presentation = resultdb.test_presentation(
@@ -319,6 +366,7 @@ try_.builder(
     ],
     gn_args = "ci/Dawn Mac x64 Builder",
     os = os.MAC_ANY,
+    cpu = cpu.ARM64,
     test_presentation = resultdb.test_presentation(
         grouping_keys = ["status", "v.test_suite", "v.gpu"],
     ),
@@ -355,9 +403,27 @@ try_.builder(
 try_.builder(
     name = "dawn-try-mac-arm64-deps-rel",
     mirrors = [
+        "ci/Dawn Mac arm64 DEPS Builder",
         "ci/Dawn Mac arm64 DEPS Release (Apple M2)",
     ],
-    gn_args = "ci/Dawn Mac arm64 DEPS Release (Apple M2)",
+    gn_args = "ci/Dawn Mac arm64 DEPS Builder",
+    pool = "luci.chromium.gpu.mac.arm64.apple.m2.try",
+    builderless = True,
+    os = os.MAC_ANY,
+    cpu = None,
+    test_presentation = resultdb.test_presentation(
+        grouping_keys = ["status", "v.test_suite", "v.gpu"],
+    ),
+)
+
+try_.builder(
+    name = "dawn-try-mac-arm64-m2-exp",
+    description_html = "Manual-only trybot for running ToT Dawn tests on experimental M2 machines",
+    mirrors = [
+        "ci/Dawn Mac arm64 Builder",
+        "ci/Dawn Mac arm64 Experimental Release (Apple M2)",
+    ],
+    gn_args = "ci/Dawn Mac arm64 Builder",
     pool = "luci.chromium.gpu.mac.arm64.apple.m2.try",
     builderless = True,
     os = os.MAC_ANY,
@@ -370,9 +436,10 @@ try_.builder(
 try_.builder(
     name = "dawn-try-mac-arm64-rel",
     mirrors = [
+        "ci/Dawn Mac arm64 Builder",
         "ci/Dawn Mac arm64 Release (Apple M2)",
     ],
-    gn_args = "ci/Dawn Mac arm64 Release (Apple M2)",
+    gn_args = "ci/Dawn Mac arm64 Builder",
     pool = "luci.chromium.gpu.mac.arm64.apple.m2.try",
     builderless = True,
     os = os.MAC_ANY,
@@ -436,6 +503,22 @@ try_.builder(
     ],
     gn_args = "ci/Dawn Win10 x86 Builder",
     pool = "luci.chromium.gpu.win10.intel.try",
+    builderless = True,
+    os = os.WINDOWS_ANY,
+    test_presentation = resultdb.test_presentation(
+        grouping_keys = ["status", "v.test_suite", "v.gpu"],
+    ),
+)
+
+try_.builder(
+    name = "dawn-try-win-x86-nvidia-exp",
+    description_html = "Runs ToT Dawn tests on experimental Win/NVIDIA/x86 configs",
+    mirrors = [
+        "ci/Dawn Win10 x86 Builder",
+        "ci/Dawn Win10 x86 Experimental Release (NVIDIA)",
+    ],
+    gn_args = "ci/Dawn Win10 x86 Builder",
+    pool = "luci.chromium.gpu.win10.nvidia.try",
     builderless = True,
     os = os.WINDOWS_ANY,
     test_presentation = resultdb.test_presentation(

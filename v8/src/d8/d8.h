@@ -184,6 +184,8 @@ class SerializationDataQueue {
 
 class Worker : public std::enable_shared_from_this<Worker> {
  public:
+  static constexpr i::ExternalPointerTag kManagedTag = i::kGenericManagedTag;
+
   explicit Worker(const char* script);
   ~Worker();
 
@@ -479,10 +481,6 @@ class ShellOptions {
   DisallowReassignment<bool> wasm_trap_handler = {"wasm-trap-handler", true};
 #endif  // V8_ENABLE_WEBASSEMBLY
   DisallowReassignment<bool> expose_fast_api = {"expose-fast-api", false};
-#if V8_ENABLE_SANDBOX
-  DisallowReassignment<bool> enable_sandbox_crash_filter = {
-      "enable-sandbox-crash-filter", false};
-#endif  // V8_ENABLE_SANDBOX
   DisallowReassignment<size_t> max_serializer_memory = {"max-serializer-memory",
                                                         1 * i::MB};
 };
@@ -558,9 +556,9 @@ class Shell : public i::AllStatic {
   static void RealmDispose(const v8::FunctionCallbackInfo<v8::Value>& info);
   static void RealmSwitch(const v8::FunctionCallbackInfo<v8::Value>& info);
   static void RealmEval(const v8::FunctionCallbackInfo<v8::Value>& info);
-  static void RealmSharedGet(Local<String> property,
+  static void RealmSharedGet(Local<Name> property,
                              const PropertyCallbackInfo<Value>& info);
-  static void RealmSharedSet(Local<String> property, Local<Value> value,
+  static void RealmSharedSet(Local<Name> property, Local<Value> value,
                              const PropertyCallbackInfo<void>& info);
 
   static void LogGetAndStop(const v8::FunctionCallbackInfo<v8::Value>& info);
@@ -569,6 +567,7 @@ class Shell : public i::AllStatic {
 
   static void InstallConditionalFeatures(
       const v8::FunctionCallbackInfo<v8::Value>& info);
+  static void EnableJSPI(const v8::FunctionCallbackInfo<v8::Value>& info);
 
   static void AsyncHooksCreateHook(
       const v8::FunctionCallbackInfo<v8::Value>& info);

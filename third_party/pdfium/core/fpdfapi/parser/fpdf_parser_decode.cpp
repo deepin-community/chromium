@@ -21,12 +21,14 @@
 #include "core/fxcodec/fax/faxmodule.h"
 #include "core/fxcodec/flate/flatemodule.h"
 #include "core/fxcodec/scanlinedecoder.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/compiler_specific.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_safe_types.h"
+#include "core/fxcrt/span.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxcrt/utf16.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
 
 namespace {
 
@@ -256,7 +258,9 @@ uint32_t RunLengthDecode(pdfium::span<const uint8_t> src_span,
     return FX_INVALID_OFFSET;
 
   dest_buf->reset(FX_Alloc(uint8_t, *dest_size));
-  pdfium::span<uint8_t> dest_span(dest_buf->get(), *dest_size);
+  // SAFETY: allocation of `*dest_size` above.
+  auto dest_span =
+      UNSAFE_BUFFERS(pdfium::make_span(dest_buf->get(), *dest_size));
   i = 0;
   int dest_count = 0;
   while (i < src_span.size()) {
@@ -456,7 +460,8 @@ bool PDF_DataDecode(pdfium::span<const uint8_t> src_span,
     if (offset == FX_INVALID_OFFSET)
       return false;
 
-    last_span = {new_buf.get(), new_size};
+    // SAFETY: relies on out params of FlateOrLZWDecode().
+    last_span = UNSAFE_BUFFERS(pdfium::make_span(new_buf.get(), new_size));
     result = std::move(new_buf);
   }
   ImageEncoding->clear();
@@ -538,31 +543,16 @@ ByteString PDF_EncodeText(WideStringView str) {
 
   size_t dest_index = 0;
   {
-#if defined(WCHAR_T_IS_32_BIT)
-    // 2 or 4 bytes required per UTF-32 code unit.
-    pdfium::span<uint8_t> dest_buf =
-        pdfium::as_writable_bytes(result.GetBuffer(len * 4 + 2));
-#else
+    std::u16string utf16 = FX_UTF16Encode(str);
     // 2 bytes required per UTF-16 code unit.
     pdfium::span<uint8_t> dest_buf =
-        pdfium::as_writable_bytes(result.GetBuffer(len * 2 + 2));
-#endif  // defined(WCHAR_T_IS_32_BIT)
+        pdfium::as_writable_bytes(result.GetBuffer(utf16.size() * 2 + 2));
 
     dest_buf[dest_index++] = 0xfe;
     dest_buf[dest_index++] = 0xff;
-    for (size_t j = 0; j < len; ++j) {
-#if defined(WCHAR_T_IS_32_BIT)
-      if (pdfium::IsSupplementary(str[j])) {
-        pdfium::SurrogatePair pair(str[j]);
-        dest_buf[dest_index++] = pair.high() >> 8;
-        dest_buf[dest_index++] = static_cast<uint8_t>(pair.high());
-        dest_buf[dest_index++] = pair.low() >> 8;
-        dest_buf[dest_index++] = static_cast<uint8_t>(pair.low());
-        continue;
-      }
-#endif  // defined(WCHAR_T_IS_32_BIT)
-      dest_buf[dest_index++] = str[j] >> 8;
-      dest_buf[dest_index++] = static_cast<uint8_t>(str[j]);
+    for (char16_t code_unit : utf16) {
+      dest_buf[dest_index++] = code_unit >> 8;
+      dest_buf[dest_index++] = static_cast<uint8_t>(code_unit);
     }
   }
   result.ReleaseBuffer(dest_index);

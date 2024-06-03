@@ -9,6 +9,7 @@
 #include "base/metrics/user_metrics.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
@@ -47,8 +48,11 @@
 #include "components/user_education/common/feature_promo_specification.h"
 #include "components/user_education/common/help_bubble_factory_registry.h"
 #include "components/user_education/common/help_bubble_params.h"
+#include "components/user_education/common/new_badge_specification.h"
 #include "components/user_education/common/tutorial_description.h"
 #include "components/user_education/common/tutorial_registry.h"
+#include "components/user_education/common/user_education_features.h"
+#include "components/user_education/common/user_education_metadata.h"
 #include "components/user_education/views/help_bubble_delegate.h"
 #include "components/user_education/views/help_bubble_factory_views.h"
 #include "components/user_education/webui/help_bubble_handler.h"
@@ -76,7 +80,6 @@ namespace {
 const char kTabGroupTutorialMetricPrefix[] = "TabGroup";
 const char kSavedTabGroupTutorialMetricPrefix[] = "SavedTabGroup";
 const char kCustomizeChromeTutorialMetricPrefix[] = "CustomizeChromeSidePanel";
-const char kSideSearchTutorialMetricPrefix[] = "SideSearch";
 const char kPasswordManagerTutorialMetricPrefix[] = "PasswordManager";
 constexpr char kTabGroupHeaderElementName[] = "TabGroupHeader";
 constexpr char kChromeThemeBackElementName[] = "ChromeThemeBackElement";
@@ -174,7 +177,20 @@ void MaybeRegisterChromeFeaturePromos(
     return;
   }
 
-  // TODO(1432894): Use toast or snooze instead of legacy promo.
+  // kIPHAutofillCreditCardBenefitFeature:
+  registry.RegisterFeature(std::move(
+      FeaturePromoSpecification::CreateForToastPromo(
+          feature_engagement::kIPHAutofillCreditCardBenefitFeature,
+          kAutofillCreditCardBenefitElementId,
+          IDS_AUTOFILL_CREDIT_CARD_BENEFIT_IPH_BUBBLE_LABEL,
+          IDS_AUTOFILL_CREDIT_CARD_BENEFIT_IPH_BUBBLE_LABEL_SCREENREADER,
+          FeaturePromoSpecification::AcceleratorInfo())
+          .SetBubbleArrow(HelpBubbleArrow::kLeftCenter)
+          .SetMetadata(125, "justinleewells@google.com",
+                       "Triggered after a credit card benefit is displayed for "
+                       "the first time.")));
+
+  // TODO(crbug.com/40264177): Use toast or snooze instead of legacy promo.
   // kIPHAutofillExternalAccountProfileSuggestionFeature:
   registry.RegisterFeature(
       std::move(FeaturePromoSpecification::CreateForLegacyPromo(
@@ -185,6 +201,20 @@ void MaybeRegisterChromeFeaturePromos(
                     .SetBubbleArrow(HelpBubbleArrow::kLeftCenter)
                     .SetMetadata(115, "vykochko@google.com",
                                  "Triggered after autofill popup appears.")));
+
+  // kIPHAutofillVirtualCardSuggestionFeature:
+  registry.RegisterFeature(std::move(
+      FeaturePromoSpecification::CreateForToastPromo(
+          feature_engagement::kIPHAutofillManualFallbackFeature,
+          kAutofillManualFallbackElementId, IDS_AUTOFILL_IPH_MANUAL_FALLBACK,
+          IDS_AUTOFILL_IPH_MANUAL_FALLBACK_SCREENREADER,
+          FeaturePromoSpecification::AcceleratorInfo())
+          .SetBubbleArrow(HelpBubbleArrow::kTopRight)
+          .SetMetadata(
+              123, "theocristea@google.com",
+              "User focuses a field, but autofill cannot be triggered "
+              "automatically because the field has autocomplete=garbage. In "
+              "this case, autofill can be triggered from the context menu.")));
 
   // kIPHAutofillVirtualCardCVCSuggestionFeature:
   registry.RegisterFeature(std::move(
@@ -331,7 +361,8 @@ void MaybeRegisterChromeFeaturePromos(
           .SetBubbleTitleText(IDS_IPH_EXPERIMENTAL_AI_PROMO)
           .SetCustomActionDismissText(IDS_NO_THANKS)
           .SetBubbleArrow(HelpBubbleArrow::kTopRight)
-          .SetCustomActionIsDefault(true)));
+          .SetCustomActionIsDefault(true)
+          .OverrideFocusOnShow(false)));
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // kIPHExtensionsMenuFeature:
@@ -583,14 +614,6 @@ void MaybeRegisterChromeFeaturePromos(
             .SetBubbleArrow(HelpBubbleArrow::kTopRight)));
   }
 
-  // kIPHSideSearchFeature:
-  registry.RegisterFeature(std::move(
-      FeaturePromoSpecification::CreateForTutorialPromo(
-          feature_engagement::kIPHSideSearchFeature, kSideSearchButtonElementId,
-          IDS_SIDE_SEARCH_PROMO, kSideSearchTutorialId)
-          .SetBubbleArrow(HelpBubbleArrow::kTopCenter)
-          .SetBubbleIcon(kLightbulbOutlineIcon)));
-
   // kIPHTabOrganizationSuccessFeature:
   registry.RegisterFeature(
       std::move(FeaturePromoSpecification::CreateForToastPromo(
@@ -811,7 +834,7 @@ void MaybeRegisterChromeFeaturePromos(
               }))
           .SetBubbleArrow(HelpBubbleArrow::kTopRight)
           .SetPromoSubtype(user_education::FeaturePromoSpecification::
-                               PromoSubtype::kPerApp)));
+                               PromoSubtype::kKeyedNotice)));
 
   if (base::FeatureList::IsEnabled(compose::features::kEnableCompose)) {
     // kIPHComposeMSBBSettingsFeature:
@@ -1039,38 +1062,6 @@ void MaybeRegisterChromeTutorials(
               .SetBubbleBodyText(IDS_TUTORIAL_CUSTOMIZE_CHROME_SUCCESS_BODY)
               .InAnyContext()));
 
-  {  // Side Search tutorial
-    auto side_search_tutorial =
-        TutorialDescription::Create<kSideSearchTutorialMetricPrefix>(
-            // 1st bubble appears and prompts users to open side search
-            BubbleStep(kSideSearchButtonElementId)
-                .SetBubbleBodyText(IDS_SIDE_SEARCH_TUTORIAL_OPEN_SIDE_PANEL)
-                .SetBubbleArrow(HelpBubbleArrow::kTopCenter),
-
-            // 2nd bubble appears and prompts users to open a link
-            BubbleStep(kSideSearchWebViewElementId)
-                .SetBubbleBodyText(IDS_SIDE_SEARCH_TUTORIAL_OPEN_A_LINK_TO_TAB)
-                .SetBubbleArrow(HelpBubbleArrow::kRightCenter),
-
-            // Hidden step that detects a link is pressed
-            EventStep(kSideSearchResultsClickedCustomEventId,
-                      kSideSearchWebViewElementId),
-
-            // 3rd bubble appears and prompts users to press close button
-            BubbleStep(kSidePanelCloseButtonElementId)
-                .SetBubbleBodyText(IDS_SIDE_SEARCH_TUTORIAL_CLOSE_SIDE_PANEL)
-                .SetBubbleArrow(HelpBubbleArrow::kTopRight),
-
-            // Completion of the tutorial.
-            BubbleStep(kSideSearchButtonElementId)
-                .SetBubbleTitleText(IDS_TUTORIAL_GENERIC_SUCCESS_TITLE)
-                .SetBubbleBodyText(IDS_SIDE_SEARCH_PROMO)
-                .SetBubbleArrow(HelpBubbleArrow::kTopRight));
-    side_search_tutorial.can_be_restarted = true;
-    tutorial_registry.AddTutorial(kSideSearchTutorialId,
-                                  std::move(side_search_tutorial));
-  }
-
   // Password Manager tutorial
   tutorial_registry.AddTutorial(
       kPasswordManagerTutorialId,
@@ -1131,4 +1122,57 @@ void MaybeRegisterChromeTutorials(
               .SetBubbleTitleText(IDS_TUTORIAL_GENERIC_SUCCESS_TITLE)
               .SetBubbleBodyText(IDS_TUTORIAL_PASSWORD_MANAGER_SUCCESS_BODY)
               .SetBubbleArrow(HelpBubbleArrow::kNone)));
+}
+
+void MaybeRegisterChromeNewBadges(user_education::NewBadgeRegistry& registry) {
+  if (registry.IsFeatureRegistered(
+          user_education::features::kNewBadgeTestFeature)) {
+    return;
+  }
+
+  registry.RegisterFeature(user_education::NewBadgeSpecification(
+      user_education::features::kNewBadgeTestFeature,
+      user_education::Metadata(124, "Frizzle Team",
+                               "Used to test \"New\" Badge logic.")));
+
+  registry.RegisterFeature(user_education::NewBadgeSpecification(
+      compose::features::kEnableCompose, user_education::Metadata()));
+  registry.RegisterFeature(user_education::NewBadgeSpecification(
+      compose::features::kEnableComposeNudge, user_education::Metadata()));
+}
+
+std::unique_ptr<BrowserFeaturePromoController> CreateUserEducationResources(
+    BrowserView* browser_view) {
+  Profile* const profile = browser_view->GetProfile();
+
+  // Get the user education service.
+  if (!UserEducationServiceFactory::ProfileAllowsUserEducation(profile)) {
+    return nullptr;
+  }
+  UserEducationService* const user_education_service =
+      UserEducationServiceFactory::GetForBrowserContext(profile);
+  if (!user_education_service) {
+    return nullptr;
+  }
+
+  // Consider registering factories, etc.
+  RegisterChromeHelpBubbleFactories(
+      user_education_service->help_bubble_factory_registry());
+  MaybeRegisterChromeFeaturePromos(
+      user_education_service->feature_promo_registry());
+  MaybeRegisterChromeTutorials(user_education_service->tutorial_registry());
+  CHECK(user_education_service->new_badge_registry());
+
+  MaybeRegisterChromeNewBadges(*user_education_service->new_badge_registry());
+  user_education_service->new_badge_controller()->InitData();
+
+  return std::make_unique<BrowserFeaturePromoController>(
+      browser_view,
+      feature_engagement::TrackerFactory::GetForBrowserContext(profile),
+      &user_education_service->feature_promo_registry(),
+      &user_education_service->help_bubble_factory_registry(),
+      &user_education_service->feature_promo_storage_service(),
+      &user_education_service->feature_promo_session_policy(),
+      &user_education_service->tutorial_service(),
+      &user_education_service->product_messaging_controller());
 }

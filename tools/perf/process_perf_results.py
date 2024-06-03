@@ -90,18 +90,29 @@ def _GetMachineGroup(build_properties):
 def _upload_perf_results(json_to_upload, name, configuration_name,
     build_properties, output_json_file):
   """Upload the contents of result JSON(s) to the perf dashboard."""
-  args= [
-      '--buildername', build_properties['buildername'],
-      '--buildnumber', build_properties['buildnumber'],
-      '--name', name,
-      '--configuration-name', configuration_name,
-      '--results-file', json_to_upload,
-      '--results-url', RESULTS_URL,
-      '--got-revision-cp', build_properties['got_revision_cp'],
-      '--got-v8-revision', build_properties['got_v8_revision'],
-      '--got-webrtc-revision', build_properties['got_webrtc_revision'],
-      '--output-json-file', output_json_file,
-      '--perf-dashboard-machine-group', _GetMachineGroup(build_properties)
+  args = [
+      '--buildername',
+      build_properties['buildername'],
+      '--buildnumber',
+      str(build_properties['buildnumber']),
+      '--name',
+      name,
+      '--configuration-name',
+      configuration_name,
+      '--results-file',
+      json_to_upload,
+      '--results-url',
+      RESULTS_URL,
+      '--got-revision-cp',
+      build_properties['got_revision_cp'],
+      '--got-v8-revision',
+      build_properties['got_v8_revision'],
+      '--got-webrtc-revision',
+      build_properties['got_webrtc_revision'],
+      '--output-json-file',
+      output_json_file,
+      '--perf-dashboard-machine-group',
+      _GetMachineGroup(build_properties),
   ]
   buildbucket = build_properties.get('buildbucket', {})
   if isinstance(buildbucket, six.string_types):
@@ -123,7 +134,8 @@ def _upload_perf_results(json_to_upload, name, configuration_name,
   logging.info('upload_results_to_perf_dashboard: %s.' % args)
 
   # Duplicate part of the results upload to staging.
-  if configuration_name == 'linux-perf-fyi' and name == 'system_health.common_desktop':
+  if (configuration_name == 'linux-perf-fyi'
+      and name == 'system_health.common_desktop'):
     try:
       RESULTS_URL_STAGE = 'https://chromeperf-stage.uc.r.appspot.com'
       staging_args = [(s if s != RESULTS_URL else RESULTS_URL_STAGE)
@@ -179,8 +191,10 @@ def _merge_json_output(output_json,
                                                      test_cross_device)
 
   # Only append the perf results links if present
+  # b/5382232 - changed from links to additional_links so that the links are
+  # retained, but not propagated to the presentation layers in recipe.
   if extra_links:
-    merged_results['links'] = extra_links
+    merged_results['additional_links'] = extra_links
 
   with open(output_json, 'w') as f:
     json.dump(merged_results, f)
@@ -481,14 +495,14 @@ def _upload_individual(
     results_size_in_mib = os.path.getsize(results_filename) / (2 ** 20)
     logging.info('Uploading perf results from %s benchmark (size %s Mib)' %
           (benchmark_name, results_size_in_mib))
-    with open(output_json_file, 'w') as oj:
-      upload_return_code = _upload_perf_results(
-        results_filename,
-        benchmark_name, configuration_name, build_properties, oj)
-      upload_end_time = time.time()
-      print_duration(('%s upload time' % (benchmark_name)),
-                     upload_begin_time, upload_end_time)
-      return (benchmark_name, upload_return_code == 0)
+    upload_return_code = _upload_perf_results(results_filename, benchmark_name,
+                                              configuration_name,
+                                              build_properties,
+                                              output_json_file)
+    upload_end_time = time.time()
+    print_duration(('%s upload time' % (benchmark_name)), upload_begin_time,
+                   upload_end_time)
+    return (benchmark_name, upload_return_code == 0)
   finally:
     shutil.rmtree(tmpfile_dir)
 

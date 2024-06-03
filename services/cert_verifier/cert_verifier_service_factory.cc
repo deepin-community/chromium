@@ -20,12 +20,14 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/features.h"
+#include "net/base/ip_address.h"
 #include "net/cert/cert_net_fetcher.h"
 #include "net/cert/cert_verifier.h"
 #include "net/cert/crl_set.h"
 #include "net/cert/x509_util.h"
 #include "net/net_buildflags.h"
 #include "services/cert_verifier/cert_net_url_loader/cert_net_fetcher_url_loader.h"
+#include "services/cert_verifier/cert_verifier_creation.h"
 #include "services/cert_verifier/cert_verifier_service.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -38,6 +40,7 @@
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
 #include <optional>
 
+#include "base/version_info/version_info.h"  // nogncheck
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "net/cert/internal/trust_store_chrome.h"
 #include "net/cert/root_store_proto_lite/root_store.pb.h"
@@ -70,28 +73,8 @@ internal::CertVerifierServiceImpl* GetNewCertVerifierImpl(
   // Populate initial instance params from creation params.
   net::CertVerifyProc::InstanceParams instance_params;
   if (creation_params->initial_additional_certificates) {
-    instance_params
-        .additional_trust_anchors = net::x509_util::ParseAllValidCerts(
-        net::x509_util::ConvertToX509CertificatesIgnoreErrors(
-            creation_params->initial_additional_certificates->trust_anchors));
-
-    instance_params.additional_untrusted_authorities =
-        net::x509_util::ParseAllValidCerts(
-            net::x509_util::ConvertToX509CertificatesIgnoreErrors(
-                creation_params->initial_additional_certificates
-                    ->all_certificates));
-
-    instance_params.additional_trust_anchors_with_enforced_constraints =
-        net::x509_util::ParseAllValidCerts(
-            net::x509_util::ConvertToX509CertificatesIgnoreErrors(
-                creation_params->initial_additional_certificates
-                    ->trust_anchors_with_enforced_constraints));
-
-    instance_params.additional_distrusted_spkis =
-        creation_params->initial_additional_certificates->distrusted_spkis;
-    instance_params.include_system_trust_store =
-        creation_params->initial_additional_certificates
-            ->include_system_trust_store;
+    UpdateCertVerifierInstanceParams(
+        creation_params->initial_additional_certificates, &instance_params);
   }
 
   std::unique_ptr<net::CertVerifierWithUpdatableProc> cert_verifier =
@@ -133,6 +116,37 @@ std::string GetHash(const bssl::ParsedCertificate& cert) {
   net::SHA256HashValue hash =
       net::X509Certificate::CalculateFingerprint256(cert.cert_buffer());
   return base::HexEncode(hash.data);
+}
+
+bool IsVersionConstraintSatisified(
+    const net::ChromeRootCertConstraints constraint) {
+  if (constraint.min_version.has_value() &&
+      version_info::GetVersion() < constraint.min_version.value()) {
+    return false;
+  }
+
+  if (constraint.max_version_exclusive.has_value() &&
+      version_info::GetVersion() >= constraint.max_version_exclusive.value()) {
+    return false;
+  }
+
+  return true;
+}
+
+// we only check any version constraints, as we don't have a certificate here to
+// check any SCT constraints.
+bool IsAnchorTrustedOnThisChromeVersion(
+    const net::ChromeRootStoreData::Anchor& anchor) {
+  if (anchor.constraints.empty()) {
+    return true;
+  }
+
+  for (const auto& constraint : anchor.constraints) {
+    if (IsVersionConstraintSatisified(constraint)) {
+      return true;
+    }
+  }
+  return false;
 }
 #endif
 
@@ -335,13 +349,21 @@ void CertVerifierServiceFactoryImpl::GetChromeRootStoreInfo(
   mojom::ChromeRootStoreInfoPtr info_ptr = mojom::ChromeRootStoreInfo::New();
   if (proc_params_.root_store_data) {
     info_ptr->version = proc_params_.root_store_data->version();
-    for (auto cert : proc_params_.root_store_data->anchors()) {
+    for (const auto& anchor : proc_params_.root_store_data->anchors()) {
+      if (!IsAnchorTrustedOnThisChromeVersion(anchor)) {
+        continue;
+      }
+      const bssl::ParsedCertificate* cert = anchor.certificate.get();
       info_ptr->root_cert_info.push_back(
           mojom::ChromeRootCertInfo::New(GetName(*cert), GetHash(*cert)));
     }
   } else {
     info_ptr->version = net::CompiledChromeRootStoreVersion();
-    for (auto cert : net::CompiledChromeRootStoreAnchors()) {
+    for (const auto& anchor : net::CompiledChromeRootStoreAnchors()) {
+      if (!IsAnchorTrustedOnThisChromeVersion(anchor)) {
+        continue;
+      }
+      const bssl::ParsedCertificate* cert = anchor.certificate.get();
       info_ptr->root_cert_info.push_back(
           mojom::ChromeRootCertInfo::New(GetName(*cert), GetHash(*cert)));
     }

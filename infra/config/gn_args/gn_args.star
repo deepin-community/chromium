@@ -167,6 +167,11 @@ gn_args.config(
 )
 
 gn_args.config(
+    name = "arm64-generic-vm",
+    args_file = "//build/args/chromeos/arm64-generic-vm.gni",
+)
+
+gn_args.config(
     name = "arm64_host",
     args = {
         "test_host_cpu": "arm64",
@@ -211,13 +216,6 @@ gn_args.config(
     name = "cast_android",
     args = {
         "is_cast_android": True,
-    },
-)
-
-gn_args.config(
-    name = "cast_os",
-    args = {
-        "is_castos": True,
     },
 )
 
@@ -639,13 +637,6 @@ gn_args.config(
 )
 
 gn_args.config(
-    name = "goma",
-    args = {
-        "use_goma": True,
-    },
-)
-
-gn_args.config(
     name = "gpu_fyi_tests",
     configs = [
         "gpu_tests",
@@ -875,13 +866,6 @@ gn_args.config(
     name = "no_dsyms",
     args = {
         "enable_dsyms": False,
-    },
-)
-
-gn_args.config(
-    name = "no_goma",
-    args = {
-        "use_goma": False,
     },
 )
 
@@ -1148,6 +1132,13 @@ gn_args.config(
     name = "strip_debug_info",
     args = {
         "strip_debug_info": True,
+    },
+)
+
+gn_args.config(
+    name = "full_mte",
+    args = {
+        "use_full_mte": True,
     },
 )
 

@@ -30,14 +30,8 @@ inline constexpr char kEvictDeviceKey[] = "EvictDeviceKey";
 inline constexpr char kRestoreDeviceKey[] = "RestoreDeviceKey";
 inline constexpr char kUnmount[] = "Unmount";
 inline constexpr char kRemove[] = "Remove";
-inline constexpr char kStartFingerprintAuthSession[] =
-    "StartFingerprintAuthSession";
-inline constexpr char kEndFingerprintAuthSession[] =
-    "EndFingerprintAuthSession";
 inline constexpr char kGetWebAuthnSecret[] = "GetWebAuthnSecret";
 inline constexpr char kGetRecoverableKeyStores[] = "GetRecoverableKeyStores";
-inline constexpr char kGetHibernateSecret[] = "GetHibernateSecret";
-inline constexpr char kGetEncryptionInfo[] = "GetEncryptionInfo";
 inline constexpr char kStartMigrateToDircrypto[] = "StartMigrateToDircrypto";
 inline constexpr char kNeedsDircryptoMigration[] = "NeedsDircryptoMigration";
 inline constexpr char kGetSupportedKeyPolicies[] = "GetSupportedKeyPolicies";
@@ -64,9 +58,12 @@ inline constexpr char kGetAuthFactorExtendedInfo[] =
     "GetAuthFactorExtendedInfo";
 inline constexpr char kGetAuthSessionStatus[] = "GetAuthSessionStatus";
 inline constexpr char kGetRecoveryRequest[] = "GetRecoveryRequest";
+inline constexpr char kLockFactorUntilReboot[] = "LockFactorUntilReboot";
 inline constexpr char kModifyAuthFactorIntents[] = "ModifyAuthFactorIntents";
 inline constexpr char kCreateVaultkeyset[] = "CreateVaultKeyset";
 inline constexpr char kGetArcDiskFeatures[] = "GetArcDiskFeatures";
+inline constexpr char kMigrateLegacyFingerprints[] =
+    "MigrateLegacyFingerprints";
 
 // Methods of the |kCryptohomePkcs11Interface| interface:
 inline constexpr char kPkcs11IsTpmTokenReady[] = "Pkcs11IsTpmTokenReady";
@@ -97,6 +94,7 @@ inline constexpr char kGetLoginStatus[] = "GetLoginStatus";
 inline constexpr char kLockToSingleUserMountUntilReboot[] =
     "LockToSingleUserMountUntilReboot";
 inline constexpr char kGetRsuDeviceId[] = "GetRsuDeviceId";
+inline constexpr char kGetPinWeaverInfo[] = "GetPinWeaverInfo";
 
 // Signals of the |kUserDataAuthInterface| interface:
 inline constexpr char kDircryptoMigrationProgress[] =
@@ -118,6 +116,7 @@ inline constexpr char kAuthFactorAddedl[] = "AuthFactorAdded";
 inline constexpr char kAuthFactorRemoved[] = "AuthFactorRemoved";
 inline constexpr char kAuthFactorUpdted[] = "AuthFactorUpdated";
 inline constexpr char kAuthSessionExpiring[] = "AuthSessionExpiring";
+inline constexpr char kRemoveCompleted[] = "RemoveCompleted";
 
 }  // namespace user_data_auth
 

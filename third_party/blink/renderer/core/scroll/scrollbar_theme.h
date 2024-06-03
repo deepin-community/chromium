@@ -84,8 +84,8 @@ class CORE_EXPORT ScrollbarTheme {
   virtual bool UsesOverlayScrollbars() const { return false; }
   virtual bool UsesFluentOverlayScrollbars() const { return false; }
   virtual gfx::Rect ShrinkMainThreadedMinimalModeThumbRect(
-      Scrollbar&,
-      gfx::Rect& rect) const {
+      const Scrollbar&,
+      const gfx::Rect& rect) const {
     return rect;
   }
   virtual void UpdateScrollbarOverlayColorTheme(const Scrollbar&) {}
@@ -120,6 +120,7 @@ class CORE_EXPORT ScrollbarTheme {
                                  const DisplayItemClient&,
                                  const gfx::Rect& corner_rect,
                                  mojom::blink::ColorScheme color_scheme,
+                                 bool in_forced_colors,
                                  const ui::ColorProvider* color_provider);
   virtual void PaintTickmarks(GraphicsContext&,
                               const Scrollbar&,

@@ -27,11 +27,13 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/containers/contains.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/trace_id_helper.h"
 #include "base/trace_event/typed_macros.h"
 #include "build/build_config.h"
 #include "cc/input/snap_selection_strategy.h"
@@ -99,7 +101,6 @@
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
-#include "third_party/blink/renderer/core/frame/pending_beacon_dispatcher.h"
 #include "third_party/blink/renderer/core/frame/permissions_policy_violation_report_body.h"
 #include "third_party/blink/renderer/core/frame/report.h"
 #include "third_party/blink/renderer/core/frame/reporting_context.h"
@@ -139,6 +140,7 @@
 #include "third_party/blink/renderer/core/timing/window_performance.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_type_policy_factory.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
+#include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
 #include "third_party/blink/renderer/platform/back_forward_cache_buffer_limit_tracker.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
@@ -150,7 +152,7 @@
 #include "third_party/blink/renderer/platform/scheduler/public/dummy_schedulers.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 #include "third_party/blink/renderer/platform/storage/blink_storage_key.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -175,9 +177,10 @@ bool IsRunningMicrotasks(ScriptState* script_state) {
 void SetCurrentTaskAsCallbackParent(
     CallbackFunctionWithTaskAttributionBase* callback) {
   ScriptState* script_state = callback->CallbackRelevantScriptState();
-  auto* tracker = ThreadScheduler::Current()->GetTaskAttributionTracker();
+  auto* tracker =
+      scheduler::TaskAttributionTracker::From(script_state->GetIsolate());
   if (tracker && script_state->World().IsMainWorld()) {
-    callback->SetParentTask(tracker->RunningTask(script_state->GetIsolate()));
+    callback->SetParentTask(tracker->RunningTask());
   }
 }
 
@@ -896,13 +899,6 @@ void LocalDOMWindow::DispatchPagehideEvent(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(features::kPendingBeaconAPI)) {
-    if (auto* dispatcher =
-            PendingBeaconDispatcher::From(*GetExecutionContext())) {
-      dispatcher->OnDispatchPagehide();
-    }
-  }
-
   DispatchEvent(
       *PageTransitionEvent::Create(event_type_names::kPagehide, persistence),
       document_.Get());
@@ -924,13 +920,10 @@ void LocalDOMWindow::DispatchPopstateEvent(
     scoped_refptr<SerializedScriptValue> state_object,
     scheduler::TaskAttributionInfo* parent_task) {
   DCHECK(GetFrame());
-  // This unique_ptr maintains the TaskScope alive for the lifetime of the
-  // method.
-  std::unique_ptr<scheduler::TaskAttributionTracker::TaskScope>
+  std::optional<scheduler::TaskAttributionTracker::TaskScope>
       task_attribution_scope;
-  CHECK(ThreadScheduler::Current());
-  auto* tracker = ThreadScheduler::Current()->GetTaskAttributionTracker();
   if (parent_task) {
+    auto* tracker = scheduler::TaskAttributionTracker::From(GetIsolate());
     ScriptState* script_state = ToScriptStateForMainWorld(GetFrame());
     if (script_state && tracker) {
       task_attribution_scope = tracker->CreateTaskScope(
@@ -1180,6 +1173,15 @@ void LocalDOMWindow::SchedulePostMessage(PostedMessage* posted_message) {
                         std::move(posted_message->target_origin),
                         std::move(location), source->GetAgent()->cluster_id()));
   event->async_task_context()->Schedule(this, "postMessage");
+  uint64_t trace_id = base::trace_event::GetNextGlobalTraceId();
+  event->SetTraceId(trace_id);
+  TRACE_EVENT_INSTANT(
+      "devtools.timeline", "SchedulePostMessage", "data",
+      [&](perfetto::TracedValue context) {
+        inspector_schedule_post_message_event::Data(
+            std::move(context), GetExecutionContext(), trace_id);
+      },
+      perfetto::Flow::Global(trace_id));
 }
 
 void LocalDOMWindow::DispatchPostMessage(
@@ -1196,6 +1198,14 @@ void LocalDOMWindow::DispatchPostMessage(
     return;
 
   event->EntangleMessagePorts(this);
+
+  TRACE_EVENT(
+      "devtools.timeline", "HandlePostMessage", "data",
+      [&](perfetto::TracedValue context) {
+        inspector_handle_post_message_event::Data(
+            std::move(context), GetExecutionContext(), *event);
+      },
+      perfetto::Flow::Global(event->GetTraceId()));
 
   DispatchMessageEventWithOriginCheck(intended_target_origin.get(), event,
                                       std::move(location),
@@ -1696,13 +1706,13 @@ CSSStyleDeclaration* LocalDOMWindow::getComputedStyle(
                                                            pseudo_elt);
 }
 
-ScriptPromise LocalDOMWindow::getComputedAccessibleNode(
+ScriptPromise<ComputedAccessibleNode> LocalDOMWindow::getComputedAccessibleNode(
     ScriptState* script_state,
     Element* element) {
   DCHECK(element);
   auto* resolver = MakeGarbageCollected<ComputedAccessibleNodePromiseResolver>(
       script_state, *element);
-  ScriptPromise promise = resolver->Promise();
+  auto promise = resolver->Promise();
   resolver->ComputeAccessibleNode();
   return promise;
 }
@@ -1954,7 +1964,6 @@ void LocalDOMWindow::cancelAnimationFrame(int id) {
 }
 
 void LocalDOMWindow::queueMicrotask(V8VoidFunction* callback) {
-  SetCurrentTaskAsCallbackParent(callback);
   GetAgent()->event_loop()->EnqueueMicrotask(
       WTF::BindOnce(&V8VoidFunction::InvokeAndReportException,
                     WrapPersistent(callback), nullptr));
@@ -2536,4 +2545,11 @@ void LocalDOMWindow::GenerateNewNavigationId() {
   navigation_id_ = WTF::CreateCanonicalUUIDString();
 }
 
+void LocalDOMWindow::SetHasBeenRevealed(bool revealed) {
+  if (has_been_revealed_ == revealed)
+    return;
+  has_been_revealed_ = revealed;
+  CHECK(document_);
+  ViewTransitionSupplement::From(*document_)->DidChangeRevealState();
+}
 }  // namespace blink

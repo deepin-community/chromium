@@ -147,35 +147,6 @@ StatusOr<std::vector<FunctionDef>> ExportXlaFunctions(
 
 }  // namespace
 
-Status ConvertFunctionToBef(
-    mlir::StringRef function_name, const tensorflow::FunctionBody* fbody,
-    const FunctionLibraryDefinition& flib_def,
-    tfrt::ArrayRef<tfrt::string_view> devices,
-    const tensorflow::TfrtFunctionCompileOptions& options,
-    tfrt::BefBuffer* bef_buffer) {
-  mlir::MLIRContext context;
-  // FunctionDef -> TF Dialect
-  auto expected_module =
-      tensorflow::ConvertFunctionToMlir(fbody, flib_def, &context);
-
-  if (!expected_module.ok())
-    return absl::InternalError(absl::StrCat(
-        "Failed to convert function to mlir for function ", function_name.str(),
-        ". Error: ", expected_module.status().message()));
-
-  auto module = std::move(expected_module).value();
-
-  // Attach devices to the MLIR module.
-  if (!devices.empty()) {
-    mlir::Builder builder(module->getContext());
-    module->getOperation()->setAttr("tf.devices",
-                                    builder.getStrArrayAttr(devices));
-  }
-
-  // TF Dialect -> BEF
-  return tensorflow::CompileTFMLIRToBEF(options, module.get(), bef_buffer);
-}
-
 Status ConvertTfMlirToRuntimeExecutable(
     const TfrtCompileOptions& options, mlir::ModuleOp module,
     absl::FunctionRef<Status(mlir::PassManager&, mlir::ModuleOp,
@@ -238,7 +209,7 @@ Status ConvertTfMlirToRuntimeExecutable(
 
     TF_RETURN_IF_ERROR(
         tensorflow::tf2xla::v2::RunFunctionTf2xlaClusteringBridge(
-            module, /*run_replicated_bridge*/ true,
+            module, /*is_supported_by_replicated_brige*/ true,
             /*is_in_fallback_enabled_mode=*/VLOG_IS_ON(1)));
 
     TF_RETURN_IF_ERROR(
@@ -257,7 +228,7 @@ Status ConvertTfMlirToRuntimeExecutable(
   } else if (options.device_target == TfrtDeviceInfraTarget::kGpu) {
     TF_RETURN_IF_ERROR(
         tensorflow::tf2xla::v2::RunFunctionTf2xlaClusteringBridge(
-            module, /*run_replicated_bridge*/ false,
+            module, /*is_supported_by_replicated_brige*/ false,
             /*is_in_fallback_enabled_mode=*/false));
 
     TF_RETURN_IF_ERROR(

@@ -14,9 +14,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ash/crosapi/full_restore_ash.h"
 #include "chrome/browser/sessions/exit_type_service.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/sessions/core/session_types.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
 class Profile;
@@ -127,14 +129,22 @@ class FullRestoreService : public KeyedService,
       std::unique_ptr<FullRestoreAppLaunchHandler> app_launch_handler);
 
  private:
-  friend class FullRestoreServiceMultipleUsersTest;
-  friend class FullRestoreServiceTest;
+  friend class FullRestoreTestHelper;
   FRIEND_TEST_ALL_PREFIXES(FullRestoreAppLaunchHandlerChromeAppBrowserTest,
                            RestoreChromeApp);
   FRIEND_TEST_ALL_PREFIXES(FullRestoreAppLaunchHandlerArcAppBrowserTest,
                            RestoreArcApp);
+  using SessionWindows = std::vector<std::unique_ptr<sessions::SessionWindow>>;
+  // Maps window id to an associated session window. We use a map at certain
+  // points because:
+  //   - The data from the full restore file is in a 2 dimensional vector. The
+  //     first one is for apps, and the second one is for windows.
+  //   - The data from session restore is a single vector.
+  // We build a map to avoid doing a O(n) search each loop of the former.
+  using SessionWindowsMap =
+      base::flat_map<int, crosapi::mojom::SessionWindowPtr>;
 
-  // KeyedService overrides.
+  // KeyedService:
   void Shutdown() override;
 
   // Returns true if `Init` can be called to show the notification or restore
@@ -151,21 +161,39 @@ class FullRestoreService : public KeyedService,
   // Callback used when the pref |kRestoreAppsAndPagesPrefName| changes.
   void OnPreferenceChanged(const std::string& pref_name);
 
-  // Returns true if there are some restore data and this is not the first time
-  // Chrome is run. Otherwise, returns false.
-  bool ShouldShowNotification() const;
-
   void OnAppTerminating();
 
   // Callbacks for the pine dialog buttons.
   void RestoreForForest();
   void CancelForForest();
 
-  // Constructs the object needed to show the pine dialog. It will be passed to
-  // ash which will then use its contents to create and display the pine dialog.
-  std::unique_ptr<PineContentsData> CreatePineContentsData(
+  // Callbacks run after querying for data from the session service(s).
+  // `OnGotSessionAsh` is run after receiving data from either the normal
+  // session service or app session service. `OnGotAllSessionsAsh` is run after
+  // receiving data from both.
+  void OnGotSessionAsh(base::OnceCallback<void(SessionWindows)> callback,
+                       SessionWindows session_windows,
+                       SessionID active_window_id,
+                       bool read_error);
+  void OnGotAllSessionsAsh(
+      bool last_session_crashed,
+      const std::vector<SessionWindows>& all_session_windows);
+  void OnGotAllSessionsLacros(
+      bool last_session_crashed,
+      std::vector<crosapi::mojom::SessionWindowPtr> all_session_windows);
+
+  // Called when session information is ready to be processed. Constructs the
+  // object needed to show the pine dialog. It will be passed to ash which will
+  // then use its contents to create and display the pine dialog. `restore_data`
+  // is the data read from the full restore file. `session_windows_map` is the
+  // browser info retrieved from session restore.
+  void OnSessionInformationReceived(
       ::app_restore::RestoreData* restore_data,
+      const SessionWindowsMap& session_windows_map,
       bool last_session_crashed);
+
+  // Starts pine onboarding dialog when there is no restore data.
+  void MaybeShowPineOnboarding();
 
   raw_ptr<Profile> profile_ = nullptr;
   PrefChangeRegistrar pref_change_registrar_;

@@ -27,18 +27,28 @@ class DCLayerOverlayImage;
 namespace gpu {
 class SharedContextState;
 class SharedImageRepresentationFactory;
+class SharedImageFactory;
+class SharedImageManager;
 
 namespace gles2 {
 class FeatureInfo;
 }  // namespace gles2
+
+namespace raster {
+class GrShaderCache;
+}  // namespace raster
 }  // namespace gpu
 
 namespace viz {
+
+class SkiaOutputSurfaceDependency;
 
 // Base class for DComp-backed OutputDevices.
 class SkiaOutputDeviceDComp : public SkiaOutputDevice {
  public:
   SkiaOutputDeviceDComp(
+      SkiaOutputSurfaceDependency* deps,
+      gpu::SharedImageFactory* shared_image_factory,
       gpu::SharedImageRepresentationFactory*
           shared_image_representation_factory,
       gpu::SharedContextState* context_state,
@@ -62,19 +72,27 @@ class SkiaOutputDeviceDComp : public SkiaOutputDevice {
                int sample_count,
                float device_scale_factor,
                gfx::OverlayTransform transform) override;
-  bool SetDrawRectangle(const gfx::Rect& draw_rectangle) override;
   SkSurface* BeginPaint(
       std::vector<GrBackendSemaphore>* end_semaphores) override;
   void EndPaint() override;
   bool IsPrimaryPlaneOverlay() const override;
 
- protected:
+ private:
   class OverlayData;
 
   std::optional<gl::DCLayerOverlayImage> BeginOverlayAccess(
       const gpu::Mailbox& mailbox);
 
   void CreateSkSurface();
+
+  // Populate |overlays_| with DComp surfaces that contain copies of overlays
+  // with non-scanout resources.
+  bool EnsureDCompSurfaceCopiesForNonOverlayResources(
+      const SkiaOutputSurface::OverlayList& overlays);
+
+  // Force the next present to return |gfx::SwapResult::SWAP_FAILED|. This
+  // function allows |ScheduleOverlays| to be fallible.
+  void ForceFailureOnNextSwap();
 
   // Mailboxes of overlays scheduled in the current frame.
   base::flat_set<gpu::Mailbox> scheduled_overlay_mailboxes_;
@@ -88,7 +106,6 @@ class SkiaOutputDeviceDComp : public SkiaOutputDevice {
   const raw_ptr<gpu::SharedContextState> context_state_;
   gfx::Size size_;
 
- private:
   // Completion callback for |DoPresent|.
   void OnPresentFinished(OutputSurfaceFrame frame,
                          const gfx::Size& swap_size,
@@ -97,6 +114,12 @@ class SkiaOutputDeviceDComp : public SkiaOutputDevice {
   // Any implementation capable of scheduling a DComp layer. Currently only
   // |DCompPresenter|.
   scoped_refptr<gl::Presenter> presenter_;
+
+  bool force_failure_on_next_swap_ = false;
+
+  const raw_ptr<gpu::raster::GrShaderCache> gr_shader_cache_;
+  const raw_ref<gpu::SharedImageManager> shared_image_manager_;
+  const raw_ref<gpu::SharedImageFactory> shared_image_factory_;
 
   base::WeakPtrFactory<SkiaOutputDeviceDComp> weak_ptr_factory_{this};
 };

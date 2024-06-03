@@ -182,7 +182,6 @@ class ExtensionFrameHelper
   void WillReleaseScriptContext(v8::Local<v8::Context>,
                                 int32_t world_id) override;
   void OnDestruct() override;
-  void DraggableRegionsChanged() override;
   void DidClearWindowObject() override;
 
   // Type of view associated with the RenderFrame.
@@ -194,7 +193,7 @@ class ExtensionFrameHelper
   // The id of the browser window the render frame is attached to.
   int browser_window_id_ = -1;
 
-  raw_ptr<Dispatcher, ExperimentalRenderer> extension_dispatcher_;
+  raw_ptr<Dispatcher> extension_dispatcher_;
 
   // Whether or not the current document element has been created. This starts
   // true as the initial empty document is already created when this class is

@@ -4,8 +4,9 @@
 
 #include "components/affiliations/core/browser/affiliation_service_impl.h"
 
+#include <vector>
+
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -94,7 +95,7 @@ struct AffiliationServiceImpl::FetchInfo {
   base::OnceClosure callback;
 };
 
-// TODO(crbug.com/1246291): Create the backend task runner in Init and stop
+// TODO(crbug.com/40789139): Create the backend task runner in Init and stop
 // passing it in the constructor.
 AffiliationServiceImpl::AffiliationServiceImpl(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
@@ -141,6 +142,11 @@ void AffiliationServiceImpl::PrefetchChangePasswordURLs(
   }
   if (!facets.empty()) {
     auto fetcher = fetcher_factory_->CreateInstance(url_loader_factory_, this);
+    if (!fetcher) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(callback));
+      return;
+    }
     fetcher->StartRequest(facets, kChangePasswordUrlRequestInfo);
     pending_fetches_.emplace_back(std::move(fetcher), tuple_origins,
                                   std::move(callback));
@@ -198,14 +204,14 @@ void AffiliationServiceImpl::OnFetchSucceeded(
 
 void AffiliationServiceImpl::OnFetchFailed(
     AffiliationFetcherInterface* fetcher) {
-  base::EraseIf(pending_fetches_, [fetcher](const auto& info) {
+  std::erase_if(pending_fetches_, [fetcher](const auto& info) {
     return info.fetcher.get() == fetcher;
   });
 }
 
 void AffiliationServiceImpl::OnMalformedResponse(
     AffiliationFetcherInterface* fetcher) {
-  base::EraseIf(pending_fetches_, [fetcher](const auto& info) {
+  std::erase_if(pending_fetches_, [fetcher](const auto& info) {
     return info.fetcher.get() == fetcher;
   });
 }
@@ -289,6 +295,11 @@ void AffiliationServiceImpl::UpdateAffiliationsAndBranding(
       base::BindOnce(&AffiliationBackend::UpdateAffiliationsAndBranding,
                      base::Unretained(backend_.get()), facets,
                      std::move(callback_in_main_sequence)));
+}
+
+void AffiliationServiceImpl::RegisterSource(
+    std::unique_ptr<AffiliationSource> source) {
+  prefetcher_.RegisterSource(std::move(source));
 }
 
 }  // namespace affiliations

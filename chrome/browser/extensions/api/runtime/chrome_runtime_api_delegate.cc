@@ -206,7 +206,10 @@ void ChromeRuntimeAPIDelegate::ReloadExtension(
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&extensions::WarningService::NotifyWarningsOnUI,
-                       browser_context_, warnings));
+                       // TODO(crbug.com/40061562): Remove
+                       // `UnsafeDanglingUntriaged`
+                       base::UnsafeDanglingUntriaged(browser_context_),
+                       warnings));
   } else {
     // We can't call ReloadExtension directly, since when this method finishes
     // it tries to decrease the reference count for the extension, which fails

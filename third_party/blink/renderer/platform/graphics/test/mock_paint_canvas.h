@@ -60,6 +60,11 @@ class MockPaintCanvas : public cc::PaintCanvas {
                     SkScalar x1,
                     SkScalar y1,
                     const cc::PaintFlags& flags));
+  MOCK_METHOD4(drawArc,
+               void(const SkRect& oval,
+                    SkScalar start_angle_degrees,
+                    SkScalar sweep_angle_degrees,
+                    const cc::PaintFlags& flags));
   MOCK_METHOD2(drawRect, void(const SkRect& rect, const cc::PaintFlags& flags));
   MOCK_METHOD2(drawIRect,
                void(const SkIRect& rect, const cc::PaintFlags& flags));
@@ -122,6 +127,7 @@ class MockPaintCanvas : public cc::PaintCanvas {
                     const cc::PaintFlags& flags));
 
   MOCK_METHOD1(drawPicture, void(PaintRecord record));
+  MOCK_METHOD2(drawPicture, void(PaintRecord record, bool local_ctm));
   MOCK_CONST_METHOD0(getLocalToDevice, SkM44());
 
   MOCK_METHOD3(Annotate,

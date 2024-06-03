@@ -44,6 +44,7 @@
 #include "chrome/browser/push_messaging/push_messaging_features.h"
 #include "chrome/browser/push_messaging/push_messaging_service_factory.h"
 #include "chrome/browser/push_messaging/push_messaging_service_impl.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/web_navigation.h"
@@ -73,8 +74,8 @@
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/process_map.h"
+#include "extensions/browser/service_worker/service_worker_task_queue.h"
 #include "extensions/browser/service_worker/service_worker_test_utils.h"
-#include "extensions/browser/service_worker_task_queue.h"
 #include "extensions/common/api/test.h"
 #include "extensions/common/extensions_client.h"
 #include "extensions/common/features/feature_channel.h"
@@ -464,7 +465,7 @@ IN_PROC_BROWSER_TEST_F(ServiceWorkerBasedBackgroundTest, ConsoleError) {
 
 // Tests that an extension can fetch a file scheme URL from the service worker,
 // if it has file access.
-// TODO(crbug.com/1499141): Flaky on mac
+// TODO(crbug.com/40939961): Flaky on mac
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_FetchFileSchemeURLWithFileAccess \
   DISABLED_FetchFileSchemeURLWithFileAccess

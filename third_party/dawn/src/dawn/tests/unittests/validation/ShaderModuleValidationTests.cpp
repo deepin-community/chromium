@@ -249,6 +249,19 @@ TEST_F(ShaderModuleValidationTest, OnlySpirvOptionsDescriptor) {
     ASSERT_DEVICE_ERROR(device.CreateShaderModule(&desc));
 }
 
+// Test that it is invalid to pass ShaderModuleCompilationOptions if the feature is not enabled.
+TEST_F(ShaderModuleValidationTest, ShaderModuleCompilationOptionsNoFeature) {
+    wgpu::ShaderModuleDescriptor desc = {};
+    wgpu::ShaderModuleWGSLDescriptor wgslDesc = {};
+    wgslDesc.code = "@compute @workgroup_size(1) fn main() {}";
+
+    wgpu::ShaderModuleCompilationOptions compilationOptions = {};
+    desc.nextInChain = &wgslDesc;
+    wgslDesc.nextInChain = &compilationOptions;
+    ASSERT_DEVICE_ERROR(device.CreateShaderModule(&desc),
+                        testing::HasSubstr("FeatureName::ShaderModuleCompilationOptions"));
+}
+
 // Tests that shader module compilation messages can be queried.
 TEST_F(ShaderModuleValidationTest, GetCompilationMessages) {
     // This test works assuming ShaderModule is backed by a native::ShaderModuleBase, which
@@ -797,6 +810,7 @@ constexpr struct WGSLExtensionInfo kExtensions[] = {
     {"chromium_experimental_pixel_local", true, "pixel-local-storage-coherent"},
     {"chromium_disable_uniformity_analysis", true, nullptr},
     {"chromium_internal_dual_source_blending", true, "dual-source-blending"},
+    {"chromium_internal_graphite", true, nullptr},
     {"chromium_experimental_framebuffer_fetch", true, "framebuffer-fetch"},
 
     // Currently the following WGSL extensions are not enabled under any situation.
@@ -924,6 +938,23 @@ TEST_F(ShaderModuleExtensionValidationTestUnsafeAllFeatures, AllExtensionsAllowe
         // On an unsafe device with all feature required, all extensions are allowed.
         utils::CreateShaderModule(device, wgsl.c_str());
     }
+}
+
+// Test it is valid to chain ShaderModuleCompilationOptions and path true/false for strictMath.
+TEST_F(ShaderModuleExtensionValidationTestUnsafeAllFeatures, ShaderModuleCompilationOptions) {
+    wgpu::ShaderModuleDescriptor desc = {};
+    wgpu::ShaderModuleWGSLDescriptor wgslDesc = {};
+    wgslDesc.code = "@compute @workgroup_size(1) fn main() {}";
+
+    wgpu::ShaderModuleCompilationOptions compilationOptions = {};
+    desc.nextInChain = &wgslDesc;
+    wgslDesc.nextInChain = &compilationOptions;
+
+    compilationOptions.strictMath = false;
+    device.CreateShaderModule(&desc);
+
+    compilationOptions.strictMath = true;
+    device.CreateShaderModule(&desc);
 }
 
 }  // anonymous namespace

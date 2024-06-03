@@ -141,6 +141,9 @@ class CORE_EXPORT FragmentBuilder {
     lines_until_clamp_ = value;
   }
 
+  bool IsTextBoxTrimApplied() const { return is_text_box_trim_applied_; }
+  void SetIsTextBoxTrimApplied() { is_text_box_trim_applied_ = true; }
+
   const UnpositionedListMarker& GetUnpositionedListMarker() const {
     return unpositioned_list_marker_;
   }
@@ -204,9 +207,8 @@ class CORE_EXPORT FragmentBuilder {
       BlockNode,
       const LogicalOffset& child_offset,
       LogicalStaticPosition::InlineEdge = LogicalStaticPosition::kInlineStart,
-      LogicalStaticPosition::BlockEdge = LogicalStaticPosition::kBlockStart);
-
-  void AddOutOfFlowChildCandidate(const LogicalOofPositionedNode& candidate);
+      LogicalStaticPosition::BlockEdge = LogicalStaticPosition::kBlockStart,
+      bool is_hidden_for_paint = false);
 
   // This should only be used for inline-level OOF-positioned nodes.
   // |inline_container_direction| is the current text direction for determining
@@ -214,7 +216,8 @@ class CORE_EXPORT FragmentBuilder {
   void AddOutOfFlowInlineChildCandidate(
       BlockNode,
       const LogicalOffset& child_offset,
-      TextDirection inline_container_direction);
+      TextDirection inline_container_direction,
+      bool is_hidden_for_paint = false);
 
   void AddOutOfFlowFragmentainerDescendant(
       const LogicalOofNodeForFragmentation& descendant);
@@ -269,10 +272,6 @@ class CORE_EXPORT FragmentBuilder {
 
   bool HasMulticolsWithPendingOOFs() const {
     return !multicols_with_pending_oofs_.empty();
-  }
-
-  HeapVector<LogicalOofPositionedNode>* MutableOutOfFlowPositionedCandidates() {
-    return &oof_positioned_candidates_;
   }
 
   // This method should only be used within the inline layout algorithm. It is
@@ -438,12 +437,6 @@ class CORE_EXPORT FragmentBuilder {
     break_appeal_ = std::min(break_appeal_, appeal);
   }
 
-  // Specify that all child break tokens be added manually, instead of being
-  // added automatically as part of adding child fragments.
-  void SetShouldAddBreakTokensManually() {
-    should_add_break_tokens_manually_ = true;
-  }
-
   void SetHasDescendantThatDependsOnPercentageBlockSize(bool b = true) {
     has_descendant_that_depends_on_percentage_block_size_ = b;
   }
@@ -508,13 +501,14 @@ class CORE_EXPORT FragmentBuilder {
         space_(space),
         style_(style),
         writing_direction_(writing_direction),
-        style_variant_(StyleVariant::kStandard) {
+        style_variant_(StyleVariant::kStandard),
+        is_hidden_for_paint_(space.IsHiddenForPaint()) {
     DCHECK(style_);
     layout_object_ = node.GetLayoutBox();
   }
 
   HeapVector<Member<LayoutBoxModelObject>>& EnsureStickyDescendants();
-  HeapHashSet<Member<LayoutBox>>& EnsureSnapAreas();
+  HeapVector<Member<LayoutBox>>& EnsureSnapAreas();
   LogicalAnchorQuery& EnsureAnchorQuery();
   ScrollStartTargetCandidates& EnsureScrollStartTargets();
 
@@ -561,7 +555,7 @@ class CORE_EXPORT FragmentBuilder {
   const BreakToken* break_token_ = nullptr;
 
   HeapVector<Member<LayoutBoxModelObject>>* sticky_descendants_ = nullptr;
-  HeapHashSet<Member<LayoutBox>>* snap_areas_ = nullptr;
+  HeapVector<Member<LayoutBox>>* snap_areas_ = nullptr;
   LogicalAnchorQuery* anchor_query_ = nullptr;
   LayoutUnit bfc_line_offset_;
   std::optional<LayoutUnit> bfc_block_offset_;
@@ -628,10 +622,12 @@ class CORE_EXPORT FragmentBuilder {
   bool is_empty_spanner_parent_ = false;
   bool should_force_same_fragmentation_flow_ = false;
   bool requires_content_before_breaking_ = false;
-  bool should_add_break_tokens_manually_ = false;
   bool has_out_of_flow_fragment_child_ = false;
   bool has_out_of_flow_in_fragmentainer_subtree_ = false;
+  bool is_text_box_trim_applied_ = false;
 
+  bool oof_candidates_may_have_anchor_queries_ = false;
+  bool oof_fragmentainer_descendants_may_have_anchor_queries_ = false;
 #if DCHECK_IS_ON()
   bool is_may_have_descendant_above_block_start_explicitly_set_ = false;
 #endif

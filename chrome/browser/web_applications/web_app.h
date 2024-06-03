@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_H_
 
 #include <stdint.h>
+
 #include <iosfwd>
 #include <optional>
 #include <set>
@@ -20,12 +21,13 @@
 #include "base/version.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/web_applications/features.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_storage_location.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-forward.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_os_integration_state.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_proto_package.pb.h"
 #include "chrome/browser/web_applications/scope_extension_info.h"
+#include "chrome/browser/web_applications/user_display_mode.h"
 #include "chrome/browser/web_applications/web_app_chromeos_data.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -35,6 +37,7 @@
 #include "components/services/app_service/public/cpp/share_target.h"
 #include "components/services/app_service/public/cpp/url_handler_info.h"
 #include "components/sync/model/string_ordinal.h"
+#include "components/sync/protocol/web_app_specifics.pb.h"
 #include "components/webapps/common/web_app_id.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/common/permissions_policy/permissions_policy_declaration.h"
@@ -99,37 +102,20 @@ class WebApp {
 
   DisplayMode display_mode() const { return display_mode_; }
 
-  std::optional<mojom::UserDisplayMode> user_display_mode() const {
-    if (!base::FeatureList::IsEnabled(kSeparateUserDisplayModeForCrOS)) {
-      return user_display_mode_default_;
-    }
-
-#if BUILDFLAG(IS_CHROMEOS)
-    CHECK(user_display_mode_cros_.has_value(), base::NotFatalUntil::M125);
-    return user_display_mode_cros_;
-#else
-    CHECK(user_display_mode_default_.has_value(), base::NotFatalUntil::M125);
-    return user_display_mode_default_;
-#endif  // BUILDFLAG(IS_CHROMEOS)
-  }
-
-  // Exposed for database/sync layer only. Elsewhere use `user_display_mode()`.
-  std::optional<mojom::UserDisplayMode> user_display_mode_cros() const {
-    return user_display_mode_cros_;
-  }
-
-  // Exposed for database/sync layer only. Elsewhere use `user_display_mode()`.
-  std::optional<mojom::UserDisplayMode> user_display_mode_default() const {
-    return user_display_mode_default_;
+  mojom::UserDisplayMode user_display_mode() const {
+    return ToMojomUserDisplayMode(
+        ResolvePlatformSpecificUserDisplayMode(sync_proto()));
   }
 
   const std::vector<DisplayMode>& display_mode_override() const {
     return display_mode_override_;
   }
 
-  syncer::StringOrdinal user_page_ordinal() const { return user_page_ordinal_; }
+  syncer::StringOrdinal user_page_ordinal() const {
+    return syncer::StringOrdinal(sync_proto().user_page_ordinal());
+  }
   syncer::StringOrdinal user_launch_ordinal() const {
-    return user_launch_ordinal_;
+    return syncer::StringOrdinal(sync_proto().user_launch_ordinal());
   }
 
   const std::optional<WebAppChromeOsData>& chromeos_data() const {
@@ -257,25 +243,14 @@ class WebApp {
   // While local |name| and |theme_color| may vary from device to device, the
   // synced copies of these fields are replicated to all devices. The synced
   // copies are read by a device to generate a placeholder icon (if needed). Any
-  // device may write new values to |sync_fallback_data|, random last update
+  // device may write new values to |sync_proto|, random last update
   // wins.
-  struct SyncFallbackData {
-    SyncFallbackData();
-    ~SyncFallbackData();
-    // Copyable and move-assignable to support Copy-on-Write with Commit.
-    SyncFallbackData(const SyncFallbackData& sync_fallback_data);
-    SyncFallbackData(SyncFallbackData&& sync_fallback_data) noexcept;
-    SyncFallbackData& operator=(SyncFallbackData&& sync_fallback_data);
-
-    base::Value AsDebugValue() const;
-
-    std::string name;
-    std::optional<SkColor> theme_color;
-    GURL scope;
-    std::vector<apps::IconInfo> icon_infos;
-  };
-  const SyncFallbackData& sync_fallback_data() const {
-    return sync_fallback_data_;
+  const sync_pb::WebAppSpecifics& sync_proto() const {
+    // Ensure the sync proto has been initialized.
+    CHECK(sync_proto_.has_start_url(), base::NotFatalUntil::M126);
+    CHECK(GURL(sync_proto_.start_url()).is_valid(), base::NotFatalUntil::M126);
+    CHECK(sync_proto_.has_relative_manifest_id(), base::NotFatalUntil::M126);
+    return sync_proto_;
   }
 
   // Represents the "shortcuts" field in the manifest.
@@ -362,12 +337,11 @@ class WebApp {
   }
 
   // If present, signals that this app is an Isolated Web App, and contains
-  // IWA-specific information like bundle location.
+  // IWA-specific information like from where the contents should be served.
   struct IsolationData {
-    // If present, signals that an update for this app is available locally and
-    // waiting to be applied.
     struct PendingUpdateInfo {
-      PendingUpdateInfo(IsolatedWebAppLocation location, base::Version version);
+      PendingUpdateInfo(IsolatedWebAppStorageLocation location,
+                        base::Version version);
       ~PendingUpdateInfo();
       PendingUpdateInfo(const PendingUpdateInfo&);
       PendingUpdateInfo& operator=(const PendingUpdateInfo&);
@@ -381,7 +355,7 @@ class WebApp {
         return os << update_info.AsDebugValue();
       }
 
-      IsolatedWebAppLocation location;
+      IsolatedWebAppStorageLocation location;
       base::Version version;
 
       // TODO(cmfcmf): Add further information about the update here, such as
@@ -389,8 +363,9 @@ class WebApp {
       // closed.
     };
 
-    IsolationData(IsolatedWebAppLocation location, base::Version version);
-    IsolationData(IsolatedWebAppLocation location,
+    IsolationData(IsolatedWebAppStorageLocation location,
+                  base::Version version);
+    IsolationData(IsolatedWebAppStorageLocation location,
                   base::Version version,
                   const std::set<std::string>& controlled_frame_partitions,
                   const std::optional<PendingUpdateInfo>& pending_update_info);
@@ -409,10 +384,10 @@ class WebApp {
       return os << isolation_data.AsDebugValue();
     }
 
-    // Sets the pending update info. Will `CHECK` if the type of
-    // `pending_update_info.location` is not the same as `location`. In other
-    // words, a `DevModeBundle` app cannot be updated to, e.g.,
-    // `InstalledBundle`.
+    // Sets the pending update info. Will `CHECK` if dev mode is different
+    // between `pending_update_info.location` and `location`. In other words, a
+    // dev mode owned bundle can never be updated to a prod mode owned bundle,
+    // etc.
     void SetPendingUpdateInfo(
         const std::optional<PendingUpdateInfo>& pending_update_info);
 
@@ -420,11 +395,13 @@ class WebApp {
       return pending_update_info_;
     }
 
-    IsolatedWebAppLocation location;
+    IsolatedWebAppStorageLocation location;
     base::Version version;
     std::set<std::string> controlled_frame_partitions;
 
    private:
+    // If present, signals that an update for this app is available locally and
+    // waiting to be applied.
     std::optional<PendingUpdateInfo> pending_update_info_;
   };
   const std::optional<IsolationData>& isolation_data() const {
@@ -446,6 +423,8 @@ class WebApp {
     return supported_links_offer_dismiss_count_;
   }
 
+  bool is_diy_app() const { return is_diy_app_; }
+
   // A Web App can be installed from multiple sources simultaneously. Installs
   // add a source to the app. Uninstalls remove a source from the app.
   void AddSource(WebAppManagement::Type source);
@@ -459,6 +438,8 @@ class WebApp {
   // Does not include apps preloaded through the App Preload Service.
   bool IsPreinstalledApp() const;
   bool IsPolicyInstalledApp() const;
+  bool IsIwaPolicyInstalledApp() const;
+  bool IsIwaShimlessRmaApp() const;
   bool IsSystemApp() const;
   bool IsWebAppStoreInstalledApp() const;
   bool IsSubAppInstalledApp() const;
@@ -481,16 +462,7 @@ class WebApp {
   void SetDisplayMode(DisplayMode display_mode);
   // Sets the UserDisplayMode for the current platform (CrOS or default).
   void SetUserDisplayMode(mojom::UserDisplayMode user_display_mode);
-  // Sets the UserDisplayMode for CrOS (exists on all platforms to maintain
-  // sync information).
-  void SetUserDisplayModeCrOS(mojom::UserDisplayMode user_display_mode_cros);
-  // Sets the non-platform-specific UserDisplayMode value (exists on all
-  // platforms to maintain sync information).
-  void SetUserDisplayModeDefault(
-      mojom::UserDisplayMode user_display_mode_default);
   void SetDisplayModeOverride(std::vector<DisplayMode> display_mode_override);
-  void SetUserPageOrdinal(syncer::StringOrdinal page_ordinal);
-  void SetUserLaunchOrdinal(syncer::StringOrdinal launch_ordinal);
   void SetWebAppChromeOsData(std::optional<WebAppChromeOsData> chromeos_data);
   void SetIsLocallyInstalled(bool is_locally_installed);
   void SetIsFromSyncAndPendingInstallation(
@@ -528,7 +500,7 @@ class WebApp {
   void SetManifestUpdateTime(const base::Time& time);
   void SetRunOnOsLoginMode(RunOnOsLoginMode mode);
   void SetRunOnOsLoginOsIntegrationState(RunOnOsLoginMode os_integration_state);
-  void SetSyncFallbackData(SyncFallbackData sync_fallback_data);
+  void SetSyncProto(sync_pb::WebAppSpecifics sync_proto);
   void SetCaptureLinks(blink::mojom::CaptureLinks capture_links);
   void SetManifestUrl(const GURL& manifest_url);
   void SetManifestId(const webapps::ManifestId& manifest_id);
@@ -550,6 +522,7 @@ class WebApp {
       proto::LinkCapturingUserPreference user_link_capturing_preference);
   void SetSupportedLinksOfferIgnoreCount(int ignore_count);
   void SetSupportedLinksOfferDismissCount(int dismiss_count);
+  void SetIsDiyApp(bool is_diy_app);
 
   void AddPlaceholderInfoToManagementExternalConfigMap(
       WebAppManagement::Type source_type,
@@ -610,11 +583,7 @@ class WebApp {
   std::optional<SkColor> background_color_;
   std::optional<SkColor> dark_mode_background_color_;
   DisplayMode display_mode_ = DisplayMode::kUndefined;
-  std::optional<mojom::UserDisplayMode> user_display_mode_cros_;
-  std::optional<mojom::UserDisplayMode> user_display_mode_default_;
   std::vector<DisplayMode> display_mode_override_;
-  syncer::StringOrdinal user_page_ordinal_;
-  syncer::StringOrdinal user_launch_ordinal_;
   std::optional<WebAppChromeOsData> chromeos_data_;
   bool is_locally_installed_ = false;
   bool is_from_sync_and_pending_installation_ = false;
@@ -652,7 +621,7 @@ class WebApp {
   // TODO(crbug.com/1401125): Remove after all OS Integration sub managers have
   // been implemented and Synchronize() is running fine.
   std::optional<RunOnOsLoginMode> run_on_os_login_os_integration_state_;
-  SyncFallbackData sync_fallback_data_;
+  sync_pb::WebAppSpecifics sync_proto_;
   blink::mojom::CaptureLinks capture_links_ =
       blink::mojom::CaptureLinks::kUndefined;
   ClientData client_data_;
@@ -703,14 +672,14 @@ class WebApp {
   int supported_links_offer_ignore_count_ = 0;
   int supported_links_offer_dismiss_count_ = 0;
 
+  bool is_diy_app_ = false;
+
   // New fields must be added to:
   //  - |operator==|
   //  - AsDebugValue()
   //  - WebAppDatabase::CreateWebApp()
   //  - WebAppDatabase::CreateWebAppProto()
   //  - CreateRandomWebApp()
-  //  - WebAppTest.EmptyAppAsDebugValue
-  //  - WebAppTest.SampleAppAsDebugValue
   //  - web_app.proto
   // If parsed from manifest, also add to:
   //  - GetManifestDataChanges() inside manifest_update_utils.h
@@ -721,11 +690,6 @@ class WebApp {
 
 // For logging and debug purposes.
 std::ostream& operator<<(std::ostream& out, const WebApp& app);
-
-bool operator==(const WebApp::SyncFallbackData& sync_fallback_data1,
-                const WebApp::SyncFallbackData& sync_fallback_data2);
-bool operator!=(const WebApp::SyncFallbackData& sync_fallback_data1,
-                const WebApp::SyncFallbackData& sync_fallback_data2);
 
 std::ostream& operator<<(
     std::ostream& out,
@@ -750,5 +714,12 @@ std::vector<std::string> GetSerializedAllowedOrigins(
         permissions_policy_declaration);
 
 }  // namespace web_app
+
+namespace sync_pb {
+bool operator==(const WebAppSpecifics& sync_proto1,
+                const WebAppSpecifics& sync_proto2);
+bool operator!=(const WebAppSpecifics& sync_proto1,
+                const WebAppSpecifics& sync_proto2);
+}  // namespace sync_pb
 
 #endif  // CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_H_

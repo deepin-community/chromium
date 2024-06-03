@@ -17,7 +17,6 @@
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/side_panel/bookmarks/bookmarks_side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/feed/feed_side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/history_clusters/history_clusters_side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/performance_controls/performance_side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/read_anything/read_anything_coordinator.h"
@@ -27,7 +26,6 @@
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/views/side_panel/user_note/user_note_ui_coordinator.h"
-#include "components/feed/feed_feature_list.h"
 #include "components/history_clusters/core/features.h"
 #include "components/history_clusters/core/history_clusters_service.h"
 #include "components/performance_manager/public/features.h"
@@ -50,6 +48,12 @@ DEFINE_UI_CLASS_PROPERTY_TYPE(SidePanelOpenTrigger)
 DEFINE_UI_CLASS_PROPERTY_KEY(std::underlying_type_t<SidePanelOpenTrigger>,
                              kSidePanelOpenTriggerKey,
                              kInvalidSidePanelOpenTrigger)
+
+DEFINE_UI_CLASS_PROPERTY_TYPE(SidePanelContentState)
+DEFINE_UI_CLASS_PROPERTY_KEY(std::underlying_type_t<SidePanelContentState>,
+                             kSidePanelContentStateKey,
+                             std::underlying_type_t<SidePanelContentState>(
+                                 SidePanelContentState::kReadyToShow))
 
 // static
 void SidePanelUtil::PopulateGlobalEntries(Browser* browser,
@@ -99,12 +103,6 @@ void SidePanelUtil::PopulateGlobalEntries(Browser* browser,
   // Add user notes.
   if (user_notes::IsUserNotesEnabled()) {
     UserNoteUICoordinator::GetOrCreateForBrowser(browser)
-        ->CreateAndRegisterEntry(global_registry);
-  }
-
-  // Add feed.
-  if (base::FeatureList::IsEnabled(feed::kWebUiFeed)) {
-    feed::FeedSidePanelCoordinator::GetOrCreateForBrowser(browser)
         ->CreateAndRegisterEntry(global_registry);
   }
 
@@ -243,6 +241,12 @@ void SidePanelUtil::RecordPinnedButtonClicked(SidePanelEntry::Id id,
   base::RecordComputedAction(base::StrCat(
       {"SidePanel.", SidePanelEntryIdToHistogramName(id), ".",
        is_pinned ? "Pinned" : "Unpinned", ".BySidePanelHeaderButton"}));
+}
+
+void SidePanelUtil::RecordSidePanelAnimationMetrics(
+    base::TimeDelta largest_step_time) {
+  base::UmaHistogramTimes("SidePanel.TimeOfLongestAnimationStep",
+                          largest_step_time);
 }
 
 actions::ActionItem::InvokeActionCallback

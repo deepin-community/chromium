@@ -37,6 +37,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
+#include "base/types/to_address.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/defaults.h"
@@ -749,14 +750,15 @@ class TabStrip::TabDragContextImpl : public TabDragContext,
     ~ResetDraggingStateDelegate() override = default;
 
     void AnimationProgressed(const gfx::Animation* animation) override {
-      tab_container_->OnTabSlotAnimationProgressed(std::to_address(slot_view_));
+      tab_container_->OnTabSlotAnimationProgressed(
+          base::to_address(slot_view_));
     }
 
     void AnimationEnded(const gfx::Animation* animation) override {
       AnimationProgressed(animation);
       slot_view_->set_animating(false);
       slot_view_->set_dragging(false);
-      tab_container_->ReturnTabSlotView(std::to_address(slot_view_));
+      tab_container_->ReturnTabSlotView(base::to_address(slot_view_));
     }
 
     void AnimationCanceled(const gfx::Animation* animation) override {
@@ -962,7 +964,7 @@ TabStrip::TabStrip(std::unique_ptr<TabStripController> controller)
       tab_container_(
           *AddChildViewAt(MakeTabContainer(this,
                                            hover_card_controller_.get(),
-                                           std::to_address(drag_context_)),
+                                           base::to_address(drag_context_)),
                           0)),
       style_(TabStyle::Get()) {
   // TODO(pbos): This is probably incorrect, the background of individual tabs
@@ -991,8 +993,8 @@ TabStrip::~TabStrip() {
   // |tab_container_|'s tabs may call back to us or to |drag_context_| from
   // their destructors. Delete them first so that if they call back we aren't in
   // a weird state.
-  RemoveChildViewT(std::to_address(tab_container_));
-  RemoveChildViewT(std::to_address(drag_context_));
+  RemoveChildViewT(base::to_address(tab_container_));
+  RemoveChildViewT(base::to_address(drag_context_));
 
   CHECK(!IsInObserverList());
 }
@@ -1340,7 +1342,7 @@ std::optional<int> TabStrip::GetModelIndexOf(const TabSlotView* view) const {
   const std::optional<int> viewmodel_index =
       tab_container_->GetModelIndexOf(view);
 
-  // TODO(1392523): The viewmodel (as accessed by
+  // TODO(crbug.com/40880410): The viewmodel (as accessed by
   // `tab_container_->GetModelIndexOf(Tab*)`) can be out of sync with the actual
   // TabStripModel when multiple tabs are closed at once. We can check
   // IsValidModelIndex to avoid crashes or out of bounds issues, but we can't
@@ -1372,7 +1374,7 @@ int TabStrip::GetModelPinnedTabCount() const {
 }
 
 TabDragContext* TabStrip::GetDragContext() {
-  return std::to_address(drag_context_);
+  return base::to_address(drag_context_);
 }
 
 bool TabStrip::IsAnimating() const {
@@ -1454,9 +1456,9 @@ bool TabStrip::IsAnimatingInTabStrip() const {
 
 void TabStrip::UpdateAnimationTarget(TabSlotView* tab_slot_view,
                                      gfx::Rect target_bounds) {
-  // TODO(1116121): This may need to do coordinate space transformations if the
-  // view hierarchy changes so `tab_container_` and `drag_context_` don't share
-  // spaces.
+  // TODO(crbug.com/40711732): This may need to do coordinate space
+  // transformations if the view hierarchy changes so `tab_container_` and
+  // `drag_context_` don't share spaces.
   drag_context_->UpdateAnimationTarget(tab_slot_view, target_bounds);
 }
 
@@ -1623,7 +1625,7 @@ void TabStrip::ToggleTabGroupCollapsedState(
   // If tab count changed, all tab groups are collapsed and we have
   // created a new tab. We need to exit closing mode to resize the new
   // tab immediately.
-  // TODO(crbug/1384151): This should be captured along with the
+  // TODO(crbug.com/40878307): This should be captured along with the
   // ToggleTabGroup logic, so other callers to
   // TabStripController::ToggleTabGroupCollapsedState see the same
   // behavior.
@@ -1881,7 +1883,7 @@ const Browser* TabStrip::GetBrowser() const {
 views::SizeBounds TabStrip::GetAvailableSize(const views::View* child) const {
   // We can only reach here if SetAvailableWidthCallback() was never called,
   // e.g. if tab scrolling is disabled. Defer to our parent.
-  DCHECK(child == std::to_address(tab_container_));
+  DCHECK(child == base::to_address(tab_container_));
   return parent()->GetAvailableSize(this);
 }
 
@@ -1927,7 +1929,7 @@ void TabStrip::Layout(PassKey) {
     // We still need to layout in this case, as the available width may have
     // changed, which can change layout outcomes (e.g. affecting tab
     // visibility). See https://crbug.com/1370459.
-    // TODO(crbug.com/1371301): TabContainer should observe available width
+    // TODO(crbug.com/40870361): TabContainer should observe available width
     // changes and invalidate its layout when needed.
     tab_container_->DeprecatedLayoutImmediately();
   }
@@ -1938,8 +1940,9 @@ void TabStrip::ChildPreferredSizeChanged(views::View* child) {
   PreferredSizeChanged();
 }
 
-BrowserRootView::DropIndex TabStrip::GetDropIndex(
-    const ui::DropTargetEvent& event) {
+std::optional<BrowserRootView::DropIndex> TabStrip::GetDropIndex(
+    const ui::DropTargetEvent& event,
+    bool allow_replacement) {
   // BrowserView should talk directly to |tab_container_| instead of asking us.
   NOTREACHED_NORETURN();
 }

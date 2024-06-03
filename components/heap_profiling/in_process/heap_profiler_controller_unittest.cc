@@ -121,7 +121,7 @@ base::FieldTrialParams FeatureTestParams::ToFieldTrialParams() const {
 
   // Add the default params.
   base::Value::Dict dict;
-  if (!supported_processes.Empty()) {
+  if (!supported_processes.empty()) {
     // Explicitly disable profiling by default, so that only the processes
     // given in `supported_processes` will be enabled.
     dict.Set("is-supported", false);
@@ -510,6 +510,24 @@ TEST_P(HeapProfilerControllerChannelTest, CanaryChannel) {
       GetParam().nonstable.expect_browser_sample, 1);
   AddOneSampleAndWait();
   EXPECT_EQ(sample_received_, GetParam().nonstable.expect_browser_sample);
+}
+
+TEST_P(HeapProfilerControllerChannelTest, UnknownChannel) {
+  // An unknown channel should be treated like stable, in case a large
+  // population doesn't have the channel set.
+  StartHeapProfiling(
+      version_info::Channel::UNKNOWN, ProcessType::kBrowser,
+      base::BindRepeating(&HeapProfilerControllerTest::RecordSampleReceived,
+                          base::Unretained(this)),
+      GetParam().stable.expect_browser_sample);
+  histogram_tester_.ExpectUniqueSample(
+      "HeapProfiling.InProcess.Enabled.Browser",
+      GetParam().stable.expect_browser_sample, 1);
+  histogram_tester_.ExpectUniqueSample("HeapProfiling.InProcess.Enabled",
+                                       GetParam().stable.expect_browser_sample,
+                                       1);
+  AddOneSampleAndWait();
+  EXPECT_EQ(sample_received_, GetParam().stable.expect_browser_sample);
 }
 
 // Test the feature in various processes.

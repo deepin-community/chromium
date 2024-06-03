@@ -32,6 +32,7 @@ def __filegroups(ctx):
                 "bin/clang",
                 "bin/clang++",
                 "bin/clang-cl.exe",
+                "*_ignorelist.txt",
             ],
         },
     }
@@ -44,6 +45,18 @@ __input_deps = {
     # also need `__assertion_handler`. b/321171148
     "third_party/libc++/src/include": [
         "buildtools/third_party/libc++:headers",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang": [
+        "build/config/unsafe_buffers_paths.txt",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang++": [
+        "build/config/unsafe_buffers_paths.txt",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang-cl": [
+        "build/config/unsafe_buffers_paths.txt",
+    ],
+    "third_party/llvm-build/Release+Asserts/bin/clang-cl.exe": [
+        "build/config/unsafe_buffers_paths.txt",
     ],
 }
 

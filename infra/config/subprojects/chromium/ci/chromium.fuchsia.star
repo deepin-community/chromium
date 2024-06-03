@@ -6,7 +6,7 @@
 load("//lib/branches.star", "branches")
 load("//lib/builder_config.star", "builder_config")
 load("//lib/builder_health_indicators.star", "health_spec")
-load("//lib/builders.star", "free_space", "os", "reclient", "sheriff_rotations")
+load("//lib/builders.star", "free_space", "os", "reclient", "sheriff_rotations", "siso")
 load("//lib/ci.star", "ci")
 load("//lib/consoles.star", "consoles")
 load("//lib/gn_args.star", "gn_args")
@@ -28,6 +28,11 @@ ci.defaults.set(
     reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
     service_account = ci.DEFAULT_SERVICE_ACCOUNT,
     shadow_service_account = ci.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_enable_cloud_profiler = True,
+    siso_enable_cloud_trace = True,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
 )
 
 consoles.console_view(
@@ -115,6 +120,51 @@ ci.builder(
 )
 
 ci.builder(
+    name = "fuchsia-x64-cast-receiver-dbg",
+    branch_selector = branches.selector.FUCHSIA_BRANCHES,
+    description_html = "x64 debug build of fuchsia components with cast receiver",
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                "fuchsia_x64",
+            ],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = [
+                "mb",
+            ],
+            build_config = builder_config.build_config.DEBUG,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.FUCHSIA,
+        ),
+        build_gs_bucket = "chromium-linux-archive",
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "debug_builder",
+            "reclient",
+            "fuchsia",
+            "cast_receiver_size_optimized",
+        ],
+    ),
+    console_view_entry = [
+        consoles.console_view_entry(
+            category = "cast-receiver",
+            short_name = "x64-dbg",
+        ),
+        consoles.console_view_entry(
+            branch_selector = branches.selector.MAIN,
+            console_view = "sheriff.fuchsia",
+            category = "gardener|ci|x64",
+            short_name = "cast-dbg",
+        ),
+    ],
+    contact_team_email = "chrome-fuchsia-engprod@google.com",
+)
+
+ci.builder(
     name = "fuchsia-x64-cast-receiver-rel",
     branch_selector = branches.selector.FUCHSIA_BRANCHES,
     builder_spec = builder_config.builder_spec(
@@ -153,51 +203,6 @@ ci.builder(
             console_view = "sheriff.fuchsia",
             category = "gardener|ci|x64",
             short_name = "cast",
-        ),
-    ],
-    contact_team_email = "chrome-fuchsia-engprod@google.com",
-)
-
-ci.builder(
-    name = "fuchsia-x64-dbg",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "fuchsia_x64",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.FUCHSIA,
-        ),
-        build_gs_bucket = "chromium-linux-archive",
-    ),
-    gn_args = gn_args.config(
-        configs = [
-            "debug_builder",
-            "reclient",
-            "fuchsia",
-            "compile_only",
-        ],
-    ),
-    # TODO: crbug.com/1509109 - should use size-optimization and be re-enabled.
-    tree_closing = False,
-    console_view_entry = [
-        consoles.console_view_entry(
-            category = "debug",
-            short_name = "x64",
-        ),
-        consoles.console_view_entry(
-            branch_selector = branches.selector.MAIN,
-            console_view = "sheriff.fuchsia",
-            category = "gardener|ci|x64",
-            short_name = "dbg",
         ),
     ],
     contact_team_email = "chrome-fuchsia-engprod@google.com",

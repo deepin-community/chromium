@@ -5,11 +5,13 @@
 #ifndef UI_GL_VSYNC_THREAD_WIN_H_
 #define UI_GL_VSYNC_THREAD_WIN_H_
 
-#include <d3d11.h>
 #include <windows.h>
+
+#include <d3d11.h>
 #include <wrl/client.h>
 
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/power_monitor/power_observer.h"
 #include "base/threading/thread.h"
 #include "ui/gl/gl_export.h"
@@ -59,14 +61,17 @@ class GL_EXPORT VSyncThreadWin final : public base::PowerSuspendObserver {
 
   // Used on vsync thread only after initialization.
   VSyncProviderWin vsync_provider_;
-  const Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device_;
-  HMONITOR primary_monitor_ = nullptr;
+  Microsoft::WRL::ComPtr<IDXGIAdapter> dxgi_adapter_;
   Microsoft::WRL::ComPtr<IDXGIOutput> primary_output_;
+
+  // The LUID of the adapter of the IDXGIDevice this instance was created with.
+  const LUID original_adapter_luid_;
 
   base::Lock lock_;
   bool GUARDED_BY(lock_) is_vsync_task_posted_ = false;
   bool GUARDED_BY(lock_) is_suspended_ = false;
-  base::flat_set<VSyncObserver*> GUARDED_BY(lock_) observers_;
+  base::flat_set<raw_ptr<VSyncObserver, CtnExperimental>> GUARDED_BY(lock_)
+      observers_;
 };
 }  // namespace gl
 

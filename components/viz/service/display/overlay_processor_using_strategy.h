@@ -38,11 +38,9 @@
 #include "ui/gfx/color_space.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-namespace cc {
-class DisplayResourceProvider;
-}
-
 namespace viz {
+
+class DisplayResourceProvider;
 
 // OverlayProcessor subclass that goes through a list of strategies to determine
 // overlay candidates. This is used by Android and Ozone platforms.
@@ -201,7 +199,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorUsingStrategy
       const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
       const OverlayProcessorInterface::FilterOperationsMap&
           render_pass_backdrop_filters,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
       OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,

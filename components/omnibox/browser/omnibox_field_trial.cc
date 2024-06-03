@@ -550,26 +550,6 @@ bool OmniboxFieldTrial::HUPSearchDatabase() {
   return value.empty() || (value == "true");
 }
 
-bool OmniboxFieldTrial::IsActionsUISimplificationEnabled() {
-  return base::FeatureList::IsEnabled(omnibox::kOmniboxActionsUISimplification);
-}
-
-bool OmniboxFieldTrial::IsKeywordModeRefreshEnabled() {
-  return base::FeatureList::IsEnabled(omnibox::kOmniboxKeywordModeRefresh);
-}
-
-const base::FeatureParam<bool>
-    OmniboxFieldTrial::kActionsUISimplificationIncludeRealbox(
-        &omnibox::kOmniboxActionsUISimplification,
-        "ActionsUISimplificationIncludeRealbox",
-        true);
-
-const base::FeatureParam<bool>
-    OmniboxFieldTrial::kActionsUISimplificationTrimExtra(
-        &omnibox::kOmniboxActionsUISimplification,
-        "ActionsUISimplificationTrimExtra",
-        true);
-
 bool OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForIncognito() {
   return base::FeatureList::IsEnabled(omnibox::kOnDeviceHeadProviderIncognito);
 }
@@ -1071,6 +1051,14 @@ MLConfig::MLConfig() {
           .Get();
 
   url_scoring_model = base::FeatureList::IsEnabled(omnibox::kUrlScoringModel);
+
+  ml_url_score_caching =
+      base::FeatureList::IsEnabled(omnibox::kMlUrlScoreCaching);
+  max_ml_score_cache_size =
+      base::FeatureParam<int>(&omnibox::kMlUrlScoreCaching,
+                              "MlUrlScoreCaching_MaxMlScoreCacheSize",
+                              max_ml_score_cache_size)
+          .Get();
 }
 
 MLConfig::MLConfig(const MLConfig&) = default;
@@ -1122,15 +1110,11 @@ bool IsMlUrlScoringUnlimitedNumCandidatesEnabled() {
 bool IsUrlScoringModelEnabled() {
   return GetMLConfig().url_scoring_model;
 }
+bool IsMlUrlScoreCachingEnabled() {
+  return GetMLConfig().ml_url_score_caching;
+}
 
 // <- ML Relevance Scoring
-// ---------------------------------------------------------
-// Android UI Revamp ->
-const base::FeatureParam<bool> kOmniboxModernizeVisualUpdateMergeClipboardOnNTP(
-    &omnibox::kOmniboxModernizeVisualUpdate,
-    "modernize_visual_update_merge_clipboard_on_ntp",
-    true);
-// <- Android UI Revamp
 // ---------------------------------------------------------
 // Touch Down Trigger For Prefetch ->
 const base::FeatureParam<int>
@@ -1148,6 +1132,10 @@ const base::FeatureParam<std::string> kGeminiUrlOverride(
 
 bool IsStarterPackExpansionEnabled() {
   return base::FeatureList::IsEnabled(omnibox::kStarterPackExpansion);
+}
+
+bool IsStarterPackIPHEnabled() {
+  return base::FeatureList::IsEnabled(omnibox::kStarterPackIPH);
 }
 // <- Site Search Starter Pack
 // ---------------------------------------------------------

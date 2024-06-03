@@ -6,6 +6,7 @@
 #define UI_OZONE_PLATFORM_WAYLAND_HOST_WAYLAND_TOPLEVEL_WINDOW_H_
 
 #include <memory>
+#include <optional>
 #include <ostream>
 
 #include "base/memory/raw_ptr.h"
@@ -162,6 +163,10 @@ class WaylandToplevelWindow : public WaylandWindow,
   void SetShadowCornersRadii(const gfx::RoundedCornersF& radii) override;
 #endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
   void RoundTripQueue() override;
+  bool HasInFlightRequestsForState() const override;
+  int64_t GetVizSequenceIdForAppliedState() const override;
+  int64_t GetVizSequenceIdForLatchedState() const override;
+  void SetLatchImmediately(bool latch_immediately) override;
   void ShowSnapPreview(WaylandWindowSnapDirection snap,
                        bool allow_haptic_feedback) override;
   void CommitSnap(WaylandWindowSnapDirection snap, float snap_ratio) override;
@@ -215,6 +220,10 @@ class WaylandToplevelWindow : public WaylandWindow,
   bool ShouldTriggerStateChange(PlatformWindowState state,
                                 int64_t target_display_id) const;
 
+  // Takes ownership of the xdg-activation token if it can be used and a token
+  // was found.
+  std::optional<std::string> TakeActivationToken() const;
+
   WaylandOutput* GetWaylandOutputForDisplayId(int64_t display_id);
 
   // Creates a surface window, which is visible as a main window.
@@ -224,11 +233,6 @@ class WaylandToplevelWindow : public WaylandWindow,
 
   // Propagates the minimum size and maximum size to the ShellToplevel.
   void SetSizeConstraints();
-
-  // If current state is not PlatformWindowState::kNormal, stores the current
-  // size into restored_bounds_dip_ so that they can be restored when the
-  // window gets back to normal state.  Otherwise, resets the restored bounds.
-  void SetOrResetRestoredBounds();
 
   // Initializes additional shell integration, if the appropriate interfaces are
   // available.
@@ -270,6 +274,11 @@ class WaylandToplevelWindow : public WaylandWindow,
   // This is used to detect fullscreen type changes from the Aura side
   // to inform Lacros clients from the asynchronous task completion.
   PlatformFullscreenType fullscreen_type_ = PlatformFullscreenType::kNone;
+
+  // The flag that indicates the last requested immersive fullscreen status from
+  // SetImmersiveFullscreenStatue to detect the immersive status changes. Set to
+  // null if it had never been called.
+  std::optional<bool> last_requested_immersive_status_ = std::nullopt;
 
   // Unique ID for this window. May be shared over non-Wayland IPC transports
   // (e.g. mojo) to identify the window.

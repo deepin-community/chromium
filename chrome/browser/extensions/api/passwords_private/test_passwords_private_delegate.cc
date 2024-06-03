@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -432,6 +431,16 @@ void TestPasswordsPrivateDelegate::ShowExportedFileInShell(
     content::WebContents* web_contents,
     std::string file_path) {
   exported_file_shown_in_shell_ = true;
+}
+
+void TestPasswordsPrivateDelegate::ChangePasswordManagerPin(
+    content::WebContents* web_contents) {
+  change_password_manager_pin_called_ = true;
+}
+
+bool TestPasswordsPrivateDelegate::IsPasswordManagerPinAvailable(
+    content::WebContents* web_contents) {
+  return false;
 }
 
 base::WeakPtr<PasswordsPrivateDelegate>

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_POINTERS_RAW_PTR_BACKUP_REF_IMPL_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_POINTERS_RAW_PTR_BACKUP_REF_IMPL_H_
+#ifndef PARTITION_ALLOC_POINTERS_RAW_PTR_BACKUP_REF_IMPL_H_
+#define PARTITION_ALLOC_POINTERS_RAW_PTR_BACKUP_REF_IMPL_H_
 
 #include <cstddef>
 #include <type_traits>
@@ -327,33 +327,55 @@ struct RawPtrBackupRefImpl {
   }
 
   // Advance the wrapped pointer by `delta_elems`.
+  // `is_in_pointer_modification` means that the result is intended to modify
+  // the pointer (as opposed to creating a new one).
   template <
       typename T,
       typename Z,
       typename =
           std::enable_if_t<partition_alloc::internal::is_offset_type<Z>, void>>
-  PA_ALWAYS_INLINE static constexpr T* Advance(T* wrapped_ptr, Z delta_elems) {
+  PA_ALWAYS_INLINE static constexpr T*
+  Advance(T* wrapped_ptr, Z delta_elems, bool is_in_pointer_modification) {
     if (partition_alloc::internal::base::is_constant_evaluated()) {
       return wrapped_ptr + delta_elems;
     }
     T* unpoisoned_ptr = UnpoisonPtr(wrapped_ptr);
-    return VerifyAndPoisonPointerAfterAdvanceOrRetreat(
-        unpoisoned_ptr, unpoisoned_ptr + delta_elems);
+    // When modifying the pointer, we have to make sure it doesn't migrate to a
+    // different slot, or else ref-count integrity is at risk. This isn't needed
+    // if the result will be assigned to a new pointer, as it'll do ref-counting
+    // properly. Do it anyway if extra OOB checks are enabled.
+    if (BUILDFLAG(BACKUP_REF_PTR_EXTRA_OOB_CHECKS) ||
+        is_in_pointer_modification) {
+      return VerifyAndPoisonPointerAfterAdvanceOrRetreat(
+          unpoisoned_ptr, unpoisoned_ptr + delta_elems);
+    }
+    return unpoisoned_ptr + delta_elems;
   }
 
   // Retreat the wrapped pointer by `delta_elems`.
+  // `is_in_pointer_modification` means that the result is intended to modify
+  // the pointer (as opposed to creating a new one).
   template <
       typename T,
       typename Z,
       typename =
           std::enable_if_t<partition_alloc::internal::is_offset_type<Z>, void>>
-  PA_ALWAYS_INLINE static constexpr T* Retreat(T* wrapped_ptr, Z delta_elems) {
+  PA_ALWAYS_INLINE static constexpr T*
+  Retreat(T* wrapped_ptr, Z delta_elems, bool is_in_pointer_modification) {
     if (partition_alloc::internal::base::is_constant_evaluated()) {
       return wrapped_ptr - delta_elems;
     }
     T* unpoisoned_ptr = UnpoisonPtr(wrapped_ptr);
-    return VerifyAndPoisonPointerAfterAdvanceOrRetreat(
-        unpoisoned_ptr, unpoisoned_ptr - delta_elems);
+    // When modifying the pointer, we have to make sure it doesn't migrate to a
+    // different slot, or else ref-count integrity is at risk. This isn't needed
+    // if the result will be assigned to a new pointer, as it'll do ref-counting
+    // properly. Do it anyway if extra OOB checks are enabled.
+    if (BUILDFLAG(BACKUP_REF_PTR_EXTRA_OOB_CHECKS) ||
+        is_in_pointer_modification) {
+      return VerifyAndPoisonPointerAfterAdvanceOrRetreat(
+          unpoisoned_ptr, unpoisoned_ptr - delta_elems);
+    }
+    return unpoisoned_ptr - delta_elems;
   }
 
   template <typename T>
@@ -487,4 +509,4 @@ struct RawPtrBackupRefImpl {
 
 }  // namespace base::internal
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_POINTERS_RAW_PTR_BACKUP_REF_IMPL_H_
+#endif  // PARTITION_ALLOC_POINTERS_RAW_PTR_BACKUP_REF_IMPL_H_

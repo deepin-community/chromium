@@ -151,13 +151,11 @@ void AutofillManager::LogAutofillTypePredictionsAvailable(
                       << std::move(buffer);
 }
 
-AutofillManager::AutofillManager(AutofillDriver* driver, AutofillClient* client)
+AutofillManager::AutofillManager(AutofillDriver* driver)
     : driver_(CHECK_DEREF(driver)),
-      client_(CHECK_DEREF(client)),
-      log_manager_(client->GetLogManager()),
+      log_manager_(unsafe_client().GetLogManager()),
       form_interactions_ukm_logger_(CreateFormInteractionsUkmLogger()) {
-  translate::TranslateDriver* translate_driver = client->GetTranslateDriver();
-  if (translate_driver) {
+  if (auto* translate_driver = unsafe_client().GetTranslateDriver()) {
     translate_observation_.Observe(translate_driver);
   }
 }
@@ -318,8 +316,6 @@ void AutofillManager::OnFormsParsed(const std::vector<FormData>& forms) {
   DCHECK(!forms.empty());
   OnBeforeProcessParsedForms();
 
-  driver().HandleParsedForms(forms);
-
   std::vector<raw_ptr<FormStructure, VectorExperimental>> non_queryable_forms;
   std::vector<raw_ptr<FormStructure, VectorExperimental>> queryable_forms;
   DenseSet<FormType> form_types;
@@ -341,10 +337,6 @@ void AutofillManager::OnFormsParsed(const std::vector<FormData>& forms) {
     }
 
     OnFormProcessed(form, *form_structure);
-  }
-
-  if (!queryable_forms.empty() || !non_queryable_forms.empty()) {
-    OnAfterProcessParsedForms(form_types);
   }
 
   // Send the current type predictions to the renderer. For non-queryable forms
@@ -380,7 +372,7 @@ void AutofillManager::OnTextFieldDidChange(const FormData& form,
                             bounding_box, timestamp)
                 .Then(NotifyObserversCallback(
                     &Observer::OnAfterTextFieldDidChange, form.global_id(),
-                    field.global_id(), field.value)));
+                    field.global_id(), field.value())));
 }
 
 void AutofillManager::OnTextFieldDidScroll(const FormData& form,
@@ -435,9 +427,13 @@ void AutofillManager::OnFocusOnFormField(const FormData& form,
                                          const gfx::RectF& bounding_box) {
   if (!IsValidFormData(form) || !IsValidFormFieldData(field))
     return;
+  NotifyObservers(&Observer::OnBeforeFocusOnFormField, form.global_id(),
+                  field.global_id(), form);
   ParseFormAsync(form, ParsingCallback(&AutofillManager::OnFocusOnFormFieldImpl,
                                        field, bounding_box)
-                           .Then(NotifyNoObserversCallback()));
+                           .Then(NotifyObserversCallback(
+                               &Observer::OnAfterFocusOnFormField,
+                               form.global_id(), field.global_id())));
 }
 
 void AutofillManager::OnFocusNoLongerOnForm(bool had_interacted_form) {
@@ -827,8 +823,8 @@ void AutofillManager::OnLoadedServerPredictions(
   // and therefore appear only once. This ensures that
   // FindCachedFormsBySignature() produces an output without duplicates in the
   // forms.
-  // TODO(crbug/1064709): |queried_forms| could be a set data structure; their
-  // order should be irrelevant.
+  // TODO(crbug.com/40123827): |queried_forms| could be a set data structure;
+  // their order should be irrelevant.
   DCHECK_EQ(queried_forms.size(),
             std::set<FormStructure*>(queried_forms.begin(), queried_forms.end())
                 .size());

@@ -37,6 +37,7 @@ class RTCInsertableStreams;
 class RTCPeerConnection;
 class RTCRtpCapabilities;
 class RTCRtpTransceiver;
+class RTCStatsReport;
 
 // https://w3c.github.io/webrtc-pc/#rtcrtpreceiver-interface
 class RTCRtpReceiver final : public ScriptWrappable,
@@ -70,6 +71,8 @@ class RTCRtpReceiver final : public ScriptWrappable,
   RTCDtlsTransport* rtcpTransport();
   std::optional<double> playoutDelayHint() const;
   void setPlayoutDelayHint(std::optional<double>, ExceptionState&);
+  std::optional<double> jitterBufferTarget() const;
+  void setJitterBufferTarget(std::optional<double>, ExceptionState&);
   RTCRtpReceiveParameters* getParameters();
   HeapVector<Member<RTCRtpSynchronizationSource>> getSynchronizationSources(
       ScriptState*,
@@ -77,13 +80,8 @@ class RTCRtpReceiver final : public ScriptWrappable,
   HeapVector<Member<RTCRtpContributingSource>> getContributingSources(
       ScriptState*,
       ExceptionState&);
-  ScriptPromise getStats(ScriptState*);
+  ScriptPromise<RTCStatsReport> getStats(ScriptState*);
   RTCInsertableStreams* createEncodedStreams(ScriptState*, ExceptionState&);
-  // TODO(crbug.com/1069295): Make these methods private.
-  RTCInsertableStreams* createEncodedAudioStreams(ScriptState*,
-                                                  ExceptionState&);
-  RTCInsertableStreams* createEncodedVideoStreams(ScriptState*,
-                                                  ExceptionState&);
 
   RTCRtpReceiverPlatform* platform_receiver();
   MediaKind kind() const;
@@ -98,28 +96,36 @@ class RTCRtpReceiver final : public ScriptWrappable,
   void Trace(Visitor*) const override;
 
  private:
+  // Insertable Streams audio support methods
+  RTCInsertableStreams* CreateEncodedAudioStreams(ScriptState*,
+                                                  ExceptionState&);
   void RegisterEncodedAudioStreamCallback();
   void UnregisterEncodedAudioStreamCallback();
   void InitializeEncodedAudioStreams(ScriptState*);
-  void OnAudioFrameFromDepacketizer(
-      std::unique_ptr<webrtc::TransformableAudioFrameInterface>
-          encoded_audio_frame);
-  void RegisterEncodedVideoStreamCallback();
-  void UnregisterEncodedVideoStreamCallback();
-  void InitializeEncodedVideoStreams(ScriptState*);
-  void OnVideoFrameFromDepacketizer(
-      std::unique_ptr<webrtc::TransformableVideoFrameInterface>
-          encoded_video_frame);
   void SetAudioUnderlyingSource(
       RTCEncodedAudioUnderlyingSource* new_underlying_source,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
   void SetAudioUnderlyingSink(
       RTCEncodedAudioUnderlyingSink* new_underlying_sink);
+  void OnAudioFrameFromDepacketizer(
+      std::unique_ptr<webrtc::TransformableAudioFrameInterface>
+          encoded_audio_frame);
+
+  // Insertable Streams video support methods
+  RTCInsertableStreams* CreateEncodedVideoStreams(ScriptState*,
+                                                  ExceptionState&);
+  void RegisterEncodedVideoStreamCallback();
+  void UnregisterEncodedVideoStreamCallback();
+  void InitializeEncodedVideoStreams(ScriptState*);
   void SetVideoUnderlyingSource(
       RTCEncodedVideoUnderlyingSource* new_underlying_source,
       scoped_refptr<base::SingleThreadTaskRunner> task_runner);
   void SetVideoUnderlyingSink(
       RTCEncodedVideoUnderlyingSink* new_underlying_sink);
+  void OnVideoFrameFromDepacketizer(
+      std::unique_ptr<webrtc::TransformableVideoFrameInterface>
+          encoded_video_frame);
+
   void LogMessage(const std::string& message);
 
   // If createEncodedStreams has not yet been called, instead tell the webrtc
@@ -141,6 +147,7 @@ class RTCRtpReceiver final : public ScriptWrappable,
   // observed delay may differ depending on the congestion control. |nullopt|
   // means default value must be used.
   std::optional<double> playout_delay_hint_;
+  std::optional<double> jitter_buffer_target_;
 
   THREAD_CHECKER(thread_checker_);
 

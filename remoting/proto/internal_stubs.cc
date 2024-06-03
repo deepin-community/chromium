@@ -53,7 +53,7 @@ std::unique_ptr<ProvisionCorpMachineRequest> GetMachineProvisioningRequest(
     const std::string& fqdn,
     const std::string& public_key,
     const std::string& version,
-    std::optional<std::string> existing_host_id) {
+    const std::optional<std::string>& existing_host_id) {
   return std::make_unique<ProvisionCorpMachineRequest>();
 }
 
@@ -105,6 +105,16 @@ std::string GetSendHeartbeatRequestPath() {
 std::unique_ptr<SendHeartbeatRequest> GetSendHeartbeatRequest(
     const std::string& host_id) {
   return std::make_unique<SendHeartbeatRequest>();
+}
+
+std::string GetReportSessionDisconnectedRequestPath() {
+  return "";
+}
+
+std::unique_ptr<ReportSessionDisconnectedRequest>
+GetReportSessionDisconnectedRequest(
+    const ReportSessionDisconnectedRequestStruct&) {
+  return std::make_unique<ReportSessionDisconnectedRequest>();
 }
 
 std::string DoNothingProto::GetTypeName() const {

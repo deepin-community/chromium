@@ -700,7 +700,7 @@ class QuicConnectionTest : public QuicTestWithParam<TestParams> {
     EXPECT_CALL(visitor_, OnCongestionWindowChange(_)).Times(AnyNumber());
     EXPECT_CALL(visitor_, OnPacketReceived(_, _, _)).Times(AnyNumber());
     EXPECT_CALL(visitor_, OnSuccessfulVersionNegotiation(_)).Times(AnyNumber());
-    if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data3)) {
+    if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data4)) {
       EXPECT_CALL(visitor_, MaybeBundleOpportunistically()).Times(AnyNumber());
       EXPECT_CALL(visitor_, GetFlowControlSendWindowSize(_)).Times(AnyNumber());
     }
@@ -1484,7 +1484,7 @@ class QuicConnectionTest : public QuicTestWithParam<TestParams> {
     QuicConfig config;
     EXPECT_CALL(*send_algorithm_, SetFromConfig(_, _));
     connection_.SetFromConfig(config);
-    connection_.set_sent_server_preferred_address(kServerPreferredAddress);
+    connection_.set_expected_server_preferred_address(kServerPreferredAddress);
   }
 
   // Receive server preferred address.
@@ -3030,6 +3030,36 @@ TEST_P(QuicConnectionTest, PeerAddressChangeAtClient) {
   } else {
     EXPECT_EQ(kNewPeerAddress, connection_.peer_address());
     EXPECT_EQ(kNewPeerAddress, connection_.effective_peer_address());
+  }
+}
+
+TEST_P(QuicConnectionTest, NoNormalizedPeerAddressChangeAtClient) {
+  if (!version().HasIetfQuicFrames()) {
+    return;
+  }
+  QuicIpAddress peer_ip;
+  peer_ip.FromString("1.1.1.1");
+
+  QuicSocketAddress peer_addr = QuicSocketAddress(peer_ip, /*port=*/443);
+  QuicSocketAddress dualstack_peer_addr =
+      QuicSocketAddress(peer_addr.host().DualStacked(), peer_addr.port());
+
+  EXPECT_CALL(visitor_, OnSuccessfulVersionNegotiation(_)).Times(AnyNumber());
+  set_perspective(Perspective::IS_CLIENT);
+  EXPECT_EQ(Perspective::IS_CLIENT, connection_.perspective());
+
+  QuicConnectionPeer::SetDirectPeerAddress(&connection_, dualstack_peer_addr);
+
+  EXPECT_CALL(visitor_, OnCryptoFrame(_)).Times(AnyNumber());
+  EXPECT_CALL(visitor_, OnStreamFrame(_)).Times(AnyNumber());
+  ProcessFramePacketWithAddresses(MakeCryptoFrame(), kSelfAddress, peer_addr,
+                                  ENCRYPTION_INITIAL);
+  EXPECT_TRUE(connection_.connected());
+
+  if (GetQuicReloadableFlag(quic_test_peer_addr_change_after_normalize)) {
+    EXPECT_EQ(0u, connection_.GetStats().packets_dropped);
+  } else {
+    EXPECT_EQ(1u, connection_.GetStats().packets_dropped);
   }
 }
 

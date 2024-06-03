@@ -126,7 +126,6 @@
 #include "chrome/browser/ash/printing/cups_printers_manager.h"
 #include "chrome/browser/ash/printing/cups_printers_manager_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
 #include "chrome/browser/ash/system/input_device_settings.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
@@ -167,6 +166,7 @@
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/metrics/login_event_recorder.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/services/assistant/assistant_manager_service_impl.h"
 #include "chromeos/ash/services/assistant/public/cpp/assistant_prefs.h"
@@ -176,6 +176,7 @@
 #include "chromeos/printing/printer_configuration.h"
 #include "chromeos/services/machine_learning/public/cpp/service_connection.h"
 #include "chromeos/ui/base/window_properties.h"
+#include "chromeos/ui/frame/caption_buttons/caption_button_model.h"
 #include "chromeos/ui/frame/default_frame_header.h"
 #include "chromeos/ui/frame/frame_header.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller.h"
@@ -248,6 +249,7 @@
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/ozone/public/system_input_injector.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/caption_button_types.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/core/cursor_manager.h"
 #include "ui/wm/core/window_properties.h"
@@ -2091,16 +2093,16 @@ AutotestPrivateGetLacrosInfoFunction::ToLacrosState(
       return api::autotest_private::LacrosState::kStopped;
     case crosapi::BrowserManager::State::PREPARING_FOR_LAUNCH:
       return api::autotest_private::LacrosState::kPreparingForLaunch;
-    case crosapi::BrowserManager::State::WAITING_OWNER_FETCH:
-      return api::autotest_private::LacrosState::kWaitingOwnerFetch;
     case crosapi::BrowserManager::State::PRE_LAUNCHED:
       return api::autotest_private::LacrosState::kPreLaunched;
     case crosapi::BrowserManager::State::STARTING:
       return api::autotest_private::LacrosState::kStarting;
     case crosapi::BrowserManager::State::RUNNING:
       return api::autotest_private::LacrosState::kRunning;
-    case crosapi::BrowserManager::State::TERMINATING:
-      return api::autotest_private::LacrosState::kTerminating;
+    case crosapi::BrowserManager::State::WAITING_FOR_MOJO_DISCONNECTED:
+      return api::autotest_private::LacrosState::kWaitingForMojoDisconnected;
+    case crosapi::BrowserManager::State::WAITING_FOR_PROCESS_TERMINATED:
+      return api::autotest_private::LacrosState::kWaitingForProcessTerminated;
   }
 }
 
@@ -6631,8 +6633,8 @@ AutotestPrivateInstallBruschettaFunction::Run() {
   // This API is available only on test images.
   base::SysInfo::CrashIfChromeOSNonTestImage();
 
-  std::optional<api::autotest_private::RemoveBruschetta::Params> params =
-      api::autotest_private::RemoveBruschetta::Params::Create(args());
+  std::optional<api::autotest_private::InstallBruschetta::Params> params =
+      api::autotest_private::InstallBruschetta::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
   Profile* profile = Profile::FromBrowserContext(browser_context());
@@ -6736,7 +6738,7 @@ AutotestPrivateIsFeatureEnabledFunction::Run() {
   static const base::Feature* const kAllowList[] = {
       // clang-format off
       &ash::features::kPrivacyIndicators,
-      &ash::features::kVideoConference,
+      &ash::features::kFeatureManagementVideoConference,
       &chromeos::features::kJelly,
       &kDisabledFeatureForTest,
       &kEnabledFeatureForTest,

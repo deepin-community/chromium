@@ -131,11 +131,15 @@ enum class Toggle {
     DisablePolyfillsOnIntegerDivisonAndModulo,
     EnableImmediateErrorHandling,
     VulkanUseStorageInputOutput16,
+    D3D12DontUseShaderModel66OrHigher,
 
     // Unresolved issues.
     NoWorkaroundSampleMaskBecomesZeroForAllButLastColorTarget,
     NoWorkaroundIndirectBaseVertexNotApplied,
     NoWorkaroundDstAlphaAsSrcBlendFactorForBothColorAndAlphaDoesNotWork,
+
+    ClearColorWithDraw,
+    VulkanSkipDraw,
 
     EnumCount,
     InvalidEnum = EnumCount,

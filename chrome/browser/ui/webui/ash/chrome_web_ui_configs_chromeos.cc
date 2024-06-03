@@ -71,6 +71,7 @@
 #include "chrome/browser/ui/webui/ash/drive_internals_ui.h"
 #include "chrome/browser/ui/webui/ash/emoji/emoji_ui.h"
 #include "chrome/browser/ui/webui/ash/enterprise_reporting/enterprise_reporting_ui.h"
+#include "chrome/browser/ui/webui/ash/extended_updates/extended_updates_ui.h"
 #include "chrome/browser/ui/webui/ash/healthd_internals/healthd_internals_ui.h"
 #include "chrome/browser/ui/webui/ash/human_presence_internals_ui.h"
 #include "chrome/browser/ui/webui/ash/in_session_password_change/password_change_ui.h"
@@ -102,6 +103,9 @@
 #include "chrome/browser/ui/webui/ash/vm/vm_ui.h"
 #include "chrome/browser/ui/webui/nearby_internals/nearby_internals_ui.h"
 #include "chrome/browser/ui/webui/nearby_share/nearby_share_dialog_ui.h"
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#include "ash/webui/conch/conch_ui.h"
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #if !defined(OFFICIAL_BUILD)
 #include "ash/webui/sample_system_web_app_ui/sample_system_web_app_ui.h"
 #if !defined(USE_REAL_DBUS_CLIENTS)
@@ -231,6 +235,8 @@ void RegisterAshChromeWebUIConfigs() {
   map.AddWebUIConfig(std::make_unique<SensorInfoUIConfig>());
   map.AddWebUIConfig(std::make_unique<EmojiUIConfig>());
   map.AddWebUIConfig(
+      std::make_unique<extended_updates::ExtendedUpdatesUIConfig>());
+  map.AddWebUIConfig(
       MakeComponentConfigWithDelegate<FilesInternalsUIConfig, FilesInternalsUI,
                                       ChromeFilesInternalsUIDelegate>());
   map.AddWebUIConfig(
@@ -306,6 +312,9 @@ void RegisterAshChromeWebUIConfigs() {
   map.AddWebUIConfig(std::make_unique<VmUIConfig>());
   map.AddWebUIConfig(std::make_unique<vc_background_ui::VcBackgroundUIConfig>(
       base::BindRepeating(vc_background_ui::CreateVcBackgroundUI)));
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  map.AddWebUIConfig(std::make_unique<ConchUIConfig>());
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #if !defined(OFFICIAL_BUILD)
   map.AddWebUIConfig(std::make_unique<SampleSystemWebAppUIConfig>());
   map.AddWebUIConfig(std::make_unique<StatusAreaInternalsUIConfig>());

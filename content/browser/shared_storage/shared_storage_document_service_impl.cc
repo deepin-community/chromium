@@ -6,7 +6,6 @@
 
 #include <stdint.h>
 
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -46,6 +45,9 @@ bool IsSecureFrame(RenderFrameHost* frame) {
 
 using AccessType =
     SharedStorageWorkletHostManager::SharedStorageObserverInterface::AccessType;
+
+using OperationResult = storage::SharedStorageManager::OperationResult;
+using GetResult = storage::SharedStorageManager::GetResult;
 
 }  // namespace
 
@@ -113,9 +115,9 @@ void SharedStorageDocumentServiceImpl::CreateWorklet(
     mojo::PendingAssociatedReceiver<blink::mojom::SharedStorageWorkletHost>
         worklet_host,
     CreateWorkletCallback callback) {
-  // A document can only create multiple worklets with `kSharedStorageAPIM123`
+  // A document can only create multiple worklets with `kSharedStorageAPIM125`
   // enabled.
-  if (!base::FeatureList::IsEnabled(blink::features::kSharedStorageAPIM123)) {
+  if (!base::FeatureList::IsEnabled(blink::features::kSharedStorageAPIM125)) {
     if (create_worklet_called_) {
       // This could indicate a compromised renderer, so let's terminate it.
       receiver_.ReportBadMessage("Attempted to create multiple worklets.");
@@ -126,12 +128,14 @@ void SharedStorageDocumentServiceImpl::CreateWorklet(
   }
 
   create_worklet_called_ = true;
+  bool is_same_origin =
+      render_frame_host().GetLastCommittedOrigin().IsSameOriginWith(
+          script_source_url);
 
   // A document can only create cross-origin worklets with
-  // `kSharedStorageAPIM123` enabled.
-  if (!base::FeatureList::IsEnabled(blink::features::kSharedStorageAPIM123) &&
-      !render_frame_host().GetLastCommittedOrigin().IsSameOriginWith(
-          script_source_url)) {
+  // `kSharedStorageAPIM125` enabled.
+  if (!base::FeatureList::IsEnabled(blink::features::kSharedStorageAPIM125) &&
+      !is_same_origin) {
     // This could indicate a compromised renderer, so let's terminate it.
     receiver_.ReportBadMessage(
         "Attempted to load a cross-origin module script.");
@@ -140,19 +144,89 @@ void SharedStorageDocumentServiceImpl::CreateWorklet(
     return;
   }
 
+  auto intercepting_callback = base::BindOnce(
+      &SharedStorageDocumentServiceImpl::OnCreateWorkletResponseIntercepted,
+      weak_ptr_factory_.GetWeakPtr(), is_same_origin, std::move(callback));
+
   std::string debug_message;
-  if (!IsSharedStorageAddModuleAllowed(&debug_message)) {
-    std::move(callback).Run(
-        /*success=*/false,
-        /*error_message=*/GetSharedStorageErrorMessage(
-            debug_message, kSharedStorageAddModuleDisabledMessage));
+  if (!IsSharedStorageAddModuleAllowedForOrigin(
+          url::Origin::Create(script_source_url), &debug_message)) {
+    std::move(intercepting_callback)
+        .Run(
+            /*success=*/false,
+            /*error_message=*/GetSharedStorageErrorMessage(
+                debug_message, kSharedStorageAddModuleDisabledMessage));
     return;
   }
 
   GetSharedStorageWorkletHostManager()->CreateWorkletHost(
       this, render_frame_host().GetLastCommittedOrigin(), script_source_url,
       credentials_mode, origin_trial_features, std::move(worklet_host),
+      std::move(intercepting_callback));
+}
+
+void SharedStorageDocumentServiceImpl::SharedStorageGet(
+    const std::u16string& key,
+    SharedStorageGetCallback callback) {
+  if (!render_frame_host().IsNestedWithinFencedFrame()) {
+    mojo::ReportBadMessage(
+        "Attempted to call get() outside of a fenced frame.");
+    return;
+  }
+
+  std::string debug_message;
+  if (!IsSharedStorageAllowed(&debug_message)) {
+    std::move(callback).Run(blink::mojom::SharedStorageGetStatus::kError,
+                            /*error_message=*/
+                            GetSharedStorageErrorMessage(
+                                debug_message, kSharedStorageDisabledMessage),
+                            /*value=*/{});
+    return;
+  }
+
+  if (!(static_cast<RenderFrameHostImpl&>(render_frame_host())
+            .CanReadFromSharedStorage())) {
+    std::move(callback).Run(
+        blink::mojom::SharedStorageGetStatus::kError,
+        /*error_message=*/
+        "sharedStorage.get() is not allowed in a fenced frame until network "
+        "access for it and all descendent frames has been revoked with "
+        "window.fence.disableUntrustedNetwork()",
+        /*value=*/{});
+    return;
+  }
+
+  GetSharedStorageWorkletHostManager()->NotifySharedStorageAccessed(
+      AccessType::kDocumentGet, main_frame_id(), SerializeLastCommittedOrigin(),
+      SharedStorageEventParams::CreateForGetOrDelete(base::UTF16ToUTF8(key)));
+
+  auto operation_completed_callback = base::BindOnce(
+      [](SharedStorageGetCallback callback, GetResult result) {
+        // If the key is not found but there is no other error, the worklet will
+        // resolve the promise to undefined.
+        if (result.result == OperationResult::kNotFound ||
+            result.result == OperationResult::kExpired) {
+          std::move(callback).Run(
+              blink::mojom::SharedStorageGetStatus::kNotFound,
+              /*error_message=*/"sharedStorage.get() could not find key",
+              /*value=*/{});
+          return;
+        }
+
+        if (result.result != OperationResult::kSuccess) {
+          std::move(callback).Run(
+              blink::mojom::SharedStorageGetStatus::kError,
+              /*error_message=*/"sharedStorage.get() failed", /*value=*/{});
+          return;
+        }
+
+        std::move(callback).Run(blink::mojom::SharedStorageGetStatus::kSuccess,
+                                /*error_message=*/{}, /*value=*/result.data);
+      },
       std::move(callback));
+
+  GetSharedStorageManager()->Get(render_frame_host().GetLastCommittedOrigin(),
+                                 key, std::move(operation_completed_callback));
 }
 
 void SharedStorageDocumentServiceImpl::SharedStorageSet(
@@ -264,8 +338,25 @@ SharedStorageDocumentServiceImpl::SharedStorageDocumentServiceImpl(
           rfh->GetOutermostMainFrame()->GetLastCommittedOrigin()),
       main_frame_id_(
           static_cast<RenderFrameHostImpl*>(rfh->GetOutermostMainFrame())
-              ->devtools_frame_token()
-              .ToString()) {}
+              ->GetFrameTreeNodeId()) {}
+
+void SharedStorageDocumentServiceImpl::OnCreateWorkletResponseIntercepted(
+    bool is_same_origin,
+    CreateWorkletCallback original_callback,
+    bool success,
+    const std::string& error_message) {
+  // When the worklet and the worklet creator are not same-origin, the user
+  // preferences for the worklet origin should not be revealed.
+  //
+  // TODO(cammie): Right now the metric will be recorded as `kSuccess`. We might
+  // want to record a separate metric for this distorted result.
+  if (!is_same_origin) {
+    std::move(original_callback).Run(/*success=*/true, /*error_message=*/{});
+    return;
+  }
+
+  std::move(original_callback).Run(success, error_message);
+}
 
 storage::SharedStorageManager*
 SharedStorageDocumentServiceImpl::GetSharedStorageManager() {
@@ -294,27 +385,37 @@ bool SharedStorageDocumentServiceImpl::IsSharedStorageAllowed(
   // Will trigger a call to
   // `content_settings::PageSpecificContentSettings::BrowsingDataAccessed()` for
   // reporting purposes.
-  return GetContentClient()->browser()->IsSharedStorageAllowed(
-      render_frame_host().GetBrowserContext(), &render_frame_host(),
-      main_frame_origin_, render_frame_host().GetLastCommittedOrigin(),
-      out_debug_message);
+  return IsSharedStorageAllowedForOrigin(
+      render_frame_host().GetLastCommittedOrigin(), out_debug_message);
 }
 
-bool SharedStorageDocumentServiceImpl::IsSharedStorageAddModuleAllowed(
+bool SharedStorageDocumentServiceImpl::IsSharedStorageAllowedForOrigin(
+    const url::Origin& accessing_origin,
     std::string* out_debug_message) {
   // Will trigger a call to
   // `content_settings::PageSpecificContentSettings::BrowsingDataAccessed()` for
   // reporting purposes.
-  if (!IsSharedStorageAllowed(out_debug_message)) {
+  return GetContentClient()->browser()->IsSharedStorageAllowed(
+      render_frame_host().GetBrowserContext(), &render_frame_host(),
+      main_frame_origin_, accessing_origin, out_debug_message);
+}
+
+bool SharedStorageDocumentServiceImpl::IsSharedStorageAddModuleAllowedForOrigin(
+    const url::Origin& accessing_origin,
+    std::string* out_debug_message) {
+  // Will trigger a call to
+  // `content_settings::PageSpecificContentSettings::BrowsingDataAccessed()` for
+  // reporting purposes.
+  if (!IsSharedStorageAllowedForOrigin(accessing_origin, out_debug_message)) {
     return false;
   }
 
   return GetContentClient()->browser()->IsSharedStorageSelectURLAllowed(
              render_frame_host().GetBrowserContext(), main_frame_origin_,
-             render_frame_host().GetLastCommittedOrigin(), out_debug_message) ||
+             accessing_origin, out_debug_message) ||
          GetContentClient()->browser()->IsPrivateAggregationAllowed(
              render_frame_host().GetBrowserContext(), main_frame_origin_,
-             render_frame_host().GetLastCommittedOrigin());
+             accessing_origin);
 }
 
 std::string SharedStorageDocumentServiceImpl::SerializeLastCommittedOrigin()

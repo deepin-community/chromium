@@ -372,7 +372,8 @@ class COMPOSITOR_EXPORT Layer : public LayerAnimationDelegate,
   void SetAcceptEvents(bool accept_events);
   bool accept_events() const { return accept_events_; }
 
-  // Sets a rounded corner clip on the layer.
+  // Gets/sets a rounded corner clip on the layer.
+  gfx::RoundedCornersF GetTargetRoundedCornerRadius() const;
   void SetRoundedCornerRadius(const gfx::RoundedCornersF& corner_radii);
   const gfx::RoundedCornersF& rounded_corner_radii() const {
     return cc_layer_->corner_radii();
@@ -515,7 +516,10 @@ class COMPOSITOR_EXPORT Layer : public LayerAnimationDelegate,
   // Notifies the layer that the device scale factor has changed.
   void OnDeviceScaleFactorChanged(float device_scale_factor);
 
-  // Requets a copy of the layer's output as a texture or bitmap.
+  // Requests a copy of the layer's output as a texture or bitmap. If the
+  // request does not have the result task runner, this will be set to
+  // the compositor's task runner, which means the layer must be added to
+  // compositor before requesting.
   void RequestCopyOfOutput(std::unique_ptr<viz::CopyOutputRequest> request);
 
   // Invoked when scrolling performed by the cc::InputHandler is committed. This
@@ -741,7 +745,7 @@ class COMPOSITOR_EXPORT Layer : public LayerAnimationDelegate,
   raw_ptr<Layer> subtree_reflected_layer_ = nullptr;
 
   // List of layers reflecting this layer and its subtree, if any.
-  base::flat_set<Layer*> subtree_reflecting_layers_;
+  base::flat_set<raw_ptr<Layer, CtnExperimental>> subtree_reflecting_layers_;
 
   // If true, and this is a destination mirror layer, changes to the bounds of
   // the source layer are propagated to this mirror layer.
@@ -816,7 +820,8 @@ class COMPOSITOR_EXPORT Layer : public LayerAnimationDelegate,
 
   raw_ptr<LayerDelegate, DanglingUntriaged> delegate_ = nullptr;
 
-  base::ObserverList<LayerObserver>::Unchecked observer_list_;
+  base::ObserverList<LayerObserver>::UncheckedAndDanglingUntriaged
+      observer_list_;
 
   raw_ptr<LayerOwner> owner_;
 

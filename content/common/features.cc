@@ -70,6 +70,13 @@ BASE_FEATURE(kBrowserVerifiedUserActivationKeyboard,
              "BrowserVerifiedUserActivationKeyboard",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// If enabled, changes to the zoom level are temporary and are forgotten when
+// the tab is closed. If disabled, changes to the zoom level persist, as though
+// the user affected them through the browser's UX.
+BASE_FEATURE(kCapturedSurfaceControlTemporaryZoom,
+             "CapturedSurfaceControlTemporaryZoom",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // If Canvas2D Image Chromium is allowed, this feature controls whether it is
 // enabled.
 BASE_FEATURE(kCanvas2DImageChromium,
@@ -85,17 +92,6 @@ BASE_FEATURE(kCanvas2DImageChromium,
 BASE_FEATURE(kCodeCacheDeletionWithoutFilter,
              "CodeCacheDeletionWithoutFilter",
              base::FEATURE_ENABLED_BY_DEFAULT);
-
-// When enabled, when creating new proxies for all nodes in a `FrameTree`, one
-// IPC is sent to create all child frame proxies instead of sending one IPC per
-// proxy.
-BASE_FEATURE(kConsolidatedIPCForProxyCreation,
-             "ConsolidatedIPCForProxyCreation",
-#if BUILDFLAG(IS_ANDROID)
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
 
 // When enabled, event.movement is calculated in blink instead of in browser.
 BASE_FEATURE(kConsolidatedMovementXY,
@@ -189,13 +185,13 @@ BASE_FEATURE(kExperimentalContentSecurityPolicyFeatures,
 // Enables CORS checks on the ID assertion endpoint of the FedCM API.
 BASE_FEATURE(kFedCmIdAssertionCORS,
              "FedCmIdAssertionCORS",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enables metrics collection for signin status mismatches. Also enables
-// parsing the signin status HTTP headers.
-// kFedCmIdpSigninStatusEnabled takes precedence over this feature flag.
-BASE_FEATURE(kFedCmIdpSigninStatusMetrics,
-             "FedCmIdpSigninStatusMetrics",
+// Enables sending only SameSite=None cookies in credentialed FedCM requests
+// (accounts endpoint and ID assertion endpoint). If kFedCmIdAssertionCORS
+// is enabled, this is a no-op for the ID assertion endpoint.
+BASE_FEATURE(kFedCmSameSiteNone,
+             "FedCmSameSiteNone",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // If enabled, limits the number of FLEDGE auctions that can be run between page
@@ -268,12 +264,6 @@ BASE_FEATURE(kHandleChildThreadTypeChangesInBrowser,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
-// Tells the RenderFrameHost to send beforeunload messages on a different
-// local frame interface which will handle the messages at a higher priority.
-BASE_FEATURE(kHighPriorityBeforeUnload,
-             "HighPriorityBeforeUnload",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 // A feature flag for the memory-backed code cache.
 BASE_FEATURE(kInMemoryCodeCache,
              "InMemoryCodeCache",
@@ -286,6 +276,14 @@ BASE_FEATURE(kInMemoryCodeCache,
 BASE_FEATURE(kInnerFrameCompositorSurfaceEviction,
              "InnerFrameCompositorSurfaceEviction",
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Enables the ability to use the updateIfOlderThanMs field in the trusted
+// bidding response to trigger a post-auction update if the group has been
+// updated more recently than updateIfOlderThanMs milliseconds, bypassing the
+// typical 24 hour wait.
+BASE_FEATURE(kInterestGroupUpdateIfOlderThan,
+             "InterestGroupUpdateIfOlderThan",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enable IOSurface based screen capturer.
 #if BUILDFLAG(IS_MAC)
@@ -366,17 +364,6 @@ BASE_FEATURE(kPreloadingConfig,
 // origin trial token: Attribution Reporting, FLEDGE, Topics.
 BASE_FEATURE(kPrivacySandboxAdsAPIsM1Override,
              "PrivacySandboxAdsAPIsM1Override",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Enables Private Network Access checks in warning mode for navigations.
-//
-// Does nothing if `kPrivateNetworkAccessForNavigations` is disabled.
-//
-// If both this and `kPrivateNetworkAccessForNavigations` are enabled, then PNA
-// preflight requests for navigations are not required to succeed. If
-// one fails, a warning is simply displayed in DevTools.
-BASE_FEATURE(kPrivateNetworkAccessForNavigationsWarningOnly,
-             "PrivateNetworkAccessForNavigationsWarningOnly",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables reporting ResourceTiming entries for document, who initiated a
@@ -400,15 +387,6 @@ BASE_FEATURE(kProactivelySwapBrowsingInstance,
 // https://crbug.com/1286501.
 BASE_FEATURE(kRestrictCanAccessDataForOriginToUIThread,
              "RestrictCanAccessDataForOriginToUIThread",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Kill switch for moving the checking of specific requested files from
-// SecurityState::CanCommitURL() to SecurityState::CanRequestURL() in
-// ChildProcessSecurityPolicy.
-// TODO(https://crbug.com/764958): Remove this once the move is verified to be
-// safe.
-BASE_FEATURE(kRequestFileSetCheckedInCanRequestURL,
-             "RequestFileSetCheckedInCanRequestURL",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Make sendBeacon throw for a Blob with a non simple type.

@@ -8,10 +8,8 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Application;
 import android.app.Instrumentation;
-import android.app.job.JobScheduler;
 import android.content.Context;
 import android.content.ContextWrapper;
-import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Build.VERSION;
 import android.os.Bundle;
@@ -19,7 +17,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.system.Os;
-import android.text.TextUtils;
 
 import androidx.core.content.ContextCompat;
 import androidx.test.InstrumentationRegistry;
@@ -43,14 +40,13 @@ import org.chromium.base.LifetimeAssert;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.library_loader.LibraryLoader;
-import org.chromium.base.metrics.UmaRecorderHolder;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.InMemorySharedPreferences;
 import org.chromium.base.test.util.InMemorySharedPreferencesContext;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.ScalableTimeout;
 import org.chromium.build.BuildConfig;
+import org.chromium.testing.TestListInstrumentationRunListener;
 
 import java.io.File;
 import java.io.IOException;
@@ -65,12 +61,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * A custom AndroidJUnitRunner that supports incremental install and custom test listing. Also
- * customizes various TestRunner and Instrumentation behaviors, like when Activities get finished,
- * and adds a timeout to waitForIdleSync.
  *
- * <p>Please beware that is this not a class runner. It is declared in test apk AndroidManifest.xml
- * <instrumentation>
+ *
+ * <pre>
+ * An Instrumentation subclass that:
+ *    * Supports incremental install.
+ *    * Installs an InMemorySharedPreferences, and a few other try-to-make-things-less-flaky things.
+ * </pre>
  */
 public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
     private static final String IS_UNIT_TEST_FLAG =
@@ -178,8 +175,7 @@ public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
                                 arguments.toString()));
             }
             finishAllAppTasks(getTargetContext());
-            getTargetContext().getSystemService(JobScheduler.class).cancelAll();
-            checkOrDeleteOnDiskSharedPreferences(false);
+            BaseJUnit4TestRule.clearJobSchedulerJobs();
             clearDataDirectory(sInMemorySharedPreferencesContext);
             InstrumentationRegistry.getInstrumentation().setInTouchMode(true);
             // //third_party/mockito is looking for android.support.test.InstrumentationRegistry.
@@ -220,30 +216,29 @@ public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
 
     private void listTests() {
         Bundle results = new Bundle();
-        TestListInstrumentationRunListener listener = new TestListInstrumentationRunListener();
         try {
             TestExecutor.Builder executorBuilder = new TestExecutor.Builder(this);
-            executorBuilder.addRunListener(listener);
+            executorBuilder.addRunListener(new TestListInstrumentationRunListener(true));
 
-            // Do not use Log runner from android test support.
+            // Do not use androidx's AndroidLogOnlyBuilder.
             //
-            // Test logging and execution skipping is handled by BaseJUnit4ClassRunner,
-            // having ARGUMENT_LOG_ONLY in argument bundle here causes AndroidJUnitRunner
-            // to use its own log-only class runner instead of BaseJUnit4ClassRunner.
+            // We require BaseJUnit4ClassRunner to implement our test skipping / restrictions logic,
+            // but ARGUMENT_LOG_ONLY means that our runner will not be used.
+            // Remove the argument, and have BaseJUnit4ClassRunner run in no-op mode.
             Bundle junit4Arguments = new Bundle(InstrumentationRegistry.getArguments());
             junit4Arguments.remove(ARGUMENT_LOG_ONLY);
 
             Request listJUnit4TestRequest = createListTestRequest(junit4Arguments);
             results.putAll(executorBuilder.build().execute(listJUnit4TestRequest));
+            finish(Activity.RESULT_OK, results);
         } catch (IOException | RuntimeException e) {
             String msg = "Fatal exception when running tests";
             Log.e(TAG, msg, e);
-            // report the exception to instrumentation out
             results.putString(
                     Instrumentation.REPORT_KEY_STREAMRESULT,
                     msg + "\n" + Log.getStackTraceString(e));
+            finish(Activity.RESULT_CANCELED, results);
         }
-        finish(Activity.RESULT_OK, results);
     }
 
     private Request createListTestRequest(Bundle arguments) {
@@ -387,13 +382,6 @@ public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
         }
     }
 
-    private static Object getField(Class<?> clazz, Object instance, String name)
-            throws ReflectiveOperationException {
-        Field field = clazz.getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(instance);
-    }
-
     /**
      * ClassLoader that translates NoClassDefFoundError into ClassNotFoundException.
      *
@@ -451,14 +439,6 @@ public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
                                 "Skipping abstract class %s: not a test", loadedClass.getName()));
                 return false;
             }
-            if (junit.framework.Test.class.isAssignableFrom(loadedClass)) {
-                // ensure that if a TestCase, it has at least one test method otherwise
-                // TestSuite will throw error
-                if (junit.framework.TestCase.class.isAssignableFrom(loadedClass)) {
-                    return hasJUnit3TestMethod(loadedClass);
-                }
-                return true;
-            }
             if (loadedClass.isAnnotationPresent(RunWith.class)) {
                 return true;
             }
@@ -481,27 +461,6 @@ public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
         }
     }
 
-    private static boolean hasJUnit3TestMethod(Class<?> loadedClass) {
-        for (Method testMethod : loadedClass.getMethods()) {
-            if (isPublicTestMethod(testMethod)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // copied from junit.framework.TestSuite
-    private static boolean isPublicTestMethod(Method m) {
-        return isTestMethod(m) && Modifier.isPublic(m.getModifiers());
-    }
-
-    // copied from junit.framework.TestSuite
-    private static boolean isTestMethod(Method m) {
-        return m.getParameterTypes().length == 0
-                && m.getName().startsWith("test")
-                && m.getReturnType().equals(Void.TYPE);
-    }
-
     @Override
     public void finish(int resultCode, Bundle results) {
         if (sTestListMode) {
@@ -521,9 +480,6 @@ public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
 
         try {
             writeClangCoverageProfileIfEnabled();
-            getTargetContext().getSystemService(JobScheduler.class).cancelAll();
-            checkOrDeleteOnDiskSharedPreferences(true);
-            UmaRecorderHolder.resetForTesting();
 
             // There is a bug on L and below that DestroyActivitiesRule does not cause onStop and
             // onDestroy. On other versions, DestroyActivitiesRule may still fail flakily. Ignore
@@ -666,77 +622,6 @@ public class BaseChromiumAndroidJUnitRunner extends AndroidJUnitRunner {
             } else if (!FileUtils.recursivelyDeleteFile(file, FileUtils.DELETE_ALL)) {
                 throw new RuntimeException("Could not delete file: " + file.getAbsolutePath());
             }
-        }
-    }
-
-    private static boolean isSharedPrefFileAllowed(File f) {
-        // WebView prefs need to stay because webview tests have no (good) way of hooking
-        // SharedPreferences for instantiated WebViews.
-        String[] allowlist =
-                new String[] {
-                    "WebViewChromiumPrefs.xml",
-                    "org.chromium.android_webview.devui.MainActivity.xml",
-                    "AwComponentUpdateServicePreferences.xml",
-                    "ComponentsProviderServicePreferences.xml",
-                    "org.chromium.webengine.test.instrumentation_test_apk_preferences.xml",
-                    "AwOriginVisitLoggerPrefs.xml",
-                };
-        for (String name : allowlist) {
-            // SharedPreferences may also access a ".bak" backup file from a previous run. See
-            // https://crbug.com/1462105#c4 and
-            // https://cs.android.com/android/platform/superproject/main/+/main:frameworks/base/core/java/android/app/SharedPreferencesImpl.java;l=213;drc=6f7c5e0914a18e6adafaa319e670363772e51691
-            // for details.
-            String backupName = name + ".bak";
-
-            if (f.getName().equals(name) || f.getName().equals(backupName)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void checkOrDeleteOnDiskSharedPreferences(boolean check) {
-        File dataDir = ContextCompat.getDataDir(InstrumentationRegistry.getTargetContext());
-        File prefsDir = new File(dataDir, "shared_prefs");
-        File[] files = prefsDir.listFiles();
-        if (files == null) {
-            return;
-        }
-        ArrayList<File> badFiles = new ArrayList<>();
-        for (File f : files) {
-            if (isSharedPrefFileAllowed(f)) {
-                continue;
-            }
-            if (check) {
-                badFiles.add(f);
-            } else {
-                f.delete();
-            }
-        }
-        if (!badFiles.isEmpty()) {
-            String errorMsg =
-                    "Found unexpected shared preferences file(s) after test ran.\n"
-                        + "All code should use ContextUtils.getApplicationContext() when accessing"
-                        + " SharedPreferences so that tests are hooked to use"
-                        + " InMemorySharedPreferences. This could also mean needing to override"
-                        + " getSharedPreferences() on custom Context subclasses (e.g."
-                        + " ChromeBaseAppCompatActivity does this to make Preferences screens"
-                        + " work).\n\n";
-
-            SharedPreferences testPrefs =
-                    ContextUtils.getApplicationContext()
-                            .getSharedPreferences("test", Context.MODE_PRIVATE);
-            if (!(testPrefs instanceof InMemorySharedPreferences)) {
-                errorMsg +=
-                        String.format(
-                                "ContextUtils.getApplicationContext() was set to type \"%s\", which"
-                                    + " does not delegate to InMemorySharedPreferencesContext (this"
-                                    + " is likely the issues).\n\n",
-                                ContextUtils.getApplicationContext().getClass().getName());
-            }
-
-            errorMsg += "Files:\n * " + TextUtils.join("\n * ", badFiles);
-            throw new AssertionError(errorMsg);
         }
     }
 

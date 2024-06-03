@@ -6,7 +6,6 @@ import os
 import sys
 import json
 import itertools
-import platform
 from typing import Any, List, Set
 import unittest
 
@@ -14,6 +13,7 @@ import gpu_path_util
 from gpu_tests import common_browser_args as cba
 from gpu_tests import common_typing as ct
 from gpu_tests import gpu_integration_test
+from gpu_tests.util import host_information
 
 html_path = os.path.join(gpu_path_util.CHROMIUM_SRC_DIR, 'content', 'test',
                          'data', 'gpu', 'webcodecs')
@@ -24,6 +24,7 @@ four_colors_img_path = os.path.join(data_path, 'four-colors.y4m')
 frame_sources = [
     'camera', 'capture', 'offscreen', 'arraybuffer', 'hw_decoder', 'sw_decoder'
 ]
+hbd_frame_sources = ['hbd_arraybuffer']
 video_codecs = [
     'avc1.42001E', 'hvc1.1.6.L123.00', 'vp8', 'vp09.00.10.08', 'av01.0.04M.08'
 ]
@@ -41,7 +42,7 @@ class WebCodecsIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
   def _GetSerialGlobs(self) -> Set[str]:
     serial_globs = set()
-    if sys.platform == 'win32':
+    if host_information.IsWindows() and host_information.IsNvidiaGpu():
       serial_globs |= {
           # crbug.com/1473480. Windows + NVIDIA has a maximum parallel encode
           # limit of 2, so serialize hardware encoding tests on Windows.
@@ -51,14 +52,10 @@ class WebCodecsIntegrationTest(gpu_integration_test.GpuIntegrationTest):
 
   def _GetSerialTests(self) -> Set[str]:
     serial_tests = set()
-    # TODO(crbug.com/324293876): Move this check to wherever the host-side
-    # information collection ends up living.
-    # We can't rely on directly checking platform.machine() since it is
-    # possible that we're using emulated Python on arm64 devices.
-    if sys.platform == 'win32' and 'armv8' in platform.processor().lower():
+    if host_information.IsWindows() and host_information.IsArmCpu():
       serial_tests |= {
-          # Checking whether serialization improves stability for
-          # crbug.com/323824490.
+          # crbug.com/323824490. Seems to flakily lose the D3D11 device when
+          # run in parallel.
           'WebCodecs_FrameSizeChange_vp09.00.10.08_hw_decoder',
       }
     return serial_tests
@@ -88,6 +85,11 @@ class WebCodecsIntegrationTest(gpu_integration_test.GpuIntegrationTest):
           source_type
       }])
       yield ('WebCodecs_convertToRGB_' + source_type, 'convert-to-rgb.html', [{
+          'source_type':
+          source_type
+      }])
+    for source_type in hbd_frame_sources:
+      yield ('WebCodecs_DrawImage_' + source_type, 'draw-image.html', [{
           'source_type':
           source_type
       }])

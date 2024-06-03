@@ -35,7 +35,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/spaced/spaced_client.h"
-#include "chromeos/ash/components/memory/memory.h"
 #include "chromeos/ash/components/system/scheduler_configuration_manager_base.h"
 #include "components/user_manager/user_manager.h"
 #include "components/version_info/channel.h"
@@ -154,16 +153,6 @@ void ApplyDisableDownloadProvider(StartParams* params) {
   params->disable_download_provider =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           ash::switches::kArcDisableDownloadProvider);
-}
-
-void ApplyDisableUreadahed(StartParams* params) {
-  // Host ureadahead generation implies disabling ureadahead.
-  params->disable_ureadahead =
-      IsUreadaheadDisabled() || IsHostUreadaheadGeneration();
-}
-
-void ApplyHostUreadahedGeneration(StartParams* params) {
-  params->host_ureadahead_generation = IsHostUreadaheadGeneration();
 }
 
 void ApplyUseDevCaches(StartParams* params) {
@@ -515,8 +504,6 @@ void ArcSessionImpl::DoStartMiniInstance(size_t num_cores_disabled) {
 
   ApplyDalvikMemoryProfile(system_memory_info_callback_, &params);
   ApplyDisableDownloadProvider(&params);
-  ApplyDisableUreadahed(&params);
-  ApplyHostUreadahedGeneration(&params);
   ApplyUseDevCaches(&params);
   ApplyHostUreadaheadMode(&params);
 

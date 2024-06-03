@@ -9,22 +9,32 @@
 #include <utility>
 
 #include "ash/accessibility/accessibility_controller.h"
+#include "ash/app_list/app_list_controller_impl.h"
 #include "ash/cancel_mode.h"
-#include "ash/constants/ash_features.h"
+#include "ash/capture_mode/capture_mode_controller.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/public/cpp/saved_desk_delegate.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/shutdown_controller.h"
 #include "ash/root_window_controller.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
+#include "ash/utility/forest_util.h"
 #include "ash/utility/occlusion_tracker_pauser.h"
+#include "ash/wallpaper/views/wallpaper_view.h"
 #include "ash/wallpaper/views/wallpaper_widget_controller.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "ash/wm/desks/desks_util.h"
+#include "ash/wm/mru_window_tracker.h"
+#include "ash/wm/overview/overview_controller.h"
+#include "ash/wm/screen_pinning_controller.h"
 #include "ash/wm/session_state_animator_impl.h"
+#include "ash/wm/window_restore/pine_constants.h"
+#include "ash/wm/window_restore/window_restore_metrics.h"
 #include "ash/wm/window_restore/window_restore_util.h"
 #include "base/command_line.h"
+#include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -44,10 +54,14 @@
 #include "base/task/thread_pool.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
+#include "chromeos/dbus/power/power_manager_client.h"
 #include "ui/aura/window_tree_host.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/image/image.h"
+#include "ui/gfx/image/image_util.h"
 #include "ui/snapshot/snapshot.h"
 #include "ui/views/controls/menu/menu_controller.h"
+#include "ui/views/widget/widget.h"
 #include "ui/wm/core/compound_event_filter.h"
 #include "ui/wm/core/cursor_manager.h"
 
@@ -89,6 +103,10 @@ constexpr base::TimeDelta kPostLockFailTimeout =
 // before actually requesting shutdown, to give the animation time to finish.
 constexpr base::TimeDelta kShutdownRequestDelay = base::Milliseconds(50);
 
+// Amount of time to wait after starting to take the pine screenshot. The task
+// will be stopped if it takes longer than this time duration.
+constexpr base::TimeDelta kTakeScreenshotFailTimeout = base::Milliseconds(800);
+
 // Records the given `duration` to the given `pref_name` so it can be recorded
 // as an UMA metric on the next startup.
 void SavePineScreenshotDuration(PrefService* local_state,
@@ -108,7 +126,16 @@ void EncodeAndSavePineImage(const base::FilePath& file_path, gfx::Image image) {
     base::DeleteFile(file_path);
     return;
   }
-  auto png_bytes = image.As1xPNGBytes();
+
+  // The width of the resized pine image will be fixed and then the height of it
+  // will be calculated based on the aspect ratio of the original pine image.
+  // The resized pine image will be saved to disk, decoded and shown with this
+  // size directly inside the pine dialog later as well.
+  const float aspect_ratio = static_cast<float>(image.Height()) / image.Width();
+  const int resized_image_height = aspect_ratio * pine::kPreviewContainerWidth;
+  const auto resized_image = gfx::ResizedImage(
+      image, gfx::Size(pine::kPreviewContainerWidth, resized_image_height));
+  auto png_bytes = resized_image.As1xPNGBytes();
   auto raw_data = base::make_span(png_bytes->data(), png_bytes->size());
   if (!base::WriteFile(file_path, raw_data)) {
     LOG(ERROR) << "Failed to write pine image to " << file_path.MaybeAsASCII();
@@ -129,6 +156,85 @@ void MaybeAppendTestCallback(Callback& callback,
     callback = std::move(callback).Then(
         base::BindPostTask(base::SingleThreadTaskRunner::GetCurrentDefault(),
                            std::move(for_test_callback)));
+  }
+}
+
+// Deletes any existing pine image if we should shutdown without taking the
+// screenshot, then no stale screenshot will be shown on next startup.
+void DeletePineImage(base::OnceClosure& for_test_callback,
+                     const base::FilePath& file_path) {
+  auto delete_image_cb =
+      base::BindOnce(base::IgnoreResult(&base::DeleteFile), file_path);
+  MaybeAppendTestCallback(delete_image_cb, for_test_callback);
+  base::ThreadPool::PostTask(FROM_HERE,
+                             {base::MayBlock(), base::TaskPriority::HIGHEST,
+                              base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
+                             std::move(delete_image_cb));
+}
+
+// TODO(minch): Check whether the screenshot should be taken in kiosk mode.
+// Returns true if the pine screenshot should be taken on shutdown.
+bool ShouldTakePineScreeshot() {
+  auto* shell = Shell::Get();
+  // Do not take the pine screenshot if it is in overview mode, lock screen,
+  // home launcher or pinned mode.
+  if (shell->overview_controller()->InOverviewSession()) {
+    RecordScreenshotOnShutdownStatus(
+        ScreenshotOnShutdownStatus::kFailedInOverview);
+    return false;
+  }
+  if (shell->session_controller()->IsScreenLocked()) {
+    RecordScreenshotOnShutdownStatus(
+        ScreenshotOnShutdownStatus::kFailedInLockScreen);
+    return false;
+  }
+  if (shell->app_list_controller()->IsHomeScreenVisible()) {
+    RecordScreenshotOnShutdownStatus(
+        ScreenshotOnShutdownStatus::kFailedInHomeLauncher);
+    return false;
+  }
+  if (shell->screen_pinning_controller()->IsPinned()) {
+    RecordScreenshotOnShutdownStatus(
+        ScreenshotOnShutdownStatus::kFailedInPinnedMode);
+    return false;
+  }
+
+  bool has_regular_unminimized_window = false;
+  for (aura::Window* window :
+       shell->mru_window_tracker()->BuildMruWindowList(kActiveDesk)) {
+    const bool is_non_regular_profile_window =
+        !shell->saved_desk_delegate()->IsWindowPersistable(window);
+    const bool is_minimized = WindowState::Get(window)->IsMinimized();
+    // Do not take the screenshot if there is an incognito ash browser window or
+    // a lacros window with the non-regular profile.
+    if (!is_minimized && is_non_regular_profile_window) {
+      RecordScreenshotOnShutdownStatus(
+          ScreenshotOnShutdownStatus::kFailedWithIncognito);
+      return false;
+    }
+    has_regular_unminimized_window |=
+        !is_non_regular_profile_window && !is_minimized;
+  }
+
+  // Take the screenshot if there are unminimized non-incognito windows inside
+  // the active desk. Both the float and the always on top window will be
+  // counted.
+  if (!has_regular_unminimized_window) {
+    RecordScreenshotOnShutdownStatus(
+        ScreenshotOnShutdownStatus::kFailedWithNoWindows);
+  }
+  return has_regular_unminimized_window;
+}
+
+// Hide the cursor and lock the cursor as well if `lock` is true.
+void HideAndMaybeLockCursor(bool lock) {
+  Shell* shell = Shell::Get();
+  if (auto* cursor_manager = shell->cursor_manager(); cursor_manager) {
+    // Hide cursor, but let it reappear if the mouse moves.
+    cursor_manager->HideCursor();
+    if (lock) {
+      cursor_manager->LockCursor();
+    }
   }
 }
 
@@ -197,8 +303,9 @@ void LockStateController::RemoveObserver(LockStateObserver* observer) {
 }
 
 void LockStateController::StartLockAnimation() {
-  if (animating_lock_)
+  if (animating_lock_) {
     return;
+  }
 
   animating_lock_ = true;
   StoreUnlockedProperties();
@@ -206,17 +313,6 @@ void LockStateController::StartLockAnimation() {
   PreLockAnimation(SessionStateAnimator::ANIMATION_SPEED_UNDOABLE, true);
   DispatchCancelMode();
   OnLockStateEvent(LockStateObserver::EVENT_PRELOCK_ANIMATION_STARTED);
-}
-
-void LockStateController::StartShutdownAnimation(ShutdownReason reason) {
-  shutdown_reason_ = reason;
-
-  Shell* shell = Shell::Get();
-  // Hide cursor, but let it reappear if the mouse moves.
-  if (shell->cursor_manager())
-    shell->cursor_manager()->HideCursor();
-
-  ShutdownOnPine(/*with_pre_animation=*/true);
 }
 
 void LockStateController::LockWithoutAnimation() {
@@ -255,10 +351,6 @@ bool LockStateController::LockRequested() {
   return lock_fail_timer_.IsRunning();
 }
 
-bool LockStateController::ShutdownRequested() {
-  return shutting_down_;
-}
-
 void LockStateController::CancelLockAnimation() {
   VLOG(1) << "CancelLockAnimation";
   animating_lock_ = false;
@@ -282,46 +374,6 @@ void LockStateController::CancelLockAnimation() {
       animation_sequence);
 
   animation_sequence->EndSequence();
-}
-
-void LockStateController::CancelUnlockAnimation() {
-  VLOG(1) << "CancelUnlockAnimation";
-  pb_pressed_during_unlock_ = true;
-}
-
-bool LockStateController::CanCancelShutdownAnimation() {
-  return pre_shutdown_timer_.IsRunning();
-}
-
-void LockStateController::CancelShutdownAnimation() {
-  if (!CanCancelShutdownAnimation())
-    return;
-
-  animator_->StartAnimation(
-      SessionStateAnimator::ROOT_CONTAINER,
-      SessionStateAnimator::ANIMATION_UNDO_GRAYSCALE_BRIGHTNESS,
-      SessionStateAnimator::ANIMATION_SPEED_REVERT_SHUTDOWN);
-  pre_shutdown_timer_.Stop();
-}
-
-void LockStateController::RequestShutdown(ShutdownReason reason) {
-  if (shutting_down_)
-    return;
-
-  shutting_down_ = true;
-  shutdown_reason_ = reason;
-
-  if (reason == ShutdownReason::LOGIN_SHUT_DOWN_BUTTON) {
-    base::Time now_timestamp = base::DefaultClock::GetInstance()->Now();
-    local_state_->SetTime(prefs::kLoginShutdownTimestampPrefName,
-                          now_timestamp);
-  }
-
-  ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
-  cursor_manager->HideCursor();
-  cursor_manager->LockCursor();
-
-  ShutdownOnPine(/*with_pre_animation=*/false);
 }
 
 void LockStateController::OnUnlockAnimationBeforeLockUIDestroyedFinished() {
@@ -359,6 +411,64 @@ void LockStateController::SetLockScreenDisplayedCallback(
     lock_screen_displayed_callback_ = std::move(callback);
 }
 
+void LockStateController::RequestShutdown(ShutdownReason reason) {
+  if (shutting_down_) {
+    return;
+  }
+
+  shutting_down_ = true;
+  shutdown_reason_ = reason;
+
+  if (reason == ShutdownReason::LOGIN_SHUT_DOWN_BUTTON) {
+    base::Time now_timestamp = base::DefaultClock::GetInstance()->Now();
+    local_state_->SetTime(prefs::kLoginShutdownTimestampPrefName,
+                          now_timestamp);
+  }
+
+  HideAndMaybeLockCursor(/*lock=*/true);
+  ShutdownOnPine(/*with_pre_animation=*/false);
+}
+
+void LockStateController::RequestCancelableShutdown(ShutdownReason reason) {
+  shutdown_reason_ = reason;
+
+  HideAndMaybeLockCursor(/*lock=*/false);
+  ShutdownOnPine(/*with_pre_animation=*/true);
+}
+
+bool LockStateController::ShutdownRequested() {
+  return shutting_down_;
+}
+
+bool LockStateController::CanCancelShutdownAnimation() {
+  return pre_shutdown_timer_.IsRunning();
+}
+
+void LockStateController::CancelShutdownAnimation() {
+  if (!CanCancelShutdownAnimation()) {
+    return;
+  }
+
+  animator_->StartAnimation(
+      SessionStateAnimator::ROOT_CONTAINER,
+      SessionStateAnimator::ANIMATION_UNDO_GRAYSCALE_BRIGHTNESS,
+      SessionStateAnimator::ANIMATION_SPEED_REVERT_SHUTDOWN);
+  pre_shutdown_timer_.Stop();
+}
+
+void LockStateController::RequestRestart(
+    power_manager::RequestRestartReason reason,
+    const std::string& description) {
+  if (IsForestFeatureEnabled()) {
+    restart_reason_ = reason;
+    restart_description_ = description;
+    HideAndMaybeLockCursor(/*lock=*/false);
+    TakePineImageAndShutdown(/*with_pre_animation=*/false);
+  } else {
+    chromeos::PowerManagerClient::Get()->RequestRestart(reason, description);
+  }
+}
+
 void LockStateController::OnHostCloseRequested(aura::WindowTreeHost* host) {
   Shell::Get()->session_controller()->RequestSignOut();
 }
@@ -369,9 +479,7 @@ void LockStateController::OnChromeTerminating() {
   // This is also the case when the user signs off.
   if (!shutting_down_) {
     shutting_down_ = true;
-    ::wm::CursorManager* cursor_manager = Shell::Get()->cursor_manager();
-    cursor_manager->HideCursor();
-    cursor_manager->LockCursor();
+    HideAndMaybeLockCursor(/*lock=*/true);
     animator_->StartAnimation(SessionStateAnimator::kAllNonRootContainersMask,
                               SessionStateAnimator::ANIMATION_HIDE_IMMEDIATELY,
                               SessionStateAnimator::ANIMATION_SPEED_IMMEDIATE);
@@ -414,6 +522,11 @@ void LockStateController::OnLockStateChanged(bool locked) {
   }
 }
 
+void LockStateController::CancelUnlockAnimation() {
+  VLOG(1) << "CancelUnlockAnimation";
+  pb_pressed_during_unlock_ = true;
+}
+
 void LockStateController::OnLockFailTimeout() {
   UMA_HISTOGRAM_LOCK_TIMES("Ash.WindowManager.Lock.Timeout",
                            lock_duration_timer_->Elapsed());
@@ -426,49 +539,6 @@ void LockStateController::OnLockFailTimeout() {
   LOG(ERROR) << "Screen lock took too long; Signing out";
   base::debug::DumpWithoutCrashing();
   Shell::Get()->session_controller()->RequestSignOut();
-}
-
-void LockStateController::StartPreShutdownAnimationTimer() {
-  pre_shutdown_timer_.Stop();
-  pre_shutdown_timer_.Start(
-      FROM_HERE,
-      animator_->GetDuration(SessionStateAnimator::ANIMATION_SPEED_SHUTDOWN),
-      this, &LockStateController::OnPreShutdownAnimationTimeout);
-}
-
-void LockStateController::OnPreShutdownAnimationTimeout() {
-  VLOG(1) << "OnPreShutdownAnimationTimeout";
-  shutting_down_ = true;
-
-  Shell* shell = Shell::Get();
-  if (shell->cursor_manager())
-    shell->cursor_manager()->HideCursor();
-
-  StartRealShutdownTimer(false);
-}
-
-void LockStateController::StartRealShutdownTimer(bool with_animation_time) {
-  base::TimeDelta duration = kShutdownRequestDelay;
-  if (with_animation_time) {
-    duration +=
-        animator_->GetDuration(SessionStateAnimator::ANIMATION_SPEED_SHUTDOWN);
-  }
-  // Play and get shutdown sound duration from chrome in |sound_duration|. And
-  // start real shutdown after a delay of |duration|.
-  base::TimeDelta sound_duration =
-      std::min(Shell::Get()->accessibility_controller()->PlayShutdownSound(),
-               base::Milliseconds(kMaxShutdownSoundDurationMs));
-  duration = std::max(duration, sound_duration);
-  real_shutdown_timer_.Start(FROM_HERE, duration, this,
-                             &LockStateController::OnRealPowerTimeout);
-}
-
-void LockStateController::OnRealPowerTimeout() {
-  VLOG(1) << "OnRealPowerTimeout";
-  DCHECK(shutting_down_);
-  DCHECK(shutdown_reason_);
-  // Shut down or reboot based on device policy.
-  shutdown_controller_->ShutDownOrReboot(*shutdown_reason_);
 }
 
 void LockStateController::PreLockAnimation(
@@ -613,8 +683,19 @@ void LockStateController::PostLockAnimationFinished(bool aborted) {
   OnLockStateEvent(LockStateObserver::EVENT_LOCK_ANIMATION_FINISHED);
   if (!lock_screen_displayed_callback_.is_null())
     std::move(lock_screen_displayed_callback_).Run();
+  views::MenuController* active_menu_controller =
+      views::MenuController::GetActiveInstance();
 
-  CHECK(!views::MenuController::GetActiveInstance());
+  if (active_menu_controller) {
+    // TODO(http://b/328064674): Please remove the below crash keys once the
+    // the crash is fixed. It seems after post lock animation finished there
+    // is active menu.
+
+    views::Widget* owner = active_menu_controller->owner();
+    SCOPED_CRASH_KEY_STRING256("LockStateController", "PostLockAnimation",
+                               owner ? owner->GetName() : "ownerless");
+    CHECK(false);
+  }
 }
 
 void LockStateController::UnlockAnimationAfterLockUIDestroyedFinished(
@@ -686,8 +767,53 @@ void LockStateController::OnLockStateEvent(LockStateObserver::EventType event) {
     observer.OnLockStateEvent(event);
 }
 
+void LockStateController::StartPreShutdownAnimationTimer() {
+  pre_shutdown_timer_.Stop();
+  pre_shutdown_timer_.Start(
+      FROM_HERE,
+      animator_->GetDuration(SessionStateAnimator::ANIMATION_SPEED_SHUTDOWN),
+      this, &LockStateController::OnPreShutdownAnimationTimeout);
+}
+
+void LockStateController::OnPreShutdownAnimationTimeout() {
+  VLOG(1) << "OnPreShutdownAnimationTimeout";
+  shutting_down_ = true;
+
+  HideAndMaybeLockCursor(/*lock=*/false);
+  StartRealShutdownTimer(false);
+}
+
+void LockStateController::StartRealShutdownTimer(bool with_animation_time) {
+  base::TimeDelta duration = kShutdownRequestDelay;
+  if (with_animation_time) {
+    duration +=
+        animator_->GetDuration(SessionStateAnimator::ANIMATION_SPEED_SHUTDOWN);
+  }
+  // Play and get shutdown sound duration from chrome in |sound_duration|. And
+  // start real shutdown after a delay of |duration|.
+  base::TimeDelta sound_duration =
+      std::min(Shell::Get()->accessibility_controller()->PlayShutdownSound(),
+               base::Milliseconds(kMaxShutdownSoundDurationMs));
+  duration = std::max(duration, sound_duration);
+  real_shutdown_timer_.Start(FROM_HERE, duration, this,
+                             &LockStateController::OnRealPowerTimeout);
+}
+
+void LockStateController::OnRealPowerTimeout() {
+  VLOG(1) << "OnRealPowerTimeout";
+  DCHECK(shutting_down_);
+  DCHECK(shutdown_reason_ || restart_reason_);
+  // Shut down or reboot based on device policy.
+  if (restart_reason_) {
+    chromeos::PowerManagerClient::Get()->RequestRestart(*restart_reason_,
+                                                        restart_description_);
+  } else {
+    shutdown_controller_->ShutDownOrReboot(*shutdown_reason_);
+  }
+}
+
 void LockStateController::ShutdownOnPine(bool with_pre_animation) {
-  if (features::IsForestFeatureEnabled()) {
+  if (IsForestFeatureEnabled()) {
     TakePineImageAndShutdown(with_pre_animation);
   } else {
     StartShutdownProcess(with_pre_animation);
@@ -695,31 +821,72 @@ void LockStateController::ShutdownOnPine(bool with_pre_animation) {
 }
 
 void LockStateController::TakePineImageAndShutdown(bool with_pre_animation) {
-  // TODO: Finalize the expected behavior on multi-display.
-  auto* root = Shell::GetRootWindowForNewWindows();
-  aura::Window* active_desk = desks_util::GetActiveDeskContainerForRoot(root);
-  CHECK(active_desk);
   const base::FilePath file_path = GetShutdownPineImagePath();
 
-  if (active_desk->children().empty()) {
-    // If there are no windows in the desk container, taking the pine image will
-    // fail. Delete any existing pine image so on next startup no pine image
-    // preview will be shown.
-    auto delete_image_cb =
-        base::BindOnce(base::IgnoreResult(&base::DeleteFile), file_path);
-    MaybeAppendTestCallback(delete_image_cb, pine_image_callback_for_test_);
-    base::ThreadPool::PostTask(FROM_HERE,
-                               {base::MayBlock(), base::TaskPriority::HIGHEST,
-                                base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
-                               std::move(delete_image_cb));
-
+  if (!ShouldTakePineScreeshot()) {
+    DeletePineImage(pine_image_callback_for_test_, file_path);
     StartShutdownProcess(with_pre_animation);
     return;
   }
-  // TODO(b/321117233): Cancel the operation to take the screenshot and proceed
-  // with the shutdown immediately if it takes too long.
+
+  // Check if there are any content currently on the screen that are restricted
+  // by DLP.
+  CaptureModeController::Get()->CheckScreenCaptureDlpRestrictions(
+      base::BindOnce(
+          &LockStateController::OnDlpRestrictionCheckedAtScreenCapture,
+          weak_ptr_factory_.GetWeakPtr(), with_pre_animation, file_path));
+}
+
+void LockStateController::OnDlpRestrictionCheckedAtScreenCapture(
+    bool with_pre_animation,
+    const base::FilePath& file_path,
+    bool proceed) {
+  if (!proceed) {
+    RecordScreenshotOnShutdownStatus(ScreenshotOnShutdownStatus::kFailedOnDLP);
+    StartShutdownProcess(with_pre_animation);
+    return;
+  }
+
+  // TODO(b/319921650): Finalize the expected behavior on multi-display.
+  auto* root = Shell::GetRootWindowForNewWindows();
+
+  // Create a new layer that mirrors the painted wallpaper view layer. Adds it
+  // to be the bottom-most child of the shutdown screenshot container layer,
+  // which is the parent of the active desk container also the container that we
+  // are going to take the pine screenshot. With this,
+  // 1) wallpaper will be included in the screenshot besides the content of the
+  //    active desk.
+  // 2) screenshot will be taken on the whole desktop instead of the specific
+  //    area with windows. This guarantees the windows' relative position inside
+  //    the desktop.
+  auto* wallpaper_layer = RootWindowController::ForWindow(root)
+                              ->wallpaper_widget_controller()
+                              ->wallpaper_view()
+                              ->layer();
+  CHECK(wallpaper_layer && wallpaper_layer->children().empty());
+  mirror_wallpaper_layer_ = wallpaper_layer->Mirror();
+
+  auto* pine_screenshot_container =
+      root->GetChildById(kShellWindowId_ShutdownScreenshotContainer);
+  auto* shutdown_screenshot_layer = pine_screenshot_container->layer();
+  shutdown_screenshot_layer->Add(mirror_wallpaper_layer_.get());
+  shutdown_screenshot_layer->StackAtBottom(mirror_wallpaper_layer_.get());
+
+  if (!disable_screenshot_tiemout_for_test_) {
+    // Trigger the `take_screenshot_fail_timer_` and start taking the screenshot
+    // at the same time. If the timer timeouts before receiving the screenshot,
+    // shutdown process will be triggered without the screenshot.
+    take_screenshot_fail_timer_.Start(
+        FROM_HERE, kTakeScreenshotFailTimeout,
+        base::BindOnce(&LockStateController::OnTakeScreenshotFailTimeout,
+                       base::Unretained(this), with_pre_animation));
+  }
+
+  // Take the screenshot on the shutdown screenshot container, thus the float
+  // and the always on top windows will be included in the screenshot as well.
   ui::GrabWindowSnapshot(
-      active_desk, /*source_rect=*/gfx::Rect(active_desk->bounds().size()),
+      pine_screenshot_container,
+      /*source_rect=*/gfx::Rect(pine_screenshot_container->bounds().size()),
       base::BindOnce(&LockStateController::OnPineImageTaken,
                      weak_ptr_factory_.GetWeakPtr(), with_pre_animation,
                      file_path, base::TimeTicks::Now()));
@@ -738,12 +905,33 @@ void LockStateController::StartShutdownProcess(bool with_pre_animation) {
   }
 }
 
+void LockStateController::OnTakeScreenshotFailTimeout(bool with_pre_animation) {
+  SavePineScreenshotDuration(local_state_, prefs::kPineScreenshotTakenDuration,
+                             kTakeScreenshotFailTimeout);
+  RecordScreenshotOnShutdownStatus(
+      ScreenshotOnShutdownStatus::kFailedOnTakingScreenshotTimeout);
+  mirror_wallpaper_layer_.reset();
+  DeletePineImage(pine_image_callback_for_test_, GetShutdownPineImagePath());
+  StartShutdownProcess(with_pre_animation);
+}
+
 void LockStateController::OnPineImageTaken(bool with_pre_animation,
                                            const base::FilePath& file_path,
                                            base::TimeTicks start_time,
                                            gfx::Image pine_image) {
+  // Do not proceed if the `take_screenshot_fail_timer_` is stopped, which means
+  // taking screenshot process took too long and the shutdown process has been
+  // triggered without the pine image.
+  if (!disable_screenshot_tiemout_for_test_ &&
+      !take_screenshot_fail_timer_.IsRunning()) {
+    return;
+  }
+
+  take_screenshot_fail_timer_.Stop();
   SavePineScreenshotDuration(local_state_, prefs::kPineScreenshotTakenDuration,
                              base::TimeTicks::Now() - start_time);
+
+  mirror_wallpaper_layer_.reset();
 
   base::ThreadPool::PostTaskAndReply(
       FROM_HERE,
@@ -764,6 +952,7 @@ void LockStateController::OnPineImageSaved(base::TimeTicks start_time) {
                              // time that the UI thread waits to get the reply
                              // from the `ThreadPool`.
                              base::TimeTicks::Now() - start_time);
+  RecordScreenshotOnShutdownStatus(ScreenshotOnShutdownStatus::kSucceeded);
   if (pine_image_callback_for_test_) {
     std::move(pine_image_callback_for_test_).Run();
   }

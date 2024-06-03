@@ -41,7 +41,6 @@
 #include "components/privacy_sandbox/tracking_protection_prefs.h"
 #include "components/subresource_filter/core/common/test_ruleset_utils.h"
 #include "components/tpcd/metadata/parser.h"
-#include "components/tpcd/metadata/parser_test_helper.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
@@ -49,11 +48,13 @@
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "net/base/features.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -169,7 +170,7 @@ class AdHeuristicTPCDBrowserTestBase
     // primary pattern.
     base::ScopedAllowBlockingForTesting allow_blocking;
     tpcd::metadata::Metadata metadata;
-    tpcd::metadata::AddEntryToMetadata(
+    tpcd::metadata::helpers::AddEntryToMetadata(
         metadata, ContentSettingsPattern::FromURL(third_party_url).ToString(),
         "*");
     EXPECT_EQ(metadata.metadata_entries_size(), 1);
@@ -570,6 +571,10 @@ class AdHeuristicTPCDBrowserTestTopLevelTrialGrant
            {"SkipTpcdMitigationsForAdsMetadata", "true"},
            {"SkipTpcdMitigationsForAdsHeuristics", "true"}}}},
         {});
+
+    // Disable the validity service so it doesn't remove manually created
+    // trial settings.
+    tpcd::trial::ValidityService::DisableForTesting();
   }
 
  private:
@@ -607,6 +612,10 @@ class AdHeuristicTPCDBrowserTestSkipTopLevelTrialGrant
            {"SkipTpcdMitigationsForAdsMetadata", "false"},
            {"SkipTpcdMitigationsForAdsHeuristics", "false"}}}},
         {});
+
+    // Disable the validity service so it doesn't remove manually created
+    // trial settings.
+    tpcd::trial::ValidityService::DisableForTesting();
   }
 
  private:

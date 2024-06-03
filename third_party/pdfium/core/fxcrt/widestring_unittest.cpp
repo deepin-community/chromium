@@ -9,11 +9,12 @@
 #include <vector>
 
 #include "build/build_config.h"
+#include "core/fxcrt/compiler_specific.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/utf16.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/base/containers/contains.h"
 
 namespace fxcrt {
 
@@ -824,7 +825,7 @@ TEST(WideString, UpperLower) {
 
 TEST(WideString, Trim) {
   WideString fred(L"  FRED  ");
-  fred.Trim();
+  fred.TrimWhitespace();
   EXPECT_EQ(L"FRED", fred);
   fred.Trim(L'E');
   EXPECT_EQ(L"FRED", fred);
@@ -838,7 +839,7 @@ TEST(WideString, Trim) {
   EXPECT_EQ(L"   ", blank);
   blank.Trim(L'E');
   EXPECT_EQ(L"   ", blank);
-  blank.Trim();
+  blank.TrimWhitespace();
   EXPECT_EQ(L"", blank);
 
   WideString empty;
@@ -846,7 +847,7 @@ TEST(WideString, Trim) {
   EXPECT_EQ(L"", empty);
   empty.Trim(L'E');
   EXPECT_EQ(L"", empty);
-  empty.Trim();
+  empty.TrimWhitespace();
   EXPECT_EQ(L"", empty);
 
   WideString abc(L"  ABCCBA  ");
@@ -856,40 +857,40 @@ TEST(WideString, Trim) {
   EXPECT_EQ(L"BCCB", abc);
 }
 
-TEST(WideString, TrimLeft) {
+TEST(WideString, TrimFront) {
   WideString fred(L"  FRED  ");
-  fred.TrimLeft();
+  fred.TrimWhitespaceFront();
   EXPECT_EQ(L"FRED  ", fred);
-  fred.TrimLeft(L'E');
+  fred.TrimFront(L'E');
   EXPECT_EQ(L"FRED  ", fred);
-  fred.TrimLeft(L'F');
+  fred.TrimFront(L'F');
   EXPECT_EQ(L"RED  ", fred);
-  fred.TrimLeft(L"ERP");
+  fred.TrimFront(L"ERP");
   EXPECT_EQ(L"D  ", fred);
 
   WideString blank(L"   ");
-  blank.TrimLeft(L"ERP");
+  blank.TrimFront(L"ERP");
   EXPECT_EQ(L"   ", blank);
-  blank.TrimLeft(L'E');
+  blank.TrimFront(L'E');
   EXPECT_EQ(L"   ", blank);
-  blank.TrimLeft();
+  blank.TrimWhitespaceFront();
   EXPECT_EQ(L"", blank);
 
   WideString empty;
-  empty.TrimLeft(L"ERP");
+  empty.TrimFront(L"ERP");
   EXPECT_EQ(L"", empty);
-  empty.TrimLeft(L'E');
+  empty.TrimFront(L'E');
   EXPECT_EQ(L"", empty);
-  empty.TrimLeft();
+  empty.TrimWhitespaceFront();
   EXPECT_EQ(L"", empty);
 }
 
-TEST(WideString, TrimLeftCopies) {
+TEST(WideString, TrimFrontCopies) {
   {
     // With a single reference, no copy takes place.
     WideString fred(L"  FRED  ");
     const wchar_t* old_buffer = fred.c_str();
-    fred.TrimLeft();
+    fred.TrimWhitespaceFront();
     EXPECT_EQ(L"FRED  ", fred);
     EXPECT_EQ(old_buffer, fred.c_str());
   }
@@ -898,7 +899,7 @@ TEST(WideString, TrimLeftCopies) {
     WideString fred(L"  FRED  ");
     WideString other_fred = fred;
     const wchar_t* old_buffer = fred.c_str();
-    fred.TrimLeft();
+    fred.TrimWhitespaceFront();
     EXPECT_EQ(L"FRED  ", fred);
     EXPECT_EQ(L"  FRED  ", other_fred);
     EXPECT_NE(old_buffer, fred.c_str());
@@ -908,47 +909,47 @@ TEST(WideString, TrimLeftCopies) {
     WideString fred(L"FRED");
     WideString other_fred = fred;
     const wchar_t* old_buffer = fred.c_str();
-    fred.TrimLeft();
+    fred.TrimWhitespaceFront();
     EXPECT_EQ(L"FRED", fred);
     EXPECT_EQ(L"FRED", other_fred);
     EXPECT_EQ(old_buffer, fred.c_str());
   }
 }
 
-TEST(WideString, TrimRight) {
+TEST(WideString, TrimBack) {
   WideString fred(L"  FRED  ");
-  fred.TrimRight();
+  fred.TrimWhitespaceBack();
   EXPECT_EQ(L"  FRED", fred);
-  fred.TrimRight(L'E');
+  fred.TrimBack(L'E');
   EXPECT_EQ(L"  FRED", fred);
-  fred.TrimRight(L'D');
+  fred.TrimBack(L'D');
   EXPECT_EQ(L"  FRE", fred);
-  fred.TrimRight(L"ERP");
+  fred.TrimBack(L"ERP");
   EXPECT_EQ(L"  F", fred);
 
   WideString blank(L"   ");
-  blank.TrimRight(L"ERP");
+  blank.TrimBack(L"ERP");
   EXPECT_EQ(L"   ", blank);
-  blank.TrimRight(L'E');
+  blank.TrimBack(L'E');
   EXPECT_EQ(L"   ", blank);
-  blank.TrimRight();
+  blank.TrimWhitespaceBack();
   EXPECT_EQ(L"", blank);
 
   WideString empty;
-  empty.TrimRight(L"ERP");
+  empty.TrimBack(L"ERP");
   EXPECT_EQ(L"", empty);
-  empty.TrimRight(L'E');
+  empty.TrimBack(L'E');
   EXPECT_EQ(L"", empty);
-  empty.TrimRight();
+  empty.TrimWhitespaceBack();
   EXPECT_EQ(L"", empty);
 }
 
-TEST(WideString, TrimRightCopies) {
+TEST(WideString, TrimBackCopies) {
   {
     // With a single reference, no copy takes place.
     WideString fred(L"  FRED  ");
     const wchar_t* old_buffer = fred.c_str();
-    fred.TrimRight();
+    fred.TrimWhitespaceBack();
     EXPECT_EQ(L"  FRED", fred);
     EXPECT_EQ(old_buffer, fred.c_str());
   }
@@ -957,7 +958,7 @@ TEST(WideString, TrimRightCopies) {
     WideString fred(L"  FRED  ");
     WideString other_fred = fred;
     const wchar_t* old_buffer = fred.c_str();
-    fred.TrimRight();
+    fred.TrimWhitespaceBack();
     EXPECT_EQ(L"  FRED", fred);
     EXPECT_EQ(L"  FRED  ", other_fred);
     EXPECT_NE(old_buffer, fred.c_str());
@@ -967,7 +968,7 @@ TEST(WideString, TrimRightCopies) {
     WideString fred(L"FRED");
     WideString other_fred = fred;
     const wchar_t* old_buffer = fred.c_str();
-    fred.TrimRight();
+    fred.TrimWhitespaceBack();
     EXPECT_EQ(L"FRED", fred);
     EXPECT_EQ(L"FRED", other_fred);
     EXPECT_EQ(old_buffer, fred.c_str());
@@ -1007,7 +1008,8 @@ TEST(WideString, GetBuffer) {
   WideString str2(L"cl");
   {
     pdfium::span<wchar_t> buffer = str2.GetBuffer(12);
-    wcscpy(buffer.data() + 2, L"ams");
+    // TODO(tsepez): make safe.
+    UNSAFE_BUFFERS(wcscpy(buffer.data() + 2, L"ams"));
   }
   str2.ReleaseBuffer(str2.GetStringLength());
   EXPECT_EQ(L"clams", str2);
@@ -1242,11 +1244,15 @@ TEST(WideString, FromUTF16BE) {
       {ByteString("\xD8\x3C\xDF\xA8", 4), L"🎨"},
   };
 
-  for (size_t i = 0; i < std::size(utf16be_decode_cases); ++i) {
-    EXPECT_EQ(WideString::FromUTF16BE(utf16be_decode_cases[i].in.raw_span()),
-              utf16be_decode_cases[i].out)
-        << " for case number " << i;
-  }
+  // TODO(tsepez): make safe.
+  UNSAFE_BUFFERS({
+    for (size_t i = 0; i < std::size(utf16be_decode_cases); ++i) {
+      EXPECT_EQ(
+          WideString::FromUTF16BE(utf16be_decode_cases[i].in.unsigned_span()),
+          utf16be_decode_cases[i].out)
+          << " for case number " << i;
+    }
+  });
 }
 
 TEST(WideString, FromUTF16LE) {
@@ -1261,11 +1267,15 @@ TEST(WideString, FromUTF16LE) {
       {ByteString("\x3C\xD8\xA8\xDF", 4), L"🎨"},
   };
 
-  for (size_t i = 0; i < std::size(utf16le_decode_cases); ++i) {
-    EXPECT_EQ(WideString::FromUTF16LE(utf16le_decode_cases[i].in.raw_span()),
-              utf16le_decode_cases[i].out)
-        << " for case number " << i;
-  }
+  // TODO(tsepez): make safe.
+  UNSAFE_BUFFERS({
+    for (size_t i = 0; i < std::size(utf16le_decode_cases); ++i) {
+      EXPECT_EQ(
+          WideString::FromUTF16LE(utf16le_decode_cases[i].in.unsigned_span()),
+          utf16le_decode_cases[i].out)
+          << " for case number " << i;
+    }
+  });
 }
 
 TEST(WideString, ToUTF16LE) {
@@ -1282,11 +1292,39 @@ TEST(WideString, ToUTF16LE) {
       {L"🎨", ByteString("\x3C\xD8\xA8\xDF\0\0", 6)},
   };
 
-  for (size_t i = 0; i < std::size(utf16le_encode_cases); ++i) {
-    EXPECT_EQ(utf16le_encode_cases[i].bs,
-              utf16le_encode_cases[i].ws.ToUTF16LE())
-        << " for case number " << i;
-  }
+  // TODO(tsepez): make safe.
+  UNSAFE_BUFFERS({
+    for (size_t i = 0; i < std::size(utf16le_encode_cases); ++i) {
+      EXPECT_EQ(utf16le_encode_cases[i].bs,
+                utf16le_encode_cases[i].ws.ToUTF16LE())
+          << " for case number " << i;
+    }
+  });
+}
+
+TEST(WideString, ToUCS2LE) {
+  struct UCS2LEEncodeCase {
+    WideString ws;
+    ByteString bs;
+  } const ucs2le_encode_cases[] = {
+      {L"", ByteString("\0\0", 2)},
+      {L"abc", ByteString("a\0b\0c\0\0\0", 8)},
+      {L"abcdef", ByteString("a\0b\0c\0d\0e\0f\0\0\0", 14)},
+      {L"abc\0def", ByteString("a\0b\0c\0\0\0", 8)},
+      {L"\xaabb\xccdd", ByteString("\xbb\xaa\xdd\xcc\0\0", 6)},
+      {L"\x3132\x6162", ByteString("\x32\x31\x62\x61\0\0", 6)},
+#if defined(WCHAR_T_IS_32_BIT)
+      {L"🎨", ByteString("\0\0", 2)},
+#endif
+  };
+
+  // TODO(tsepez): make safe.
+  UNSAFE_BUFFERS({
+    for (size_t i = 0; i < std::size(ucs2le_encode_cases); ++i) {
+      EXPECT_EQ(ucs2le_encode_cases[i].bs, ucs2le_encode_cases[i].ws.ToUCS2LE())
+          << " for case number " << i;
+    }
+  });
 }
 
 TEST(WideString, EncodeEntities) {
@@ -1443,7 +1481,7 @@ TEST(WideStringView, FromVector) {
   cleared_vec.pop_back();
   WideStringView cleared_string(cleared_vec);
   EXPECT_EQ(0u, cleared_string.GetLength());
-  EXPECT_FALSE(cleared_string.raw_str());
+  EXPECT_FALSE(cleared_string.unterminated_unsigned_str());
 }
 
 TEST(WideStringView, ElementAccess) {
@@ -1790,7 +1828,7 @@ TEST(WideStringView, TrimmedRight) {
   EXPECT_EQ(L"FRED", fred.TrimmedRight(L'E'));
   EXPECT_EQ(L"FRE", fred.TrimmedRight(L'D'));
   WideStringView fredd(L"FREDD");
-  EXPECT_EQ(L"FRE", fred.TrimmedRight(L'D'));
+  EXPECT_EQ(L"FRE", fredd.TrimmedRight(L'D'));
 }
 
 TEST(WideString, FormatWidth) {

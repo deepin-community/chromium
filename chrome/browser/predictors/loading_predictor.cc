@@ -9,6 +9,7 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
+#include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/predictors/lcp_critical_path_predictor/lcp_critical_path_predictor_util.h"
 #include "chrome/browser/predictors/lcp_critical_path_predictor/prewarm_http_disk_cache_manager.h"
 #include "chrome/browser/predictors/loading_data_collector.h"
@@ -318,6 +319,7 @@ PrefetchManager* LoadingPredictor::prefetch_manager() {
 void LoadingPredictor::Shutdown() {
   DCHECK(!shutdown_);
   resource_prefetch_predictor_->Shutdown();
+  preconnect_manager_.reset();
   shutdown_ = true;
 }
 
@@ -345,7 +347,7 @@ void LoadingPredictor::OnNavigationFinished(NavigationId navigation_id,
     return;
 
   loading_data_collector()->RecordFinishNavigation(
-      navigation_id, old_main_frame_url, new_main_frame_url, is_error_page);
+      navigation_id, new_main_frame_url, is_error_page);
   if (active_urls_to_navigations_.find(old_main_frame_url) !=
       active_urls_to_navigations_.end()) {
     active_urls_to_navigations_[old_main_frame_url].erase(navigation_id);
@@ -401,7 +403,10 @@ void LoadingPredictor::CleanupAbandonedHintsAndNavigations(
 void LoadingPredictor::MaybeAddPreconnect(const GURL& url,
                                           PreconnectPrediction prediction) {
   CHECK(!shutdown_);
-  if (!prediction.prefetch_requests.empty()) {
+  if (!prediction.prefetch_requests.empty() &&
+      (AfterStartupTaskUtils::IsBrowserStartupComplete() ||
+       !base::FeatureList::IsEnabled(
+           features::kAvoidLoadingPredictorPrefetchDuringBrowserStartup))) {
     CHECK(base::FeatureList::IsEnabled(features::kLoadingPredictorPrefetch));
     prefetch_manager()->Start(url, std::move(prediction.prefetch_requests));
   }
@@ -424,13 +429,13 @@ void LoadingPredictor::MaybeRemovePreconnect(const GURL& url) {
     prefetch_manager_->Stop(url);
 }
 
-void LoadingPredictor::HandleHintByOrigin(const GURL& url,
+bool LoadingPredictor::HandleHintByOrigin(const GURL& url,
                                           bool preconnectable,
                                           bool only_allow_https,
                                           PreconnectData& preconnect_data) {
   if (!url.is_valid() || !url.has_host() || !IsPreconnectAllowed(profile_) ||
       (only_allow_https && url.scheme() != url::kHttpsScheme)) {
-    return;
+    return false;
   }
 
   const url::Origin origin = url::Origin::Create(url);
@@ -439,7 +444,7 @@ void LoadingPredictor::HandleHintByOrigin(const GURL& url,
   // origin from the same URL will result in a different unique opaque origin,
   // so any preconnect attempt would never be used anyway.
   if (origin.opaque()) {
-    return;
+    return false;
   }
 
   // Tracking whether this is a new origin request. If so, then
@@ -458,14 +463,17 @@ void LoadingPredictor::HandleHintByOrigin(const GURL& url,
       preconnect_manager()->StartPreconnectUrl(url, true,
                                                network_anonymization_key);
     }
-    return;
+    return true;
   }
 
   if (is_new_origin || now - preconnect_data.last_preresolve_time_ >=
                            kMinDelayBetweenPreresolveRequests) {
     preconnect_data.last_preresolve_time_ = now;
     preconnect_manager()->StartPreresolveHost(url, network_anonymization_key);
+    return true;
   }
+
+  return false;
 }
 
 void LoadingPredictor::PreconnectInitiated(const GURL& url,

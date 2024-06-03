@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser.ui.native_page;
 
-import android.net.Uri;
 import android.view.View;
 
 import androidx.annotation.ColorInt;
@@ -78,6 +77,20 @@ public interface NativePage {
         return false;
     }
 
+    /**
+     * @return {@code true} if the native page is a pdf page.
+     */
+    default boolean isPdf() {
+        return false;
+    }
+
+    /**
+     * @return the filepath or null if not available. Only pdf native page supports filepath now.
+     */
+    default String getCanonicalFilepath() {
+        return null;
+    }
+
     /** Notify the native page that it is about to be navigated back or hidden by a back press. */
     default void notifyHidingWithBack() {}
 
@@ -93,7 +106,8 @@ public interface NativePage {
         NativePageType.DOWNLOADS,
         NativePageType.HISTORY,
         NativePageType.EXPLORE,
-        NativePageType.MANAGEMENT
+        NativePageType.MANAGEMENT,
+        NativePageType.PDF
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface NativePageType {
@@ -106,49 +120,76 @@ public interface NativePage {
         int HISTORY = 6;
         int EXPLORE = 7;
         int MANAGEMENT = 8;
+        int PDF = 9;
     }
 
     /**
-     * Returns whether the URL would navigate to a native page.
-     *
      * @param url The URL to be checked.
      * @param isIncognito Whether the page will be displayed in incognito mode.
-     * @return Whether the host and the scheme of the passed in URL matches one of the supported
-     *         native pages.
+     * @param isPdf Whether it is a pdf native page.
+     * @return Whether the URL would navigate to a native page.
      */
-    @Deprecated // Use GURL-variant instead.
-    static boolean isNativePageUrl(String url, boolean isIncognito) {
-        return nativePageType(url, null, isIncognito) != NativePageType.NONE;
-    }
-
-    static boolean isNativePageUrl(GURL url, boolean isIncognito) {
-        return url != null
-                && nativePageType(url.getHost(), url.getScheme(), null, isIncognito)
-                        != NativePageType.NONE;
+    static boolean isNativePageUrl(GURL url, boolean isIncognito, boolean isPdf) {
+        return url != null && nativePageType(url, null, isIncognito, isPdf) != NativePageType.NONE;
     }
 
     /**
      * @param url The URL to be checked.
-     * @param candidatePage NativePage to return as result if the host is matched.
      * @param isIncognito Whether the page will be displayed in incognito mode.
+     * @return Whether the URL would navigate to a native page, excluding pdf native page which do
+     *     not have chrome or chrome-native scheme.
+     */
+    static boolean isChromePageUrl(GURL url, boolean isIncognito) {
+        return url != null && chromePageType(url, null, isIncognito) != NativePageType.NONE;
+    }
+
+    /**
+     * @param url The URL to be checked.
+     * @param candidatePage NativePage to return as result if the url is matched.
+     * @param isIncognito Whether the page will be displayed in incognito mode.
+     * @param isPdf Whether it is a pdf native page.
      * @return Type of the native page defined in {@link NativePageType}.
      */
-    // TODO(crbug/783819) - Convert to using GURL.
+    // TODO(crbug.com/40549331) - Convert to using GURL.
     static @NativePageType int nativePageType(
-            String url, NativePage candidatePage, boolean isIncognito) {
+            String url, NativePage candidatePage, boolean isIncognito, boolean isPdf) {
         if (url == null) return NativePageType.NONE;
 
-        Uri uri = Uri.parse(url);
-        return nativePageType(uri.getHost(), uri.getScheme(), candidatePage, isIncognito);
+        GURL gurl = new GURL(url);
+        return nativePageType(gurl, candidatePage, isIncognito, isPdf);
     }
 
     /**
-     * @param candidatePage NativePage to return as result if the host is matched.
+     * @param url The URL to be checked.
+     * @param candidatePage NativePage to return as result if the url is matched.
      * @param isIncognito Whether the page will be displayed in incognito mode.
+     * @param isPdf Whether it is a pdf native page.
      * @return Type of the native page defined in {@link NativePageType}.
      */
     private static @NativePageType int nativePageType(
-            String host, String scheme, NativePage candidatePage, boolean isIncognito) {
+            GURL url, NativePage candidatePage, boolean isIncognito, boolean isPdf) {
+        if (!isPdf) {
+            return chromePageType(url, candidatePage, isIncognito);
+        }
+
+        if (candidatePage != null && candidatePage.getUrl().equals(url.getSpec())) {
+            return NativePageType.CANDIDATE;
+        }
+
+        return NativePageType.PDF;
+    }
+
+    /**
+     * @param url The URL to be checked.
+     * @param candidatePage NativePage to return as result if the host is matched.
+     * @param isIncognito Whether the page will be displayed in incognito mode.
+     * @return Type of the native page defined in {@link NativePageType}, excluding pdf native page
+     *     which do not have chrome or chrome-native scheme.
+     */
+    private static @NativePageType int chromePageType(
+            GURL url, NativePage candidatePage, boolean isIncognito) {
+        String host = url.getHost();
+        String scheme = url.getScheme();
         if (!UrlConstants.CHROME_NATIVE_SCHEME.equals(scheme)
                 && !UrlConstants.CHROME_SCHEME.equals(scheme)) {
             return NativePageType.NONE;

@@ -8,10 +8,11 @@
 #include <dawn/webgpu_cpp.h>
 
 #include <memory>
-
 #include <optional>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/stack_allocated.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
@@ -140,6 +141,7 @@ class GPU_GLES2_EXPORT SharedImageBacking {
   bool is_thread_safe() const { return !!lock_; }
   bool is_ref_counted() const { return is_ref_counted_; }
   gfx::BufferUsage buffer_usage() const { return buffer_usage_.value(); }
+  const std::string& debug_label() const { return debug_label_; }
 
   void OnContextLost();
 
@@ -263,8 +265,6 @@ class GPU_GLES2_EXPORT SharedImageBacking {
   friend class SharedImageManager;
   friend class CompoundImageBacking;
 
-  const std::string& debug_label() const { return debug_label_; }
-
   virtual std::unique_ptr<GLTextureImageRepresentation> ProduceGLTexture(
       SharedImageManager* manager,
       MemoryTypeTracker* tracker);
@@ -347,6 +347,8 @@ class GPU_GLES2_EXPORT SharedImageBacking {
 
   // Helper class used by subclasses to acquire |lock_| if it exists.
   class SCOPED_LOCKABLE GPU_GLES2_EXPORT AutoLock {
+    STACK_ALLOCATED();
+
    public:
     explicit AutoLock(const SharedImageBacking* shared_image_backing)
         EXCLUSIVE_LOCK_FUNCTION(shared_image_backing->lock_);

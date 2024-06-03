@@ -9,14 +9,26 @@
 
 #include "base/functional/callback_forward.h"
 #include "build/build_config.h"
+#include "components/autofill/core/browser/autofill_client.h"
 #include "components/autofill/core/browser/payments/legal_message_line.h"
 #include "components/autofill/core/browser/payments/risk_data_loader.h"
 
 namespace autofill {
 
+struct AutofillErrorDialogContext;
+enum class AutofillProgressDialogType;
+class CardUnmaskDelegate;
+struct CardUnmaskPromptOptions;
+class CreditCard;
 class MigratableCreditCard;
+class OtpUnmaskDelegate;
+struct CardUnmaskChallengeOption;
+enum class OtpUnmaskResult;
 
 namespace payments {
+
+class PaymentsNetworkInterface;
+class PaymentsWindowManager;
 
 // A payments-specific client interface that handles dependency injection, and
 // its implementations serve as the integration for platform-specific code. One
@@ -75,10 +87,54 @@ class PaymentsAutofillClient : public RiskDataLoader {
 
   // Called after credit card upload is finished. Will show upload result to
   // users. `card_saved` indicates if the card is successfully saved.
-  // TODO(crbug.com/932818): This function is overridden in iOS codebase and in
-  // the desktop codebase. If iOS is not using it to do anything, please keep
+  // TODO(crbug.com/40614280): This function is overridden in iOS codebase and
+  // in the desktop codebase. If iOS is not using it to do anything, please keep
   // this function for desktop.
   virtual void CreditCardUploadCompleted(bool card_saved);
+
+  // Returns true if save card offer or confirmation prompt is visible.
+  virtual bool IsSaveCardPromptVisible() const;
+
+  // Hides save card offer or confirmation prompt.
+  virtual void HideSaveCardPromptPrompt();
+
+  // Show/dismiss the progress dialog which contains a throbber and a text
+  // message indicating that something is in progress.
+  virtual void ShowAutofillProgressDialog(
+      AutofillProgressDialogType autofill_progress_dialog_type,
+      base::OnceClosure cancel_callback);
+  virtual void CloseAutofillProgressDialog(
+      bool show_confirmation_before_closing,
+      base::OnceClosure no_interactive_authentication_callback);
+
+  // Show the OTP unmask dialog to accept user-input OTP value.
+  virtual void ShowCardUnmaskOtpInputDialog(
+      const CardUnmaskChallengeOption& challenge_option,
+      base::WeakPtr<OtpUnmaskDelegate> delegate);
+  // Invoked when we receive the server response of the OTP unmask request.
+  virtual void OnUnmaskOtpVerificationResult(OtpUnmaskResult unmask_result);
+
+  // Gets the payments::PaymentsNetworkInterface instance owned by the client.
+  virtual PaymentsNetworkInterface* GetPaymentsNetworkInterface();
+
+  // Shows an error dialog when card retrieval errors happen. The type of error
+  // dialog that is shown will match the `type` in `context`. If the
+  // `server_returned_title` and `server_returned_description` in `context` are
+  // both set, the error dialog that is displayed will have these fields
+  // displayed for the title and description, respectively.
+  virtual void ShowAutofillErrorDialog(AutofillErrorDialogContext context);
+
+  // Gets the PaymentsWindowManager owned by the client.
+  virtual PaymentsWindowManager* GetPaymentsWindowManager();
+
+  // A user has attempted to use a masked card. Prompt them for further
+  // information to proceed.
+  virtual void ShowUnmaskPrompt(
+      const CreditCard& card,
+      const CardUnmaskPromptOptions& card_unmask_prompt_options,
+      base::WeakPtr<CardUnmaskDelegate> delegate);
+  virtual void OnUnmaskVerificationResult(
+      AutofillClient::PaymentsRpcResult result);
 };
 
 }  // namespace payments

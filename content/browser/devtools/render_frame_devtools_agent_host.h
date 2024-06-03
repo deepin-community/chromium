@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/common/content_export.h"
@@ -178,8 +179,9 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
 
   std::unique_ptr<FrameAutoAttacher> auto_attacher_;
   // The active host we are talking to.
-  RenderFrameHostImpl* frame_host_ = nullptr;
-  base::flat_set<NavigationRequest*> navigation_requests_;
+  raw_ptr<RenderFrameHostImpl> frame_host_ = nullptr;
+  base::flat_set<raw_ptr<NavigationRequest, CtnExperimental>>
+      navigation_requests_;
   bool render_frame_alive_ = false;
   bool render_frame_crashed_ = false;
 
@@ -189,7 +191,7 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   bool is_debugger_pause_situation_recorded_ = false;
 
   // The FrameTreeNode associated with this agent.
-  FrameTreeNode* frame_tree_node_;
+  raw_ptr<FrameTreeNode> frame_tree_node_;
 };
 
 // Returns the ancestor FrameTreeNode* for which a RenderFrameDevToolsAgentHost

@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_CONSTANTS_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_CONSTANTS_H_
+#ifndef PARTITION_ALLOC_PARTITION_ALLOC_CONSTANTS_H_
+#define PARTITION_ALLOC_PARTITION_ALLOC_CONSTANTS_H_
 
 #include <algorithm>
 #include <climits>
@@ -111,8 +111,7 @@ PartitionPageShift() {
   return 18;  // 256 KiB
 }
 #elif (BUILDFLAG(IS_APPLE) && defined(ARCH_CPU_64_BITS)) || \
-    (BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)) ||   \
-    (BUILDFLAG(IS_LINUX) && defined(ARCH_CPU_ARM64))
+    defined(PARTITION_ALLOCATOR_CONSTANTS_POSIX_NONCONST_PAGE_SIZE)
 PA_ALWAYS_INLINE PAGE_ALLOCATOR_CONSTANTS_DECLARE_CONSTEXPR size_t
 PartitionPageShift() {
   return PageAllocationGranularityShift() + 2;
@@ -211,14 +210,17 @@ constexpr size_t kHighThresholdForAlternateDistribution =
 // Free Slot Bitmap is only present when USE_FREESLOT_BITMAP is true. State
 // Bitmap is inserted for partitions that may have quarantine enabled.
 //
-// If ENABLE_BACKUP_REF_PTR_SUPPORT is on, RefCountTable(4KiB) is inserted
-// after the Metadata page for BackupRefPtr. The guard pages after the table
-// is reduced to 4KiB.
+// If ENABLE_BACKUP_REF_PTR_SUPPORT is on, InSlotMetadataTable(4KiB) is inserted
+// after the Metadata page, which hosts what normally would be in-slot metadata,
+// but for reasons described in InSlotMetadataPointer() can't always be placed
+// inside the slot. BRP ref-count is there, hence the connection with
+// ENABLE_BACKUP_REF_PTR_SUPPORT.
+// The guard page after the table is reduced to 4KiB.
 //
 //...
-//     | Metadata page (4 KiB) |
-//     | RefCountTable (4 KiB) |
-//     | Guard pages (4 KiB)   |
+//     | Metadata page (4 KiB)       |
+//     | InSlotMetadataTable (4 KiB) |
+//     | Guard pages (4 KiB)         |
 //...
 //
 // Each slot span is a contiguous range of one or more `PartitionPage`s. Note
@@ -468,10 +470,22 @@ constexpr size_t kBitsPerSizeT = sizeof(void*) * CHAR_BIT;
 // PurgeFlags::kDecommitEmptySlotSpans flag will eagerly decommit all entries
 // in the ring buffer, so with periodic purge enabled, this typically happens
 // every few seconds.
-constexpr size_t kEmptyCacheIndexBits = 7;
+#if BUILDFLAG(USE_LARGE_EMPTY_SLOT_SPAN_RING)
+// USE_LARGE_EMPTY_SLOT_SPAN_RING results in two size. kMaxEmptyCacheIndexBits,
+// which is used when the renderer is in the foreground, and
+// kMinEmptyCacheIndexBits which is used when the renderer is in the background.
+constexpr size_t kMaxEmptyCacheIndexBits = 10;
+constexpr size_t kMinEmptyCacheIndexBits = 7;
+#else
+constexpr size_t kMaxEmptyCacheIndexBits = 7;
+constexpr size_t kMinEmptyCacheIndexBits = 7;
+#endif
+static_assert(kMinEmptyCacheIndexBits <= kMaxEmptyCacheIndexBits,
+              "min size must be <= max size");
 // kMaxFreeableSpans is the buffer size, but is never used as an index value,
 // hence <= is appropriate.
-constexpr size_t kMaxFreeableSpans = 1 << kEmptyCacheIndexBits;
+constexpr size_t kMaxFreeableSpans = 1 << kMaxEmptyCacheIndexBits;
+constexpr size_t kMinFreeableSpans = 1 << kMinEmptyCacheIndexBits;
 constexpr size_t kDefaultEmptySlotSpanRingSize = 16;
 
 // If the total size in bytes of allocated but not committed pages exceeds this
@@ -511,4 +525,4 @@ using ::partition_alloc::internal::PartitionPageSize;
 
 }  // namespace partition_alloc
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_PARTITION_ALLOC_CONSTANTS_H_
+#endif  // PARTITION_ALLOC_PARTITION_ALLOC_CONSTANTS_H_

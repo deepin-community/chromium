@@ -52,12 +52,13 @@ $ PATH_TO_INSTALLER.EXE ^
 Required
 
 * [Windows 11 SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/)
-version 10.0.22621.0. This can be installed separately or by checking the
+version 10.0.22621.2428. This can be installed separately or by checking the
 appropriate box in the Visual Studio Installer.
-* (Windows 11) SDK Debugging Tools 10.0.22621.755. This version of the Debugging
-tools is needed in order to support reading the large-page PDBs that Chrome uses
-to allow greater-than 4 GiB PDBs. This can be installed after the matching
-Windows SDK version is installed, from: Control Panel -> Programs and Features
+* (Windows 11) SDK Debugging Tools 10.0.22621.755 or higher. This version of the
+Debugging tools is needed in order to support reading the large-page PDBs that
+Chrome uses to allow greater-than 4 GiB PDBs. This can be installed after the
+matching Windows SDK version is installed, from: Control Panel -> Programs and
+Features
 -> Windows Software Development Kit [version] -> Change -> Debugging Tools for
 Windows. If building on ARM64 Windows then you will need to manually copy the
 Debuggers\x64 directory from another machine because it does not get installed
@@ -113,9 +114,9 @@ with the code, including msysgit and python.
 
 ## Check python install
 
-After running gclient open a command prompt and type `where python` and
-confirm that the depot_tools `python.bat` comes ahead of any copies of
-python.exe. Failing to ensure this can lead to overbuilding when
+After running gclient open a command prompt and type `where python3` and
+confirm that the depot_tools `python3.bat` comes ahead of any copies of
+python3.exe. Failing to ensure this can lead to overbuilding when
 using gn - see [crbug.com/611087](https://crbug.com/611087).
 
 [App Execution Aliases](https://docs.microsoft.com/en-us/windows/apps/desktop/modernize/desktop-to-uwp-extensions#alias)

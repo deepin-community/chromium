@@ -33,26 +33,27 @@ class StringTemplate {
 
   // Explicit conversion to UnsignedType*. May return nullptr.
   // Note: Any subsequent modification of |this| will invalidate the result.
-  const UnsignedType* raw_str() const {
+  const UnsignedType* unsigned_str() const {
     return m_pData ? reinterpret_cast<const UnsignedType*>(m_pData->m_String)
                    : nullptr;
   }
 
   // Explicit conversion to StringView.
   // Note: Any subsequent modification of |this| will invalidate the result.
-  StringView AsStringView() const { return StringView(raw_str(), GetLength()); }
+  StringView AsStringView() const {
+    return StringView(unsigned_str(), GetLength());
+  }
 
   // Explicit conversion to span.
   // Note: Any subsequent modification of |this| will invalidate the result.
   pdfium::span<const CharType> span() const {
-    return pdfium::make_span(m_pData ? m_pData->m_String : nullptr,
-                             GetLength());
+    return m_pData ? m_pData->span() : pdfium::span<const CharType>();
   }
 
   // Explicit conversion to spans of unsigned types.
   // Note: Any subsequent modification of |this| will invalidate the result.
-  pdfium::span<const UnsignedType> raw_span() const {
-    return pdfium::make_span(raw_str(), GetLength());
+  pdfium::span<const UnsignedType> unsigned_span() const {
+    return reinterpret_span<const UnsignedType>(span());
   }
 
   // Note: Any subsequent modification of |this| will invalidate iterators.
@@ -133,6 +134,16 @@ class StringTemplate {
   void SetAt(size_t index, T ch);
 
   void Reserve(size_t len) { GetBuffer(len); }
+
+  // Remove character `ch` from  both/front/back of string.
+  void Trim(T ch);
+  void TrimFront(T ch);
+  void TrimBack(T ch);
+
+  // Remove all characters in `targets` from both/front/back of string.
+  void Trim(StringView targets);
+  void TrimFront(StringView targets);
+  void TrimBack(StringView targets);
 
  protected:
   using StringData = StringDataTemplate<T>;

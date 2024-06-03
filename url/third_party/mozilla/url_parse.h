@@ -318,16 +318,12 @@ COMPONENT_EXPORT(URL)
 void ParseFileURL(const char16_t* url, int url_len, Parsed* parsed);
 
 // Filesystem URLs are structured differently than other URLs.
-COMPONENT_EXPORT(URL)
-void ParseFileSystemURL(const char* url, int url_len, Parsed* parsed);
-COMPONENT_EXPORT(URL)
-void ParseFileSystemURL(const char16_t* url, int url_len, Parsed* parsed);
+COMPONENT_EXPORT(URL) Parsed ParseFileSystemURL(std::string_view url);
+COMPONENT_EXPORT(URL) Parsed ParseFileSystemURL(std::u16string_view url);
 
 // MailtoURL is for mailto: urls. They are made up scheme,path,query
-COMPONENT_EXPORT(URL)
-void ParseMailtoURL(const char* url, int url_len, Parsed* parsed);
-COMPONENT_EXPORT(URL)
-void ParseMailtoURL(const char16_t* url, int url_len, Parsed* parsed);
+COMPONENT_EXPORT(URL) Parsed ParseMailtoURL(std::string_view url);
+COMPONENT_EXPORT(URL) Parsed ParseMailtoURL(std::u16string_view url);
 
 // Helper functions -----------------------------------------------------------
 
@@ -351,6 +347,11 @@ void ParseMailtoURL(const char16_t* url, int url_len, Parsed* parsed);
 // end of the string).
 //
 // The 8-bit version requires UTF-8 encoding.
+COMPONENT_EXPORT(URL)
+bool ExtractScheme(std::string_view url, Component* scheme);
+COMPONENT_EXPORT(URL)
+bool ExtractScheme(std::u16string_view url, Component* scheme);
+// Deprecated (crbug.com/325408566): Prefer using the overloads above.
 COMPONENT_EXPORT(URL)
 bool ExtractScheme(const char* url, int url_len, Component* scheme);
 COMPONENT_EXPORT(URL)

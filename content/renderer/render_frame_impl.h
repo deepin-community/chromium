@@ -32,6 +32,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/timer/timer.h"
 #include "base/unguessable_token.h"
+#include "base/uuid.h"
 #include "build/build_config.h"
 #include "cc/input/browser_controls_state.h"
 #include "content/common/buildflags.h"
@@ -107,6 +108,7 @@
 #include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/public/web/web_frame_serializer_client.h"
 #include "third_party/blink/public/web/web_history_commit_type.h"
+#include "third_party/blink/public/web/web_link_preview_triggerer.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_meaningful_layout.h"
@@ -274,7 +276,7 @@ class CONTENT_EXPORT RenderFrameImpl
     CreateParams(CreateParams&&);
     CreateParams& operator=(CreateParams&&);
 
-    raw_ptr<AgentSchedulingGroup, ExperimentalRenderer> agent_scheduling_group;
+    raw_ptr<AgentSchedulingGroup> agent_scheduling_group;
     blink::LocalFrameToken frame_token;
     int32_t routing_id;
     mojo::PendingAssociatedReceiver<mojom::Frame> frame_receiver;
@@ -484,6 +486,7 @@ class CONTENT_EXPORT RenderFrameImpl
           fetch_later_loader_factory,
       const blink::DocumentToken& document_token,
       const base::UnguessableToken& devtools_navigation_token,
+      const base::Uuid& base_auction_nonce,
       const std::optional<blink::ParsedPermissionsPolicy>& permissions_policy,
       blink::mojom::PolicyContainerPtr policy_container,
       mojo::PendingRemote<blink::mojom::CodeCacheHost> code_cache_host,
@@ -599,7 +602,7 @@ class CONTENT_EXPORT RenderFrameImpl
   void DidFailAsyncSameDocumentCommit() override;
   void WillFreezePage() override;
   void DidOpenDocumentInputStream(const blink::WebURL& url) override;
-  void DidSetPageLifecycleState() override;
+  void DidSetPageLifecycleState(bool restoring_from_bfcache) override;
   void NotifyCurrentHistoryItemChanged() override;
   void DidUpdateCurrentHistoryItem() override;
   base::UnguessableToken GetDevToolsFrameToken() override;
@@ -623,8 +626,9 @@ class CONTENT_EXPORT RenderFrameImpl
       const blink::WebURLResponse& response) override;
   void DidChangePerformanceTiming() override;
   void DidObserveUserInteraction(base::TimeTicks max_event_start,
-                                 base::TimeTicks max_event_end,
                                  base::TimeTicks max_event_queued_main_thread,
+                                 base::TimeTicks max_event_commit_finish,
+                                 base::TimeTicks max_event_end,
                                  blink::UserInteractionType interaction_type,
                                  uint64_t interaction_offset) override;
   void DidChangeCpuTiming(base::TimeDelta time) override;
@@ -652,7 +656,9 @@ class CONTENT_EXPORT RenderFrameImpl
   bool AllowContentInitiatedDataUrlNavigations(
       const blink::WebURL& url) override;
   void PostAccessibilityEvent(const ui::AXEvent& event) override;
-  bool AXReadyCallback() override;
+  bool SendAccessibilitySerialization(std::vector<ui::AXTreeUpdate> updates,
+                                      std::vector<ui::AXEvent> events,
+                                      bool had_load_complete_messages) override;
   void CheckIfAudioSinkExistsAndIsAuthorized(
       const blink::WebString& sink_id,
       blink::WebSetSinkIdCompleteCallback callback) override;
@@ -661,7 +667,6 @@ class CONTENT_EXPORT RenderFrameImpl
   scoped_refptr<blink::WebBackgroundResourceFetchAssets>
   MaybeGetBackgroundResourceFetchAssets() override;
   void OnStopLoading() override;
-  void DraggableRegionsChanged() override;
   blink::BrowserInterfaceBrokerProxy* GetBrowserInterfaceBroker() override;
   blink::WebView* CreateNewWindow(
       const blink::WebURLRequest& request,
@@ -674,6 +679,8 @@ class CONTENT_EXPORT RenderFrameImpl
       const std::optional<blink::Impression>& impression,
       const std::optional<blink::WebPictureInPictureWindowOptions>& pip_options,
       const blink::WebURL& base_url) override;
+  std::unique_ptr<blink::WebLinkPreviewTriggerer> CreateLinkPreviewTriggerer()
+      override;
 
   // Dispatches the current state of selection on the webpage to the browser if
   // it has changed or if the forced flag is passed. The forced flag is used
@@ -871,7 +878,7 @@ class CONTENT_EXPORT RenderFrameImpl
 
    private:
     base::WeakPtr<RenderFrameImpl> weak_frame_;
-    raw_ptr<T, ExperimentalRenderer> scoped_variable_;
+    raw_ptr<T> scoped_variable_;
     T original_value_;
   };
 
@@ -895,7 +902,7 @@ class CONTENT_EXPORT RenderFrameImpl
   void RemoveObserver(RenderFrameObserver* observer);
 
   // Checks whether accessibility support for this frame is currently enabled.
-  bool IsAccessibilityEnabled() const;
+  bool IsAccessibilityEnabled() const override;
 
   // mojom::Frame implementation:
   void CommitSameDocumentNavigation(
@@ -1207,11 +1214,10 @@ class CONTENT_EXPORT RenderFrameImpl
   // constructor until BindToFrame() is called, and it is null after
   // FrameDetached() is called until destruction (which is asynchronous in the
   // case of the main frame, but not subframes).
-  raw_ptr<blink::WebNavigationControl, ExperimentalRenderer> frame_ = nullptr;
+  raw_ptr<blink::WebNavigationControl> frame_ = nullptr;
 
   // The `AgentSchedulingGroup` this frame is associated with.
-  const raw_ref<AgentSchedulingGroup, ExperimentalRenderer>
-      agent_scheduling_group_;
+  const raw_ref<AgentSchedulingGroup> agent_scheduling_group_;
 
   // False until Initialize() is run, to avoid actions before the frame's
   // observers are created.
@@ -1228,18 +1234,18 @@ class CONTENT_EXPORT RenderFrameImpl
 
     // FrameAdapter overrides:
     bool IsMainFrame() const override;
-    bool IsCandidateUnique(base::StringPiece name) const override;
+    bool IsCandidateUnique(std::string_view name) const override;
     int GetSiblingCount() const override;
     int GetChildCount() const override;
     std::vector<std::string> CollectAncestorNames(
         BeginPoint begin_point,
-        bool (*should_stop)(base::StringPiece)) const override;
+        bool (*should_stop)(std::string_view)) const override;
     std::vector<int> GetFramePosition(BeginPoint begin_point) const override;
 
    private:
     blink::WebLocalFrame* GetWebFrame() const;
 
-    raw_ptr<RenderFrameImpl, ExperimentalRenderer> render_frame_;
+    raw_ptr<RenderFrameImpl> render_frame_;
   };
   UniqueNameFrameAdapter unique_name_frame_adapter_;
   blink::UniqueNameHelper unique_name_helper_;
@@ -1332,8 +1338,7 @@ class CONTENT_EXPORT RenderFrameImpl
   PepperPluginSet active_pepper_instances_;
 
   // Whether or not the focus is on a PPAPI plugin
-  raw_ptr<PepperPluginInstanceImpl, ExperimentalRenderer>
-      focused_pepper_plugin_;
+  raw_ptr<PepperPluginInstanceImpl> focused_pepper_plugin_;
 
   mojo::AssociatedRemote<mojom::PepperHost> pepper_host_remote_;
 #endif
@@ -1635,7 +1640,8 @@ class CONTENT_EXPORT RenderFrameImpl
 
   // Set when this RenderFrame is being swapped for
   // `provisional_frame_for_local_root_swap_`.
-  raw_ptr<RenderFrameImpl> provisional_frame_for_local_root_swap_ = nullptr;
+  base::WeakPtr<RenderFrameImpl> provisional_frame_for_local_root_swap_ =
+      nullptr;
 
   // Set if this RenderFrameImpl is for a main frame which is not top-level.
   const bool is_for_nested_main_frame_;

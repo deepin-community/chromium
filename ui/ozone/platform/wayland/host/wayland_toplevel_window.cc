@@ -5,8 +5,10 @@
 #include "ui/ozone/platform/wayland/host/wayland_toplevel_window.h"
 
 #include <aura-shell-client-protocol.h>
+
 #include <string>
 
+#include "base/nix/xdg_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -25,6 +27,7 @@
 #include "ui/ozone/platform/wayland/host/gtk_surface1.h"
 #include "ui/ozone/platform/wayland/host/shell_object_factory.h"
 #include "ui/ozone/platform/wayland/host/shell_toplevel_wrapper.h"
+#include "ui/ozone/platform/wayland/host/wayland_bubble.h"
 #include "ui/ozone/platform/wayland/host/wayland_buffer_manager_host.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_event_source.h"
@@ -178,6 +181,9 @@ void WaylandToplevelWindow::Hide() {
     child_window()->Hide();
     set_child_window(nullptr);
   }
+  for (auto bubble : child_bubbles()) {
+    bubble->Hide();
+  }
   WaylandWindow::Hide();
 
   // Request the compositor to cease any possible ongoing snapping
@@ -243,32 +249,32 @@ void WaylandToplevelWindow::Maximize() {
 }
 
 void WaylandToplevelWindow::Minimize() {
-  // Do not allow to minimize the window if it has never been configured. That
-  // is, if the browser is minimized (there are at least two windows) and the
-  // session is restored after crash or logout, which forced the browser to
-  // close, the session will only restore one window, while all the other
-  // windows will be set to minimized. That means windows will be never ack
-  // configured and they will stay forever minimized as a Wayland compositor
-  // will not activate those windows (upon user interaction) because the before
-  // mentioned initial configure/ack_configure messaging hasn't happened.
-  //
-  // TODO(crbug.com/1293740): find a solution to this workaround.
-  if (IsSurfaceConfigured()) {
-    fullscreen_display_id_ = display::kInvalidDisplayId;
-    shell_toplevel_->SetMinimized();
-    if (!SupportsConfigureMinimizedState()) {
-      // Wayland standard does not have API to notify client apps about
-      // window minimized, while exo has an extension (in
-      // zaura_shell::configure) for it.
-      // In the former case we update the window state here synchronously,
-      // while in the latter case update the window state in the handler of
-      // configure (HandleAuraToplevelConfigure) asynchronously.
-      previous_state_ = state_;
-      state_ = PlatformWindowState::kMinimized;
-      delegate()->OnWindowStateChanged(previous_state_, state_);
-    }
-  } else {
-    SetWindowState(PlatformWindowState::kNormal, display::kInvalidDisplayId);
+  if (!shell_toplevel_) {
+    // TODO(crbug.com/1466385): Store `PlatformWindowState::kMinimized` to a
+    // pending state.
+    return;
+  }
+
+  fullscreen_display_id_ = display::kInvalidDisplayId;
+  shell_toplevel_->SetMinimized();
+
+  if (!SupportsConfigureMinimizedState() && IsSurfaceConfigured()) {
+    // Wayland standard does not have API to notify client apps about
+    // window minimized, while exo has an extension (in
+    // zaura_shell::configure) for it.
+    // In the former case we update the window state here synchronously,
+    // while in the latter case update the window state in the handler of
+    // configure (HandleAuraToplevelConfigure) asynchronously.
+    // We also need to check if the surface is already configured in case of a
+    // synchronous minimize because a minimized window cannot ack configure.
+    // This can happen if a minimized window is restored by a session restore.
+    //
+    // TODO(crbug.com/1293740): Verify that the claim about a window initialized
+    // as a minimized window cannot ack configure. If not
+    // `IsSurfaceConfigured()` condition can be removed.
+    previous_state_ = state_;
+    state_ = PlatformWindowState::kMinimized;
+    delegate()->OnWindowStateChanged(previous_state_, state_);
   }
 }
 
@@ -292,6 +298,17 @@ PlatformWindowState WaylandToplevelWindow::GetPlatformWindowState() const {
   return state_;
 }
 
+std::optional<std::string> WaylandToplevelWindow::TakeActivationToken() const {
+  if (!connection()->xdg_activation() ||
+      // xdg-activation implementation in some compositors is still buggy and
+      // Mutter crashes were observed when windows are activated during window
+      // dragging sessions. See https://crbug.com/1366504.
+      connection()->IsDragInProgress()) {
+    return std::nullopt;
+  }
+  return base::nix::TakeXdgActivationToken();
+}
+
 void WaylandToplevelWindow::Activate() {
   // Activation is supported through optional protocol extensions and hence may
   // or may not work depending on the compositor.  The details depend on the
@@ -305,21 +322,20 @@ void WaylandToplevelWindow::Activate() {
     shell_toplevel_->Activate();
   } else if (zaura_surface && zaura_surface->SupportsActivate()) {
     zaura_surface->Activate();
-  } else if (connection()->xdg_activation()) {
-    // xdg-activation implementation in some compositors is still buggy and
-    // Mutter crashes were observed when windows are activated during window
-    // dragging sessions. See https://crbug.com/1366504.
-    if (!connection()->IsDragInProgress())
-      connection()->xdg_activation()->Activate(root_surface()->surface());
+  } else if (auto token = TakeActivationToken()) {
+    connection()->xdg_activation()->Activate(root_surface()->surface(), *token);
   } else if (gtk_surface1_) {
     gtk_surface1_->RequestFocus();
   }
+
   // This is required as the high level activation might not get a flush for
   // a while. Example: Ash calls OpenURL in Lacros, which activates a window
   // but nothing more happens (until the user moves the mouse over a Lacros
   // window in which case events will start and the activation will come
   // through).
   connection()->Flush();
+
+  WaylandWindow::Activate();
 }
 
 void WaylandToplevelWindow::Deactivate() {
@@ -327,6 +343,7 @@ void WaylandToplevelWindow::Deactivate() {
     shell_toplevel_->Deactivate();
     connection()->Flush();
   }
+  WaylandWindow::Deactivate();
 }
 
 void WaylandToplevelWindow::SizeConstraintsChanged() {
@@ -636,18 +653,30 @@ void WaylandToplevelWindow::HandleAuraToplevelConfigure(
   pending_configure_state_.size_px =
       delegate()->ConvertRectToPixels(bounds_dip).size();
 
-  // Store the restored bounds if current state differs from the normal state.
-  // It can be client or compositor side change from normal to something else.
-  // Thus, we must store previous bounds to restore later.
-  SetOrResetRestoredBounds();
+  // Update `restored_bounds_dip_` which is used when the window gets back to
+  // normal state after it went maximized or fullscreen. It can be client or
+  // compositor side change, so we must store previous bounds to restore later.
+  // We reset `restored_bounds_dip_` if the window is normal, snapped or floated
+  // state, or update it to the applied bounds if we don't have any meaningful
+  // value stored.
+  if (ShouldSetBounds(state_)) {
+    SetRestoredBoundsInDIP({});
+  } else if (GetRestoredBoundsInDIP().IsEmpty()) {
+    SetRestoredBoundsInDIP(GetBoundsInDIP());
+  }
 
   if (old_state != state_ && !skip_window_state_changed_notification) {
     previous_state_ = old_state;
     delegate()->OnWindowStateChanged(previous_state_, state_);
   }
 
-  if (did_active_change)
-    delegate()->OnActivationChanged(is_active_);
+  if (did_active_change) {
+    if (active_bubble()) {
+      ActivateBubble(is_active_ ? active_bubble() : nullptr);
+    } else {
+      delegate()->OnActivationChanged(is_active_);
+    }
+  }
 }
 
 void WaylandToplevelWindow::SetBoundsInPixels(const gfx::Rect& bounds) {
@@ -842,24 +871,14 @@ void WaylandToplevelWindow::StartWindowDraggingSessionIfNeeded(
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
 void WaylandToplevelWindow::SetImmersiveFullscreenStatus(bool status) {
+  // Skip if `status` is same as the last request.
+  if (last_requested_immersive_status_ == status) {
+    return;
+  }
+  last_requested_immersive_status_ = std::make_optional(status);
+
   if (shell_toplevel_) {
     shell_toplevel_->SetUseImmersiveMode(status);
-  } else {
-    // TODO(elkurin): Investigate whether we can deprecate this clause. This
-    // pass is used by some tests which do not set shell properly and ideally we
-    // would like to fix those tests. After those fixes, remove this clause or
-    // replace it by CHECK.
-    NOTIMPLEMENTED_LOG_ONCE();
-    // TODO(https://crbug.com/1113900): With Lacros, the state change gets
-    // completed asynchronously (see removal of notification call in
-    // `BrowserView::ProcessFullscreen`). As such we need to release any waiting
-    // application now. This needs also be properly addressed with the
-    // immersive mode change inside the immersive mode handling by calling
-    // this delegate - or `BrowserView::FullscreenStateChanged()` directly.
-    auto new_type = status ? PlatformFullscreenType::kImmersive
-                           : PlatformFullscreenType::kPlain;
-    delegate()->OnFullscreenTypeChanged(fullscreen_type_, new_type);
-    fullscreen_type_ = new_type;
   }
 }
 
@@ -885,6 +904,25 @@ void WaylandToplevelWindow::SetShadowCornersRadii(
 
 void WaylandToplevelWindow::RoundTripQueue() {
   connection()->RoundTripQueue();
+}
+
+bool WaylandToplevelWindow::HasInFlightRequestsForState() const {
+  CHECK(UseTestConfigForPlatformWindows());
+  return WaylandWindow::HasInFlightRequestsForStateForTesting();
+}
+
+int64_t WaylandToplevelWindow::GetVizSequenceIdForAppliedState() const {
+  CHECK(UseTestConfigForPlatformWindows());
+  return latest_applied_viz_seq_for_testing_;
+}
+
+int64_t WaylandToplevelWindow::GetVizSequenceIdForLatchedState() const {
+  CHECK(UseTestConfigForPlatformWindows());
+  return latest_latched_viz_seq_for_testing_;
+}
+
+void WaylandToplevelWindow::SetLatchImmediately(bool latch_immediately) {
+  latch_immediately_for_testing_ = latch_immediately;
 }
 
 void WaylandToplevelWindow::ShowSnapPreview(
@@ -1203,19 +1241,6 @@ void WaylandToplevelWindow::SetSizeConstraints() {
   connection()->Flush();
 }
 
-void WaylandToplevelWindow::SetOrResetRestoredBounds() {
-  // The |restored_size_in_dp_| are used when the window gets back to normal
-  // state after it went maximized or fullscreen.  So we reset these if the
-  // window has just become normal and store the current bounds if it is
-  // either going out of normal state or simply changes the state and we don't
-  // have any meaningful value stored.
-  if (ShouldSetBounds(GetPlatformWindowState())) {
-    SetRestoredBoundsInDIP({});
-  } else if (GetRestoredBoundsInDIP().IsEmpty()) {
-    SetRestoredBoundsInDIP(GetBoundsInDIP());
-  }
-}
-
 void WaylandToplevelWindow::SetUpShellIntegration() {
   // This method should be called after the XDG surface is initialized.
   DCHECK(shell_toplevel_);
@@ -1223,15 +1248,13 @@ void WaylandToplevelWindow::SetUpShellIntegration() {
     if (auto* zaura_surface = root_surface()->CreateZAuraSurface()) {
       zaura_surface->set_delegate(AsWeakPtr());
 
-      // If native window occlusion tracking is disabled (meaning compositor
-      // visibility is not controlled by occlusion) then enable the old
-      // unsynchronized occlusion pathway. Also, if the server does not support
-      // the synchronized occlusion pathway, enable the unsynchronized occlusion
-      // pathway.
-      if (!delegate()->IsNativeWindowOcclusionTrackingAlwaysEnabled() ||
-          !shell_toplevel_->IsSupportedOnAuraToplevel(
+      // If the server does not support the synchronized occlusion pathway,
+      // enable the unsynchronized occlusion pathway and disable native
+      // occlusion.
+      if (!shell_toplevel_->IsSupportedOnAuraToplevel(
               ZAURA_TOPLEVEL_CONFIGURE_OCCLUSION_STATE_SINCE_VERSION)) {
         zaura_surface->SetOcclusionTracking();
+        delegate()->DisableNativeWindowOcclusion();
       }
     }
 

@@ -28,7 +28,6 @@
 #include "dawn/native/Texture.h"
 
 #include <algorithm>
-#include <string>
 #include <utility>
 
 #include "dawn/common/Assert.h"
@@ -371,13 +370,6 @@ MaybeError ValidateTextureUsage(const DeviceBase* device,
                     "The texture usage (%s) includes %s, which is incompatible with the texture "
                     "dimension (%s).",
                     usage, wgpu::TextureUsage::RenderAttachment, descriptor->dimension);
-
-    DAWN_INVALID_IF(!device->IsToggleEnabled(Toggle::AllowUnsafeAPIs) &&
-                        descriptor->dimension == wgpu::TextureDimension::e3D &&
-                        (usage & wgpu::TextureUsage::RenderAttachment),
-                    "The texture dimension must not be %s for a render attachment if "
-                    "allow_unsafe_apis is not enabled. See crbug.com/dawn/1020.",
-                    wgpu::TextureDimension::e3D);
 
     DAWN_INVALID_IF(
         !format->supportsStorageUsage && (usage & wgpu::TextureUsage::StorageBinding),
@@ -733,7 +725,7 @@ bool IsValidSampleCount(uint32_t sampleCount) {
 TextureBase::TextureState::TextureState() : hasAccess(true), destroyed(false) {}
 
 TextureBase::TextureBase(DeviceBase* device, const UnpackedPtr<TextureDescriptor>& descriptor)
-    : ApiObjectBase(device, descriptor->label),
+    : SharedResource(device, descriptor->label),
       mDimension(descriptor->dimension),
       mCompatibilityTextureBindingViewDimension(
           ResolveDefaultCompatiblityTextureBindingViewDimension(device, descriptor)),
@@ -795,7 +787,7 @@ static constexpr Format kUnusedFormat;
 TextureBase::TextureBase(DeviceBase* device,
                          const TextureDescriptor* descriptor,
                          ObjectBase::ErrorTag tag)
-    : ApiObjectBase(device, tag, descriptor->label),
+    : SharedResource(device, tag, descriptor->label),
       mDimension(descriptor->dimension),
       mCompatibilityTextureBindingViewDimension(
           ResolveDefaultCompatiblityTextureBindingViewDimension(device, Unpack(descriptor))),
@@ -830,6 +822,32 @@ Ref<TextureBase> TextureBase::MakeError(DeviceBase* device, const TextureDescrip
 
 ObjectType TextureBase::GetType() const {
     return ObjectType::Texture;
+}
+
+void TextureBase::FormatLabel(absl::FormatSink* s) const {
+    s->Append(ObjectTypeAsString(GetType()));
+
+    const std::string& label = GetLabel();
+    if (!label.empty()) {
+        s->Append(absl::StrFormat(" \"%s\"", label));
+    } else if (!IsError()) {
+        s->Append(absl::StrFormat(" (unlabeled %s, %s)", GetSizeLabel(), mFormat->format));
+    }
+}
+
+std::string TextureBase::GetSizeLabel() const {
+    if (mDimension == wgpu::TextureDimension::e1D) {
+        return absl::StrFormat("%d px", mBaseSize.width);
+    } else if (mDimension == wgpu::TextureDimension::e3D) {
+        return absl::StrFormat("%dx%dx%d px", mBaseSize.width, mBaseSize.height,
+                               mBaseSize.depthOrArrayLayers);
+    }
+
+    if (mBaseSize.depthOrArrayLayers > 1) {
+        return absl::StrFormat("%dx%d px, %d layer", mBaseSize.width, mBaseSize.height,
+                               mBaseSize.depthOrArrayLayers);
+    }
+    return absl::StrFormat("%dx%d px", mBaseSize.width, mBaseSize.height);
 }
 
 wgpu::TextureDimension TextureBase::GetDimension() const {
@@ -955,6 +973,14 @@ bool TextureBase::IsDestroyed() const {
     return mState.destroyed;
 }
 
+bool TextureBase::IsInitialized() const {
+    return IsSubresourceContentInitialized(GetAllSubresources());
+}
+
+void TextureBase::SetInitialized(bool initialized) {
+    SetIsSubresourceContentInitialized(initialized, GetAllSubresources());
+}
+
 void TextureBase::SetHasAccess(bool hasAccess) {
     DAWN_ASSERT(!IsError());
     mState.hasAccess = hasAccess;
@@ -1011,8 +1037,11 @@ MaybeError TextureBase::ValidateCanUseInSubmitNow() const {
     if (DAWN_UNLIKELY(mState.destroyed || !mState.hasAccess)) {
         DAWN_INVALID_IF(mState.destroyed, "Destroyed texture %s used in a submit.", this);
         if (DAWN_UNLIKELY(!mState.hasAccess)) {
-            if (mSharedTextureMemoryContents != nullptr) {
-                auto memory = mSharedTextureMemoryContents->GetSharedTextureMemory().Promote();
+            if (mSharedResourceMemoryContents != nullptr) {
+                Ref<SharedTextureMemoryBase> memory =
+                    mSharedResourceMemoryContents->GetSharedResourceMemory()
+                        .Promote()
+                        .Cast<Ref<SharedTextureMemoryBase>>();
                 if (memory != nullptr) {
                     return DAWN_VALIDATION_ERROR("%s used in a submit without current access to %s",
                                                  this, memory.Get());
@@ -1146,10 +1175,6 @@ bool TextureBase::IsImplicitMSAARenderTextureViewSupported() const {
     return (GetUsage() & wgpu::TextureUsage::TextureBinding) != 0;
 }
 
-SharedTextureMemoryContents* TextureBase::GetSharedTextureMemoryContents() const {
-    return mSharedTextureMemoryContents.Get();
-}
-
 void TextureBase::APIDestroy() {
     Destroy();
 }
@@ -1225,8 +1250,7 @@ void TextureViewBase::FormatLabel(absl::FormatSink* s) const {
         return;
     }
 
-    const std::string& textureLabel = mTexture->GetLabel();
-    if (!textureLabel.empty()) {
+    if (label.empty()) {
         s->Append(" of ");
         GetTexture()->FormatLabel(s);
     }

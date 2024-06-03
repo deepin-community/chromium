@@ -92,6 +92,11 @@ enum AttributionReportingIssueType {
   kWebAndOsHeaders,
   kNoWebOrOsSupport,
   kNavigationRegistrationWithoutTransientUserActivation,
+  kInvalidInfoHeader,
+  kNoRegisterSourceHeader,
+  kNoRegisterTriggerHeader,
+  kNoRegisterOsSourceHeader,
+  kNoRegisterOsTriggerHeader,
 };
 
 struct AttributionReportingIssueDetails {
@@ -238,6 +243,8 @@ enum FederatedAuthRequestResult {
   kErrorSilentMediationFailure,
   kErrorThirdPartyCookiesBlocked,
   kErrorNotSignedInWithIdp,
+  kErrorMissingTransientUserActivation,
+  kErrorReplacedByButtonMode,
   kError,
 };
 

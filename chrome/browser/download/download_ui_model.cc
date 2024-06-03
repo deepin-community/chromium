@@ -355,9 +355,11 @@ std::u16string DownloadUIModel::GetWarningText(const std::u16string& filename,
                                         offset);
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
       // TODO(crbug.com/1491184): Implement UX for this danger type.
+      return u"";
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
+      // TODO(b/327392327): Implement UX for this danger type.
       NOTREACHED();
       break;
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
@@ -506,6 +508,15 @@ DownloadUIModel::GetInsecureDownloadStatus() const {
 
 void DownloadUIModel::OpenUsingPlatformHandler() {}
 
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+std::optional<DownloadCommands::Command>
+DownloadUIModel::MaybeGetMediaAppAction() const {
+  return std::nullopt;
+}
+
+void DownloadUIModel::OpenUsingMediaApp() {}
+#endif
+
 bool DownloadUIModel::IsBeingRevived() const {
   return true;
 }
@@ -629,6 +640,8 @@ bool DownloadUIModel::IsCommandEnabled(
     case DownloadCommands::OPEN_WHEN_COMPLETE:
     case DownloadCommands::PLATFORM_OPEN:
     case DownloadCommands::ALWAYS_OPEN_TYPE:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       NOTREACHED();
       return false;
     case DownloadCommands::CANCEL:
@@ -689,6 +702,8 @@ bool DownloadUIModel::IsCommandChecked(
     case DownloadCommands::REVIEW:
     case DownloadCommands::RETRY:
     case DownloadCommands::CANCEL_DEEP_SCAN:
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
       return false;
   }
   return false;
@@ -716,24 +731,30 @@ void DownloadUIModel::ExecuteCommand(DownloadCommands* download_commands,
       NOTREACHED();
       break;
     case DownloadCommands::LEARN_MORE_INTERRUPTED:
-      download_commands->GetBrowser()->OpenURL(content::OpenURLParams(
-          download_commands->GetLearnMoreURLForInterruptedDownload(),
-          content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui::PAGE_TRANSITION_LINK, false));
+      download_commands->GetBrowser()->OpenURL(
+          content::OpenURLParams(
+              download_commands->GetLearnMoreURLForInterruptedDownload(),
+              content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+              ui::PAGE_TRANSITION_LINK, false),
+          /*navigation_handle_callback=*/{});
       break;
     case DownloadCommands::LEARN_MORE_INSECURE_DOWNLOAD:
-      download_commands->GetBrowser()->OpenURL(content::OpenURLParams(
-          GURL(chrome::kInsecureDownloadBlockingLearnMoreUrl),
-          content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui::PAGE_TRANSITION_LINK, false));
+      download_commands->GetBrowser()->OpenURL(
+          content::OpenURLParams(
+              GURL(chrome::kInsecureDownloadBlockingLearnMoreUrl),
+              content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
+              ui::PAGE_TRANSITION_LINK, false),
+          /*navigation_handle_callback=*/{});
       break;
     case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
-      download_commands->GetBrowser()->OpenURL(content::OpenURLParams(
-          google_util::AppendGoogleLocaleParam(
-              GURL(chrome::kDownloadBlockedLearnMoreURL),
-              g_browser_process->GetApplicationLocale()),
-          content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui::PAGE_TRANSITION_LINK, false));
+      download_commands->GetBrowser()->OpenURL(
+          content::OpenURLParams(google_util::AppendGoogleLocaleParam(
+                                     GURL(chrome::kDownloadBlockedLearnMoreURL),
+                                     g_browser_process->GetApplicationLocale()),
+                                 content::Referrer(),
+                                 WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                                 ui::PAGE_TRANSITION_LINK, false),
+          /*navigation_handle_callback=*/{});
       break;
     case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
       chrome::ShowSafeBrowsingEnhancedProtectionWithIph(
@@ -758,12 +779,24 @@ void DownloadUIModel::ExecuteCommand(DownloadCommands* download_commands,
     case DownloadCommands::RETRY:
     case DownloadCommands::CANCEL_DEEP_SCAN:
       break;
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+      OpenUsingMediaApp();
+#else
+      NOTREACHED();
+#endif
+      break;
   }
 }
 
 DownloadUIModel::TailoredWarningType DownloadUIModel::GetTailoredWarningType()
     const {
   return TailoredWarningType::kNoTailoredWarning;
+}
+
+DownloadUIModel::DangerUiPattern DownloadUIModel::GetDangerUiPattern() const {
+  return DangerUiPattern::kNormal;
 }
 
 bool DownloadUIModel::ShouldShowInBubble() const {
@@ -999,7 +1032,10 @@ DownloadUIModel::BubbleStatusTextBuilder::GetBubbleWarningStatusText() const {
             l10n_util::GetStringUTF16(
                 IDS_DOWNLOAD_BUBBLE_STATUS_DEEP_SCANNED_FAILED_UPDATED),
             l10n_util::GetStringUTF16(IDS_DOWNLOAD_BUBBLE_STATUS_SUSPICIOUS));
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
+      // TODO(b/327392327): Implement message for this danger type.
+      NOTREACHED();
+      break;
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
     case download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:

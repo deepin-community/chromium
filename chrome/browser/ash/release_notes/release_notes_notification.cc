@@ -9,6 +9,7 @@
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/utility/forest_util.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/strings/string_util.h"
@@ -38,11 +39,15 @@ ReleaseNotesNotification::~ReleaseNotesNotification() {}
 
 void ReleaseNotesNotification::MaybeShowReleaseNotes() {
   release_notes_storage_ = std::make_unique<ReleaseNotesStorage>(profile_);
-  if (!release_notes_storage_->ShouldNotify())
+  if (!release_notes_storage_->ShouldNotify() || IsForestFeatureEnabled()) {
     return;
+  }
   ShowReleaseNotesNotification();
   base::RecordAction(base::UserMetricsAction("ReleaseNotes.NotificationShown"));
   release_notes_storage_->MarkNotificationShown();
+  // When the notification is shown we should also show the suggestion chip a
+  // number of times.
+  release_notes_storage_->StartShowingSuggestionChip();
 }
 
 void ReleaseNotesNotification::HandleClickShowNotification() {

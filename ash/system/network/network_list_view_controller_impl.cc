@@ -298,26 +298,40 @@ void NetworkListViewControllerImpl::OnGetNetworkStateList(
     if (ShouldTetherHostsSectionBeShown()) {
       if (!tether_hosts_header_view_) {
         tether_hosts_header_view_ =
-            network_detailed_network_view()->AddTetherHostsSectionHeader();
+            network_detailed_network_view()->AddTetherHostsSectionHeader(
+                base::BindRepeating(
+                    &NetworkListViewControllerImpl::UpdateTetherHostsSection,
+                    weak_ptr_factory_.GetWeakPtr()));
       }
 
       UpdateTetherHostsSection();
-      network_detailed_network_view()->ReorderTetherHostsTopContainer(index++);
+      tether_hosts_header_view_->parent()->ReorderChildView(
+          tether_hosts_header_view_, index++);
 
       size_t tether_item_index = 0;
-      tether_item_index = CreateItemViewsIfMissingAndReorder(
-          NetworkType::kTether, tether_item_index, networks,
-          &previous_network_views);
 
-      // Add tether hosts status message to NetworkDetailedNetworkView's
-      // `tether_hosts_network_list_view_` if it exist.
-      if (tether_hosts_status_message_) {
-        network_detailed_network_view()
-            ->GetNetworkList(NetworkType::kTether)
-            ->ReorderChildView(tether_hosts_status_message_,
-                               tether_item_index++);
+      if (has_phone_eligible_for_setup_) {
+        // This does not remote tether_hosts_status_message_, as
+        // UpdateTetherHostsSection() ensures tether_hosts_status_message_ does
+        // not exist if has_phone_eligible_for_setup_ is true
+        tether_item_index = CreateConfigureNetworkEntry(
+            &set_up_cross_device_suite_entry_, NetworkType::kTether,
+            tether_item_index);
+      } else {
+        RemoveAndResetViewIfExists(&set_up_cross_device_suite_entry_);
+        tether_item_index = CreateItemViewsIfMissingAndReorder(
+            NetworkType::kTether, tether_item_index, networks,
+            &previous_network_views);
+
+        // Add tether hosts status message to NetworkDetailedNetworkView's
+        // `tether_hosts_network_list_view_` if it exist.
+        if (tether_hosts_status_message_) {
+          network_detailed_network_view()
+              ->GetNetworkList(NetworkType::kTether)
+              ->ReorderChildView(tether_hosts_status_message_,
+                                 tether_item_index);
+        }
       }
-
       network_detailed_network_view()->ReorderTetherHostsListView(index++);
     } else {
       RemoveAndResetViewIfExists(&tether_hosts_header_view_);
@@ -693,20 +707,23 @@ void NetworkListViewControllerImpl::UpdateMobileSection() {
 }
 
 void NetworkListViewControllerImpl::UpdateTetherHostsSection() {
+  CHECK(features::IsInstantHotspotRebrandEnabled());
   if (!tether_hosts_header_view_) {
     return;
   }
 
-  network_detailed_network_view()->UpdateTetherHostsStatus(true);
+  network_detailed_network_view()->UpdateTetherHostsStatus(
+      tether_hosts_header_view_->is_expanded());
 
-  if (!IsBluetoothEnabledOrEnabling(bluetooth_system_state_)) {
+  if (!IsBluetoothEnabledOrEnabling(bluetooth_system_state_) &&
+      !has_phone_eligible_for_setup_) {
     CreateInfoLabelIfMissingAndUpdate(
         IDS_ASH_STATUS_TRAY_NETWORK_TETHER_NO_BLUETOOTH,
         &tether_hosts_status_message_);
     return;
   }
 
-  if (!has_tether_networks_) {
+  if (!has_tether_networks_ && !has_phone_eligible_for_setup_) {
     CreateInfoLabelIfMissingAndUpdate(
         IDS_ASH_STATUS_TRAY_NETWORK_NO_TETHER_DEVICES_FOUND,
         &tether_hosts_status_message_);

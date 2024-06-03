@@ -100,8 +100,7 @@ ContextualPageActionsModel::GetModelConfig() {
 
   // Set output config, labels, and classifier.
   writer.AddOutputConfigForMultiClassClassifier(
-      kContextualPageActionModelLabels.begin(),
-      kContextualPageActionModelLabels.size(),
+      kContextualPageActionModelLabels,
       /*top_k_outputs=*/1, threshold);
 
   constexpr int kModelVersion = 1;
@@ -132,7 +131,7 @@ void ContextualPageActionsModel::ExecuteModelWithInput(
   ModelProvider::Response response(2, 0);
   response[0] = can_track_price;
   response[1] = has_reader_mode;
-  // TODO(crbug/1399467): Set a classifier threshold.
+  // TODO(crbug.com/40249852): Set a classifier threshold.
 
   // TODO(shaktisahu): This class needs some rethinking to correctly associate
   // the labeled outputs to the flattened vector. Maybe have this method return

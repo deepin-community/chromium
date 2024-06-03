@@ -51,6 +51,7 @@ typedef struct {
     SDL_Rect texture_rect;
 
     int inited;
+    int warned;
 } SDLContext;
 
 static const struct sdl_texture_format_entry {
@@ -164,6 +165,15 @@ static int sdl2_write_header(AVFormatContext *s)
     AVCodecParameters *codecpar = st->codecpar;
     int i, ret = 0;
     int flags  = 0;
+
+    if (!sdl->warned) {
+        av_log(sdl, AV_LOG_WARNING,
+            "The sdl output device is deprecated due to being fundamentally incompatible with libavformat API. "
+            "For monitoring purposes in ffmpeg you can output to a file or use pipes and a video player.\n"
+            "Example: ffmpeg -i INPUT -f nut -c:v rawvideo - | ffplay -\n"
+        );
+        sdl->warned = 1;
+    }
 
     if (!sdl->window_title)
         sdl->window_title = av_strdup(s->url);
@@ -350,6 +360,7 @@ static const AVOption options[] = {
 
 static const AVClass sdl2_class = {
     .class_name = "sdl2 outdev",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
     .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_OUTPUT,

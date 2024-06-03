@@ -4,8 +4,6 @@
 
 #include "content/public/app/content_main.h"
 
-#include <optional>
-
 #include "base/allocator/partition_alloc_support.h"
 #include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
 #include "base/at_exit.h"
@@ -21,8 +19,10 @@
 #include "base/process/launch.h"
 #include "base/process/memory.h"
 #include "base/process/process.h"
+#include "base/process/set_process_title.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/synchronization/condition_variable.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/platform_thread.h"
@@ -35,7 +35,6 @@
 #include "components/tracing/common/tracing_switches.h"
 #include "content/app/content_main_runner_impl.h"
 #include "content/common/mojo_core_library_support.h"
-#include "content/common/set_process_title.h"
 #include "content/public/app/content_main_delegate.h"
 #include "content/public/common/content_switches.h"
 #include "mojo/core/embedder/configuration.h"
@@ -245,7 +244,7 @@ RunContentProcess(ContentMainParams params,
 
     base::EnableTerminationOnHeapCorruption();
 
-    SetProcessTitleFromCommandLine(argv);
+    base::SetProcessTitleFromCommandLine(argv);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
     InitTimeTicksAtUnixEpoch();
@@ -287,12 +286,8 @@ RunContentProcess(ContentMainParams params,
 #endif
 
 #if BUILDFLAG(IS_IOS)
-    // TODO(crbug.com/1412835): Remove this initialization on iOS. Everything
-    // runs in process for now as we have no fork.
+    base::ConditionVariable::InitializeFeatures();
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-#if !TARGET_OS_SIMULATOR
-    command_line->AppendSwitch(switches::kSingleProcess);
-#endif
     command_line->AppendSwitch(switches::kEnableViewport);
     command_line->AppendSwitch(switches::kUseMobileUserAgent);
 #endif
@@ -309,15 +304,14 @@ RunContentProcess(ContentMainParams params,
     }
 
 #if BUILDFLAG(IS_WIN)
-    // Route stdio to parent console (if any) or create one.
-    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kEnableLogging)) {
-      base::RouteStdioToConsole(/*create_console_if_not_found*/ true);
-    } else if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-                   switches::kHeadless)) {
+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+    if (command_line->HasSwitch(switches::kHeadless)) {
       // When running in headless mode we want stdio routed however if
       // console does not exist we should not create one.
       base::RouteStdioToConsole(/*create_console_if_not_found*/ false);
+    } else if (command_line->HasSwitch(switches::kEnableLogging)) {
+      // Route stdio to parent console (if any) or create one.
+      base::RouteStdioToConsole(/*create_console_if_not_found*/ true);
     }
 #endif
 

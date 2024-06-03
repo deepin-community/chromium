@@ -10,6 +10,14 @@
 #include <utility>
 #include <vector>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/compiler_specific.h"
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/numerics/clamped_math.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
+#include "core/fxcrt/numerics/safe_math.h"
+#include "core/fxcrt/span.h"
 #include "core/fxge/cfx_font.h"
 #include "core/fxge/cfx_fontmgr.h"
 #include "core/fxge/cfx_gemodule.h"
@@ -21,12 +29,6 @@
 #include "core/fxge/fx_font.h"
 #include "core/fxge/fx_fontencoding.h"
 #include "core/fxge/scoped_font_transform.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/notreached.h"
-#include "third_party/base/numerics/clamped_math.h"
-#include "third_party/base/numerics/safe_conversions.h"
-#include "third_party/base/numerics/safe_math.h"
 
 #define EM_ADJUST(em, a) (em == 0 ? (a) : (a) * 1000 / em)
 
@@ -290,8 +292,8 @@ RetainPtr<CFX_Face> CFX_Face::New(FT_Library library,
                                   FT_Long face_index) {
   FXFT_FaceRec* pRec = nullptr;
   if (FT_New_Memory_Face(library, data.data(),
-                         pdfium::base::checked_cast<FT_Long>(data.size()),
-                         face_index, &pRec) != 0) {
+                         pdfium::checked_cast<FT_Long>(data.size()), face_index,
+                         &pRec) != 0) {
     return nullptr;
   }
   // Private ctor.
@@ -353,37 +355,37 @@ ByteString CFX_Face::GetStyleName() const {
 }
 
 FX_RECT CFX_Face::GetBBox() const {
-  return FX_RECT(pdfium::base::checked_cast<int32_t>(GetRec()->bbox.xMin),
-                 pdfium::base::checked_cast<int32_t>(GetRec()->bbox.yMin),
-                 pdfium::base::checked_cast<int32_t>(GetRec()->bbox.xMax),
-                 pdfium::base::checked_cast<int32_t>(GetRec()->bbox.yMax));
+  return FX_RECT(pdfium::checked_cast<int32_t>(GetRec()->bbox.xMin),
+                 pdfium::checked_cast<int32_t>(GetRec()->bbox.yMin),
+                 pdfium::checked_cast<int32_t>(GetRec()->bbox.xMax),
+                 pdfium::checked_cast<int32_t>(GetRec()->bbox.yMax));
 }
 
 uint16_t CFX_Face::GetUnitsPerEm() const {
-  return pdfium::base::checked_cast<uint16_t>(GetRec()->units_per_EM);
+  return pdfium::checked_cast<uint16_t>(GetRec()->units_per_EM);
 }
 
 int16_t CFX_Face::GetAscender() const {
-  return pdfium::base::checked_cast<int16_t>(GetRec()->ascender);
+  return pdfium::checked_cast<int16_t>(GetRec()->ascender);
 }
 
 int16_t CFX_Face::GetDescender() const {
-  return pdfium::base::checked_cast<int16_t>(GetRec()->descender);
+  return pdfium::checked_cast<int16_t>(GetRec()->descender);
 }
 
 #if BUILDFLAG(IS_ANDROID)
 int16_t CFX_Face::GetHeight() const {
-  return pdfium::base::checked_cast<int16_t>(GetRec()->height);
+  return pdfium::checked_cast<int16_t>(GetRec()->height);
 }
 #endif
 
 pdfium::span<uint8_t> CFX_Face::GetData() const {
-  return {GetRec()->stream->base, GetRec()->stream->size};
+  return UNSAFE_BUFFERS(
+      pdfium::make_span(GetRec()->stream->base, GetRec()->stream->size));
 }
 
 size_t CFX_Face::GetSfntTable(uint32_t table, pdfium::span<uint8_t> buffer) {
-  unsigned long length =
-      pdfium::base::checked_cast<unsigned long>(buffer.size());
+  unsigned long length = pdfium::checked_cast<unsigned long>(buffer.size());
   if (length) {
     int error = FT_Load_Sfnt_Table(GetRec(), table, 0, buffer.data(), &length);
     if (error || length != buffer.size()) {
@@ -396,7 +398,7 @@ size_t CFX_Face::GetSfntTable(uint32_t table, pdfium::span<uint8_t> buffer) {
   if (error || !length) {
     return 0;
   }
-  return pdfium::base::checked_cast<size_t>(length);
+  return pdfium::checked_cast<size_t>(length);
 }
 
 std::optional<std::array<uint32_t, 4>> CFX_Face::GetOs2UnicodeRange() {
@@ -428,7 +430,7 @@ std::optional<std::array<uint8_t, 2>> CFX_Face::GetOs2Panose() {
 }
 
 int CFX_Face::GetGlyphCount() const {
-  return pdfium::base::checked_cast<int>(GetRec()->num_glyphs);
+  return pdfium::checked_cast<int>(GetRec()->num_glyphs);
 }
 
 std::unique_ptr<CFX_GlyphBitmap> CFX_Face::RenderGlyph(const CFX_Font* pFont,
@@ -496,7 +498,7 @@ std::unique_ptr<CFX_GlyphBitmap> CFX_Face::RenderGlyph(const CFX_Font* pFont,
   }
   if (pSubstFont && !pSubstFont->IsBuiltInGenericFont() && weight > 400) {
     uint32_t index = (weight - 400) / 10;
-    pdfium::base::CheckedNumeric<signed long> level =
+    pdfium::CheckedNumeric<signed long> level =
         GetWeightLevel(pSubstFont->m_Charset, index);
     if (level.ValueOrDefault(-1) < 0) {
       return nullptr;
@@ -522,10 +524,13 @@ std::unique_ptr<CFX_GlyphBitmap> CFX_Face::RenderGlyph(const CFX_Font* pFont,
   int dib_width = bitmap.width;
   auto pGlyphBitmap =
       std::make_unique<CFX_GlyphBitmap>(glyph->bitmap_left, glyph->bitmap_top);
-  pGlyphBitmap->GetBitmap()->Create(dib_width, bitmap.rows,
-                                    anti_alias == FT_RENDER_MODE_MONO
-                                        ? FXDIB_Format::k1bppMask
-                                        : FXDIB_Format::k8bppMask);
+  const FXDIB_Format format = anti_alias == FT_RENDER_MODE_MONO
+                                  ? FXDIB_Format::k1bppMask
+                                  : FXDIB_Format::k8bppMask;
+  if (!pGlyphBitmap->GetBitmap()->Create(dib_width, bitmap.rows, format)) {
+    return nullptr;
+  }
+
   int dest_pitch = pGlyphBitmap->GetBitmap()->GetPitch();
   uint8_t* pDestBuf = pGlyphBitmap->GetBitmap()->GetWritableBuffer().data();
   const uint8_t* pSrcBuf = bitmap.buffer;
@@ -703,8 +708,8 @@ FX_RECT CFX_Face::GetCharBBox(uint32_t code, int glyph_index) {
 
 FX_RECT CFX_Face::GetGlyphBBox() const {
   const auto* glyph = GetRec()->glyph;
-  pdfium::base::ClampedNumeric<FT_Pos> left = glyph->metrics.horiBearingX;
-  pdfium::base::ClampedNumeric<FT_Pos> top = glyph->metrics.horiBearingY;
+  pdfium::ClampedNumeric<FT_Pos> left = glyph->metrics.horiBearingX;
+  pdfium::ClampedNumeric<FT_Pos> top = glyph->metrics.horiBearingY;
   const uint16_t upem = GetUnitsPerEm();
   return FX_RECT(NormalizeFontMetric(left, upem),
                  NormalizeFontMetric(top, upem),
@@ -760,7 +765,7 @@ fxge::FontEncoding CFX_Face::GetCharMapEncodingByIndex(size_t index) const {
 
 size_t CFX_Face::GetCharMapCount() const {
   return GetRec()->charmaps
-             ? pdfium::base::checked_cast<size_t>(GetRec()->num_charmaps)
+             ? pdfium::checked_cast<size_t>(GetRec()->num_charmaps)
              : 0;
 }
 

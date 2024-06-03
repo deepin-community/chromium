@@ -158,8 +158,9 @@ scoped_refptr<StaticBitmapImage> GPUCanvasContext::GetImage(FlushReason) {
 
 bool GPUCanvasContext::PaintRenderingResultsToCanvas(
     SourceDrawingBuffer source_buffer) {
-  if (!swap_buffers_)
+  if (!swap_buffers_) {
     return false;
+  }
 
   if (Host()->ResourceProvider() &&
       Host()->ResourceProvider()->Size() != swap_buffers_->Size()) {
@@ -168,6 +169,9 @@ bool GPUCanvasContext::PaintRenderingResultsToCanvas(
 
   CanvasResourceProvider* resource_provider =
       Host()->GetOrCreateCanvasResourceProvider(RasterModeHint::kPreferGPU);
+  if (!resource_provider) {
+    return false;
+  }
 
   return CopyRenderingResultsFromDrawingBuffer(resource_provider,
                                                source_buffer);
@@ -416,18 +420,7 @@ void GPUCanvasContext::configure(const GPUCanvasConfiguration* descriptor,
       break;
 
     case WGPUTextureFormat_RGBA16Float:
-#if BUILDFLAG(IS_CHROMEOS)
-      // TODO(crbug.com/1317015): support RGBA16Float on ChromeOS.
-      device_->InjectError(
-          WGPUErrorType_Validation,
-          ("Support for canvas context format \"" +
-           std::string(FromDawnEnum(texture_descriptor_.format)) +
-           "\" has not been implemented.")
-              .c_str());
-      return;
-#else
       break;
-#endif
 
     default:
       device_->InjectError(
@@ -598,12 +591,14 @@ GPUTexture* GPUCanvasContext::getCurrentTexture(
   swap_texture_ = MakeGarbageCollected<GPUTexture>(
       device_, swap_texture_descriptor_.format,
       static_cast<WGPUTextureUsage>(swap_texture_descriptor_.usage),
-      std::move(mailbox_texture));
+      std::move(mailbox_texture), String(swap_texture_descriptor_.label));
 
   if (copy_to_swap_texture_required_) {
     texture_ = MakeGarbageCollected<GPUTexture>(
-        device_, GetProcs().deviceCreateTexture(device_->GetHandle(),
-                                                &texture_descriptor_));
+        device_,
+        GetProcs().deviceCreateTexture(device_->GetHandle(),
+                                       &texture_descriptor_),
+        String(texture_descriptor_.label));
     // If the user manually destroys the texture before yielding control back
     // to the browser, do the copy just prior to the texture destruction.
     texture_->SetBeforeDestroyCallback(WTF::BindOnce(
@@ -720,9 +715,12 @@ bool GPUCanvasContext::CopyTextureToResourceProvider(
     CanvasResourceProvider* resource_provider) const {
   DCHECK(resource_provider);
   DCHECK_EQ(resource_provider->Size(), size);
+
+  // This method will copy the contents of `texture` to `resource_provider`'s
+  // backing SharedImage via the WebGPU interface. Hence, WEBGPU_WRITE usage
+  // must be included on that backing SharedImage.
   DCHECK(resource_provider->GetSharedImageUsageFlags() &
-         (gpu::SHARED_IMAGE_USAGE_WEBGPU_READ |
-          gpu::SHARED_IMAGE_USAGE_WEBGPU_WRITE));
+         gpu::SHARED_IMAGE_USAGE_WEBGPU_WRITE);
   DCHECK(resource_provider->IsOriginTopLeft());
 
   base::WeakPtr<WebGraphicsContext3DProviderWrapper> shared_context_wrapper =
@@ -757,17 +755,11 @@ bool GPUCanvasContext::CopyTextureToResourceProvider(
       WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment,
       dst_mailbox);
   WGPUImageCopyTexture source = {
-      .nextInChain = nullptr,
       .texture = texture,
-      .mipLevel = 0,
-      .origin = WGPUOrigin3D{0},
       .aspect = WGPUTextureAspect_All,
   };
   WGPUImageCopyTexture destination = {
-      .nextInChain = nullptr,
       .texture = reservation.texture,
-      .mipLevel = 0,
-      .origin = WGPUOrigin3D{0},
       .aspect = WGPUTextureAspect_All,
   };
   WGPUExtent3D copy_size = {

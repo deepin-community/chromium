@@ -618,8 +618,8 @@ void LockContentsView::AboutToRequestFocusFromTabTraversal(bool reverse) {
 void LockContentsView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   Shelf* shelf = Shelf::ForWindow(GetWidget()->GetNativeWindow());
   ShelfWidget* shelf_widget = shelf->shelf_widget();
-  GetViewAccessibility().OverrideNextFocus(shelf_widget);
-  GetViewAccessibility().OverridePreviousFocus(shelf->GetStatusAreaWidget());
+  GetViewAccessibility().SetNextFocus(shelf_widget);
+  GetViewAccessibility().SetPreviousFocus(shelf->GetStatusAreaWidget());
   node_data->role = ax::mojom::Role::kWindow;
   node_data->SetName(
       l10n_util::GetStringUTF16(screen_type_ == LockScreen::ScreenType::kLogin
@@ -708,6 +708,8 @@ void LockContentsView::ApplyUserChanges(
         main_view_->AddChildView(std::make_unique<LoginCameraTimeoutView>(
             base::BindRepeating(&LockContentsView::OnBackToSigninButtonTapped,
                                 weak_ptr_factory_.GetWeakPtr())));
+    // TODO(b/333882432): Remove this log after the bug fixed.
+    LOG(WARNING) << " b/333882432: LockContentsView::ApplyUserChanges";
     Shell::Get()->login_screen_controller()->ShowGaiaSignin(
         /*prefilled_account=*/EmptyAccountId());
     return;
@@ -776,6 +778,11 @@ void LockContentsView::OnPinEnabledForUserChanged(const AccountId& user,
     LOG(ERROR) << "Unable to find user when changing PIN state to " << enabled;
     return;
   }
+  if (state->show_pin == enabled) {
+    LOG(WARNING)
+        << "Unexpected call to OnPinEnabledForUserChanged; state unchanged.";
+    return;
+  }
 
   state->show_pin = enabled;
   state->autosubmit_pin_length =
@@ -813,6 +820,12 @@ void LockContentsView::OnFingerprintStateChanged(const AccountId& account_id,
                                                  FingerprintState state) {
   UserState* user_state = FindStateForUser(account_id);
   if (!user_state) {
+    LOG(ERROR) << "Unable to find user when changing fingerprint state.";
+    return;
+  }
+  if (user_state->fingerprint_state == state) {
+    LOG(WARNING)
+        << "Unexpected call to OnFingerprintStateChanged; state unchanged.";
     return;
   }
 
@@ -2304,6 +2317,18 @@ void LockContentsView::OnBottomStatusIndicatorTapped() {
 }
 
 void LockContentsView::OnBackToSigninButtonTapped() {
+  // TODO(b/333882432): Remove this log after the bug fixed.
+  LOG(WARNING) << "b/333882432: LockContentsView::OnBackToSigninButtonTapped";
+  // Prevent starting a gaia signin in a transition state.
+  session_manager::SessionState current_state =
+      Shell::Get()->session_controller()->GetSessionState();
+  if (current_state != session_manager::SessionState::OOBE &&
+      current_state != session_manager::SessionState::LOGIN_PRIMARY) {
+    LOG(WARNING) << "Back to signin button was called in an unexpected state: "
+                 << static_cast<int>(current_state)
+                 << " skip to call ShowGaiaSignin.";
+    return;
+  }
   Shell::Get()->login_screen_controller()->ShowGaiaSignin(
       /*prefilled_account=*/EmptyAccountId());
 }

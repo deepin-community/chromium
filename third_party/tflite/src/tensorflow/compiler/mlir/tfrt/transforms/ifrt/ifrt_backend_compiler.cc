@@ -90,8 +90,7 @@ CompileAndRegisterIfrtPrograms(absl::string_view model_name,
 
     auto executable = std::make_unique<IfrtServingExecutable>(
         model_name, entry_function_name.str(), *std::move(submodule),
-        ifrt_model_context.GetClient(),
-        &ifrt_model_context.GetThreadPoolDevice(),
+        ifrt_model_context.GetClient(), &ifrt_model_context.GetThreadPool(),
         &ifrt_model_context.GetLoadedVariableRegistry(),
         ifrt_model_context.GetShapeRepresentationFn());
 
@@ -160,7 +159,7 @@ absl::Status IfrtBackendCompiler::CompileTensorflow(
 
   // Use bridge for cluster formation.
   TF_RETURN_IF_ERROR(tensorflow::tf2xla::v2::RunFunctionTf2xlaClusteringBridge(
-      module, /*run_replicated_bridge*/ true,
+      module, /*is_supported_by_replicated_brige*/ true,
       /*is_in_fallback_enabled_mode=*/false));
 
   if (VLOG_IS_ON(1)) {

@@ -44,6 +44,7 @@
 #include "media/base/audio_parameters.h"
 #include "media/capture/video_capture_types.h"
 #include "media/cast/common/openscreen_conversion_helpers.h"
+#include "media/cast/common/packet.h"
 #include "media/cast/encoding/encoding_support.h"
 #include "media/cast/openscreen/config_conversions.h"
 #include "media/cast/sender/audio_sender.h"
@@ -147,7 +148,7 @@ media::mojom::RemotingSinkMetadata ToRemotingSinkMetadata(
             RemotingSinkVideoCapability::CODEC_HEVC);
         continue;
 
-      // TODO(https://crbug.com/1363020): remoting should support AV1.
+      // TODO(crbug.com/40238534): remoting should support AV1.
       case openscreen::cast::VideoCapability::kAv1:
         continue;
     }
@@ -244,6 +245,7 @@ class OpenscreenSessionHost::AudioCapturingCallback final
   // Called on audio thread.
   void Capture(const media::AudioBus* audio_bus,
                base::TimeTicks audio_capture_time,
+               const media::AudioGlitchInfo& glitch_info,
                double volume,
                bool key_pressed) override {
     // TODO(crbug.com/1015467): Don't copy the audio data. Instead, send
@@ -327,7 +329,7 @@ OpenscreenSessionHost::OpenscreenSessionHost(
       openscreen::cast::SenderSession::Configuration{
           .remote_address = media::cast::ToOpenscreenIPAddress(
               session_params_.receiver_address),
-          .client = this,
+          .client = *this,
           .environment = openscreen_environment_.get(),
           .message_port = &message_port_,
           .message_source_id = session_params_.source_id,
@@ -470,9 +472,9 @@ void OpenscreenSessionHost::OnNegotiated(
     audio_capturing_callback_ = std::make_unique<AudioCapturingCallback>(
         base::BindPostTaskToCurrentDefault(base::BindRepeating(
             &AudioRtpStream::InsertAudio, audio_stream_->AsWeakPtr())),
-        base::BindOnce(&OpenscreenSessionHost::ReportAndLogError,
-                       weak_factory_.GetWeakPtr(),
-                       SessionError::AUDIO_CAPTURE_ERROR));
+        base::BindPostTaskToCurrentDefault(base::BindOnce(
+            &OpenscreenSessionHost::ReportAndLogError,
+            weak_factory_.GetWeakPtr(), SessionError::AUDIO_CAPTURE_ERROR)));
     audio_input_device_ = new media::AudioInputDevice(
         std::make_unique<CapturedAudioInput>(base::BindRepeating(
             &OpenscreenSessionHost::CreateAudioStream, base::Unretained(this))),
@@ -579,7 +581,7 @@ void OpenscreenSessionHost::OnNegotiated(
   LogInfoMessage(base::StringPrintf(
       "negotiated a new %s session. audio codec=%s, video codec=%s (%s)",
       (state_ == State::kRemoting ? "remoting" : "mirroring"),
-      // TODO(https://crbug.com/1363514): media::cast::Codec should be removed.
+      // TODO(crbug.com/40238715): media::cast::Codec should be removed.
       // For now, we log the integer value of the enum but this should be
       // serialized to a string once we use AudioCodec, VideoCodec.
       (audio_config
@@ -671,7 +673,7 @@ void OpenscreenSessionHost::CreateVideoEncodeAccelerator(
     // This is a highly unusual statement due to the fact that
     // `MojoVideoEncodeAccelerator` must be destroyed using `Destroy()` and has
     // a private destructor.
-    // TODO(https://crbug.com/1363905): should be castable to parent type with
+    // TODO(crbug.com/40238884): should be castable to parent type with
     // destructor.
     mojo_vea = base::WrapUnique<media::VideoEncodeAccelerator>(
         new media::MojoVideoEncodeAccelerator(std::move(vea)));
@@ -984,7 +986,7 @@ int OpenscreenSessionHost::GetSuggestedVideoBitrate(int min_bitrate,
   }
 
   // Then limit it based on the frame sender configuration.
-  // TODO(https://crbug.com/1423486): we should also factor in device
+  // TODO(crbug.com/40260069): we should also factor in device
   // capability when determining which bitrate to use.
   return std::clamp(suggested, min_bitrate, max_bitrate);
 }

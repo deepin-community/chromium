@@ -10,19 +10,21 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
 #include <xnnpack.h>
 #include <xnnpack/allocator.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/log.h>
 #include <xnnpack/common.h>
-#include <xnnpack/math.h>
-#include <xnnpack/microkernel-type.h>
-#include <xnnpack/params.h>
 #include <xnnpack/compute.h>
 #include <xnnpack/indirection.h>
+#include <xnnpack/log.h>
+#include <xnnpack/math.h>
+#include <xnnpack/microkernel-type.h>
+#include <xnnpack/microparams.h>
+#include <xnnpack/operator-type.h>
+#include <xnnpack/operator.h>
+#include <xnnpack/params.h>
 #include <xnnpack/quantization.h>
 
+#include "pthreadpool.h"
 
 void xnn_compute_transposec_2d(
     const struct transpose_context* context,
@@ -310,11 +312,9 @@ void xnn_compute_packw_gemm_gio(
   void* packed_weights = (void*) ((uintptr_t) context->packed_weights + n_block_start * context->w_stride);
 
   context->packw_gemm_gio(
-    /*groups=*/1, n_block_size, context->kc,
-    context->nr, context->kr, context->sr,
-    context->k_stride_elements,
-    kernel, bias, /*scale=*/NULL, packed_weights,
-    /*extra_bytes=*/0, /*params=*/NULL);
+      /*groups=*/1, n_block_size, context->kc, context->nr, context->kr,
+      context->sr, context->k_stride_elements, kernel, bias, /*scale=*/NULL,
+      packed_weights, /*extra_bytes=*/0, /*params=*/NULL);
 }
 
 void xnn_compute_batched_packw_gemm_gio(
@@ -334,11 +334,9 @@ void xnn_compute_batched_packw_gemm_gio(
                                   batch_index * context->gc_stride);
 
   context->packw_gemm_gio(
-    /*groups=*/1, n_block_size, context->kc,
-    context->nr, context->kr, context->sr,
-    context->k_stride_elements,
-    kernel, bias, /*scale=*/NULL, packed_weights,
-    /*extra_bytes=*/0, /*params=*/NULL);
+      /*groups=*/1, n_block_size, context->kc, context->nr, context->kr,
+      context->sr, context->k_stride_elements, kernel, bias, /*scale=*/NULL,
+      packed_weights, /*extra_bytes=*/0, /*params=*/NULL);
 }
 
 void xnn_compute_packw_gemm_goi(
@@ -354,10 +352,9 @@ void xnn_compute_packw_gemm_goi(
   void* packed_weights = (void*) ((uintptr_t) context->packed_weights + context->w_stride * n_block_start);
 
   context->packw_gemm_goi(
-    /*groups=*/1, n_block_size, context->kc,
-    context->nr, context->kr, context->sr,
-    kernel, bias, /*scale=*/NULL, packed_weights,
-    /*extra_bytes=*/0, /*params=*/NULL);
+      /*groups=*/1, n_block_size, context->kc, context->nr, context->kr,
+      context->sr, kernel, bias, /*scale=*/NULL, packed_weights,
+      /*extra_bytes=*/0, /*params=*/NULL);
 }
 
 void xnn_compute_batched_packw_gemm_goi(
@@ -377,10 +374,9 @@ void xnn_compute_batched_packw_gemm_goi(
                                   batch_index * context->gc_stride);
 
   context->packw_gemm_goi(
-    /*groups=*/1, n_block_size, context->kc,
-    context->nr, context->kr, context->sr,
-    kernel, bias, /*scale=*/NULL, packed_weights,
-    /*extra_bytes=*/0, /*params=*/NULL);
+      /*groups=*/1, n_block_size, context->kc, context->nr, context->kr,
+      context->sr, kernel, bias, /*scale=*/NULL, packed_weights,
+      /*extra_bytes=*/0, /*params=*/NULL);
 }
 
 void xnn_compute_grouped_gemm(
@@ -394,18 +390,67 @@ void xnn_compute_grouped_gemm(
   const size_t k_scaled  = context->k_scaled;
   const size_t a_stride  = context->a_stride;
   const size_t cm_stride = context->cm_stride;
+  const size_t num_batch_dims = context->num_batch_dims;
+  const size_t group_index_c = group_index;
 
-  context->ukernel.function[XNN_UARCH_DEFAULT](
-      mr_block_size,
-      nr_block_size,
-      k_scaled,
-      (const void*) ((uintptr_t) context->a + mr_block_start * a_stride + group_index * context->ga_stride),
-      a_stride,
-      (const void*) ((uintptr_t) context->packed_w + nr_block_start * context->w_stride + group_index * context->gw_stride),
-      (void*) ((uintptr_t) context->c + mr_block_start * cm_stride + (nr_block_start << context->log2_csize) + group_index * context->gc_stride),
-      cm_stride,
-      context->cn_stride,
-      &context->params);
+  // Compute the group index offsets into A and B.
+  size_t group_index_a = 0;
+  size_t group_index_b = 0;
+  for (int k = 0; k < num_batch_dims; k++) {
+    // Extract the kth batch index from the group_index.
+    const size_t index = group_index / context->batch_strides_c[k];
+    group_index %= context->batch_strides_c[k];
+
+    // Compute the corresponding kth group index offsets into A and B.
+    group_index_a = (index % context->batch_dims_a[k]) +
+                    context->batch_dims_a[k] * group_index_a;
+    group_index_b = (index % context->batch_dims_b[k]) +
+                    context->batch_dims_b[k] * group_index_b;
+  }
+
+  if (context->quantization_params != NULL) {
+    // If the effective `mr_block_size` is smaller than the kernel's `mr`,
+    // create a padded coppy of the quantization params.
+    const struct xnn_qd8_quantization_params* quantization_params =
+        &context->quantization_params[group_index_a * context->gq_stride +
+                                      mr_block_start];
+    struct xnn_qd8_quantization_params padded_quantization_params[XNN_MAX_MR];
+    if (mr_block_size < context->mr) {
+      memcpy(padded_quantization_params, quantization_params,
+             mr_block_size * sizeof(struct xnn_qd8_quantization_params));
+      for (size_t i = mr_block_size; i < context->mr; i++) {
+        padded_quantization_params[i] =
+            padded_quantization_params[mr_block_size - 1];
+      }
+      quantization_params = padded_quantization_params;
+    };
+
+    context->dq_ukernel.function[XNN_UARCH_DEFAULT](
+        mr_block_size, nr_block_size, k_scaled,
+        (const void*)((uintptr_t)context->a + mr_block_start * a_stride +
+                      group_index_a * context->ga_stride),
+        a_stride,
+        (const void*)((uintptr_t)context->packed_w +
+                      nr_block_start * context->w_stride +
+                      group_index_b * context->gw_stride),
+        (void*)((uintptr_t)context->c + mr_block_start * cm_stride +
+                (nr_block_start << context->log2_csize) +
+                group_index_c * context->gc_stride),
+        cm_stride, context->cn_stride, &context->params, quantization_params);
+  } else {
+    context->ukernel.function[XNN_UARCH_DEFAULT](
+        mr_block_size, nr_block_size, k_scaled,
+        (const void*)((uintptr_t)context->a + mr_block_start * a_stride +
+                      group_index_a * context->ga_stride),
+        a_stride,
+        (const void*)((uintptr_t)context->packed_w +
+                      nr_block_start * context->w_stride +
+                      group_index_b * context->gw_stride),
+        (void*)((uintptr_t)context->c + mr_block_start * cm_stride +
+                (nr_block_start << context->log2_csize) +
+                group_index_c * context->gc_stride),
+        cm_stride, context->cn_stride, &context->params);
+  }
 }
 
 void xnn_compute_gemm(

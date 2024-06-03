@@ -4,12 +4,10 @@
 
 #include "content/browser/xr/service/vr_service_impl.h"
 
-#include <optional>
 #include <utility>
 #include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -234,6 +232,11 @@ VRServiceImpl::~VRServiceImpl() {
        it != magic_window_controllers_.end(); ++it) {
     OnInlineSessionDisconnected(it.id());
   }
+
+  if (on_exit_present_) {
+    std::move(on_exit_present_).Run();
+  }
+
   runtime_manager_->RemoveService(this);
 }
 
@@ -540,7 +543,7 @@ void VRServiceImpl::RequestSession(
   // features, but we don't need to block creation if an optional feature is
   // not supported. Remove all unsupported optional features from the
   // optional_features collection before handing it off.
-  base::EraseIf(options->optional_features, [runtime](auto& feature) {
+  std::erase_if(options->optional_features, [runtime](auto& feature) {
     return !runtime->SupportsFeature(feature);
   });
 
@@ -850,7 +853,8 @@ void VRServiceImpl::ExitPresent(ExitPresentCallback on_exited) {
       runtime_manager_->GetCurrentlyPresentingImmersiveRuntime();
   DVLOG(2) << __func__ << ": !!immersive_runtime=" << !!immersive_runtime;
   if (immersive_runtime) {
-    immersive_runtime->ExitPresent(this, std::move(on_exited));
+    on_exit_present_ = std::move(on_exited);
+    immersive_runtime->ExitPresent(this);
   } else {
     std::move(on_exited).Run();
   }
@@ -901,6 +905,10 @@ void VRServiceImpl::OnExitPresent() {
       ->OnXrHasRenderTarget(default_frame_sink_id);
 
   GetSessionMetricsHelper()->StopAndRecordImmersiveSession();
+
+  if (on_exit_present_) {
+    std::move(on_exit_present_).Run();
+  }
 
   for (auto& client : session_clients_) {
     // https://crbug.com/1160940 has a fairly generic callstack, in mojom

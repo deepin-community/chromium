@@ -66,6 +66,7 @@
 #include "third_party/blink/renderer/core/accessibility/histogram_macros.h"
 #include "third_party/blink/renderer/core/content_capture/content_capture_manager.h"
 #include "third_party/blink/renderer/core/core_initializer.h"
+#include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/focus_params.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
@@ -633,6 +634,25 @@ void WebFrameWidgetImpl::OnStartStylusWriting(
   }
 
   std::move(callback).Run(std::nullopt, std::nullopt);
+}
+
+void WebFrameWidgetImpl::NotifyClearedDisplayedGraphics() {
+  if (!LocalRootImpl() || !LocalRootImpl()->GetFrame() ||
+      !LocalRootImpl()->GetFrame()->GetDocument()) {
+    return;
+  }
+
+  auto& document = *LocalRootImpl()->GetFrame()->GetDocument();
+  // If we've already been revealed, then we may have produced a frame already.
+  if (document.domWindow() && document.domWindow()->HasBeenRevealed()) {
+    return;
+  }
+
+  // Skip any incoming cross document transitions here.
+  if (ViewTransition* transition =
+          ViewTransitionUtils::GetIncomingCrossDocumentTransition(document)) {
+    transition->SkipTransition();
+  }
 }
 
 void WebFrameWidgetImpl::HandleStylusWritingGestureAction(
@@ -1393,6 +1413,9 @@ void WebFrameWidgetImpl::Trace(Visitor* visitor) const {
   visitor->Trace(frame_widget_host_);
   visitor->Trace(receiver_);
   visitor->Trace(input_target_receiver_);
+#if BUILDFLAG(IS_ANDROID)
+  visitor->Trace(ime_render_widget_host_);
+#endif
   visitor->Trace(mouse_capture_element_);
   visitor->Trace(device_emulator_);
   visitor->Trace(animation_frame_timing_monitor_);
@@ -1779,7 +1802,7 @@ void WebFrameWidgetImpl::ApplyVisualPropertiesSizing(
     }
   }
 
-  SetWindowSegments(visual_properties.root_widget_window_segments);
+  SetViewportSegments(visual_properties.root_widget_viewport_segments);
 
   widget_base_->UpdateSurfaceAndScreenInfo(
       visual_properties.local_surface_id.value_or(viz::LocalSurfaceId()),
@@ -1918,8 +1941,8 @@ bool WebFrameWidgetImpl::Resizable() const {
   return resizable_;
 }
 
-const WebVector<gfx::Rect>& WebFrameWidgetImpl::WindowSegments() const {
-  return window_segments_;
+const WebVector<gfx::Rect>& WebFrameWidgetImpl::ViewportSegments() const {
+  return viewport_segments_;
 }
 
 bool WebFrameWidgetImpl::StartDeferringCommits(base::TimeDelta timeout,
@@ -2409,10 +2432,16 @@ void WebFrameWidgetImpl::BeginCommitCompositorFrame() {
   probe::LayerTreePainted(LocalRootImpl()->GetFrame());
   if (ForTopMostMainFrame()) {
     Document* doc = local_root_->GetFrame()->GetDocument();
-    if (doc->GetSettings()->GetViewportMetaEnabled() &&
-        !LayerTreeHost()->IsMobileOptimized()) {
+    bool tap_delay_enabled = doc->GetSettings()->GetViewportMetaEnabled() &&
+                             !LayerTreeHost()->IsMobileOptimized();
+    if (tap_delay_enabled) {
       UseCounter::Count(doc, WebFeature::kTapDelayEnabled);
     }
+    TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                         "BeginCommitCompositorFrame", TRACE_EVENT_SCOPE_THREAD,
+                         "frame",
+                         local_root_->GetFrame()->GetFrameIdForTracing(),
+                         "is_mobile_optimized", !tap_delay_enabled);
   }
   if (ForMainFrame()) {
     View()->DidCommitCompositorFrameForLocalMainFrame();
@@ -2439,6 +2468,10 @@ void WebFrameWidgetImpl::EndCommitCompositorFrame(
       ->GetUkmAggregator()
       ->RecordImplCompositorSample(commit_compositor_frame_start_time_.value(),
                                    commit_start_time, commit_finish_time);
+  WindowPerformance* performance = DOMWindowPerformance::performance(
+      *LocalRootImpl()->GetFrame()->DomWindow());
+  performance->SetCommitFinishTimeStampForPendingEvents(commit_finish_time);
+
   commit_compositor_frame_start_time_ =
       next_commit_compositor_frame_start_time_;
   next_commit_compositor_frame_start_time_.reset();
@@ -2740,17 +2773,18 @@ void WebFrameWidgetImpl::DisableDevicePostureOverrideForEmulation() {
   frame->DisableDevicePostureOverrideForEmulation();
 }
 
-void WebFrameWidgetImpl::SetWindowSegments(
-    const std::vector<gfx::Rect>& window_segments_param) {
-  WebVector<gfx::Rect> window_segments(window_segments_param);
-  if (!window_segments_.Equals(window_segments)) {
-    window_segments_ = window_segments;
+void WebFrameWidgetImpl::SetViewportSegments(
+    const std::vector<gfx::Rect>& viewport_segments_param) {
+  WebVector<gfx::Rect> viewport_segments(viewport_segments_param);
+  if (!viewport_segments_.Equals(viewport_segments)) {
+    viewport_segments_ = viewport_segments;
     LocalFrame* frame = LocalRootImpl()->GetFrame();
-    frame->WindowSegmentsChanged(window_segments_);
+    frame->ViewportSegmentsChanged(viewport_segments_);
 
     ForEachRemoteFrameControlledByWidget(
-        [&window_segments = window_segments_param](RemoteFrame* remote_frame) {
-          remote_frame->DidChangeRootWindowSegments(window_segments);
+        [&viewport_segments =
+             viewport_segments_param](RemoteFrame* remote_frame) {
+          remote_frame->DidChangeRootViewportSegments(viewport_segments);
         });
   }
 }
@@ -3127,12 +3161,14 @@ void WebFrameWidgetImpl::DidMeaningfulLayout(WebMeaningfulLayout layout_type) {
 }
 
 void WebFrameWidgetImpl::PresentationCallbackForMeaningfulLayout(
-    base::TimeTicks first_paint_time) {
+    const viz::FrameTimingDetails& first_paint_details) {
   // |local_root_| may be null if the widget has shut down between when this
   // callback was requested and when it was resolved by the compositor.
   if (local_root_)
     local_root_->ViewImpl()->DidFirstVisuallyNonEmptyPaint();
 
+  base::TimeTicks first_paint_time =
+      first_paint_details.presentation_feedback.timestamp;
   if (widget_base_)
     widget_base_->DidFirstVisuallyNonEmptyPaint(first_paint_time);
 }
@@ -3315,7 +3351,8 @@ class ReportTimeSwapPromise : public cc::SwapPromise {
 #endif
     } else {
       ReportTime(std::move(callbacks.swap_time_callback), swap_time);
-      ReportTime(std::move(callbacks.presentation_time_callback), swap_time);
+      ReportPresentationTime(std::move(callbacks.presentation_time_callback),
+                             swap_time);
 #if BUILDFLAG(IS_APPLE)
       ReportErrorCode(std::move(callbacks.core_animation_error_code_callback),
                       gfx::kCALayerUnknownNoWidget);
@@ -3324,22 +3361,51 @@ class ReportTimeSwapPromise : public cc::SwapPromise {
   }
 
   static void RunCallbackAfterPresentation(
-      base::OnceCallback<void(base::TimeTicks)> presentation_time_callback,
+      base::OnceCallback<void(const viz::FrameTimingDetails&)>
+          presentation_callback,
       base::TimeTicks swap_time,
-      base::TimeTicks presentation_time) {
+      const viz::FrameTimingDetails& frame_timing_details) {
     DCHECK(!swap_time.is_null());
+
+    base::TimeTicks presentation_time =
+        frame_timing_details.presentation_feedback.timestamp;
     bool presentation_time_is_valid =
         !presentation_time.is_null() && (presentation_time > swap_time);
     UMA_HISTOGRAM_BOOLEAN("PageLoad.Internal.Renderer.PresentationTime.Valid",
                           presentation_time_is_valid);
-    ReportTime(std::move(presentation_time_callback),
-               presentation_time_is_valid ? presentation_time : swap_time);
+    if (presentation_time_is_valid) {
+      ReportPresentationTime(std::move(presentation_callback),
+                             frame_timing_details);
+    } else {
+      viz::FrameTimingDetails frame_timing_details_with_swap_time =
+          frame_timing_details;
+      frame_timing_details_with_swap_time.presentation_feedback.timestamp =
+          swap_time;
+      ReportPresentationTime(std::move(presentation_callback),
+                             frame_timing_details_with_swap_time);
+    }
   }
 
   static void ReportTime(base::OnceCallback<void(base::TimeTicks)> callback,
                          base::TimeTicks time) {
     if (callback)
       std::move(callback).Run(time);
+  }
+
+  static void ReportPresentationTime(
+      base::OnceCallback<void(const viz::FrameTimingDetails&)> callback,
+      base::TimeTicks time) {
+    viz::FrameTimingDetails frame_timing_details;
+    frame_timing_details.presentation_feedback.timestamp = time;
+    ReportPresentationTime(std::move(callback), frame_timing_details);
+  }
+
+  static void ReportPresentationTime(
+      base::OnceCallback<void(const viz::FrameTimingDetails&)> callback,
+      const viz::FrameTimingDetails& frame_timing_details) {
+    if (callback) {
+      std::move(callback).Run(frame_timing_details);
+    }
   }
 
 #if BUILDFLAG(IS_APPLE)
@@ -3364,7 +3430,8 @@ class ReportTimeSwapPromise : public cc::SwapPromise {
     }
 
     ReportTime(std::move(callbacks.swap_time_callback), failure_time);
-    ReportTime(std::move(callbacks.presentation_time_callback), failure_time);
+    ReportPresentationTime(std::move(callbacks.presentation_time_callback),
+                           failure_time);
 #if BUILDFLAG(IS_APPLE)
     ReportErrorCode(std::move(callbacks.core_animation_error_code_callback),
                     gfx::kCALayerUnknownDidNotSwap);
@@ -3384,13 +3451,15 @@ void WebFrameWidgetImpl::NotifySwapAndPresentationTimeForTesting(
 }
 
 void WebFrameWidgetImpl::NotifyPresentationTimeInBlink(
-    base::OnceCallback<void(base::TimeTicks)> presentation_callback) {
+    base::OnceCallback<void(const viz::FrameTimingDetails&)>
+        presentation_callback) {
   NotifySwapAndPresentationTime(
       {.presentation_time_callback = std::move(presentation_callback)});
 }
 
 void WebFrameWidgetImpl::NotifyPresentationTime(
-    base::OnceCallback<void(base::TimeTicks)> presentation_callback) {
+    base::OnceCallback<void(const viz::FrameTimingDetails&)>
+        presentation_callback) {
   NotifySwapAndPresentationTime(
       {.presentation_time_callback = std::move(presentation_callback)});
 }
@@ -3820,7 +3889,8 @@ void WebFrameWidgetImpl::DidNavigate() {
   // to document lifecycle.
   if (!widget_base_->widget_input_handler_manager())
     return;
-  widget_base_->widget_input_handler_manager()->DidNavigate();
+  widget_base_->widget_input_handler_manager()
+      ->InitializeInputEventSuppressionStates();
 }
 
 void WebFrameWidgetImpl::FlushInputForTesting(base::OnceClosure done_callback) {
@@ -3844,6 +3914,19 @@ void WebFrameWidgetImpl::NotifyAutoscrollForSelectionInMainFrame(
     host->SetAutoscrollSelectionActiveInMainFrame(autoscroll_selection);
   }
 }
+
+#if BUILDFLAG(IS_ANDROID)
+void WebFrameWidgetImpl::PassImeRenderWidgetHost(
+    mojo::PendingRemote<mojom::blink::ImeRenderWidgetHost> pending_remote) {
+  // TODO(crbug.com/330385378): Could the renderer send this endpoint to the
+  // browser?
+  ime_render_widget_host_ =
+      HeapMojoRemote<mojom::blink::ImeRenderWidgetHost>(nullptr);
+  ime_render_widget_host_.Bind(
+      std::move(pending_remote),
+      local_root_->GetTaskRunner(TaskType::kInternalDefault));
+}
+#endif
 
 gfx::Range WebFrameWidgetImpl::CompositionRange() {
   WebLocalFrame* focused_frame = FocusedWebLocalFrameInWidget();
@@ -3929,12 +4012,62 @@ void WebFrameWidgetImpl::UpdateLineBounds() {
     return;
   }
   input_visible_line_bounds_.swap(line_bounds);
+  if (RuntimeEnabledFeatures::CursorAnchorInfoMojoPipeEnabled()) {
+    UpdateCursorAnchorInfo();
+    return;
+  }
   if (mojom::blink::WidgetInputHandlerHost* host =
           widget_base_->widget_input_handler_manager()
               ->GetWidgetInputHandlerHost()) {
     host->ImeCompositionRangeChanged(gfx::Range::InvalidRange(), std::nullopt,
                                      input_visible_line_bounds_);
   }
+}
+
+void WebFrameWidgetImpl::UpdateCursorAnchorInfo() {
+#if BUILDFLAG(IS_ANDROID)
+  Element* focused_element = FocusedElement();
+  if (!focused_element) {
+    return;
+  }
+  TextControlElement* text_control = ToTextControlOrNull(focused_element);
+  if (!text_control || text_control->IsDisabledOrReadOnly() ||
+      !text_control->GetLayoutObject()) {
+    return;
+  }
+
+  Vector<gfx::Rect> character_bounds;
+  GetCompositionCharacterBoundsInWindow(&character_bounds);
+
+  gfx::RectF editor_bounds =
+      gfx::RectF(LocalRootImpl()->GetFrameView()->FrameToScreen(
+          focused_element->VisibleBoundsInLocalRoot()));
+  float device_scale_factor = widget_base_->GetScreenInfo().device_scale_factor;
+  gfx::RectF handwriting_bounds(editor_bounds);
+  // See kStylusWritableAdjustmentSizeDip in
+  // third_party/blink/renderer/core/input/pointer_event_manager.cc
+  handwriting_bounds.Outset(30 / device_scale_factor);
+  mojom::blink::EditorBoundsInfoPtr editor_bounds_info =
+      mojom::blink::EditorBoundsInfo::New(editor_bounds, handwriting_bounds);
+
+  mojom::blink::TextAppearanceInfoPtr text_appearance_info =
+      mojom::blink::TextAppearanceInfo::New(
+          text_control->GetLayoutObject()
+              ->StyleRef()
+              .VisitedDependentColor(GetCSSPropertyColor())
+              .Rgb());
+
+  mojom::blink::InputCursorAnchorInfoPtr cursor_anchor_info =
+      mojom::blink::InputCursorAnchorInfo::New(
+          character_bounds, std::move(editor_bounds_info),
+          std::move(text_appearance_info), input_visible_line_bounds_);
+  // Since the IME pushes this endpoint to the renderer, it may not be bound
+  // yet.
+  if (ime_render_widget_host_) {
+    ime_render_widget_host_->UpdateCursorAnchorInfo(
+        std::move(cursor_anchor_info));
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 void WebFrameWidgetImpl::AddImeTextSpansToExistingText(

@@ -80,6 +80,10 @@ namespace ui {
 class Cursor;
 }
 
+namespace viz {
+struct FrameTimingDetails;
+}
+
 namespace blink {
 
 class ColorChooser;
@@ -179,7 +183,11 @@ class CORE_EXPORT ChromeClient : public GarbageCollected<ChromeClient> {
 
   // Returns true if the page should support drag regions via the app-region
   // CSS property.
-  virtual bool SupportsAppRegion() = 0;
+  virtual bool SupportsDraggableRegions() = 0;
+
+  // Sends the draggable regions defined by the app-region CSS property to the
+  // browser.
+  virtual void DraggableRegionsChanged() = 0;
 
   // Allow document lifecycle updates to be run in order to produce composited
   // outputs. Updates are blocked from occurring during loading navigation in
@@ -518,10 +526,14 @@ class CORE_EXPORT ChromeClient : public GarbageCollected<ChromeClient> {
 
   virtual void SelectOrSelectListFieldOptionsChanged(HTMLFormControlElement&) {}
   virtual void AjaxSucceeded(LocalFrame*) {}
-  // Called when |element| is in autofilled state and the value has been changed
-  // by JavaScript. |old_value| contains the value before being changed.
-  virtual void JavaScriptChangedAutofilledValue(HTMLFormControlElement&,
-                                                const String& old_value) {}
+  // Called when the value of `element` has been changed by JavaScript.
+  // `old_value` contains the value before being changed.
+  // `was_autofilled` is the state of the field prior to the JS change.
+  // Only called if there is an observable change in the actual value, i.e.
+  // JavaScript setting it to the current value will not trigger this.
+  virtual void JavaScriptChangedValue(HTMLFormControlElement&,
+                                      const String& old_value,
+                                      bool was_autofilled) {}
 
   // Input method editor related functions.
   virtual void ShowVirtualKeyboardOnElementFocus(LocalFrame&) {}
@@ -557,7 +569,7 @@ class CORE_EXPORT ChromeClient : public GarbageCollected<ChromeClient> {
   // the frame to be presented, the `callback` will run with the time of the
   // failure.
   using ReportTimeCallback =
-      WTF::CrossThreadOnceFunction<void(base::TimeTicks)>;
+      WTF::CrossThreadOnceFunction<void(const viz::FrameTimingDetails&)>;
   virtual void NotifyPresentationTime(LocalFrame& frame,
                                       ReportTimeCallback callback) {}
 

@@ -12,7 +12,7 @@
 #include <tuple>
 #include <utility>
 
-#include "third_party/base/compiler_specific.h"
+#include "core/fxcrt/compiler_specific.h"
 
 // Encoding:
 // - Bits-per-pixel: value & 0xFF
@@ -32,8 +32,17 @@ enum class FXDIB_Format : uint16_t {
 using FX_ARGB = uint32_t;
 using FX_CMYK = uint32_t;
 
-// FX_COLORREF, like win32 COLORREF, is BGR.
+// FX_COLORREF, like win32 COLORREF, is BGR. i.e. 0x00BBGGRR.
+// Note that while the non-existent alpha component should be set to 0, some
+// parts of the codebase use 0xFFFFFFFF as a sentinel value to indicate error.
 using FX_COLORREF = uint32_t;
+
+template <typename T>
+struct FX_RGB {
+  T red;
+  T green;
+  T blue;
+};
 
 struct FXDIB_ResampleOptions {
   FXDIB_ResampleOptions();

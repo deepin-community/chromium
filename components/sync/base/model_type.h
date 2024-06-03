@@ -111,8 +111,6 @@ enum ModelType {
   USER_EVENTS,
   // Commit only user consents.
   USER_CONSENTS,
-  // Segmentation data.
-  SEGMENTATION,
   // Tabs sent between devices.
   SEND_TAB_TO_SELF,
   // Commit only security events.
@@ -138,7 +136,7 @@ enum ModelType {
   // Contact information from the Google Address Storage.
   CONTACT_INFO,
   // A tab group saved by a user. Currently only supported on desktop platforms
-  // (Linux, Mac, Windows, ChromeOS).
+  // (Linux, Mac, Windows, ChromeOS) and Android.
   SAVED_TAB_GROUP,
 
   // Power bookmarks are features associated with bookmarks(i.e. notes, price
@@ -156,7 +154,18 @@ enum ModelType {
   // Data related to tab group sharing.
   SHARED_TAB_GROUP_DATA,
 
-  LAST_USER_MODEL_TYPE = SHARED_TAB_GROUP_DATA,
+  // Special datatype to notify client about People Group changes. Read-only on
+  // the client.
+  COLLABORATION_GROUP,
+
+  // Origin-specific email addresses forwarded from the user's account.
+  // Read-only on the client.
+  PLUS_ADDRESS,
+
+  // Product comparison groups.
+  COMPARE,
+
+  LAST_USER_MODEL_TYPE = COMPARE,
 
   // ---- Control Types ----
   // An object representing a set of Nigori keys.
@@ -239,7 +248,7 @@ enum class ModelTypeForHistograms {
   kPrintersAuthorizationServers = 52,
   kContactInfo = 53,
   kAutofillWalletUsage = 54,
-  kSegmentation = 55,
+  // kDeprecatedSegmentation = 55,
   kSavedTabGroups = 56,
   kPowerBookmark = 57,
   kWebAuthnCredentials = 58,
@@ -248,7 +257,10 @@ enum class ModelTypeForHistograms {
   kAutofillWalletCredential = 61,
   kWebApks = 62,
   kSharedTabGroupData = 63,
-  kMaxValue = kSharedTabGroupData,
+  kCollaborationGroup = 64,
+  kPlusAddresses = 65,
+  kCompare = 66,
+  kMaxValue = kCompare,
 };
 
 // Used to mark the type of EntitySpecifics that has no actual data.
@@ -276,11 +288,11 @@ constexpr ModelTypeSet UserTypes() {
 
 // User types which are not user-controlled.
 constexpr ModelTypeSet AlwaysPreferredUserTypes() {
-  return {DEVICE_INFO,
-          USER_CONSENTS,
-          SECURITY_EVENTS,
-          SEND_TAB_TO_SELF,
-          SUPERVISED_USER_SETTINGS,
+  // TODO(b/322147254): `PLUS_ADDRESS` isn't bound to a `UserSelectableType` and
+  // always considered enabled. Revise once a product decision about the opt-out
+  // has been made.
+  return {DEVICE_INFO,     USER_CONSENTS,    PLUS_ADDRESS,
+          SECURITY_EVENTS, SEND_TAB_TO_SELF, SUPERVISED_USER_SETTINGS,
           SHARING_MESSAGE};
 }
 
@@ -363,6 +375,21 @@ constexpr ModelTypeSet CommitOnlyTypes() {
 // possible).
 constexpr ModelTypeSet ApplyUpdatesImmediatelyTypes() {
   return {HISTORY};
+}
+
+// Types for which `collaboration_id` field in SyncEntity should be provided.
+// These types also support `gc_directive` for collaborations to track active
+// collaboratons.
+constexpr ModelTypeSet SharedTypes() {
+  return {SHARED_TAB_GROUP_DATA};
+}
+
+// Types triggering a warning when the user signs out and the types have
+// unsynced data. The warning offers the user to either save the data locally or
+// abort sign-out, depending on the platform.
+constexpr ModelTypeSet TypesRequiringUnsyncedDataCheckOnSignout() {
+  return {syncer::BOOKMARKS, syncer::READING_LIST, syncer::PASSWORDS,
+          syncer::CONTACT_INFO};
 }
 
 // User types that can be encrypted, which is a subset of UserTypes() and a

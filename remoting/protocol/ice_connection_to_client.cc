@@ -93,7 +93,7 @@ void IceConnectionToClient::Disconnect(ErrorCode error) {
 }
 
 std::unique_ptr<VideoStream> IceConnectionToClient::StartVideoStream(
-    const std::string& stream_name,
+    webrtc::ScreenId screen_id,
     std::unique_ptr<DesktopCapturer> desktop_capturer) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -190,7 +190,7 @@ void IceConnectionToClient::OnSessionStateChange(Session::State state) {
     case Session::FAILED:
       CloseChannels();
       event_handler_->OnConnectionClosed(
-          state == Session::FAILED ? session_->error() : OK);
+          state == Session::FAILED ? session_->error() : ErrorCode::OK);
       break;
   }
 }
@@ -216,7 +216,7 @@ void IceConnectionToClient::OnChannelInitialized(
 void IceConnectionToClient::OnChannelClosed(
     ChannelDispatcherBase* channel_dispatcher) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  Disconnect(OK);
+  Disconnect(ErrorCode::OK);
 }
 
 void IceConnectionToClient::NotifyIfChannelsReady() {

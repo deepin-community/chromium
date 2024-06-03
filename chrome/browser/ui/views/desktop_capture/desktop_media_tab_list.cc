@@ -52,7 +52,7 @@ enum class HighlightedTabDiscardStatus {
 // length is likely shorter than this, as the Label will elide it to fit the UI.
 constexpr const int kMaxPreviewTitleLength = 500;
 
-// TODO(crbug.com/1224342): Refer to central Desktop UI constants rather than
+// TODO(crbug.com/40187992): Refer to central Desktop UI constants rather than
 // hardcoding this.
 const int kListWidth = 346;
 
@@ -244,7 +244,8 @@ DesktopMediaTabList::DesktopMediaTabList(DesktopMediaListController* controller,
       model_.get(), std::vector<ui::TableColumn>(1),
       views::TableType::kIconAndText, true);
   table->set_observer(view_observer_.get());
-  table->GetViewAccessibility().OverrideName(accessible_name);
+  table->GetViewAccessibility().SetName(accessible_name,
+                                        ax::mojom::NameFrom::kAttribute);
   table_ = table.get();
 
   AddChildView(BuildUI(std::move(table)));

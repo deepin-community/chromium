@@ -75,11 +75,11 @@
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/viewport_intersection_state.mojom-blink.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom-blink.h"
 #include "third_party/blink/public/mojom/page_state/page_state.mojom-blink.h"
 #include "third_party/blink/public/mojom/scroll/scrollbar_mode.mojom-blink.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/public/mojom/window_features/window_features.mojom-blink.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/web_cache.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
 #include "third_party/blink/public/platform/web_url.h"
@@ -203,7 +203,9 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/runtime_feature_state/runtime_feature_state_override_context.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
+#include "third_party/blink/renderer/platform/scheduler/public/main_thread_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
+#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/testing/find_cc_layer.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
@@ -337,8 +339,9 @@ class WebFrameTest : public testing::Test {
     // Make sure that the RendererScheduler is foregrounded to avoid getting
     // throttled.
     if (kLaunchingProcessIsBackgrounded) {
-      blink::scheduler::WebThreadScheduler::MainThreadScheduler()
-          .SetRendererBackgrounded(false);
+      ThreadScheduler::Current()
+          ->ToMainThreadScheduler()
+          ->SetRendererBackgroundedForTesting(false);
     }
   }
 
@@ -7324,6 +7327,8 @@ class TestAccessInitialDocumentLocalFrameHost
   void DidAccessInitialMainDocument() override {
     ++did_access_initial_main_document_;
   }
+  void DraggableRegionsChanged(
+      Vector<mojom::blink::DraggableRegionPtr> regions) override {}
 
   // !!!!!!!!!!!!!!!!!! IMPORTANT !!!!!!!!!!!!!!!!!!
   // If the actual counts in the tests below increase, this could be an
@@ -13595,8 +13600,7 @@ static void TestFramePrinting(WebLocalFrameImpl* frame) {
   WebPrintParams print_params((gfx::SizeF(page_size)));
   EXPECT_EQ(1u, frame->PrintBegin(print_params, WebNode()));
   cc::PaintRecorder recorder;
-  frame->PrintPagesForTesting(recorder.beginRecording(), print_params,
-                              page_size);
+  frame->PrintPagesForTesting(recorder.beginRecording(), page_size);
   frame->PrintEnd();
 }
 
@@ -13660,8 +13664,7 @@ std::vector<TextRunDOMNodeIdInfo> GetPrintedTextRunDOMNodeIds(
 
   frame->PrintBegin(print_params, WebNode());
   cc::PaintRecorder recorder;
-  frame->PrintPagesForTesting(recorder.beginRecording(), print_params,
-                              page_size, pages);
+  frame->PrintPagesForTesting(recorder.beginRecording(), page_size, pages);
   frame->PrintEnd();
 
   cc::PaintRecord paint_record = recorder.finishRecordingAsPicture();
@@ -13817,8 +13820,9 @@ TEST_F(WebFrameSimTest, EnterFullscreenResetScrollAndScaleState) {
   EXPECT_EQ(0, WebView().VisualViewportOffset().y());
 }
 
-TEST_F(WebFrameSimTest, GetPageSizeType) {
-  WebView().MainFrameViewWidget()->Resize(gfx::Size(500, 500));
+TEST_F(WebFrameSimTest, PageSizeType) {
+  gfx::Size page_size(500, 500);
+  WebView().MainFrameViewWidget()->Resize(page_size);
 
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
@@ -13853,19 +13857,21 @@ TEST_F(WebFrameSimTest, GetPageSizeType) {
   CSSStyleDeclaration* style_decl =
       To<CSSPageRule>(sheet->cssRules(ASSERT_NO_EXCEPTION)->item(0))->style();
 
-  // GetPageSizeType() requires layout to be up-to-date.
-  WebView().MainFrameWidget()->UpdateAllLifecyclePhases(
-      DocumentUpdateReason::kTest);
-
+  auto* frame = WebView().MainFrame()->ToWebLocalFrame();
+  WebPrintParams print_params((gfx::SizeF(page_size)));
+  frame->PrintBegin(print_params, WebNode());
   // Initially empty @page rule.
-  EXPECT_EQ(PageSizeType::kAuto, main_frame->GetPageSizeType(1));
+  EXPECT_EQ(PageSizeType::kAuto,
+            main_frame->GetPageDescription(0).page_size_type);
+  frame->PrintEnd();
 
   for (const auto& test : test_cases) {
     style_decl->setProperty(doc->GetExecutionContext(), "size", test.size, "",
                             ASSERT_NO_EXCEPTION);
-    WebView().MainFrameWidget()->UpdateAllLifecyclePhases(
-        DocumentUpdateReason::kTest);
-    EXPECT_EQ(test.page_size_type, main_frame->GetPageSizeType(1));
+    frame->PrintBegin(print_params, WebNode());
+    EXPECT_EQ(test.page_size_type,
+              main_frame->GetPageDescription(0).page_size_type);
+    frame->PrintEnd();
   }
 }
 
@@ -13901,18 +13907,16 @@ TEST_F(WebFrameSimTest, PageOrientation) {
   WebPrintParams print_params((gfx::SizeF(page_size)));
   EXPECT_EQ(4u, frame->PrintBegin(print_params, WebNode()));
 
-  WebPrintPageDescription description;
-
-  frame->GetPageDescription(0, &description);
+  WebPrintPageDescription description = frame->GetPageDescription(0);
   EXPECT_EQ(description.orientation, PageOrientation::kUpright);
 
-  frame->GetPageDescription(1, &description);
+  description = frame->GetPageDescription(1);
   EXPECT_EQ(description.orientation, PageOrientation::kRotateLeft);
 
-  frame->GetPageDescription(2, &description);
+  description = frame->GetPageDescription(2);
   EXPECT_EQ(description.orientation, PageOrientation::kRotateRight);
 
-  frame->GetPageDescription(3, &description);
+  description = frame->GetPageDescription(3);
   EXPECT_EQ(description.orientation, PageOrientation::kUpright);
 
   frame->PrintEnd();

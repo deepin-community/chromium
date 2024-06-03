@@ -14,7 +14,6 @@
 #include "base/containers/contains.h"
 #include "base/containers/queue.h"
 #include "base/debug/alias.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
@@ -22,7 +21,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "components/viz/common/features.h"
 #include "components/viz/common/performance_hint_utils.h"
 #include "components/viz/common/surfaces/subtree_capture_id.h"
 #include "components/viz/common/surfaces/video_capture_target.h"
@@ -364,8 +362,7 @@ void FrameSinkManagerImpl::EvictSurfaces(
 
   // Trigger garbage collection immediately, otherwise the surface may not be
   // evicted for a long time (e.g. not before a frame is produced).
-  if (base::FeatureList::IsEnabled(features::kEagerSurfaceGarbageCollection))
-    surface_manager_.GarbageCollectSurfaces();
+  surface_manager_.GarbageCollectSurfaces();
 }
 
 void FrameSinkManagerImpl::RequestCopyOfOutput(
@@ -866,7 +863,7 @@ void FrameSinkManagerImpl::ClearThrottling(const FrameSinkId& id) {
 }
 
 void FrameSinkManagerImpl::CacheSurfaceAnimationManager(
-    NavigationID navigation_id,
+    NavigationId navigation_id,
     std::unique_ptr<SurfaceAnimationManager> manager) {
   if (navigation_to_animation_manager_.contains(navigation_id)) {
     LOG(ERROR)
@@ -879,7 +876,7 @@ void FrameSinkManagerImpl::CacheSurfaceAnimationManager(
 }
 
 std::unique_ptr<SurfaceAnimationManager>
-FrameSinkManagerImpl::TakeSurfaceAnimationManager(NavigationID navigation_id) {
+FrameSinkManagerImpl::TakeSurfaceAnimationManager(NavigationId navigation_id) {
   auto it = navigation_to_animation_manager_.find(navigation_id);
   if (it == navigation_to_animation_manager_.end()) {
     LOG(ERROR) << "SurfaceAnimationManager missing for |navigation_id| : "
@@ -893,7 +890,7 @@ FrameSinkManagerImpl::TakeSurfaceAnimationManager(NavigationID navigation_id) {
 }
 
 void FrameSinkManagerImpl::ClearSurfaceAnimationManager(
-    NavigationID navigation_id) {
+    NavigationId navigation_id) {
   navigation_to_animation_manager_.erase(navigation_id);
 }
 
@@ -923,6 +920,16 @@ void FrameSinkManagerImpl::StopFrameCountingForTest(
 
   std::move(callback).Run(frame_counter_->TakeData());
   frame_counter_.reset();
+}
+
+void FrameSinkManagerImpl::ClearUnclaimedViewTransitionResources(
+    const NavigationId& navigation_id) {
+  navigation_to_animation_manager_.erase(navigation_id);
+}
+
+void FrameSinkManagerImpl::HasUnclaimedViewTransitionResourcesForTest(
+    HasUnclaimedViewTransitionResourcesForTestCallback callback) {
+  std::move(callback).Run(!navigation_to_animation_manager_.empty());
 }
 
 }  // namespace viz

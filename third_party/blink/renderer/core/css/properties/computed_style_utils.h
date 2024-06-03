@@ -23,11 +23,12 @@
 
 namespace blink {
 
+class ComputedStyle;
 class CSSNumericLiteralValue;
 class CSSStyleValue;
 class CSSValue;
-class ComputedStyle;
 class FontFamily;
+class InsetArea;
 class StyleColor;
 class StyleIntrinsicLength;
 class StylePropertyShorthand;
@@ -36,8 +37,6 @@ class StyleTimeline;
 namespace cssvalue {
 class CSSContentDistributionValue;
 }
-
-enum class CSSValuePhase { kComputedValue, kUsedValue };
 
 class CORE_EXPORT ComputedStyleUtils {
   STATIC_ONLY(ComputedStyleUtils);
@@ -62,14 +61,14 @@ class CORE_EXPORT ComputedStyleUtils {
                                             bool* is_current_color);
   static CSSValue* ZoomAdjustedPixelValueForLength(const Length&,
                                                    const ComputedStyle&);
-  static const CSSValue* BackgroundImageOrWebkitMaskImage(
-      const ComputedStyle&,
-      bool allow_visited_style,
-      const FillLayer&);
+  static const CSSValue* BackgroundImageOrMaskImage(const ComputedStyle&,
+                                                    bool allow_visited_style,
+                                                    const FillLayer&,
+                                                    CSSValuePhase value_phase);
   static const CSSValue* ValueForFillSize(const FillSize&,
                                           const ComputedStyle&);
-  static const CSSValue* BackgroundImageOrWebkitMaskSize(const ComputedStyle&,
-                                                         const FillLayer&);
+  static const CSSValue* BackgroundImageOrMaskSize(const ComputedStyle&,
+                                                   const FillLayer&);
   static const CSSValueList* CreatePositionListForLayer(const CSSProperty&,
                                                         const FillLayer&,
                                                         const ComputedStyle&);
@@ -79,16 +78,17 @@ class CORE_EXPORT ComputedStyleUtils {
   static const CSSValueList* ValuesForBackgroundShorthand(
       const ComputedStyle&,
       const LayoutObject*,
-      bool allow_visited_style);
+      bool allow_visited_style,
+      CSSValuePhase value_phase);
   static const CSSValueList* ValuesForMaskShorthand(
       const StylePropertyShorthand&,
       const ComputedStyle&,
       const LayoutObject*,
-      bool allow_visited_style);
-  static const CSSValue* BackgroundPositionOrWebkitMaskPosition(
-      const CSSProperty&,
-      const ComputedStyle&,
-      const FillLayer*);
+      bool allow_visited_style,
+      CSSValuePhase value_phase);
+  static const CSSValue* BackgroundPositionOrMaskPosition(const CSSProperty&,
+                                                          const ComputedStyle&,
+                                                          const FillLayer*);
   static const CSSValue* BackgroundPositionXOrWebkitMaskPositionX(
       const ComputedStyle&,
       const FillLayer*);
@@ -102,16 +102,19 @@ class CORE_EXPORT ComputedStyleUtils {
   static CSSValue* ValueForNinePieceImageRepeat(const NinePieceImage&);
   static CSSValue* ValueForNinePieceImage(const NinePieceImage&,
                                           const ComputedStyle&,
-                                          bool allow_visited_style);
+                                          bool allow_visited_style,
+                                          CSSValuePhase value_phase);
   static CSSValue* ValueForReflection(const StyleReflection*,
                                       const ComputedStyle&,
-                                      bool allow_visited_style);
+                                      bool allow_visited_style,
+                                      CSSValuePhase value_phase);
   static CSSValue* ValueForPosition(const LengthPoint& position,
                                     const ComputedStyle&);
 
   static CSSValue* ValueForOffset(const ComputedStyle&,
                                   const LayoutObject*,
-                                  bool allow_visited_style);
+                                  bool allow_visited_style,
+                                  CSSValuePhase value_phase);
   static CSSValue* MinWidthOrMinHeightAuto(const ComputedStyle&);
   static CSSValue* ValueForPositionOffset(const ComputedStyle&,
                                           const CSSProperty&,
@@ -240,13 +243,15 @@ class CORE_EXPORT ComputedStyleUtils {
   static CSSValue* ValueForTransitionProperty(const CSSTransitionData*);
   static CSSValue* ValueForTransitionBehavior(const CSSTransitionData*);
   static CSSValue* ValueForContentData(const ComputedStyle&,
-                                       bool allow_visited_style);
+                                       bool allow_visited_style,
+                                       CSSValuePhase value_phase);
 
   static CSSValue* ValueForCounterDirectives(const ComputedStyle&,
                                              CounterNode::Type type);
   static CSSValue* ValueForShape(const ComputedStyle&,
                                  bool allow_visited_style,
-                                 ShapeValue*);
+                                 ShapeValue*,
+                                 CSSValuePhase value_phase);
   static CSSValueList* ValueForBorderRadiusShorthand(const ComputedStyle&);
   static CSSValue* StrokeDashArrayToCSSValueList(const SVGDashArray&,
                                                  const ComputedStyle&);
@@ -274,50 +279,62 @@ class CORE_EXPORT ComputedStyleUtils {
   static CSSValueList* ValuesForShorthandProperty(const StylePropertyShorthand&,
                                                   const ComputedStyle&,
                                                   const LayoutObject*,
-                                                  bool allow_visited_style);
+                                                  bool allow_visited_style,
+                                                  CSSValuePhase value_phase);
   static CSSValuePair* ValuesForGapShorthand(const StylePropertyShorthand&,
                                              const ComputedStyle&,
                                              const LayoutObject*,
-                                             bool allow_visited_style);
+                                             bool allow_visited_style,
+                                             CSSValuePhase value_phase);
   static CSSValueList* ValuesForGridShorthand(const StylePropertyShorthand&,
                                               const ComputedStyle&,
                                               const LayoutObject*,
-                                              bool allow_visited_style);
+                                              bool allow_visited_style,
+                                              CSSValuePhase value_phase);
   static CSSValueList* ValuesForGridAreaShorthand(const StylePropertyShorthand&,
                                                   const ComputedStyle&,
                                                   const LayoutObject*,
-                                                  bool allow_visited_style);
+                                                  bool allow_visited_style,
+                                                  CSSValuePhase value_phase);
   static CSSValueList* ValuesForGridLineShorthand(const StylePropertyShorthand&,
                                                   const ComputedStyle&,
                                                   const LayoutObject*,
-                                                  bool allow_visited_style);
+                                                  bool allow_visited_style,
+                                                  CSSValuePhase value_phase);
   static CSSValueList* ValuesForGridTemplateShorthand(
       const StylePropertyShorthand&,
       const ComputedStyle&,
       const LayoutObject*,
-      bool allow_visited_style);
+      bool allow_visited_style,
+      CSSValuePhase value_phase);
   static CSSValueList* ValuesForSidesShorthand(const StylePropertyShorthand&,
                                                const ComputedStyle&,
                                                const LayoutObject*,
-                                               bool allow_visited_style);
+                                               bool allow_visited_style,
+                                               CSSValuePhase value_phase);
   static CSSValuePair* ValuesForInlineBlockShorthand(
       const StylePropertyShorthand&,
       const ComputedStyle&,
       const LayoutObject*,
-      bool allow_visited_style);
+      bool allow_visited_style,
+      CSSValuePhase value_phase);
   static CSSValuePair* ValuesForPlaceShorthand(const StylePropertyShorthand&,
                                                const ComputedStyle&,
                                                const LayoutObject*,
-                                               bool allow_visited_style);
+                                               bool allow_visited_style,
+                                               CSSValuePhase value_phase);
   static CSSValue* ValuesForFontVariantProperty(const ComputedStyle&,
                                                 const LayoutObject*,
-                                                bool allow_visited_style);
+                                                bool allow_visited_style,
+                                                CSSValuePhase value_phase);
   static CSSValue* ValuesForFontSynthesisProperty(const ComputedStyle&,
                                                   const LayoutObject*,
-                                                  bool allow_visited_style);
+                                                  bool allow_visited_style,
+                                                  CSSValuePhase value_phase);
   static CSSValueList* ValuesForContainerShorthand(const ComputedStyle&,
                                                    const LayoutObject*,
-                                                   bool allow_visited_style);
+                                                   bool allow_visited_style,
+                                                   CSSValuePhase value_phase);
   static CSSValue* ValueForGapLength(const std::optional<Length>&,
                                      const ComputedStyle&);
   static CSSValue* ValueForStyleName(const StyleName&);
@@ -331,7 +348,7 @@ class CORE_EXPORT ComputedStyleUtils {
                                            const StyleIntrinsicLength&);
   static CSSValue* ValueForScrollStart(const ComputedStyle&,
                                        const ScrollStartData&);
-  static CSSValue* ValueForPositionTryOptions(const blink::PositionTryOptions*);
+  static CSSValue* ValueForInsetArea(const blink::InsetArea&);
   static std::unique_ptr<CrossThreadStyleValue>
   CrossThreadStyleValueFromCSSStyleValue(CSSStyleValue* style_value);
 

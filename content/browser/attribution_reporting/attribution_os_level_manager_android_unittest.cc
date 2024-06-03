@@ -15,14 +15,13 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "components/attribution_reporting/os_registration.h"
+#include "components/attribution_reporting/registrar.h"
 #include "content/browser/attribution_reporting/attribution_input_event.h"
 #include "content/browser/attribution_reporting/attribution_os_level_manager.h"
 #include "content/browser/attribution_reporting/os_registration.h"
-#include "content/browser/attribution_reporting/test/mock_content_browser_client.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/test/browser_task_environment.h"
-#include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -30,6 +29,8 @@
 
 namespace content {
 namespace {
+
+using ::attribution_reporting::Registrar;
 
 class AttributionOsLevelManagerAndroidTest : public ::testing::Test {
  public:
@@ -53,31 +54,21 @@ TEST_F(AttributionOsLevelManagerAndroidTest, Register) {
   const struct {
     const char* desc;
     std::optional<AttributionInputEvent> input_event;
-    bool should_use_os_web_source;
-    bool should_use_os_web_trigger;
+    Registrar registrar;
     size_t items_count;
   } kTestCases[] = {
-      {"os-trigger-single", std::nullopt, false, false, 1},
-      {"os-trigger-multi", std::nullopt, false, false, 3},
-      {"web-trigger-single", std::nullopt, false, true, 1},
-      {"web-trigger-multi", std::nullopt, false, true, 3},
-      {"os-source-single", AttributionInputEvent(), false, false, 1},
-      {"os-source-multi", AttributionInputEvent(), false, false, 3},
-      {"web-source-single", AttributionInputEvent(), true, false, 1},
-      {"web-source-multi", AttributionInputEvent(), true, false, 3},
+      {"os-trigger-single", std::nullopt, Registrar::kOs, 1},
+      {"os-trigger-multi", std::nullopt, Registrar::kOs, 3},
+      {"web-trigger-single", std::nullopt, Registrar::kWeb, 1},
+      {"web-trigger-multi", std::nullopt, Registrar::kWeb, 3},
+      {"web-source-single", AttributionInputEvent(), Registrar::kWeb, 1},
+      {"web-source-multi", AttributionInputEvent(), Registrar::kWeb, 3},
+      {"os-source-single", AttributionInputEvent(), Registrar::kOs, 1},
+      {"os-source-multi", AttributionInputEvent(), Registrar::kOs, 3},
   };
 
   for (const auto& test_case : kTestCases) {
     SCOPED_TRACE(test_case.desc);
-
-    MockAttributionReportingContentBrowserClient browser_client;
-    EXPECT_CALL(browser_client,
-                ShouldUseOsWebSourceAttributionReporting(testing::_))
-        .WillRepeatedly(testing::Return(test_case.should_use_os_web_source));
-    EXPECT_CALL(browser_client,
-                ShouldUseOsWebTriggerAttributionReporting(testing::_))
-        .WillRepeatedly(testing::Return(test_case.should_use_os_web_trigger));
-    ScopedContentBrowserClientSetting setting(&browser_client);
 
     base::RunLoop run_loop;
 
@@ -90,16 +81,17 @@ TEST_F(AttributionOsLevelManagerAndroidTest, Register) {
       is_debug_key_allowed.push_back(false);
     }
     manager_->Register(
-        OsRegistration(std::move(items),
-                       url::Origin::Create(GURL("https://o.test")),
-                       test_case.input_event, /*is_within_fenced_frame=*/false,
-                       /*render_frame_id=*/GlobalRenderFrameHostId()),
+        OsRegistration(
+            std::move(items), url::Origin::Create(GURL("https://o.test")),
+            test_case.input_event, /*is_within_fenced_frame=*/false,
+            /*render_frame_id=*/GlobalRenderFrameHostId(), test_case.registrar),
         is_debug_key_allowed,
-        base::BindLambdaForTesting([&](const OsRegistration&, bool success) {
-          // We don't check `success` here because the measurement API may or
-          // may not be available depending on the Android version.
-          run_loop.Quit();
-        }));
+        base::BindLambdaForTesting(
+            [&](const OsRegistration& registration, bool success) {
+              // We don't check `success` here because the measurement API may
+              // or may not be available depending on the Android version.
+              run_loop.Quit();
+            }));
 
     run_loop.Run();
   }

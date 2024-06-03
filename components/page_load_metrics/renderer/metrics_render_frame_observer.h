@@ -17,7 +17,6 @@
 #include "third_party/blink/public/common/loader/loading_behavior_flag.h"
 #include "third_party/blink/public/common/responsiveness_metrics/user_interaction_latency.h"
 #include "third_party/blink/public/common/subresource_load_metrics.h"
-#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
 #include "third_party/blink/public/web/web_local_frame_observer.h"
 
@@ -81,8 +80,9 @@ class MetricsRenderFrameObserver : public content::RenderFrameObserver,
   // RenderFrameObserver implementation
   void DidChangePerformanceTiming() override;
   void DidObserveUserInteraction(base::TimeTicks max_event_start,
-                                 base::TimeTicks max_event_end,
+                                 base::TimeTicks max_event_commit_finish,
                                  base::TimeTicks max_event_queued_main_thread,
+                                 base::TimeTicks max_event_end,
                                  blink::UserInteractionType interaction_type,
                                  uint64_t interaction_offset) override;
   void DidChangeCpuTiming(base::TimeDelta time) override;
@@ -114,7 +114,7 @@ class MetricsRenderFrameObserver : public content::RenderFrameObserver,
   void DidStartNavigation(
       const GURL& url,
       std::optional<blink::WebNavigationType> navigation_type) override;
-  void DidSetPageLifecycleState() override;
+  void DidSetPageLifecycleState(bool restoring_from_bfcache) override;
 
   void ReadyToCommitNavigation(
       blink::WebDocumentLoader* document_loader) override;
@@ -192,10 +192,6 @@ class MetricsRenderFrameObserver : public content::RenderFrameObserver,
 
   // Will be null when we're not actively sending metrics.
   std::unique_ptr<PageTimingMetricsSender> page_timing_metrics_sender_;
-
-  // DocumentToken associated with current page load. Only available after
-  // `DidCreateDocumentElement` event.
-  std::optional<blink::DocumentToken> document_token_;
 };
 
 }  // namespace page_load_metrics

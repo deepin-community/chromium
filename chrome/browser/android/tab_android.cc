@@ -17,15 +17,14 @@
 #include "base/metrics/user_metrics.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/slim/layer.h"
-#include "chrome/android/chrome_jni_headers/TabImpl_jni.h"
 #include "chrome/browser/android/background_tab_manager.h"
 #include "chrome/browser/android/compositor/tab_content_manager.h"
 #include "chrome/browser/android/tab_web_contents_delegate_android.h"
 #include "chrome/browser/browser_about_handler.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/notifications/notification_permission_context.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "chrome/browser/resource_coordinator/tab_helper.h"
 #include "chrome/browser/resource_coordinator/tab_load_tracker.h"
 #include "chrome/browser/sync/glue/synced_tab_delegate_android.h"
@@ -33,12 +32,19 @@
 #include "chrome/browser/ui/android/context_menu_helper.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/startup/bad_flags_prompt.h"
 #include "chrome/browser/ui/tab_helpers.h"
+#include "components/android_autofill/browser/android_autofill_client.h"
+#include "components/android_autofill/browser/android_autofill_manager.h"
+#include "components/android_autofill/browser/autofill_provider.h"
+#include "components/android_autofill/browser/autofill_provider_android.h"
+#include "components/autofill/content/browser/content_autofill_driver_factory.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
@@ -51,6 +57,9 @@
 #include "ui/android/view_android.h"
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
+
+// Must come after other includes, because FromJniType() uses Profile.
+#include "chrome/android/chrome_jni_headers/TabImpl_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF8ToJavaString;
@@ -130,14 +139,14 @@ void TabAndroid::AttachTabHelpers(content::WebContents* web_contents) {
 
 TabAndroid::TabAndroid(JNIEnv* env,
                        const JavaRef<jobject>& obj,
-                       const JavaRef<jobject>& jprofile,
+                       Profile* profile,
                        int tab_id)
     : weak_java_tab_(env, obj),
       tab_id_(tab_id),
       session_window_id_(SessionID::InvalidValue()),
       content_layer_(cc::slim::Layer::Create()),
       synced_tab_delegate_(new browser_sync::SyncedTabDelegateAndroid(this)),
-      profile_(ProfileAndroid::FromProfileAndroid(jprofile)->GetWeakPtr()) {
+      profile_(profile->GetWeakPtr()) {
   Java_TabImpl_setNativePtr(env, obj, reinterpret_cast<intptr_t>(this));
 }
 
@@ -206,9 +215,8 @@ std::u16string TabAndroid::GetTitle() const {
 
 GURL TabAndroid::GetURL() const {
   JNIEnv* env = base::android::AttachCurrentThread();
-  std::unique_ptr<GURL> gurl = url::GURLAndroid::ToNativeGURL(
+  return url::GURLAndroid::ToNativeGURL(
       env, Java_TabImpl_getUrl(env, weak_java_tab_.get(env)));
-  return std::move(*gurl);
 }
 
 bool TabAndroid::IsUserInteractable() const {
@@ -345,6 +353,24 @@ void TabAndroid::InitWebContents(
 
   for (Observer& observer : observers_)
     observer.OnInitWebContents(this);
+}
+
+void TabAndroid::InitializeAutofillIfNecessary(JNIEnv* env) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  DCHECK(autofill::AutofillProvider::FromWebContents(web_contents_.get()));
+  if (autofill::ContentAutofillClient::FromWebContents(web_contents_.get())) {
+    return;
+  }
+  android_autofill::AndroidAutofillClient::CreateForWebContents(
+      web_contents_.get(), [&](const JavaRef<jobject>& client) {});
+
+  // We need to initialize the keyboard suppressor before creating any
+  // AutofillManagers and after the autofill client is available.
+  autofill::AutofillProvider::FromWebContents(web_contents_.get())
+      ->MaybeInitKeyboardSuppressor();
+
+  autofill::ContentAutofillDriverFactory::FromWebContents(web_contents_.get())
+      ->DriverForFrame(web_contents_->GetPrimaryMainFrame());
 }
 
 void TabAndroid::UpdateDelegates(
@@ -495,13 +521,13 @@ base::android::ScopedJavaLocalRef<jobject> JNI_TabImpl_FromWebContents(
 static jboolean JNI_TabImpl_HandleNonNavigationAboutURL(
     JNIEnv* env,
     const JavaParamRef<jobject>& jurl) {
-  std::unique_ptr<GURL> url = url::GURLAndroid::ToNativeGURL(env, jurl);
-  return HandleNonNavigationAboutURL(*url);
+  GURL url = url::GURLAndroid::ToNativeGURL(env, jurl);
+  return HandleNonNavigationAboutURL(url);
 }
 
 static void JNI_TabImpl_Init(JNIEnv* env,
                              const JavaParamRef<jobject>& obj,
-                             const JavaParamRef<jobject>& profile,
+                             Profile* profile,
                              jint id) {
   TRACE_EVENT0("native", "TabAndroid::Init");
   // This will automatically bind to the Java object and pass ownership there.

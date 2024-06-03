@@ -7,7 +7,7 @@
  * credit cards for use in autofill and payments APIs.
  */
 
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
+import '/shared/settings/prefs/prefs.js';
 import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
@@ -44,11 +44,8 @@ import type {PaymentsManagerProxy} from './payments_manager_proxy.js';
 import {PaymentsManagerImpl} from './payments_manager_proxy.js';
 import {getTemplate} from './payments_section.html.js';
 
-/**
- * TODO(crbug.com/322869650): Replace the help URL when the correct article
- * is ready.
- */
-export const GOOGLE_PAY_HELP_URL = 'https://support.google.com/googlepay/';
+export const GOOGLE_PAY_HELP_URL =
+    'https://support.google.com/googlepay?p=card_benefits_chrome';
 
 type DotsCardMenuiClickEvent = CustomEvent<{
   creditCard: chrome.autofillPrivate.CreditCardEntry,
@@ -74,7 +71,6 @@ export interface SettingsPaymentsSectionElement {
     creditCardSharedMenu: CrActionMenuElement,
     ibanSharedActionMenu: CrLazyRenderElement<CrActionMenuElement>,
     mandatoryAuthToggle: SettingsToggleButtonElement,
-    menuClearCreditCard: HTMLElement,
     menuEditCreditCard: HTMLElement,
     menuRemoveCreditCard: HTMLElement,
     menuAddVirtualCard: HTMLElement,
@@ -214,7 +210,7 @@ export class SettingsPaymentsSectionElement extends
       },
 
       /**
-       * Checks if card benefits feature flag is enabled.
+       * Checks if a card benefits feature flag is enabled.
        */
       cardBenefitsFlagEnabled_: {
         type: Boolean,
@@ -521,16 +517,6 @@ export class SettingsPaymentsSectionElement extends
     this.$.ibanSharedActionMenu.get().close();
   }
 
-  /**
-   * Handles clicking on the "Clear copy" button for cached credit cards.
-   */
-  private onMenuClearCreditCardClick_() {
-    this.paymentsManager_.clearCachedCreditCard(this.activeCreditCard_!.guid!);
-    this.$.creditCardSharedMenu.close();
-    this.activeCreditCard_ = null;
-  }
-
-
   private onMenuAddVirtualCardClick_() {
     this.paymentsManager_.addVirtualCard(this.activeCreditCard_!.guid!);
     this.$.creditCardSharedMenu.close();
@@ -721,6 +707,14 @@ export class SettingsPaymentsSectionElement extends
       this.paymentsManager_.bulkDeleteAllCvcs();
     }
     this.showBulkRemoveCvcConfirmationDialog_ = false;
+
+    // Focus on the CVC storage toggle, post deletion of CVCs for voice reader
+    // correctness.
+    const cvcStorageToggle =
+        this.shadowRoot!.querySelector<SettingsToggleButtonElement>(
+            '#cvcStorageToggle');
+    assert(cvcStorageToggle);
+    cvcStorageToggle.focus();
   }
 
   /**
@@ -742,6 +736,17 @@ export class SettingsPaymentsSectionElement extends
    */
   private onCardBenefitsSublabelLinkClick_() {
     OpenWindowProxyImpl.getInstance().openUrl(GOOGLE_PAY_HELP_URL);
+  }
+
+  /**
+   * Get the CVC storage toggle aria label for a11y voice readers.
+   * @returns CVC storage aria label.
+   */
+  private getCvcStorageAriaLabel_(): string {
+    const card = this.creditCards.find(cc => !!cc.cvc);
+    return this.i18n(
+        card === undefined ? 'enableCvcStorageAriaLabelForNoCvcSaved' :
+                             'enableCvcStorageLabel');
   }
 }
 

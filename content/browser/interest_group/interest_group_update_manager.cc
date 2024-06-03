@@ -288,7 +288,7 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   return true;
 }
 
-// Copies the trustedBiddingSignals list JSON field into
+// Copies the trustedBiddingSignalsKeys list JSON field into
 // `interest_group_update`, returns true iff the JSON is valid and the copy
 // completed.
 [[nodiscard]] bool TryToCopyTrustedBiddingSignalsKeys(
@@ -715,7 +715,7 @@ std::optional<InterestGroupUpdate> ParseUpdateJson(
   }
   if (!TryToCopyMaxTrustedBiddingSignalsURLLength(*dict,
                                                   interest_group_update)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   if (!TryToCopyTrustedBiddingSignalsKeys(*dict, interest_group_update)) {
     return std::nullopt;

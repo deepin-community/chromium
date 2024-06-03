@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <deque>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/base64.h"
@@ -155,7 +156,7 @@ FieldType FirstNonCapturedType(const FormStructure& form,
       // possible_type was determined by a valid email address found within the
       // field's content. The kAutofillUploadVotesForFieldsWithEmail feature
       // handles this scenario.
-      if (type == EMAIL_ADDRESS && IsValidEmailAddress(field->value) &&
+      if (type == EMAIL_ADDRESS && IsValidEmailAddress(field->value()) &&
           base::FeatureList::IsEnabled(
               features::kAutofillUploadVotesForFieldsWithEmail)) {
         continue;
@@ -200,7 +201,7 @@ void EncodeRandomizedValue(const RandomizedEncoder& encoder,
                            FormSignature form_signature,
                            FieldSignature field_signature,
                            std::string_view data_type,
-                           base::StringPiece16 data_value,
+                           std::u16string_view data_value,
                            bool include_checksum,
                            AutofillRandomizedValue* output) {
   EncodeRandomizedValue(encoder, form_signature, field_signature, data_type,
@@ -261,7 +262,7 @@ void PopulateRandomizedFieldMetadata(
   }
   EncodeRandomizedValue(encoder, form_signature, field_signature,
                         RandomizedEncoder::FIELD_CONTROL_TYPE,
-                        FormControlTypeToString(field.form_control_type),
+                        FormControlTypeToString(field.form_control_type()),
                         /*include_checksum=*/false, metadata->mutable_type());
   if (!field.label.empty()) {
     EncodeRandomizedValue(encoder, form_signature, field_signature,
@@ -322,17 +323,6 @@ void EncodeFormFieldsForUpload(const FormStructure& form,
     auto* added_field = upload->add_field();
     for (auto field_type : field->possible_types()) {
       added_field->add_autofill_type(field_type);
-    }
-
-    field->NormalizePossibleTypesValidities();
-
-    for (const auto& [field_type, validities] :
-         field->possible_types_validities()) {
-      auto* type_validities = added_field->add_autofill_type_validities();
-      type_validities->set_type(field_type);
-      for (const auto& validity : validities) {
-        type_validities->add_validity(base::to_underlying(validity));
-      }
     }
 
     if (field->generation_type()) {
@@ -848,7 +838,7 @@ void ProcessServerPredictionsQueryResponse(
     form->UpdateAutofillCount();
     form->RationalizeFormStructure(form_interactions_ukm_logger, log_manager);
 
-    // TODO(crbug.com/1154080): By calling this with true, autocomplete section
+    // TODO(crbug.com/40159300): By calling this with true, autocomplete section
     // attributes will be ignored.
     form->IdentifySections(/*ignore_autocomplete=*/true);
     // Metrics are intentionally only emitted after the sever response, not when

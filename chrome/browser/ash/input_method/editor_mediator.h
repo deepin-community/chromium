@@ -36,6 +36,7 @@ namespace input_method {
 // providing an overall unified interface for the backend of the project.
 class EditorMediator : public EditorEventSink,
                        public EditorPanelManager::Delegate,
+                       public EditorSwitch::Delegate,
                        public EditorSystemActuator::System,
                        public display::DisplayObserver,
                        public KeyedService {
@@ -75,6 +76,7 @@ class EditorMediator : public EditorEventSink,
   EditorOpportunityMode GetEditorOpportunityMode() const override;
   std::vector<EditorBlockedReason> GetBlockedReasons() const override;
   void CacheContext() override;
+  void FetchAndUpdateInputContext() override;
   EditorMetricsRecorder* GetMetricsRecorder() override;
 
   // display::DisplayObserver overrides
@@ -86,6 +88,9 @@ class EditorMediator : public EditorEventSink,
   void ShowUI() override;
   void CloseUI() override;
   size_t GetSelectedTextLength() override;
+
+  // EditorSwitch::Delegate overrides
+  void OnEditorModeChanged(const EditorMode& mode) override;
 
   // KeyedService overrides
   void Shutdown() override;

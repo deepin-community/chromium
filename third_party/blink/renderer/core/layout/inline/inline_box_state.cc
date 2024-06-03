@@ -40,6 +40,11 @@ FontHeight ComputeEmphasisMarkOutsets(const ComputedStyle& style,
 
 }  // namespace
 
+void LogicalRubyColumn::Trace(Visitor* visitor) const {
+  visitor->Trace(annotation_items);
+  visitor->Trace(ruby_column_list);
+}
+
 InlineBoxState::InlineBoxState(const InlineBoxState&& state)
     : fragment_start(state.fragment_start),
       item(state.item),
@@ -138,8 +143,7 @@ void InlineBoxState::ComputeTextMetrics(const ComputedStyle& styleref,
   FontHeight emphasis_marks_outsets =
       ComputeEmphasisMarkOutsets(styleref, fontref);
   FontHeight leading_space = CalculateLeadingSpace(
-      styleref.ComputedLineHeightAsFixed(fontref), text_metrics,
-      styleref.TextBoxTrim(), styleref.GetWritingMode());
+      styleref.ComputedLineHeightAsFixed(fontref), text_metrics);
   if (emphasis_marks_outsets.IsEmpty()) {
     text_metrics.AddLeading(leading_space);
   } else {
@@ -153,7 +157,7 @@ void InlineBoxState::ComputeTextMetrics(const ComputedStyle& styleref,
 
   metrics.Unite(text_metrics);
 
-  include_used_fonts = styleref.LineHeight().IsNegative();
+  include_used_fonts = styleref.LineHeight().IsAuto();
 }
 
 void InlineBoxState::ResetTextMetrics() {
@@ -177,8 +181,7 @@ void InlineBoxState::AccumulateUsedFonts(const ShapeResultView* shape_result) {
     FontHeight fallback_metrics =
         fallback_font->GetFontMetrics().GetFontHeight(baseline_type);
     FontHeight leading_space = CalculateLeadingSpace(
-        fallback_font->GetFontMetrics().FixedLineSpacing(), fallback_metrics,
-        style->TextBoxTrim(), style->GetWritingMode());
+        fallback_font->GetFontMetrics().FixedLineSpacing(), fallback_metrics);
     fallback_metrics.AddLeading(leading_space);
     metrics.Unite(fallback_metrics);
   }
@@ -682,8 +685,9 @@ LayoutUnit InlineLayoutStateStack::ComputeInlinePositions(
     child.rect.offset.inline_offset += position;
     // Box margins/boders/paddings will be processed later.
     // TODO(kojii): we could optimize this if the reordering did not occur.
-    if (!child.HasFragment())
+    if (!child.HasFragment() && !child.IsRubyLinePlaceholder()) {
       continue;
+    }
     position += child.inline_size;
   }
 
@@ -869,7 +873,8 @@ const LayoutResult* InlineLayoutStateStack::BoxData::CreateBoxFragment(
       LogicalOffset static_offset = child.rect.offset - rect.offset;
 
       box.AddOutOfFlowInlineChildCandidate(oof_box, static_offset,
-                                           child.container_direction);
+                                           child.container_direction,
+                                           child.is_hidden_for_paint);
       child.out_of_flow_positioned_box = nullptr;
       continue;
     }
@@ -1151,8 +1156,7 @@ FontHeight InlineLayoutStateStack::MetricsForTopAndBottomAlign(
     // Include the line-height property. The inline box has the height of the
     // font metrics without the line-height included.
     FontHeight leading_space =
-        CalculateLeadingSpace(style.ComputedLineHeightAsFixed(), box_metrics,
-                              style.TextBoxTrim(), style.GetWritingMode());
+        CalculateLeadingSpace(style.ComputedLineHeightAsFixed(), box_metrics);
     box_metrics.AddLeading(leading_space);
     metrics.Unite(box_metrics);
   }
@@ -1179,6 +1183,11 @@ FontHeight InlineLayoutStateStack::MetricsForTopAndBottomAlign(
     }
   }
   return max;
+}
+
+LogicalRubyColumn& InlineLayoutStateStack::CreateRubyColumn() {
+  ruby_column_list_.push_back(MakeGarbageCollected<LogicalRubyColumn>());
+  return *ruby_column_list_.back();
 }
 
 #if DCHECK_IS_ON()

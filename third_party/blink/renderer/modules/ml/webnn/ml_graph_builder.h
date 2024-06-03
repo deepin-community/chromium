@@ -10,7 +10,7 @@
 #include "base/types/expected.h"
 #include "components/ml/webnn/graph_validation_utils.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_ml_auto_pad.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_operand_data_type.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
@@ -34,12 +34,16 @@ class MLConvTranspose2dOptions;
 class MLEluOptions;
 class MLGatherOptions;
 class MLGemmOptions;
+class MLGruOptions;
+class MLGruCellOptions;
+class MLGraph;
 class MLHardSigmoidOptions;
 class MLInstanceNormalizationOptions;
 class MLLayerNormalizationOptions;
 class MLLeakyReluOptions;
 class MLLinearOptions;
 class MLLstmOptions;
+class MLLstmCellOptions;
 class MLPadOptions;
 class MLPool2dOptions;
 class MLReduceOptions;
@@ -47,9 +51,9 @@ class MLResample2dOptions;
 class MLSoftplusOptions;
 class MLSplitOptions;
 class MLTransposeOptions;
+class MLTriangularOptions;
 class MLOperand;
 class MLOperandDescriptor;
-class ScriptPromiseResolver;
 
 typedef HeapVector<std::pair<String, Member<MLOperand>>> MLNamedOperands;
 
@@ -197,6 +201,22 @@ class MODULES_EXPORT MLGraphBuilder final : public ScriptWrappable {
                   const MLGemmOptions* options,
                   ExceptionState& exception_state);
 
+  HeapVector<Member<const MLOperand>> gru(const MLOperand* input,
+                                          const MLOperand* weight,
+                                          const MLOperand* recurrent_weight,
+                                          const uint32_t steps,
+                                          const uint32_t hidden_size,
+                                          MLGruOptions* options,
+                                          ExceptionState& exception_state);
+
+  MLOperand* gruCell(const MLOperand* input,
+                     const MLOperand* weight,
+                     const MLOperand* recurrent_weight,
+                     const MLOperand* hidden_state,
+                     const uint32_t hidden_size,
+                     MLGruCellOptions* options,
+                     ExceptionState& exception_state);
+
   MLOperand* hardSigmoid(const MLOperand* input,
                          const MLHardSigmoidOptions* options,
                          ExceptionState& exception_state);
@@ -232,8 +252,18 @@ class MODULES_EXPORT MLGraphBuilder final : public ScriptWrappable {
                                            const MLOperand* recurrent_weight,
                                            const uint32_t steps,
                                            const uint32_t hidden_size,
-                                           const MLLstmOptions* options,
+                                           MLLstmOptions* options,
                                            ExceptionState& exception_state);
+
+  HeapVector<Member<const MLOperand>> lstmCell(
+      const MLOperand* input,
+      const MLOperand* weight,
+      const MLOperand* recurrent_weight,
+      const MLOperand* hidden_state,
+      const MLOperand* cell_state,
+      uint32_t hidden_size,
+      MLLstmCellOptions* options,
+      ExceptionState& exception_state);
 
   MLOperand* matmul(const MLOperand* a,
                     const MLOperand* b,
@@ -339,14 +369,18 @@ class MODULES_EXPORT MLGraphBuilder final : public ScriptWrappable {
                        const MLTransposeOptions* options,
                        ExceptionState& exception_state);
 
+  MLOperand* triangular(const MLOperand* input,
+                        const MLTriangularOptions* options,
+                        ExceptionState& exception_state);
+
   MLOperand* where(const MLOperand* condition,
                    const MLOperand* true_value,
                    const MLOperand* false_value,
                    ExceptionState& exception_state);
 
-  ScriptPromise build(ScriptState* script_state,
-                      const MLNamedOperands& outputs,
-                      ExceptionState& exception_state);
+  ScriptPromise<MLGraph> build(ScriptState* script_state,
+                               const MLNamedOperands& outputs,
+                               ExceptionState& exception_state);
 
   // The test cases can override the graph building behavior by implementing
   // this class and setting its instance by SetBackendForTesting().
@@ -354,12 +388,31 @@ class MODULES_EXPORT MLGraphBuilder final : public ScriptWrappable {
    public:
     virtual void BuildGraphImpl(MLContext* context,
                                 const MLNamedOperands& named_outputs,
-                                ScriptPromiseResolver* resolver) = 0;
+                                ScriptPromiseResolver<MLGraph>* resolver) = 0;
   };
 
   static void SetBackendForTesting(BackendForTesting* backend_for_testing);
 
  private:
+  // Performs platform-agnostic and operand-agnostic validation checks which
+  // must be run for each built operand. Returns an error message which may be
+  // used to throw a TypeError if `input` is not valid to use with this builder.
+  [[nodiscard]] base::expected<void, String> ValidateInput(
+      const MLOperand* input);
+  // Convenience method to validate several inputs at once.
+  [[nodiscard]] base::expected<void, String> ValidateInputs(
+      const HeapVector<Member<const MLOperand>>& inputs);
+
+  // Performs platform-agnostic and operand-agnostic validation checks which
+  // must be run for each MLActivation passed as an option to a builder method.
+  // Returns an error message which may be used to throw a TypeError if
+  // `activation` is not valid to use with this builder.
+  [[nodiscard]] base::expected<void, String> ValidateActivation(
+      const MLActivation* activation);
+  // Convenience method to validate several activations at once.
+  [[nodiscard]] base::expected<void, String> ValidateActivations(
+      const HeapVector<Member<MLActivation>>& activations);
+
   Member<MLContext> ml_context_;
 };
 

@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_button.h"
+#include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_everything_menu.h"
 #include "components/saved_tab_groups/saved_tab_group_model.h"
 #include "components/saved_tab_groups/saved_tab_group_model_observer.h"
 #include "content/public/browser/page.h"
@@ -19,8 +20,6 @@
 #include "ui/views/widget/widget_observer.h"
 
 class Browser;
-class SavedTabGroupButton;
-class SavedTabGroupDragData;
 
 namespace content {
 class PageNavigator;
@@ -29,6 +28,11 @@ class PageNavigator;
 namespace views {
 class Widget;
 }
+
+namespace tab_groups {
+
+class SavedTabGroupButton;
+class SavedTabGroupDragData;
 
 // The view for accessing SavedTabGroups from the bookmarks bar. Is responsible
 // for rendering the SavedTabGroupButtons with the bounds that are defined by
@@ -47,7 +51,8 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
   SavedTabGroupBar& operator=(const SavedTabGroupBar&) = delete;
   ~SavedTabGroupBar() override;
 
-  // Sets the stored page navigator
+  // Sets the stored page navigator.
+  // TODO(pengchaocai): Navigator seems not needed. Investigate and remove.
   void SetPageNavigator(content::PageNavigator* page_navigator) {
     page_navigator_ = page_navigator;
   }
@@ -93,6 +98,11 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
   // Calculates what the visible width would be when a restriction on width is
   // placed on the bar.
   int CalculatePreferredWidthRestrictedBy(int width_restriction) const;
+
+  // Calculates what the visible width would be when a restriction on width is
+  // placed on the bar. Should only get invoked behind TabGroupsSaveV2.
+  // TODO(crbug.com/329659664): Rename once V2 ships.
+  int V2CalculatePreferredWidthRestrictedBy(int width_restriction) const;
 
   bool IsOverflowButtonVisible();
 
@@ -143,6 +153,11 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
   // group into the tabstrip.
   void MaybeShowOverflowMenu();
 
+  // When called, display a menu that shows a "Create new tab group" option and
+  // all the saved tab groups (if there are any). Pressing on the saved tab
+  // groups opens the group into the tab strip.
+  void ShowEverythingMenu();
+
   // Updates the contents of the overflow menu if it is open.
   void UpdateOverflowMenu();
 
@@ -166,7 +181,8 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
 
   // Finds the index of the last button that can be displayed within the given
   // width. Guaranteed to not exceed `kMaxVisibleButtons`. Does not include the
-  // overflow button.
+  // overflow button. Returns -1 to indicate that no tab groups button is
+  // visible with the given width.
   int CalculateLastVisibleButtonIndexForWidth(int max_width) const;
 
   // Updates the drop index in `drag_data_` based on the current drag location.
@@ -195,6 +211,8 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
 
   raw_ptr<views::MenuButton, AcrossTasksDanglingUntriaged> overflow_button_;
 
+  std::unique_ptr<STGEverythingMenu> everything_menu_;
+
   // Used to show the overflow menu when clicked.
   raw_ptr<views::BubbleDialogDelegate> bubble_delegate_ = nullptr;
 
@@ -220,9 +238,14 @@ class SavedTabGroupBar : public views::AccessiblePaneView,
   // animate or not.
   const bool animations_enabled_ = true;
 
+  // Whether the kTabGroupsSaveUIUpdate flag is enabled.
+  const bool v2_ui_enabled_;
+
   // Returns WeakPtrs used in GetPageNavigatorGetter(). Used to ensure
   // safety if BookmarkBarView is deleted after getting the callback.
   base::WeakPtrFactory<SavedTabGroupBar> weak_ptr_factory_{this};
 };
+
+}  // namespace tab_groups
 
 #endif  // CHROME_BROWSER_UI_VIEWS_BOOKMARKS_SAVED_TAB_GROUPS_SAVED_TAB_GROUP_BAR_H_

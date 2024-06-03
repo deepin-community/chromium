@@ -115,6 +115,11 @@ chromium-metrics-reviews@google.com.
         summary="Downloading of the recoverability-degraded state"/>
     <variant name=".DownloadKeys" summary="Downloading of keys"/>
     <variant name=".RegisterDevice" summary="Local device registration"/>
+    <variant name=".RegisterGooglePasswordManagerPIN"
+        summary="Google Password Manager PIN registration"/>
+    <variant name=".RegisterLockScreenKnowledgeFactor"
+        summary="Registration of a lock screen knowledge factor (e.g. PIN or
+                 local password)"/>
     <variant name=".RegisterUnspecifiedAuthenticationFactor"
         summary="Registration of an authentication factor of unspecified type"/>
   </token>

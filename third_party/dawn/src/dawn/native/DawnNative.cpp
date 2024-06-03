@@ -189,10 +189,6 @@ const ToggleInfo* Instance::GetToggleInfo(const char* toggleName) {
     return mImpl->GetToggleInfo(toggleName);
 }
 
-const FeatureInfo* Instance::GetFeatureInfo(WGPUFeatureName feature) {
-    return mImpl->GetFeatureInfo(static_cast<wgpu::FeatureName>(feature));
-}
-
 void Instance::EnableBackendValidation(bool enableBackendValidation) {
     if (enableBackendValidation) {
         mImpl->SetBackendValidationLevel(BackendValidationLevel::Full);
@@ -217,6 +213,10 @@ uint64_t Instance::GetDeviceCountForTesting() const {
 
 WGPUInstance Instance::Get() const {
     return ToAPI(mImpl);
+}
+
+void Instance::DisconnectDawnPlatform() {
+    mImpl->DisconnectDawnPlatform();
 }
 
 size_t GetLazyClearCountForTesting(WGPUDevice device) {

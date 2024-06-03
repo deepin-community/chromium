@@ -125,6 +125,11 @@ union xnn_f16_minmax_params {
     XNN_ALIGN(32) float min[8];
     XNN_ALIGN(32) float max[8];
   } avx;
+  struct {
+    float min;
+    float max;
+    int8_t sign_mask;
+  } avxvnni;
 #endif  // XNN_ARCH_X86 || XNN_ARCH_X86_64
 };
 
@@ -174,6 +179,13 @@ union xnn_f16_qc4w_minmax_params {
     XNN_ALIGN(32) float max[8];
     XNN_ALIGN(32) uint8_t mask[16];
   } avx;
+  struct {
+    float min;
+    float max;
+    int8_t sign_mask;   // 0x80
+    int8_t mask;        // 0xF0
+    int64_t gfni_shl4;  // 0x01020408
+  } avxvnni;
 #endif  // XNN_ARCH_X86 || XNN_ARCH_X86_64
 };
 
@@ -194,17 +206,6 @@ union xnn_f32_qc4w_minmax_params {
     XNN_ALIGN(16) float magic_bias_plus_kernel_zero_point_c1[4];
     XNN_ALIGN(16) uint8_t mask[16];
   } sse;
-  // XOP is same as SSE with shift added
-  struct {
-    XNN_ALIGN(16) float min[4];
-    XNN_ALIGN(16) float max[4];
-    XNN_ALIGN(16) uint32_t magic_bias_c0[4];
-    XNN_ALIGN(16) uint32_t magic_bias_c1[4];
-    XNN_ALIGN(16) float magic_bias_plus_kernel_zero_point_c0[4];
-    XNN_ALIGN(16) float magic_bias_plus_kernel_zero_point_c1[4];
-    XNN_ALIGN(16) uint8_t mask[16];
-    XNN_ALIGN(16) uint8_t shift[16];
-  } xop;
   struct {
     XNN_ALIGN(32) float min[8];
     XNN_ALIGN(32) float max[8];
@@ -1076,6 +1077,15 @@ union xnn_qu8_avgpool_minmax_params {
 
 
 // Abs: used by VABS microkernels.
+
+union xnn_bf16_abs_params {
+  char _; // Dummy member variable to comply with the C standard
+#if XNN_ARCH_ARM || XNN_ARCH_ARM64
+  struct {
+    XNN_ALIGN(16) uint16_t nonsign_mask[8];
+  } neon;
+#endif  // XNN_ARCH_ARM || XNN_ARCH_ARM64
+};
 
 union xnn_f16_abs_params {
   char _; // Dummy member variable to comply with the C standard
@@ -2725,7 +2735,27 @@ union xnn_f32_sqrt_params {
 // Rsqrt (Reciprocal Square Root): used by VRSQRT microkernels.
 
 union xnn_f32_rsqrt_params {
-  char _;  // Dummy member variable to comply with the C standard
+  char _;  // Dummy member variable to comply with the C standard.
+#if XNN_ARCH_X86 || XNN_ARCH_X86_64
+  struct {
+    XNN_ALIGN(16) float three[4];
+    XNN_ALIGN(16) float half[4];
+  } sse;
+  struct {
+    XNN_ALIGN(32) float three[8];
+    XNN_ALIGN(32) float half[8];
+    int32_t mask_table[14];
+  } avx;
+  struct {
+    XNN_ALIGN(32) float three[8];
+    XNN_ALIGN(32) float neg_half[8];
+    int32_t mask_table[14];
+  } fma3;
+  struct {
+    float three;
+    float neg_half;
+  } avx512;
+#endif  // XNN_ARCH_X86 || XNN_ARCH_X86_64
 };
 
 // TanH (Hyperbolic Tangent): used by VTANH microkernels.

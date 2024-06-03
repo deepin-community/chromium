@@ -45,6 +45,8 @@
 #include "content/common/input/event_with_latency_info.h"
 #include "content/common/input/input_disposition_handler.h"
 #include "content/common/input/input_router_impl.h"
+#include "content/common/input/render_input_router.h"
+#include "content/common/input/render_input_router_delegate.h"
 #include "content/common/input/synthetic_gesture.h"
 #include "content/common/input/synthetic_gesture_controller.h"
 #include "content/public/browser/render_process_host_observer.h"
@@ -56,10 +58,10 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-forward.h"
-#include "services/viz/public/mojom/hit_test/input_target_client.mojom.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_context.mojom.h"
+#include "third_party/blink/public/mojom/keyboard_lock/keyboard_lock.mojom.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/blink/public/mojom/page/widget.mojom.h"
 #include "third_party/blink/public/mojom/widget/platform_widget.mojom.h"
@@ -102,6 +104,7 @@ class FlingSchedulerBase;
 class FrameTree;
 class InputRouter;
 class MockRenderWidgetHost;
+class MockRenderWidgetHostImpl;
 class PeakGpuMemoryTracker;
 class RenderWidgetHostOwnerDelegate;
 class SiteInstanceGroup;
@@ -150,7 +153,8 @@ class CONTENT_EXPORT RenderWidgetHostImpl
       public blink::mojom::FrameWidgetHost,
       public blink::mojom::PopupWidgetHost,
       public blink::mojom::WidgetHost,
-      public blink::mojom::PointerLockContext {
+      public blink::mojom::PointerLockContext,
+      public RenderInputRouterDelegate {
  public:
   // See the constructor for documentations.
   static std::unique_ptr<RenderWidgetHostImpl> Create(
@@ -350,6 +354,10 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   void SetPopupBounds(const gfx::Rect& bounds,
                       SetPopupBoundsCallback callback) override;
 
+  // RenderInputRouterDelegate implementation.
+  RenderWidgetHostViewInput* GetPointerLockView() override;
+  const cc::RenderFrameMetadata& GetLastRenderFrameMetadata() override;
+
   // Update the stored set of visual properties for the renderer. If 'propagate'
   // is true, the new properties will be sent to the renderer process.
   bool UpdateVisualProperties(bool propagate);
@@ -497,13 +505,6 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // Notifies the RenderWidgetHost that the View was destroyed.
   void ViewDestroyed();
 
-  // Signals if this host has forwarded a GestureScrollBegin without yet having
-  // forwarded a matching GestureScrollEnd/GestureFlingStart.
-  bool is_in_touchscreen_gesture_scroll() const {
-    return is_in_gesture_scroll_[static_cast<int>(
-        blink::WebGestureDevice::kTouchscreen)];
-  }
-
   bool visual_properties_ack_pending_for_testing() {
     return visual_properties_ack_pending_;
   }
@@ -634,7 +635,8 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // Cancels an ongoing composition.
   void ImeCancelComposition();
 
-  // Whether forwarded WebInputEvents are being ignored.
+  // Whether forwarded WebInputEvents or other events are being ignored.
+  bool IsIgnoringWebInputEvents(const blink::WebInputEvent& event) const;
   bool IsIgnoringInputEvents() const;
 
   // Called when the response to a pending pointer lock request has arrived.
@@ -676,7 +678,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // Don't check whether we expected a resize ack during web tests.
   static void DisableResizeAckCheckForTesting();
 
-  InputRouter* input_router() { return input_router_.get(); }
+  InputRouter* input_router();
 
   void SetForceEnableZoom(bool);
 
@@ -699,7 +701,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
       bool is_pinch_gesture_active,
       const gfx::Size& visible_viewport_size,
       const gfx::Rect& compositor_viewport,
-      std::vector<gfx::Rect> root_widget_window_segments);
+      std::vector<gfx::Rect> root_widget_viewport_segments);
 
   // Indicates if the render widget host should track the render widget's size
   // as opposed to visa versa.
@@ -774,13 +776,6 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // there are any queued messages belonging to it, they will be processed.
   void DidProcessFrame(uint32_t frame_token, base::TimeTicks activation_time);
 
-  mojo::Remote<viz::mojom::InputTargetClient>& input_target_client() {
-    return input_target_client_;
-  }
-
-  void SetInputTargetClientForTesting(
-      mojo::Remote<viz::mojom::InputTargetClient> input_target_client);
-
   // InputRouterImplClient overrides.
   blink::mojom::WidgetInputHandler* GetWidgetInputHandler() override;
   void OnImeCompositionRangeChanged(
@@ -824,11 +819,14 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   void SetScreenOrientationForTesting(uint16_t angle,
                                       display::mojom::ScreenOrientation type);
 
-  // Requests Keyboard lock.  Note: the lock may not take effect until later.
-  // If |codes| has no value then all keys will be locked, otherwise only the
-  // keys specified will be intercepted and routed to the web page.
-  // Returns true if the lock request was successfully registered.
-  bool RequestKeyboardLock(std::optional<base::flat_set<ui::DomCode>> codes);
+  // Requests keyboard lock. If `codes` has no value then all keys will be
+  // locked, otherwise only the keys specified will be intercepted and routed to
+  // the web page. `request_keyboard_lock_callback` gets called with the result
+  // of the request, possibly before the lock actually takes effect.
+  void RequestKeyboardLock(
+      std::optional<base::flat_set<ui::DomCode>> codes,
+      base::OnceCallback<void(blink::mojom::KeyboardLockRequestResult)>
+          request_keyboard_lock_callback);
 
   // Cancels a previous keyboard lock request.
   void CancelKeyboardLock();
@@ -972,6 +970,11 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // the owned `compositor_metric_recorder_`.
   void DisableCompositorMetricRecording();
 
+  virtual RenderInputRouter* GetRenderInputRouter();  // virtual for testing.
+
+  // Requests a commit and forced redraw in the renderer compositor.
+  void ForceRedrawForTesting();
+
  protected:
   // |routing_id| must not be MSG_ROUTING_NONE.
   // If this object outlives |delegate|, DetachDelegate() must be called when
@@ -1016,6 +1019,8 @@ class CONTENT_EXPORT RenderWidgetHostImpl
 
   bool IsPointerLocked() const;
 
+  std::unique_ptr<FlingSchedulerBase> MakeFlingScheduler();
+
  private:
   FRIEND_TEST_ALL_PREFIXES(FullscreenDetectionTest,
                            EncompassingDivNotFullscreen);
@@ -1058,6 +1063,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   FRIEND_TEST_ALL_PREFIXES(RenderWidgetHostInputEventRouterTest,
                            EnsureRendererDestroyedHandlesUnAckedTouchEvents);
   friend class MockRenderWidgetHost;
+  friend class MockRenderWidgetHostImpl;
   friend class OverscrollNavigationOverlayTest;
   friend class RenderViewHostTester;
   friend class TestRenderViewHost;
@@ -1193,10 +1199,11 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // getting an ack from the renderer.
   void OnInputEventAckTimeout();
 
+  void SetupRenderInputRouter();
   void SetupInputRouter();
 
   // Start intercepting system keyboard events.
-  bool LockKeyboard();
+  void LockKeyboard();
 
   // Stop intercepting system keyboard events.
   void UnlockKeyboard();
@@ -1358,7 +1365,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl
 
     // The logical segments of the root widget, in DIPs relative to the root
     // RenderWidgetHost.
-    std::vector<gfx::Rect> root_widget_window_segments;
+    std::vector<gfx::Rect> root_widget_viewport_segments;
   } properties_from_parent_local_root_;
 
   bool waiting_for_screen_rects_ack_ = false;
@@ -1420,21 +1427,14 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   bool pointer_lock_raw_movement_ = false;
   // Stores the keyboard keys to lock while waiting for a pending lock request.
   std::optional<base::flat_set<ui::DomCode>> keyboard_keys_to_lock_;
-  bool keyboard_lock_requested_ = false;
   bool keyboard_lock_allowed_ = false;
+  base::OnceCallback<void(blink::mojom::KeyboardLockRequestResult)>
+      keyboard_lock_request_callback_;
 
   // Used when locking to indicate when a target application has voluntarily
   // unlocked and desires to relock the mouse. If the mouse is unlocked due
   // to ESC being pressed by the user, this will be false.
   bool is_last_unlocked_by_target_ = false;
-
-  // TODO(wjmaclean) Remove the code for supporting resending gesture events
-  // when WebView transitions to OOPIF and BrowserPlugin is removed.
-  // http://crbug.com/533069
-  bool is_in_gesture_scroll_[static_cast<int>(
-                                 blink::WebGestureDevice::kMaxValue) +
-                             1] = {false};
-  bool is_in_touchpad_gesture_fling_ = false;
 
   // TODO(crbug.com/1432355): The gesture controller can cause synchronous
   // destruction of the page (sending a click to the tab close button). Since
@@ -1442,13 +1442,8 @@ class CONTENT_EXPORT RenderWidgetHostImpl
   // awkward.
   std::unique_ptr<SyntheticGestureController> synthetic_gesture_controller_;
 
-  // Must be declared before `input_router_`. The latter is constructed by
-  // borrowing a reference to this object, so it must be deleted first.
-  std::unique_ptr<FlingSchedulerBase> fling_scheduler_;
-
-  // Receives and handles all input events.
-  // Depends on `fling_scheduler` above, so it must be declared last.
-  std::unique_ptr<InputRouter> input_router_;
+  // Receives and handles input events.
+  std::unique_ptr<RenderInputRouter> render_input_router_;
 
   base::OneShotTimer input_event_ack_timeout_;
 
@@ -1496,16 +1491,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl
 
   std::unique_ptr<FrameTokenMessageQueue> frame_token_message_queue_;
 
-  mojo::Remote<blink::mojom::WidgetInputHandler> widget_input_handler_;
-  mojo::AssociatedRemote<blink::mojom::FrameWidgetInputHandler>
-      frame_widget_input_handler_;
-  mojo::Remote<viz::mojom::InputTargetClient> input_target_client_;
-
   std::optional<uint16_t> screen_orientation_angle_for_testing_;
   std::optional<display::mojom::ScreenOrientation>
       screen_orientation_type_for_testing_;
-
-  bool force_enable_zoom_ = false;
 
   RenderFrameMetadataProviderImpl render_frame_metadata_provider_;
   bool surface_id_allocation_suppressed_ = false;

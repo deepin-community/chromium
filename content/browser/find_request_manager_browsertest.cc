@@ -92,6 +92,12 @@ class FindRequestManagerTestBase : public ContentBrowserTest {
     EXPECT_TRUE(
         NavigateToURL(shell(), embedded_test_server()->GetURL("a.com", url)));
     ASSERT_TRUE(navigation_observer.last_navigation_succeeded());
+
+    // crbug.com/330147459: Ensure a frame has been produced in the renderer so
+    // the active match is set correctly.
+    ASSERT_TRUE(
+        EvalJsAfterLifecycleUpdate(contents()->GetPrimaryMainFrame(), "", "")
+            .error.empty());
   }
 
   // Loads a multi-frame page. The page will have a full binary frame tree of
@@ -633,7 +639,14 @@ IN_PROC_BROWSER_TEST_F(FindRequestManagerTest, MAYBE(HiddenFrame)) {
 }
 
 // Tests that new matches can be found in dynamically added text.
-IN_PROC_BROWSER_TEST_P(FindRequestManagerTest, MAYBE(FindNewMatches)) {
+// TODO(crbug.com/330194342): Deflake and re-enable.
+#if BUILDFLAG(IS_ANDROID) || \
+    (BUILDFLAG(IS_LINUX) && !defined(UNDEFINED_SANITIZER))
+#define MAYBE_FindNewMatches DISABLED_FindNewMatches
+#else
+#define MAYBE_FindNewMatches FindNewMatches
+#endif
+IN_PROC_BROWSER_TEST_P(FindRequestManagerTest, MAYBE_FindNewMatches) {
   LoadAndWait("/find_in_dynamic_page.html");
 
   auto options = blink::mojom::FindOptions::New();

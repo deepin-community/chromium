@@ -64,6 +64,11 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
    public:
     virtual ~Delegate() {}
 
+    virtual void CreateDisplay(const Display& display) = 0;
+    virtual void RemoveDisplay(const Display& display) = 0;
+    virtual void UpdateDisplayMetrics(const Display& display,
+                                      uint32_t metrics) = 0;
+
     // Create or updates the mirroring window with |display_info_list|.
     virtual void CreateOrUpdateMirroringDisplay(
         const DisplayInfoList& display_info_list) = 0;
@@ -180,6 +185,8 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
 
   // Checks the validity of given |display_id|.
   bool IsDisplayIdValid(int64_t display_id) const;
+
+  void OnScreenBrightnessChanged(float brightness);
 
   // Finds the display that contains |point| in screen coordinates.  Returns
   // invalid display if there is no display that can satisfy the condition.
@@ -495,6 +502,7 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
   // Notifies observers of display configuration changes.
   void NotifyMetricsChanged(const Display& display, uint32_t metrics);
   void NotifyDisplayAdded(const Display& display);
+  void NotifyWillRemoveDisplays(const Displays& display);
   void NotifyDisplayRemoved(const Display& display);
   void NotifyWillProcessDisplayChanges();
   void NotifyDidProcessDisplayChanges(
@@ -517,7 +525,8 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
   // See description above |notify_depth_| for details.
   class BeginEndNotifier {
    public:
-    explicit BeginEndNotifier(DisplayManager* display_manager);
+    explicit BeginEndNotifier(DisplayManager* display_manager,
+                              bool notify_on_pending_change_only = false);
 
     BeginEndNotifier(const BeginEndNotifier&) = delete;
     BeginEndNotifier& operator=(const BeginEndNotifier&) = delete;
@@ -530,6 +539,13 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
     DisplayManagerObserver::DisplayConfigurationChange CreateConfigChange()
         const;
 
+    // Propagates change notifications only if `pending_display_changes_` is
+    // non-empty. This is necessary to handle change notifications triggering
+    // further changes and nested notifications.
+    // TODO(crbug.com/328134509): Update DisplayManager to better handle display
+    // changes during change propagation.
+    bool notify_on_pending_change_only_ = false;
+
     raw_ptr<DisplayManager> display_manager_;
   };
 
@@ -540,6 +556,9 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
     PendingDisplayChanges(const PendingDisplayChanges&) = delete;
     PendingDisplayChanges& operator=(const PendingDisplayChanges&) = delete;
     ~PendingDisplayChanges();
+
+    // True if there are no stored pending changes.
+    bool IsEmpty() const;
 
     // Store added display_ids to avoid copying potentially stale display
     // objects while update state is accumulated.
@@ -727,6 +746,7 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
   // time.
   base::OnceClosure created_mirror_window_;
 
+  // TODO(oshima): Make this non reentrant.
   base::ObserverList<DisplayObserver> display_observers_;
 
   base::ObserverList<DisplayManagerObserver> manager_observers_;
@@ -756,6 +776,11 @@ class DISPLAY_MANAGER_EXPORT DisplayManager
   // Temporary changes may include things like the user trying out different
   // zoom levels before making the final decision.
   base::CancelableOnceClosure on_display_zoom_modify_timeout_;
+
+  // Stores the id of the display being added during creation process. This is
+  // used to skip updating.
+  // TODO(crbug.com/329003664): Consolidate this logic and BeginEndNotifier.
+  std::optional<int64_t> in_creating_display_;
 
   display::TabletState tablet_state_ = display::TabletState::kInClamshellMode;
 

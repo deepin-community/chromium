@@ -44,7 +44,8 @@ class Device final : public d3d::Device {
   public:
     static ResultOrError<Ref<Device>> Create(AdapterBase* adapter,
                                              const UnpackedPtr<DeviceDescriptor>& descriptor,
-                                             const TogglesState& deviceToggles);
+                                             const TogglesState& deviceToggles,
+                                             Ref<DeviceBase::DeviceLostEvent>&& lostEvent);
     ~Device() override;
 
     MaybeError Initialize(const UnpackedPtr<DeviceDescriptor>& descriptor);
@@ -57,7 +58,7 @@ class Device final : public d3d::Device {
     void ReferenceUntilUnused(ComPtr<IUnknown> object);
     Ref<TextureBase> CreateD3DExternalTexture(const UnpackedPtr<TextureDescriptor>& descriptor,
                                               ComPtr<IUnknown> d3dTexture,
-                                              ComPtr<IDXGIKeyedMutex> dxgiKeyedMutex,
+                                              Ref<d3d::KeyedMutex> keyedMutex,
                                               std::vector<FenceAndSignalValue> waitFences,
                                               bool isSwapChainTexture,
                                               bool isInitialized) override;
@@ -85,8 +86,11 @@ class Device final : public d3d::Device {
 
     ResultOrError<FenceAndSignalValue> CreateFence(
         const d3d::ExternalImageDXGIFenceDescriptor* descriptor) override;
+
     ResultOrError<std::unique_ptr<d3d::ExternalImageDXGIImpl>> CreateExternalImageDXGIImplImpl(
         const ExternalImageDescriptor* descriptor) override;
+
+    void DisposeKeyedMutex(ComPtr<IDXGIKeyedMutex> dxgiKeyedMutex) override;
 
     uint32_t GetUAVSlotCount() const;
 
@@ -96,15 +100,16 @@ class Device final : public d3d::Device {
         uint32_t implicitAttachmentIndex);
 
     // Grab a staging buffer, the size of which is no less than 'size'.
-    // Note: We assume only 1 staging buffer is active, so the client should release it as soon as
-    // possbile once the buffer usage is done.
+    // The buffer must be returned before the advancing of the current pending serial.
     ResultOrError<Ref<BufferBase>> GetStagingBuffer(
         const ScopedCommandRecordingContext* commandContext,
         uint64_t size);
+    void ReturnStagingBuffer(Ref<BufferBase>&& buffer);
 
   private:
     using Base = d3d::Device;
     using Base::Base;
+    static constexpr uint64_t kMaxStagingBufferSize = 512 * 1024;
 
     ResultOrError<Ref<BindGroupBase>> CreateBindGroupImpl(
         const BindGroupDescriptor* descriptor) override;
@@ -124,7 +129,7 @@ class Device final : public d3d::Device {
     ResultOrError<Ref<SwapChainBase>> CreateSwapChainImpl(
         Surface* surface,
         SwapChainBase* previousSwapChain,
-        const SwapChainDescriptor* descriptor) override;
+        const SurfaceConfiguration* config) override;
     ResultOrError<Ref<TextureBase>> CreateTextureImpl(
         const UnpackedPtr<TextureDescriptor>& descriptor) override;
     ResultOrError<Ref<TextureViewBase>> CreateTextureViewImpl(
@@ -159,8 +164,9 @@ class Device final : public d3d::Device {
     // TODO(dawn:1704): decide when to clear the cached implicit pixel local storage attachments.
     std::array<Ref<TextureViewBase>, kMaxPLSSlots> mImplicitPixelLocalStorageAttachmentTextureViews;
 
-    // The cached staging buffer.
-    Ref<BufferBase> mStagingBuffer;
+    // The cached staging buffers.
+    std::vector<Ref<BufferBase>> mStagingBuffers;
+    uint64_t mTotalStagingBufferSize = 0;
 };
 
 }  // namespace dawn::native::d3d11

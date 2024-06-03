@@ -88,6 +88,7 @@
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numeric>
 #include <utility>
@@ -339,23 +340,15 @@ class ChromePrintContext : public PrintContext {
 
   ~ChromePrintContext() override = default;
 
+  virtual WebPrintPageDescription GetPageDescription(uint32_t page_index) {
+    return GetFrame()->GetDocument()->GetPageDescription(page_index);
+  }
+
   void SpoolSinglePage(cc::PaintCanvas* canvas, wtf_size_t page_number) {
-    DispatchEventsForPrintingOnAllFrames();
-    if (!GetFrame()->GetDocument() ||
-        !GetFrame()->GetDocument()->GetLayoutView()) {
-      return;
-    }
-
-    GetFrame()->View()->UpdateLifecyclePhasesForPrinting();
-    if (!GetFrame()->GetDocument() ||
-        !GetFrame()->GetDocument()->GetLayoutView()) {
-      return;
-    }
-
     // The page rect gets scaled and translated, so specify the entire
     // print content area here as the recording rect.
-    auto* builder = MakeGarbageCollected<PaintRecordBuilder>();
-    GraphicsContext& context = builder->Context();
+    PaintRecordBuilder builder;
+    GraphicsContext& context = builder.Context();
     context.SetPrintingMetafile(canvas->GetPrintingMetafile());
     context.SetPrinting(true);
     context.BeginRecording();
@@ -364,23 +357,12 @@ class ChromePrintContext : public PrintContext {
   }
 
   void SpoolPagesWithBoundariesForTesting(cc::PaintCanvas* canvas,
-                                          const WebPrintParams& print_params,
                                           const gfx::Size& spool_size_in_pixels,
                                           const WebVector<uint32_t>* pages) {
-    DispatchEventsForPrintingOnAllFrames();
-    if (!GetFrame()->GetDocument() ||
-        !GetFrame()->GetDocument()->GetLayoutView())
-      return;
-
-    GetFrame()->View()->UpdateLifecyclePhasesForPrinting();
-    if (!GetFrame()->GetDocument() ||
-        !GetFrame()->GetDocument()->GetLayoutView())
-      return;
-
     gfx::Rect all_pages_rect(spool_size_in_pixels);
 
-    auto* builder = MakeGarbageCollected<PaintRecordBuilder>();
-    GraphicsContext& context = builder->Context();
+    PaintRecordBuilder builder;
+    GraphicsContext& context = builder.Context();
     context.SetPrintingMetafile(canvas->GetPrintingMetafile());
     context.SetPrinting(true);
     context.BeginRecording();
@@ -411,12 +393,16 @@ class ChromePrintContext : public PrintContext {
       }
 
       WebPrintPageDescription description =
-          print_params.default_page_description;
-      GetFrame()->GetDocument()->GetPageDescription(page_index, &description);
+          GetFrame()->GetDocument()->GetPageDescription(page_index);
 
       AffineTransform transform;
-      transform.Translate(description.margin_left,
-                          current_height + description.margin_top);
+      // The transform offset should be in integers, or everything will look
+      // blurry. The value is also rounded to the nearest integer (not ceil /
+      // floor), to better match what it would look like if the same offset were
+      // applied from within the document contents (e.g. margin / padding on a
+      // regular DIV). Some tests depend on this.
+      transform.Translate(std::round(description.margin_left),
+                          current_height + std::round(description.margin_top));
 
       if (description.orientation == PageOrientation::kUpright) {
         current_height += description.size.height() + 1;
@@ -445,6 +431,15 @@ class ChromePrintContext : public PrintContext {
 
  protected:
   virtual void SpoolPage(GraphicsContext& context, wtf_size_t page_number) {
+    DispatchEventsForPrintingOnAllFrames();
+    if (!IsFrameValid()) {
+      return;
+    }
+
+    auto* frame_view = GetFrame()->View();
+    DCHECK(frame_view);
+    frame_view->UpdateLifecyclePhasesForPrinting();
+
     if (!IsFrameValid() || page_number >= PageCount()) {
       // TODO(crbug.com/452672): The number of pages may change after layout for
       // pagination.
@@ -453,8 +448,6 @@ class ChromePrintContext : public PrintContext {
     gfx::Rect page_rect = PageRect(page_number);
     AffineTransform transform;
 
-    auto* frame_view = GetFrame()->View();
-    DCHECK(frame_view);
     const LayoutView* layout_view = frame_view->GetLayoutView();
 
     // Layout may have used a larger viewport size in order to fit more
@@ -472,22 +465,15 @@ class ChromePrintContext : public PrintContext {
     auto property_tree_state =
         layout_view->FirstFragment().LocalBorderBoxProperties();
 
-    auto* builder = MakeGarbageCollected<PaintRecordBuilder>(context);
+    PaintRecordBuilder builder(context);
     frame_view->PaintOutsideOfLifecycle(
-        builder->Context(),
+        builder.Context(),
         PaintFlag::kOmitCompositingInfo | PaintFlag::kAddUrlMetadata,
         CullRect(page_rect));
-    {
-      ScopedPaintChunkProperties scoped_paint_chunk_properties(
-          builder->Context().GetPaintController(), property_tree_state,
-          *builder, DisplayItem::kPrintedContentDestinationLocations);
-      DrawingRecorder line_boundary_recorder(
-          builder->Context(), *builder,
-          DisplayItem::kPrintedContentDestinationLocations);
-      OutputLinkedDestinations(builder->Context(), page_rect);
-    }
 
-    context.DrawRecord(builder->EndRecording(property_tree_state.Unalias()));
+    OutputLinkedDestinations(builder.Context(), property_tree_state, page_rect);
+
+    context.DrawRecord(builder.EndRecording(property_tree_state.Unalias()));
     context.Restore();
   }
 
@@ -522,9 +508,17 @@ class ChromePluginPrintContext final : public ChromePrintContext {
 
   const gfx::Rect& PageRect(wtf_size_t) const = delete;
 
+  WebPrintPageDescription GetPageDescription(uint32_t page_index) override {
+    // Plug-ins aren't really able to provide any page description apart from
+    // the "default" one. Yet, the printing code calls this function for
+    // plug-ins, which isn't ideal, but something we have to cope with for now.
+    return default_page_description_;
+  }
+
   wtf_size_t PageCount() const override { return page_count_; }
 
   void BeginPrintMode(const WebPrintParams& print_params) override {
+    default_page_description_ = print_params.default_page_description;
     page_count_ = plugin_->PrintBegin(print_params);
   }
 
@@ -544,14 +538,16 @@ class ChromePluginPrintContext final : public ChromePrintContext {
 
  protected:
   void SpoolPage(GraphicsContext& context, wtf_size_t page_number) override {
-    auto* builder = MakeGarbageCollected<PaintRecordBuilder>(context);
-    plugin_->PrintPage(page_number, builder->Context());
-    context.DrawRecord(builder->EndRecording());
+    PaintRecordBuilder builder(context);
+    plugin_->PrintPage(page_number, builder.Context());
+    context.DrawRecord(builder.EndRecording());
   }
 
  private:
   // Set when printing.
   Member<WebPluginContainerImpl> plugin_;
+
+  WebPrintPageDescription default_page_description_;
 
   wtf_size_t page_count_ = 0;
 };
@@ -581,8 +577,8 @@ class PaintPreviewContext : public PrintContext {
     if (!GetFrame()->GetDocument() ||
         !GetFrame()->GetDocument()->GetLayoutView())
       return false;
-    auto* builder = MakeGarbageCollected<PaintRecordBuilder>();
-    builder->Context().SetPaintPreviewTracker(canvas->GetPaintPreviewTracker());
+    PaintRecordBuilder builder;
+    builder.Context().SetPaintPreviewTracker(canvas->GetPaintPreviewTracker());
 
     LocalFrameView* frame_view = GetFrame()->View();
     DCHECK(frame_view);
@@ -595,19 +591,12 @@ class PaintPreviewContext : public PrintContext {
     if (include_linked_destinations)
       flags |= PaintFlag::kAddUrlMetadata;
 
-    frame_view->PaintOutsideOfLifecycle(builder->Context(), flags,
+    frame_view->PaintOutsideOfLifecycle(builder.Context(), flags,
                                         CullRect(bounds));
     if (include_linked_destinations) {
-      // Add anchors.
-      ScopedPaintChunkProperties scoped_paint_chunk_properties(
-          builder->Context().GetPaintController(), property_tree_state,
-          *builder, DisplayItem::kPrintedContentDestinationLocations);
-      DrawingRecorder line_boundary_recorder(
-          builder->Context(), *builder,
-          DisplayItem::kPrintedContentDestinationLocations);
-      OutputLinkedDestinations(builder->Context(), bounds);
+      OutputLinkedDestinations(builder.Context(), property_tree_state, bounds);
     }
-    canvas->drawPicture(builder->EndRecording(property_tree_state.Unalias()));
+    canvas->drawPicture(builder.EndRecording(property_tree_state.Unalias()));
     return true;
   }
 };
@@ -1158,7 +1147,7 @@ int32_t WebLocalFrameImpl::GetScriptContextWorldId(
 v8::Local<v8::Context> WebLocalFrameImpl::GetScriptContextFromWorldId(
     v8::Isolate* isolate,
     int world_id) const {
-  scoped_refptr<DOMWrapperWorld> world =
+  DOMWrapperWorld* world =
       DOMWrapperWorld::EnsureIsolatedWorld(isolate, world_id);
   return ToScriptState(GetFrame(), *world)->GetContext();
 }
@@ -1421,10 +1410,11 @@ bool WebLocalFrameImpl::HasSelection() const {
   if (plugin_container)
     return plugin_container->Plugin()->HasSelection();
 
-  // frame()->selection()->isNone() never returns true.
-  const auto& selection =
-      GetFrame()->Selection().ComputeVisibleSelectionInDOMTreeDeprecated();
-  return selection.Start() != selection.End();
+  // TODO(editing-dev): The use of UpdateStyleAndLayoutIgnorePendingStylesheets
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  GetFrame()->GetDocument()->UpdateStyleAndLayout(
+      DocumentUpdateReason::kSelection);
+  return GetFrame()->Selection().ComputeVisibleSelectionInDOMTree().IsRange();
 }
 
 WebRange WebLocalFrameImpl::SelectionRange() const {
@@ -1435,7 +1425,7 @@ WebRange WebLocalFrameImpl::SelectionRange() const {
 
   return GetFrame()
       ->Selection()
-      .ComputeVisibleSelectionInDOMTreeDeprecated()
+      .ComputeVisibleSelectionInDOMTree()
       .ToNormalizedEphemeralRange();
 }
 
@@ -1964,18 +1954,12 @@ bool WebLocalFrameImpl::CapturePaintPreview(const gfx::Rect& bounds,
   return success;
 }
 
-PageSizeType WebLocalFrameImpl::GetPageSizeType(uint32_t page_index) {
-  return GetFrame()->GetDocument()->StyleForPage(page_index)->GetPageSizeType();
-}
-
-void WebLocalFrameImpl::GetPageDescription(
-    uint32_t page_index,
-    WebPrintPageDescription* description) {
-  GetFrame()->GetDocument()->GetPageDescription(page_index, description);
+WebPrintPageDescription WebLocalFrameImpl::GetPageDescription(
+    uint32_t page_index) {
+  return print_context_->GetPageDescription(page_index);
 }
 
 gfx::Size WebLocalFrameImpl::SpoolSizeInPixelsForTesting(
-    const WebPrintParams& print_params,
     const WebVector<uint32_t>& pages) {
   int spool_width = 0;
   int spool_height = 0;
@@ -1985,8 +1969,8 @@ gfx::Size WebLocalFrameImpl::SpoolSizeInPixelsForTesting(
     if (page_index != pages.front())
       spool_height++;
 
-    WebPrintPageDescription description = print_params.default_page_description;
-    GetFrame()->GetDocument()->GetPageDescription(page_index, &description);
+    WebPrintPageDescription description =
+        GetFrame()->GetDocument()->GetPageDescription(page_index);
     gfx::Size page_size = gfx::ToCeiledSize(description.size);
     if (description.orientation == PageOrientation::kUpright) {
       spool_width = std::max(spool_width, page_size.width());
@@ -1999,23 +1983,20 @@ gfx::Size WebLocalFrameImpl::SpoolSizeInPixelsForTesting(
   return gfx::Size(spool_width, spool_height);
 }
 
-gfx::Size WebLocalFrameImpl::SpoolSizeInPixelsForTesting(
-    const WebPrintParams& print_params,
-    uint32_t page_count) {
+gfx::Size WebLocalFrameImpl::SpoolSizeInPixelsForTesting(uint32_t page_count) {
   WebVector<uint32_t> pages(page_count);
   std::iota(pages.begin(), pages.end(), 0);
-  return SpoolSizeInPixelsForTesting(print_params, pages);
+  return SpoolSizeInPixelsForTesting(pages);
 }
 
 void WebLocalFrameImpl::PrintPagesForTesting(
     cc::PaintCanvas* canvas,
-    const WebPrintParams& print_params,
     const gfx::Size& spool_size_in_pixels,
     const WebVector<uint32_t>* pages) {
   DCHECK(print_context_);
 
   print_context_->SpoolPagesWithBoundariesForTesting(
-      canvas, print_params, spool_size_in_pixels, pages);
+      canvas, spool_size_in_pixels, pages);
 }
 
 gfx::Rect WebLocalFrameImpl::GetSelectionBoundsRectForTesting() const {
@@ -2396,10 +2377,7 @@ LocalFrame* WebLocalFrameImpl::CreateChildFrame(
         std::make_unique<PolicyContainer>(std::move(policy_container_remote),
                                           std::move(policy_container_data));
 
-    KURL creator_base_url;
-    if (features::IsNewBaseUrlInheritanceBehaviorEnabled()) {
-      creator_base_url = owner_element->GetDocument().BaseURL();
-    }
+    KURL creator_base_url(owner_element->GetDocument().BaseURL());
     To<WebLocalFrameImpl>(new_child_frame)
         ->InitializeCoreFrameInternal(
             *GetFrame()->GetPage(), owner_element, this, LastChild(),
@@ -2678,8 +2656,7 @@ void WebLocalFrameImpl::CommitNavigation(
     if (navigation_params->is_synchronous_commit_for_bug_778318 &&
         // Explicitly check for about:blank or about:srcdoc to prevent things
         // like about:mumble propagating the base url.
-        (url.IsAboutBlankURL() || url.IsAboutSrcdocURL()) &&
-        features::IsNewBaseUrlInheritanceBehaviorEnabled()) {
+        (url.IsAboutBlankURL() || url.IsAboutSrcdocURL())) {
       navigation_params->fallback_base_url =
           GetFrame()->GetDocument()->BaseURL();
     }
@@ -3194,18 +3171,21 @@ WebLocalFrameImpl::ConvertNotRestoredReasons(
           mojom::blink::BFCacheBlockingDetailedReason::New();
       reason->name = WTF::String(reason_to_copy->name);
       if (reason_to_copy->source) {
-        mojom::blink::BlockingReasonSourceLocationPtr source_location =
-            mojom::blink::BlockingReasonSourceLocation::New();
-        source_location->url = WTF::String(reason_to_copy->source->url);
-        source_location->line_number = reason_to_copy->source->line_number;
-        source_location->column_number = reason_to_copy->source->column_number;
+        CHECK_GT(reason_to_copy->source->line_number, 0U);
+        CHECK_GT(reason_to_copy->source->column_number, 0U);
+        mojom::blink::ScriptSourceLocationPtr source_location =
+            mojom::blink::ScriptSourceLocation::New(
+                KURL(reason_to_copy->source->url),
+                WTF::String(reason_to_copy->source->function_name),
+                reason_to_copy->source->line_number,
+                reason_to_copy->source->column_number);
         reason->source = std::move(source_location);
       }
       not_restored_reasons->reasons.push_back(std::move(reason));
     }
     if (reasons_to_copy->same_origin_details) {
       auto details = mojom::blink::SameOriginBfcacheNotRestoredDetails::New();
-      details->url = reasons_to_copy->same_origin_details->url.c_str();
+      details->url = KURL(reasons_to_copy->same_origin_details->url);
       for (const auto& child : reasons_to_copy->same_origin_details->children) {
         details->children.push_back(ConvertNotRestoredReasons(child));
       }
@@ -3256,6 +3236,14 @@ void WebLocalFrameImpl::SetLCPPHint(
     preconnect_origins.emplace_back(url::Origin::Create(origin_url));
   }
   lcpp->set_preconnected_origins(preconnect_origins);
+
+  Vector<KURL> unused_preloads;
+  unused_preloads.reserve(
+      base::checked_cast<wtf_size_t>(hint->unused_preloads.size()));
+  for (const auto& url : hint->unused_preloads) {
+    unused_preloads.emplace_back(url);
+  }
+  lcpp->set_unused_preloads(std::move(unused_preloads));
 }
 
 void WebLocalFrameImpl::AddHitTestOnTouchStartCallback(

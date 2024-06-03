@@ -8,6 +8,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -40,6 +41,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
 #include "chrome/browser/tpcd/heuristics/opener_heuristic_tab_helper.h"
+#include "chrome/browser/tpcd/heuristics/redirect_heuristic_tab_helper.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
@@ -63,7 +65,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/fenced_frame_test_util.h"
-#include "content/public/test/hit_test_region_observer.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_devtools_protocol_client.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -159,7 +160,7 @@ void AppendRedirects(std::vector<std::string>* vec,
 void AppendSitesInReport(std::vector<std::string>* reports,
                          const std::set<std::string>& sites) {
   reports->push_back(base::JoinString(
-      std::vector<base::StringPiece>(sites.begin(), sites.end()), ", "));
+      std::vector<std::string_view>(sites.begin(), sites.end()), ", "));
 }
 
 std::vector<url::Origin> GetOrigins(const AttributionData& data) {
@@ -442,17 +443,7 @@ class DIPSBounceDetectorBrowserTest
   void SetUpOnMainThread() override {
     prerender_test_helper_.RegisterServerRequestMonitor(embedded_test_server());
     ASSERT_TRUE(embedded_test_server()->Start());
-    host_resolver()->AddRule("a.test", "127.0.0.1");
-    host_resolver()->AddRule("b.test", "127.0.0.1");
-    host_resolver()->AddRule("sub.b.test", "127.0.0.1");
-    host_resolver()->AddRule("c.test", "127.0.0.1");
-    host_resolver()->AddRule("sub.c.test", "127.0.0.1");
-    host_resolver()->AddRule("d.test", "127.0.0.1");
-    host_resolver()->AddRule("sub.d.test", "127.0.0.1");
-    host_resolver()->AddRule("e.test", "127.0.0.1");
-    host_resolver()->AddRule("sub.e.test", "127.0.0.1");
-    host_resolver()->AddRule("f.test", "127.0.0.1");
-    host_resolver()->AddRule("g.test", "127.0.0.1");
+    host_resolver()->AddRule("*", "127.0.0.1");
     SetUpDIPSWebContentsObserver();
 
     // These rules apply an ad-tagging param to cookies marked with the `isad=1`
@@ -484,10 +475,26 @@ class DIPSBounceDetectorBrowserTest
   // Perform a browser-based navigation to terminate the current redirect chain.
   // (NOTE: tests using WCOCallbackLogger must call this *after* checking the
   // log, since this navigation will be logged.)
-  void EndRedirectChain() {
+  //
+  // By default (when `wait`=true) this waits for the DIPSService to tell
+  // observers that the redirect chain was handled. But some tests override
+  // the handling flow so that chains don't reach the service (and so observers
+  // are never notified). Such tests should pass `wait`=false.
+  void EndRedirectChain(bool wait = true) {
+    WebContents* web_contents = GetActiveWebContents();
+    DIPSService* dips_service = DIPSServiceFactory::GetForBrowserContext(
+        web_contents->GetBrowserContext());
+    GURL expected_url = web_contents->GetLastCommittedURL();
+
+    RedirectChainObserver chain_observer(dips_service, expected_url);
+    // Performing a browser-based navigation terminates the current redirect
+    // chain.
     ASSERT_TRUE(content::NavigateToURL(
-        GetActiveWebContents(),
-        embedded_test_server()->GetURL("a.test", "/title1.html")));
+        web_contents,
+        embedded_test_server()->GetURL("endthechain.test", "/title1.html")));
+    if (wait) {
+      chain_observer.Wait();
+    }
   }
 
   [[nodiscard]] bool AccessStorage(content::RenderFrameHost* frame,
@@ -539,13 +546,7 @@ class DIPSBounceDetectorBrowserTest
   }
 
   void SimulateMouseClick() {
-    WebContents* web_contents = GetActiveWebContents();
-    content::WaitForHitTestData(web_contents->GetPrimaryMainFrame());
-    UserActivationObserver observer(web_contents,
-                                    web_contents->GetPrimaryMainFrame());
-    content::SimulateMouseClick(web_contents, 0,
-                                blink::WebMouseEvent::Button::kLeft);
-    observer.Wait();
+    SimulateMouseClickAndWait(GetActiveWebContents());
   }
 
   void SimulateCookieWrite() {
@@ -1088,7 +1089,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
       GetActiveWebContents(),
       embedded_test_server()->GetURL("c.test", "/title1.html")));
 
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   EXPECT_THAT(redirects,
               ElementsAre(("[1/1] a.test/title1.html -> b.test/title1.html "
@@ -1243,7 +1244,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents, root_url));
   ASSERT_TRUE(
       content::NavigateIframeToURL(web_contents, iframe_id, redirect_url));
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   // b.test had a stateful redirect, but because it was in an iframe, we ignored
   // it.
@@ -1367,7 +1368,7 @@ IN_PROC_BROWSER_TEST_F(
                   // Land on c.test
                   ("DidStartNavigation(c.test/title1.html)"),
                   ("DidFinishNavigation(c.test/title1.html)")));
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   // b.test is a bounce, but not stateful.
   EXPECT_THAT(redirects, ElementsAre("[1/1] a.test/title1.html"
@@ -1427,7 +1428,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
                   // Land on c.test
                   ("DidStartNavigation(c.test/title1.html)"),
                   ("DidFinishNavigation(c.test/title1.html)")));
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   // b.test IS considered a stateful bounce, even though the cookie was read by
   // an image hosted on sub.b.test.
@@ -1467,7 +1468,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
       embedded_test_server()->GetURL("e.test",
                                      "/cross-site/f.test/title1.html"),
       embedded_test_server()->GetURL("f.test", "/title1.html")));
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   EXPECT_THAT(
       redirects,
@@ -1504,9 +1505,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
 
   EXPECT_THAT(redirects, IsEmpty());
 
-  content::WebContentsDestroyedWatcher destruction_watcher(web_contents);
-  web_contents->Close();
-  destruction_watcher.Wait();
+  CloseTab(web_contents);
 
   EXPECT_THAT(redirects,
               ElementsAre(("[1/1] a.test/title1.html -> "
@@ -1547,7 +1546,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
   tab_web_contents_observer->SetRedirectChainHandlerForTesting(
       base::BindRepeating(&AppendRedirects, &redirects));
 
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   EXPECT_THAT(redirects,
               ElementsAre((
@@ -1583,7 +1582,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
   // Navigate without a click (i.e. by C-redirecting) to c.test.
   ASSERT_TRUE(content::NavigateToURLFromRendererWithoutUserGesture(
       new_tab, embedded_test_server()->GetURL("c.test", "/title1.html")));
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   EXPECT_THAT(
       redirects,
@@ -1617,7 +1616,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
   tab_web_contents_observer->SetRedirectChainHandlerForTesting(
       base::BindRepeating(&AppendRedirects, &redirects));
 
-  EndRedirectChain();
+  EndRedirectChain(/*wait=*/false);
 
   EXPECT_THAT(redirects,
               ElementsAre((
@@ -1626,9 +1625,33 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
                   "c.test/title1.html")));
 }
 
-// Tests the conditions for recording RedirectHeuristic_CookieAccess and
-// RedirectHeuristic_CookieAccessThirdParty UKM events.
-IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
+class RedirectHeuristicBrowserTest : public PlatformBrowserTest {
+ public:
+  void SetUpOnMainThread() override {
+    PlatformBrowserTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_test_server()->Start());
+    host_resolver()->AddRule("*", "127.0.0.1");
+  }
+
+  WebContents* GetActiveWebContents() {
+    return chrome_test_utils::GetActiveWebContents(this);
+  }
+
+  // Perform a browser-based navigation to terminate the current redirect chain.
+  void EndRedirectChain() {
+    ASSERT_TRUE(content::NavigateToURL(
+        GetActiveWebContents(),
+        embedded_test_server()->GetURL("endthechain.test", "/title1.html")));
+  }
+
+  void SimulateMouseClick() {
+    SimulateMouseClickAndWait(GetActiveWebContents());
+  }
+};
+
+// Tests the conditions for recording RedirectHeuristic_CookieAccess2 and
+// RedirectHeuristic_CookieAccessThirdParty2 UKM events.
+IN_PROC_BROWSER_TEST_F(RedirectHeuristicBrowserTest,
                        RecordsRedirectHeuristicCookieAccessEvent) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   WebContents* web_contents = GetActiveWebContents();
@@ -1708,7 +1731,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
 
   std::vector<ukm::TestUkmRecorder::HumanReadableUkmEntry>
       ukm_first_party_entries =
-          ukm_recorder.GetEntries("RedirectHeuristic.CookieAccess", {});
+          ukm_recorder.GetEntries("RedirectHeuristic.CookieAccess2", {});
 
   // Expect one UKM entry.
 
@@ -1727,7 +1750,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
   // Expect one corresponding UKM entry for CookieAccessThirdParty.
   std::vector<ukm::TestUkmRecorder::HumanReadableUkmEntry>
       ukm_third_party_entries = ukm_recorder.GetEntries(
-          "RedirectHeuristic.CookieAccessThirdParty", {});
+          "RedirectHeuristic.CookieAccessThirdParty2", {});
   ASSERT_EQ(1u, ukm_third_party_entries.size());
   EXPECT_THAT(
       ukm_recorder.GetSourceForSourceId(ukm_third_party_entries[0].source_id)
@@ -1735,10 +1758,10 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
       Eq(tracker_url_pre_target_redirect));
 }
 
-// Tests setting different metrics for the RedirectHeuristic_CookieAccess UKM
+// Tests setting different metrics for the RedirectHeuristic_CookieAccess2 UKM
 // event.
 // TODO(https://crbug.com/1489241): Flaky on multiple platforms.
-IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
+IN_PROC_BROWSER_TEST_F(RedirectHeuristicBrowserTest,
                        DISABLED_RedirectHeuristicCookieAccessEvent_AllMetrics) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   WebContents* web_contents = GetActiveWebContents();
@@ -1830,7 +1853,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
 
   std::vector<ukm::TestUkmRecorder::HumanReadableUkmEntry> ukm_entries =
       ukm_recorder.GetEntries(
-          "RedirectHeuristic.CookieAccess",
+          "RedirectHeuristic.CookieAccess2",
           {"AccessId", "AccessAllowed", "IsAdTagged",
            "HoursSinceLastInteraction", "MillisecondsSinceRedirect",
            "OpenerHasSameSiteIframe", "SitesPassedCount",
@@ -1887,7 +1910,7 @@ IN_PROC_BROWSER_TEST_F(DIPSBounceDetectorBrowserTest,
   // matching access IDs.
   std::vector<ukm::TestUkmRecorder::HumanReadableUkmEntry>
       ukm_third_party_entries = ukm_recorder.GetEntries(
-          "RedirectHeuristic.CookieAccessThirdParty", {"AccessId"});
+          "RedirectHeuristic.CookieAccessThirdParty2", {"AccessId"});
   ASSERT_EQ(2u, ukm_third_party_entries.size());
 
   EXPECT_THAT(
@@ -1913,7 +1936,7 @@ struct RedirectHeuristicFlags {
 // Android.
 #if !BUILDFLAG(IS_ANDROID)
 class RedirectHeuristicGrantTest
-    : public DIPSBounceDetectorBrowserTest,
+    : public RedirectHeuristicBrowserTest,
       public testing::WithParamInterface<RedirectHeuristicFlags> {
  public:
   RedirectHeuristicGrantTest() {
@@ -1933,8 +1956,24 @@ class RedirectHeuristicGrantTest
            require_current_interaction_string}}});
   }
 
+  void SetUp() override {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        enabled_features_,
+        /*disabled_features=*/{
+            // TODO(crbug.com/1394910): Use HTTPS URLs in tests to avoid having
+            // to disable this feature.
+            features::kHttpsUpgrades,
+        });
+    RedirectHeuristicBrowserTest::SetUp();
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    // Prevents flakiness by handling clicks even before content is drawn.
+    command_line->AppendSwitch(blink::switches::kAllowPreCommitInput);
+  }
+
   void SetUpOnMainThread() override {
-    DIPSBounceDetectorBrowserTest::SetUpOnMainThread();
+    RedirectHeuristicBrowserTest::SetUpOnMainThread();
 
     browser()->profile()->GetPrefs()->SetInteger(
         prefs::kCookieControlsMode,
@@ -1943,6 +1982,9 @@ class RedirectHeuristicGrantTest
     browser()->profile()->GetPrefs()->SetBoolean(
         prefs::kTrackingProtection3pcdEnabled, true);
   }
+
+  base::test::ScopedFeatureList scoped_feature_list_;
+  std::vector<base::test::FeatureRefAndParams> enabled_features_;
 };
 
 IN_PROC_BROWSER_TEST_P(RedirectHeuristicGrantTest,
@@ -2933,14 +2975,20 @@ IN_PROC_BROWSER_TEST_F(DIPSThrottlingBrowserTest,
                                               start_time + base::Seconds(1))));
 }
 
-class AllSitesFollowingFirstPartyTest : public DIPSBounceDetectorBrowserTest {
+class AllSitesFollowingFirstPartyTest : public PlatformBrowserTest {
  public:
   void SetUpOnMainThread() override {
-    DIPSBounceDetectorBrowserTest::SetUpOnMainThread();
+    PlatformBrowserTest::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_test_server()->Start());
+    host_resolver()->AddRule("*", "127.0.0.1");
 
     first_party_url_ = embedded_test_server()->GetURL("a.test", "/title1.html");
     third_party_url_ = embedded_test_server()->GetURL("b.test", "/title1.html");
     other_url_ = embedded_test_server()->GetURL("c.test", "/title1.html");
+  }
+
+  WebContents* GetActiveWebContents() {
+    return chrome_test_utils::GetActiveWebContents(this);
   }
 
  protected:
@@ -2957,8 +3005,8 @@ IN_PROC_BROWSER_TEST_F(AllSitesFollowingFirstPartyTest,
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), third_party_url_));
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), other_url_));
 
-  EXPECT_THAT(web_contents_observer_->AllSitesFollowingFirstPartyForTesting(
-                  first_party_url_),
+  EXPECT_THAT(RedirectHeuristicTabHelper::AllSitesFollowingFirstParty(
+                  GetActiveWebContents(), first_party_url_),
               testing::ElementsAre(GetSiteForDIPS(third_party_url_)));
 }
 
@@ -2969,8 +3017,8 @@ IN_PROC_BROWSER_TEST_F(AllSitesFollowingFirstPartyTest,
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), other_url_));
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), third_party_url_));
 
-  EXPECT_THAT(web_contents_observer_->AllSitesFollowingFirstPartyForTesting(
-                  first_party_url_),
+  EXPECT_THAT(RedirectHeuristicTabHelper::AllSitesFollowingFirstParty(
+                  GetActiveWebContents(), first_party_url_),
               testing::ElementsAre(GetSiteForDIPS(third_party_url_)));
 }
 
@@ -2980,8 +3028,8 @@ IN_PROC_BROWSER_TEST_F(AllSitesFollowingFirstPartyTest, MultipleSitesIncluded) {
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), first_party_url_));
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), other_url_));
 
-  EXPECT_THAT(web_contents_observer_->AllSitesFollowingFirstPartyForTesting(
-                  first_party_url_),
+  EXPECT_THAT(RedirectHeuristicTabHelper::AllSitesFollowingFirstParty(
+                  GetActiveWebContents(), first_party_url_),
               testing::ElementsAre(GetSiteForDIPS(third_party_url_),
                                    GetSiteForDIPS(other_url_)));
 }
@@ -2991,8 +3039,8 @@ IN_PROC_BROWSER_TEST_F(AllSitesFollowingFirstPartyTest,
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), third_party_url_));
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), other_url_));
 
-  EXPECT_THAT(web_contents_observer_->AllSitesFollowingFirstPartyForTesting(
-                  first_party_url_),
+  EXPECT_THAT(RedirectHeuristicTabHelper::AllSitesFollowingFirstParty(
+                  GetActiveWebContents(), first_party_url_),
               testing::IsEmpty());
 }
 
@@ -3002,8 +3050,8 @@ IN_PROC_BROWSER_TEST_F(AllSitesFollowingFirstPartyTest,
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), third_party_url_));
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(), first_party_url_));
 
-  EXPECT_THAT(web_contents_observer_->AllSitesFollowingFirstPartyForTesting(
-                  first_party_url_),
+  EXPECT_THAT(RedirectHeuristicTabHelper::AllSitesFollowingFirstParty(
+                  GetActiveWebContents(), first_party_url_),
               testing::IsEmpty());
 }
 
@@ -3137,3 +3185,368 @@ IN_PROC_BROWSER_TEST_P(DIPSPrivacySandboxDataTest,
 }
 
 INSTANTIATE_TEST_SUITE_P(All, DIPSPrivacySandboxDataTest, ::testing::Bool());
+
+namespace {
+
+class SiteStorage {
+ public:
+  constexpr SiteStorage() = default;
+
+  virtual base::expected<std::string, std::string> ReadValue(
+      content::RenderFrameHost* frame) const = 0;
+  virtual testing::AssertionResult WriteValue(content::RenderFrameHost* frame,
+                                              base::StringPiece value,
+                                              bool partitioned) const = 0;
+
+  virtual std::string_view name() const = 0;
+};
+
+class CookieStorage : public SiteStorage {
+  base::expected<std::string, std::string> ReadValue(
+      content::RenderFrameHost* frame) const override {
+    content::EvalJsResult result = content::EvalJs(
+        frame, "document.cookie", content::EXECUTE_SCRIPT_NO_USER_GESTURE);
+    if (!result.error.empty()) {
+      return base::unexpected(result.error);
+    }
+    return base::ok(result.ExtractString());
+  }
+
+  testing::AssertionResult WriteValue(content::RenderFrameHost* frame,
+                                      base::StringPiece cookie,
+                                      bool partitioned) const override {
+    std::string value(cookie);
+    if (partitioned) {
+      value += ";Secure;Partitioned;SameSite=None";
+    }
+
+    FrameCookieAccessObserver obs(WebContents::FromRenderFrameHost(frame),
+                                  frame, CookieOperation::kChange);
+    testing::AssertionResult result = content::ExecJs(
+        frame, content::JsReplace("document.cookie = $1;", value),
+        content::EXECUTE_SCRIPT_NO_USER_GESTURE);
+    if (result) {
+      obs.Wait();
+    }
+    return result;
+  }
+
+  std::string_view name() const override { return "CookieStorage"; }
+};
+
+class LocalStorage : public SiteStorage {
+  base::expected<std::string, std::string> ReadValue(
+      content::RenderFrameHost* frame) const override {
+    content::EvalJsResult result =
+        content::EvalJs(frame, "localStorage.getItem('value')",
+                        content::EXECUTE_SCRIPT_NO_USER_GESTURE);
+    if (!result.error.empty()) {
+      return base::unexpected(result.error);
+    }
+    if (result.value.is_none()) {
+      return base::ok("");
+    }
+    return base::ok(result.ExtractString());
+  }
+
+  testing::AssertionResult WriteValue(content::RenderFrameHost* frame,
+                                      base::StringPiece value,
+                                      bool partitioned) const override {
+    return content::ExecJs(
+        frame, content::JsReplace("localStorage.setItem('value', $1);", value),
+        content::EXECUTE_SCRIPT_NO_USER_GESTURE);
+  }
+
+  std::string_view name() const override { return "LocalStorage"; }
+};
+
+void PrintTo(const SiteStorage* storage, std::ostream* os) {
+  *os << storage->name();
+}
+
+static constexpr CookieStorage kCookieStorage;
+static constexpr LocalStorage kLocalStorage;
+}  // namespace
+
+class DIPSDataDeletionBrowserTest
+    : public DIPSBounceDetectorBrowserTest,
+      public testing::WithParamInterface<const SiteStorage*> {
+ public:
+  void SetUpOnMainThread() override {
+    DIPSBounceDetectorBrowserTest::SetUpOnMainThread();
+    https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
+    https_server_.AddDefaultHandlers(kChromeTestDataDir);
+    ASSERT_TRUE(https_server_.Start());
+
+    chrome_test_utils::GetProfile(this)->GetPrefs()->SetInteger(
+        prefs::kCookieControlsMode,
+        static_cast<int>(
+            content_settings::CookieControlsMode::kBlockThirdParty));
+  }
+
+  const net::EmbeddedTestServer& https_server() const { return https_server_; }
+
+  [[nodiscard]] testing::AssertionResult WriteToPartitionedStorage(
+      base::StringPiece first_party_hostname,
+      base::StringPiece third_party_hostname,
+      base::StringPiece value) {
+    content::WebContents* web_contents = GetActiveWebContents();
+
+    if (!content::NavigateToURL(web_contents,
+                                https_server().GetURL(first_party_hostname,
+                                                      "/iframe_blank.html"))) {
+      return testing::AssertionFailure() << "Failed to navigate top-level";
+    }
+
+    const base::StringPiece kIframeId = "test";
+    if (!content::NavigateIframeToURL(
+            web_contents, kIframeId,
+            https_server().GetURL(third_party_hostname, "/title1.html"))) {
+      return testing::AssertionFailure() << "Failed to navigate iframe";
+    }
+
+    content::RenderFrameHost* iframe = content::ChildFrameAt(web_contents, 0);
+    if (!iframe) {
+      return testing::AssertionFailure() << "Child frame not found";
+    }
+    return WriteValue(iframe, value, /*partitioned=*/true);
+  }
+
+  [[nodiscard]] base::expected<std::string, std::string>
+  ReadFromPartitionedStorage(base::StringPiece first_party_hostname,
+                             base::StringPiece third_party_hostname) {
+    content::WebContents* web_contents = GetActiveWebContents();
+
+    if (!content::NavigateToURL(web_contents,
+                                https_server().GetURL(first_party_hostname,
+                                                      "/iframe_blank.html"))) {
+      return base::unexpected("Failed to navigate top-level");
+    }
+
+    const base::StringPiece kIframeId = "test";
+    if (!content::NavigateIframeToURL(
+            web_contents, kIframeId,
+            https_server().GetURL(third_party_hostname, "/title1.html"))) {
+      return base::unexpected("Failed to navigate iframe");
+    }
+
+    content::RenderFrameHost* iframe = content::ChildFrameAt(web_contents, 0);
+    if (!iframe) {
+      return base::unexpected("iframe not found");
+    }
+    return ReadValue(iframe);
+  }
+
+  [[nodiscard]] base::expected<std::string, std::string> ReadFromStorage(
+      base::StringPiece hostname) {
+    content::WebContents* web_contents = GetActiveWebContents();
+
+    if (!content::NavigateToURL(
+            web_contents, https_server().GetURL(hostname, "/title1.html"))) {
+      return base::unexpected("Failed to navigate");
+    }
+
+    return ReadValue(web_contents);
+  }
+
+  [[nodiscard]] testing::AssertionResult WriteToStorage(
+      base::StringPiece hostname,
+      base::StringPiece value) {
+    content::WebContents* web_contents = GetActiveWebContents();
+
+    if (!content::NavigateToURL(
+            web_contents, https_server().GetURL(hostname, "/title1.html"))) {
+      return testing::AssertionFailure() << "Failed to navigate";
+    }
+
+    return WriteValue(web_contents, value);
+  }
+
+  // Navigates to host1, then performs a stateful bounce on host2 to host3.
+  [[nodiscard]] testing::AssertionResult DoStatefulBounce(
+      base::StringPiece host1,
+      base::StringPiece host2,
+      base::StringPiece host3) {
+    content::WebContents* web_contents = GetActiveWebContents();
+
+    if (!content::NavigateToURL(web_contents,
+                                https_server().GetURL(host1, "/title1.html"))) {
+      return testing::AssertionFailure() << "Failed to navigate to " << host1;
+    }
+
+    if (!content::NavigateToURLFromRenderer(
+            web_contents, https_server().GetURL(host2, "/title1.html"))) {
+      return testing::AssertionFailure() << "Failed to navigate to " << host2;
+    }
+
+    testing::AssertionResult result = WriteValue(web_contents, "bounce=yes");
+    if (!result) {
+      return result;
+    }
+
+    if (!content::NavigateToURLFromRendererWithoutUserGesture(
+            web_contents, https_server().GetURL(host3, "/title1.html"))) {
+      return testing::AssertionFailure() << "Failed to navigate to " << host3;
+    }
+
+    EndRedirectChain();
+
+    return testing::AssertionSuccess();
+  }
+
+ private:
+  const SiteStorage* storage() { return GetParam(); }
+
+  [[nodiscard]] base::expected<std::string, std::string> ReadValue(
+      const content::ToRenderFrameHost& frame) {
+    return storage()->ReadValue(frame.render_frame_host());
+  }
+
+  [[nodiscard]] testing::AssertionResult WriteValue(
+      const content::ToRenderFrameHost& frame,
+      base::StringPiece value,
+      bool partitioned = false) {
+    return storage()->WriteValue(frame.render_frame_host(), value, partitioned);
+  }
+
+  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
+};
+
+IN_PROC_BROWSER_TEST_P(DIPSDataDeletionBrowserTest, DeleteDomain) {
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  // Perform a stateful bounce on b.test to make it eligible for deletion.
+  ASSERT_TRUE(DoStatefulBounce("a.test", "b.test", "c.test"));
+
+  // Confirm unpartitioned storage was written on b.test.
+  EXPECT_THAT(ReadFromStorage("b.test"), base::test::ValueIs("bounce=yes"));
+  // Navigate away from b.test since DIPS won't delete its state while loaded.
+  ASSERT_TRUE(content::NavigateToURL(
+      web_contents, https_server().GetURL("a.test", "/title1.html")));
+
+  // Trigger DIPS deletion.
+  base::test::TestFuture<const std::vector<std::string>&> deleted_sites;
+  DIPSService::Get(web_contents->GetBrowserContext())
+      ->DeleteEligibleSitesImmediately(deleted_sites.GetCallback());
+  ASSERT_THAT(deleted_sites.Get(), ElementsAre("b.test"));
+
+  // Confirm b.test storage was deleted.
+  EXPECT_THAT(ReadFromStorage("b.test"), base::test::ValueIs(""));
+}
+
+IN_PROC_BROWSER_TEST_P(DIPSDataDeletionBrowserTest, DontDeleteOtherDomains) {
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  // Set storage on a.test
+  ASSERT_TRUE(WriteToStorage("a.test", "foo=bar"));
+  // Confirm written.
+  EXPECT_THAT(ReadFromStorage("a.test"), base::test::ValueIs("foo=bar"));
+
+  // Perform a stateful bounce on b.test to make it eligible for deletion.
+  ASSERT_TRUE(DoStatefulBounce("a.test", "b.test", "c.test"));
+
+  // Trigger DIPS deletion.
+  base::test::TestFuture<const std::vector<std::string>&> deleted_sites;
+  DIPSService::Get(web_contents->GetBrowserContext())
+      ->DeleteEligibleSitesImmediately(deleted_sites.GetCallback());
+  ASSERT_THAT(deleted_sites.Get(), ElementsAre("b.test"));
+
+  // Confirm a.test storage was NOT deleted.
+  EXPECT_THAT(ReadFromStorage("a.test"), base::test::ValueIs("foo=bar"));
+}
+
+IN_PROC_BROWSER_TEST_P(DIPSDataDeletionBrowserTest,
+                       DontDeleteDomainWhenPartitioned) {
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  // Set storage on b.test embedded in a.test.
+  ASSERT_TRUE(WriteToPartitionedStorage("a.test", "b.test", "foo=bar"));
+  // Confirm written.
+  EXPECT_THAT(ReadFromPartitionedStorage("a.test", "b.test"),
+              base::test::ValueIs("foo=bar"));
+
+  // Perform a stateful bounce on b.test to make it eligible for deletion.
+  ASSERT_TRUE(DoStatefulBounce("a.test", "b.test", "c.test"));
+
+  // Trigger DIPS deletion.
+  base::test::TestFuture<const std::vector<std::string>&> deleted_sites;
+  DIPSService::Get(web_contents->GetBrowserContext())
+      ->DeleteEligibleSitesImmediately(deleted_sites.GetCallback());
+  ASSERT_THAT(deleted_sites.Get(), ElementsAre("b.test"));
+
+  // Confirm partitioned storage was NOT deleted.
+  EXPECT_THAT(ReadFromPartitionedStorage("a.test", "b.test"),
+              base::test::ValueIs("foo=bar"));
+}
+
+IN_PROC_BROWSER_TEST_P(DIPSDataDeletionBrowserTest, DeleteSubdomains) {
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  // Set storage on sub.b.test
+  ASSERT_TRUE(WriteToStorage("sub.b.test", "foo=bar"));
+  // Confirm written.
+  EXPECT_THAT(ReadFromStorage("sub.b.test"), base::test::ValueIs("foo=bar"));
+
+  // Perform a stateful bounce on b.test to make it eligible for deletion.
+  ASSERT_TRUE(DoStatefulBounce("a.test", "b.test", "c.test"));
+
+  // Trigger DIPS deletion.
+  base::test::TestFuture<const std::vector<std::string>&> deleted_sites;
+  DIPSService::Get(web_contents->GetBrowserContext())
+      ->DeleteEligibleSitesImmediately(deleted_sites.GetCallback());
+  ASSERT_THAT(deleted_sites.Get(), ElementsAre("b.test"));
+
+  // Confirm sub.b.test storage was deleted.
+  EXPECT_THAT(ReadFromStorage("sub.b.test"), base::test::ValueIs(""));
+}
+
+IN_PROC_BROWSER_TEST_P(DIPSDataDeletionBrowserTest, DeleteEmbedded3Ps) {
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  // Set storage on a.test embedded in b.test.
+  ASSERT_TRUE(WriteToPartitionedStorage("b.test", "a.test", "foo=bar"));
+  // Confirm written.
+  EXPECT_THAT(ReadFromPartitionedStorage("b.test", "a.test"),
+              base::test::ValueIs("foo=bar"));
+
+  // Perform a stateful bounce on b.test to make it eligible for deletion.
+  ASSERT_TRUE(DoStatefulBounce("a.test", "b.test", "c.test"));
+
+  // Trigger DIPS deletion.
+  base::test::TestFuture<const std::vector<std::string>&> deleted_sites;
+  DIPSService::Get(web_contents->GetBrowserContext())
+      ->DeleteEligibleSitesImmediately(deleted_sites.GetCallback());
+  ASSERT_THAT(deleted_sites.Get(), ElementsAre("b.test"));
+
+  // Confirm partitioned a.test storage was deleted.
+  EXPECT_THAT(ReadFromPartitionedStorage("b.test", "a.test"),
+              base::test::ValueIs(""));
+}
+
+IN_PROC_BROWSER_TEST_P(DIPSDataDeletionBrowserTest,
+                       DeleteEmbedded3Ps_Subdomain) {
+  content::WebContents* web_contents = GetActiveWebContents();
+
+  // Set storage on a.test embedded in sub.b.test.
+  ASSERT_TRUE(WriteToPartitionedStorage("sub.b.test", "a.test", "foo=bar"));
+  // Confirm written.
+  EXPECT_THAT(ReadFromPartitionedStorage("sub.b.test", "a.test"),
+              base::test::ValueIs("foo=bar"));
+
+  // Perform a stateful bounce on b.test to make it eligible for deletion.
+  ASSERT_TRUE(DoStatefulBounce("a.test", "b.test", "c.test"));
+
+  // Trigger DIPS deletion.
+  base::test::TestFuture<const std::vector<std::string>&> deleted_sites;
+  DIPSService::Get(web_contents->GetBrowserContext())
+      ->DeleteEligibleSitesImmediately(deleted_sites.GetCallback());
+  ASSERT_THAT(deleted_sites.Get(), ElementsAre("b.test"));
+
+  // Confirm partitioned a.test storage was deleted.
+  EXPECT_THAT(ReadFromPartitionedStorage("sub.b.test", "a.test"),
+              base::test::ValueIs(""));
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         DIPSDataDeletionBrowserTest,
+                         ::testing::Values(&kCookieStorage, &kLocalStorage));

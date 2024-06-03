@@ -43,7 +43,7 @@ group("deps") {
     }
     if (use_prebuilt_instrumented_libraries ||
         use_locally_built_instrumented_libraries) {
-      deps += [ "//third_party/instrumented_libraries:deps" ]
+      deps += [ "//third_party/instrumented_libs:deps" ]
     }
   }
   if (fail_on_san_warnings) {
@@ -438,6 +438,11 @@ config("coverage_flags") {
                   rebase_path(sanitizer_coverage_allowlist, root_build_dir) ]
     }
   }
+  if (use_centipede) {
+    # Centipede intercepts calls such as memcmp and memcpy in order to improve
+    # its testcase generation.
+    cflags += [ "-fno-builtin" ]
+  }
 }
 
 config("hwasan_flags") {
@@ -468,10 +473,11 @@ config("msan_flags") {
 
       # TODO(https://crbug.com/1317909): evaluate and possibly enable
       "-fno-sanitize-memory-use-after-dtor",
-
-      # TODO(https://crbug.com/1369167): evaluate and possibly enable
-      "-fno-sanitize-memory-param-retval",
     ]
+
+    if (!msan_eager_checks) {
+      cflags += [ "-fno-sanitize-memory-param-retval" ]
+    }
   }
 }
 
@@ -519,23 +525,6 @@ config("ubsan_flags") {
       "-fsanitize=vla-bound",
       "-fsanitize-ignorelist=$ubsan_ignorelist_path",
     ]
-
-    # Chromecast ubsan builds fail to compile with these
-    # experimental flags, so only add them to non-chromecast ubsan builds.
-    if (!is_castos && !is_cast_android) {
-      cflags += [
-        # Employ the experimental PBQP register allocator to avoid slow
-        # compilation on files with too many basic blocks.
-        # See http://crbug.com/426271.
-        "-mllvm",
-        "-regalloc=pbqp",
-
-        # Speculatively use coalescing to slightly improve the code generated
-        # by PBQP regallocator. May increase compile time.
-        "-mllvm",
-        "-pbqp-coalescing",
-      ]
-    }
   }
 }
 

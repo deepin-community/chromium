@@ -148,7 +148,11 @@ std::string GetSwitchOrDefault(std::string_view switch_string,
 
 // If the current locale is not the default one, ensure it is reverted to the
 // default when demo session restarts (i.e. user-selected locale is only allowed
-// to be used for a single session).
+// to be used for a single session), unless the restart is triggered by the user
+// explicitly changing the locale. (e.g. if the current locale is de-de and the
+// user changes the locale to fr-fr from the system tray, when the demo session
+// restarts, the system doesn't revert to the default locale en-us, but instead,
+// goes to fr-fr as specified.
 void RestoreDefaultLocaleForNextSession() {
   auto* user = user_manager::UserManager::Get()->GetActiveUser();
   // Tests may not have an active user.
@@ -181,8 +185,8 @@ void RestoreDefaultLocaleForNextSession() {
   if (current_locale != default_locale) {
     // If the user has changed the locale, request to change it back (which will
     // take effect when the session restarts).
-    profile->ChangeAppLocale(default_locale,
-                             Profile::APP_LOCALE_CHANGED_VIA_DEMO_SESSION);
+    profile->ChangeAppLocale(
+        default_locale, Profile::APP_LOCALE_CHANGED_VIA_DEMO_SESSION_REVERT);
   }
 }
 
@@ -304,15 +308,8 @@ bool DemoSession::IsDeviceInDemoMode() {
   if (!InstallAttributes::IsInitialized()) {
     return false;
   }
-  bool is_demo_device_mode = InstallAttributes::Get()->GetMode() ==
-                             policy::DeviceMode::DEVICE_MODE_DEMO;
-  bool is_demo_device_domain =
-      InstallAttributes::Get()->GetDomain() == policy::kDemoModeDomain;
 
-  // We check device mode and domain to allow for dev/test
-  // setup that is done by manual enrollment into demo domain. Device mode is
-  // not set to DeviceMode::DEVICE_MODE_DEMO then.
-  return is_demo_device_mode || is_demo_device_domain;
+  return InstallAttributes::Get()->IsDeviceInDemoMode();
 }
 
 // static
@@ -787,8 +784,8 @@ void DemoSession::RemoveSplashScreen() {
 }
 
 bool DemoSession::ShouldRemoveSplashScreen() {
-  // TODO(crbug.com/934979): Launch screensaver after active session starts, so
-  // that there's no need to check session state here.
+  // TODO(crbug.com/40615242): Launch screensaver after active session starts,
+  // so that there's no need to check session state here.
   return session_manager::SessionManager::Get()->session_state() ==
              session_manager::SessionState::ACTIVE &&
          screensaver_activated_;

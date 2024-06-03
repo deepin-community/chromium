@@ -52,8 +52,8 @@ class BrowserFeaturePromoStorageServiceTest : public testing::Test {
     data.last_snooze_time = base::Time::FromMillisecondsSinceUnixEpoch(200);
     data.snooze_count = 3;
     data.show_count = 4;
-    data.shown_for_apps.insert(kAppName1);
-    data.shown_for_apps.insert(kAppName2);
+    data.shown_for_keys.insert(kAppName1);
+    data.shown_for_keys.insert(kAppName2);
     return data;
   }
 
@@ -71,8 +71,8 @@ class BrowserFeaturePromoStorageServiceTest : public testing::Test {
     EXPECT_EQ(expected.last_snooze_time, actual->last_snooze_time);
     EXPECT_EQ(expected.snooze_count, actual->snooze_count);
     EXPECT_EQ(expected.show_count, actual->show_count);
-    EXPECT_THAT(actual->shown_for_apps,
-                testing::ContainerEq(expected.shown_for_apps));
+    EXPECT_THAT(actual->shown_for_keys,
+                testing::ContainerEq(expected.shown_for_keys));
   }
 
   void SaveData(const base::Feature& to_save_data_for,
@@ -102,6 +102,36 @@ class BrowserFeaturePromoStorageServiceTest : public testing::Test {
     EXPECT_EQ(expected.most_recent_active_time, actual.most_recent_active_time);
   }
 
+  void SaveNewBadgeData(const user_education::NewBadgeData& data,
+                        const base::Feature& to_save_data_for) {
+    service_.SaveNewBadgeData(to_save_data_for, data);
+  }
+
+  void CompareNewBadgeData(const user_education::NewBadgeData& expected,
+                           const base::Feature& to_read_data_for) {
+    const auto actual = service_.ReadNewBadgeData(to_read_data_for);
+    EXPECT_EQ(expected.show_count, actual.show_count);
+    EXPECT_EQ(expected.used_count, actual.used_count);
+    EXPECT_EQ(expected.feature_enabled_time, actual.feature_enabled_time);
+  }
+
+  void ResetNewBadgeData(const base::Feature& to_reset_data_for) {
+    service_.ResetNewBadge(to_reset_data_for);
+  }
+
+  void SaveRecentSessionData(const RecentSessionData& data) {
+    service_.SaveRecentSessionData(data);
+  }
+
+  void ResetRecentSessionData() { service_.ResetRecentSessionData(); }
+
+  void CompareRecentSessionData(const RecentSessionData& expected) {
+    const auto actual = service_.ReadRecentSessionData();
+    EXPECT_THAT(actual.recent_session_start_times,
+                testing::ContainerEq(expected.recent_session_start_times));
+    EXPECT_EQ(expected.enabled_time, actual.enabled_time);
+  }
+
  private:
   content::BrowserTaskEnvironment task_environment_;
   TestingProfile profile_;
@@ -121,7 +151,7 @@ TEST_F(BrowserFeaturePromoStorageServiceTest, SavesAndReadsData) {
 TEST_F(BrowserFeaturePromoStorageServiceTest, SaveAgain) {
   auto data = CreateTestData();
   SaveData(kTestIPHFeature, data);
-  data.shown_for_apps.clear();
+  data.shown_for_keys.clear();
   data.is_dismissed = false;
   data.show_count++;
   SaveData(kTestIPHFeature, data);
@@ -142,7 +172,7 @@ TEST_F(BrowserFeaturePromoStorageServiceTest, SavesAndReadsMultipleFeatures) {
   auto data2 = CreateTestData();
   data2.is_dismissed = false;
   data2.last_dismissed_by = user_education::FeaturePromoClosedReason::kCancel;
-  data2.shown_for_apps.clear();
+  data2.shown_for_keys.clear();
   data2.show_count = 6;
   SaveData(kTestIPHFeature2, data2);
   CompareData(data, kTestIPHFeature);
@@ -179,4 +209,114 @@ TEST_F(BrowserFeaturePromoStorageServiceTest, ResetSessionClearsData) {
   SaveSessionData(data);
   ResetSessionData();
   CompareSessionData(user_education::FeaturePromoSessionData());
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest, NoNewBadgeDataByDefault) {
+  CompareNewBadgeData(user_education::NewBadgeData(), kTestIPHFeature);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest, SavesAndReadsNewBadgeData) {
+  user_education::NewBadgeData data;
+  data.show_count = 2;
+  data.used_count = 3;
+  data.feature_enabled_time = base::Time::Now();
+  SaveNewBadgeData(data, kTestIPHFeature);
+  CompareNewBadgeData(data, kTestIPHFeature);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest, SavesAndClearNewBadgeData) {
+  user_education::NewBadgeData data;
+  data.show_count = 2;
+  data.used_count = 3;
+  data.feature_enabled_time = base::Time::Now();
+  SaveNewBadgeData(data, kTestIPHFeature);
+  ResetNewBadgeData(kTestIPHFeature);
+  CompareNewBadgeData(user_education::NewBadgeData(), kTestIPHFeature);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest, SaveNewBadgeDataAgain) {
+  user_education::NewBadgeData data;
+  SaveNewBadgeData(data, kTestIPHFeature);
+  data.show_count = 2;
+  data.used_count = 3;
+  data.feature_enabled_time = base::Time::Now();
+  SaveNewBadgeData(data, kTestIPHFeature);
+  CompareNewBadgeData(data, kTestIPHFeature);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest, SaveMultipleNewBadgeData) {
+  user_education::NewBadgeData data;
+  data.show_count = 2;
+  data.used_count = 3;
+  data.feature_enabled_time = base::Time::Now();
+  user_education::NewBadgeData data2;
+  data2.show_count = 4;
+  data2.used_count = 1;
+  data2.feature_enabled_time = base::Time::Now();
+  SaveNewBadgeData(data, kTestIPHFeature);
+  CompareNewBadgeData(user_education::NewBadgeData(), kTestIPHFeature2);
+  SaveNewBadgeData(data2, kTestIPHFeature2);
+  CompareNewBadgeData(data, kTestIPHFeature);
+  CompareNewBadgeData(data2, kTestIPHFeature2);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest, SaveAndRestoreRecentSessionData) {
+  CompareRecentSessionData(RecentSessionData());
+  RecentSessionData data;
+  data.enabled_time = base::Time::FromSecondsSinceUnixEpoch(10);
+  data.recent_session_start_times = {
+      base::Time::FromSecondsSinceUnixEpoch(100000),
+      base::Time::FromSecondsSinceUnixEpoch(10000),
+      base::Time::FromSecondsSinceUnixEpoch(1000),
+      base::Time::FromSecondsSinceUnixEpoch(100),
+  };
+  SaveRecentSessionData(data);
+  CompareRecentSessionData(data);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest,
+       SaveAndRestoreRecentSessionData_NoEnabledTime) {
+  CompareRecentSessionData(RecentSessionData());
+  RecentSessionData data;
+  data.recent_session_start_times = {
+      base::Time::FromSecondsSinceUnixEpoch(1000),
+      base::Time::FromSecondsSinceUnixEpoch(100),
+  };
+  SaveRecentSessionData(data);
+  CompareRecentSessionData(data);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest,
+       SaveAndRestoreRecentSessionData_ElidesOutOfOrderEntries) {
+  RecentSessionData data;
+  data.enabled_time = base::Time::FromSecondsSinceUnixEpoch(10);
+  data.recent_session_start_times = {
+      base::Time::FromSecondsSinceUnixEpoch(10000),
+      base::Time::FromSecondsSinceUnixEpoch(100000),
+      base::Time::FromSecondsSinceUnixEpoch(1000),
+      base::Time::FromSecondsSinceUnixEpoch(100),
+  };
+  SaveRecentSessionData(data);
+
+  // Expected entries will elide the out-of-order entry.
+  data.recent_session_start_times = {
+      base::Time::FromSecondsSinceUnixEpoch(10000),
+      base::Time::FromSecondsSinceUnixEpoch(1000),
+      base::Time::FromSecondsSinceUnixEpoch(100),
+  };
+  CompareRecentSessionData(data);
+}
+
+TEST_F(BrowserFeaturePromoStorageServiceTest, ResetRecentSessionData) {
+  RecentSessionData data;
+  data.enabled_time = base::Time::FromSecondsSinceUnixEpoch(10);
+  data.recent_session_start_times = {
+      base::Time::FromSecondsSinceUnixEpoch(100000),
+      base::Time::FromSecondsSinceUnixEpoch(10000),
+      base::Time::FromSecondsSinceUnixEpoch(1000),
+      base::Time::FromSecondsSinceUnixEpoch(100),
+  };
+  SaveRecentSessionData(data);
+  ResetRecentSessionData();
+  CompareRecentSessionData(RecentSessionData());
 }

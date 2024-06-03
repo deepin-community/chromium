@@ -175,6 +175,9 @@ class PictureInPictureWindowManager {
     observers_.RemoveObserver(observer);
   }
 
+  // Notify observers that picture-in-picture window is created.
+  void NotifyObserversOnEnterPictureInPicture();
+
 #if !BUILDFLAG(IS_ANDROID)
   std::unique_ptr<AutoPipSettingOverlayView> GetOverlayView(
       const gfx::Rect& browser_view_overridden_bounds,
@@ -216,13 +219,6 @@ class PictureInPictureWindowManager {
   // This is suffixed with "Internal" to keep consistency with the method above.
   void CloseWindowInternal();
 
-  template <typename Functor>
-  void NotifyObservers(const Functor& functor) {
-    for (Observer& observer : observers_) {
-      std::invoke(functor, observer);
-    }
-  }
-
 #if !BUILDFLAG(IS_ANDROID)
   // Called when the document PiP parent web contents is being destroyed.
   void DocumentWebContentsDestroyed();
@@ -237,6 +233,12 @@ class PictureInPictureWindowManager {
   // Creates the `occlusion_tracker_` if it does not already exist and should
   // exist.
   void CreateOcclusionTrackerIfNecessary();
+
+  // Records metrics about the requested size of a document picture-in-picture
+  // window.
+  void RecordDocumentPictureInPictureRequestedSizeMetrics(
+      const blink::mojom::PictureInPictureWindowOptions& pip_options,
+      const display::Display& display);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   PictureInPictureWindowManager();

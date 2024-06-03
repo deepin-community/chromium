@@ -186,8 +186,8 @@ AutofillField::AutofillField(FieldSignature field_signature) : AutofillField() {
 AutofillField::AutofillField(const FormFieldData& field)
     : FormFieldData(field),
       field_signature_(
-          CalculateFieldSignatureByNameAndType(name, form_control_type)),
-      parseable_name_(name),
+          CalculateFieldSignatureByNameAndType(name(), form_control_type())),
+      parseable_name_(name()),
       parseable_label_(label) {
   local_type_predictions_.fill(NO_SERVER_DATA);
 }
@@ -243,14 +243,6 @@ void AutofillField::set_heuristic_type(HeuristicSource s, FieldType type) {
   }
 }
 
-void AutofillField::add_possible_types_validities(
-    const FieldTypeValidityStateMap& possible_types_validities) {
-  for (const auto& possible_type_validity : possible_types_validities) {
-    possible_types_validities_[possible_type_validity.first].push_back(
-        possible_type_validity.second);
-  }
-}
-
 void AutofillField::set_server_predictions(
     std::vector<FieldPrediction> predictions) {
   overall_type_ = AutofillType(NO_SERVER_DATA);
@@ -279,9 +271,9 @@ void AutofillField::set_server_predictions(
         experimental_server_predictions_.push_back(std::move(prediction));
       }
     } else {
-      // TODO(crbug.com/1376045): captured tests store old autofill api response
-      // recordings without `source` field. We need to maintain the old behavior
-      // until these recordings will be migrated.
+      // TODO(crbug.com/40243028): captured tests store old autofill api
+      // response recordings without `source` field. We need to maintain the old
+      // behavior until these recordings will be migrated.
       server_predictions_.push_back(std::move(prediction));
     }
   }
@@ -294,13 +286,6 @@ void AutofillField::set_server_predictions(
       << "Expected up to 2 default predictions from the Autofill server. "
          "Actual: "
       << server_predictions_.size();
-}
-
-std::vector<AutofillDataModel::ValidityState>
-AutofillField::get_validities_for_possible_type(FieldType type) {
-  if (possible_types_validities_.find(type) == possible_types_validities_.end())
-    return {AutofillDataModel::ValidityState::kUnvalidated};
-  return possible_types_validities_[type];
 }
 
 void AutofillField::SetHtmlType(HtmlFieldType type, HtmlFieldMode mode) {
@@ -425,13 +410,13 @@ AutofillType AutofillField::Type() const {
 }
 
 bool AutofillField::IsEmpty() const {
-  return value.empty();
+  return value().empty();
 }
 
 FieldSignature AutofillField::GetFieldSignature() const {
-  return field_signature_
-             ? *field_signature_
-             : CalculateFieldSignatureByNameAndType(name, form_control_type);
+  return field_signature_ ? *field_signature_
+                          : CalculateFieldSignatureByNameAndType(
+                                name(), form_control_type());
 }
 
 std::string AutofillField::FieldSignatureAsStr() const {
@@ -458,15 +443,6 @@ bool AutofillField::ShouldSuppressSuggestionsAndFillingByDefault() const {
 
 void AutofillField::SetPasswordRequirements(PasswordRequirementsSpec spec) {
   password_requirements_ = std::move(spec);
-}
-
-void AutofillField::NormalizePossibleTypesValidities() {
-  for (auto possible_type : possible_types_) {
-    if (possible_types_validities_[possible_type].empty()) {
-      possible_types_validities_[possible_type].push_back(
-          AutofillDataModel::ValidityState::kUnvalidated);
-    }
-  }
 }
 
 bool AutofillField::IsCreditCardPrediction() const {

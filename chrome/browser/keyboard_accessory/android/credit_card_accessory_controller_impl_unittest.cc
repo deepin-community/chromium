@@ -8,7 +8,6 @@
 #include "base/test/mock_callback.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_manual_filling_controller.h"
-#include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
@@ -81,8 +80,8 @@ class MockAutofillDriver : public TestContentAutofillDriver {
   using TestContentAutofillDriver::TestContentAutofillDriver;
   MOCK_METHOD(void,
               ApplyFieldAction,
-              (mojom::ActionPersistence action_persistence,
-               mojom::TextReplacement text_replacement,
+              (mojom::FieldActionType action_type,
+               mojom::ActionPersistence action_persistence,
                const FieldGlobalId& field,
                const std::u16string&),
               (override));
@@ -91,11 +90,6 @@ class MockAutofillDriver : public TestContentAutofillDriver {
 class CreditCardAccessoryControllerTest
     : public ChromeRenderViewHostTestHarness {
  public:
-  CreditCardAccessoryControllerTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kAutofillEnableManualFallbackForVirtualCards);
-  }
-
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
     NavigateAndCommit(GURL(kExampleSite));
@@ -115,8 +109,8 @@ class CreditCardAccessoryControllerTest
   void TearDown() override {
     data_manager_.SetSyncServiceForTest(nullptr);
     data_manager_.SetPrefService(nullptr);
-    data_manager_.ClearCreditCards();
-    data_manager_.ClearCreditCardOfferData();
+    data_manager_.test_payments_data_manager().ClearCreditCards();
+    data_manager_.test_payments_data_manager().ClearCreditCardOfferData();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
@@ -155,7 +149,6 @@ class CreditCardAccessoryControllerTest
       filling_source_observer_;
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   TestAutofillClientInjector<TestContentAutofillClient>
       autofill_client_injector_;
   TestAutofillDriverInjector<testing::NiceMock<MockAutofillDriver>>
@@ -167,26 +160,7 @@ class CreditCardAccessoryControllerTestSupportingPromoCodeOffers
     : public CreditCardAccessoryControllerTest {
  public:
   CreditCardAccessoryControllerTestSupportingPromoCodeOffers() = default;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
-
-TEST_F(CreditCardAccessoryControllerTest,
-       AllowedForWebContentsForVirtualCards) {
-  PersonalDataManager* personal_data_manager =
-      PersonalDataManagerFactory::GetForProfile(profile());
-  // Add a virtual card.
-  CreditCard card = test::GetMaskedServerCard();
-  card.set_virtual_card_enrollment_state(
-      CreditCard::VirtualCardEnrollmentState::kEnrolled);
-  personal_data_manager->AddServerCreditCardForTest(
-      std::make_unique<CreditCard>(card));
-
-  // Verify that the accessory sheet is allowed.
-  ASSERT_TRUE(
-      CreditCardAccessoryController::AllowedForWebContents(web_contents()));
-}
 
 TEST_F(CreditCardAccessoryControllerTest, RefreshSuggestions) {
   CreditCard card = test::GetCreditCard();
@@ -315,8 +289,8 @@ TEST_P(CreditCardAccessoryControllerCardUnmaskTest, CardUnmask) {
                          .renderer_id = FieldRendererId(123)};
 
   EXPECT_CALL(autofill_driver(),
-              ApplyFieldAction(mojom::ActionPersistence::kFill,
-                               mojom::TextReplacement::kReplaceAll, field_id,
+              ApplyFieldAction(mojom::FieldActionType::kReplaceAll,
+                               mojom::ActionPersistence::kFill, field_id,
                                card.number()));
 
   controller()->OnFillingTriggered(field_id, field);

@@ -132,10 +132,10 @@ Controller::MessageGroupStreams::MessageGroupStreams(
     const std::string& service_id)
     : controller_(controller),
       service_id_(service_id),
-      initiation_handler_(this),
-      connection_open_handler_(this),
-      connection_close_handler_(this),
-      termination_handler_(this) {}
+      initiation_handler_(*this),
+      connection_open_handler_(*this),
+      connection_close_handler_(*this),
+      termination_handler_(*this) {}
 
 Controller::MessageGroupStreams::~MessageGroupStreams() = default;
 
@@ -370,7 +370,7 @@ Controller::ReceiverWatch::~ReceiverWatch() {
 }
 
 Controller::ReceiverWatch& Controller::ReceiverWatch::operator=(
-    Controller::ReceiverWatch other) {
+    Controller::ReceiverWatch&& other) {
   swap(*this, other);
   return *this;
 }
@@ -405,7 +405,7 @@ Controller::ConnectRequest::~ConnectRequest() {
 }
 
 Controller::ConnectRequest& Controller::ConnectRequest::operator=(
-    ConnectRequest other) {
+    ConnectRequest&& other) {
   swap(*this, other);
   return *this;
 }
@@ -438,12 +438,12 @@ Controller::Controller(ClockNowFunctionPtr now_function) {
   }
   // TODO(btolsch): This is for |receiver_endpoints_|, but this should really be
   // tracked elsewhere so it's available to other protocols as well.
-  NetworkServiceManager::Get()->GetServiceListener()->AddObserver(this);
+  NetworkServiceManager::Get()->GetServiceListener()->AddObserver(*this);
 }
 
 Controller::~Controller() {
   connection_manager_.reset();
-  NetworkServiceManager::Get()->GetServiceListener()->RemoveObserver(this);
+  NetworkServiceManager::Get()->GetServiceListener()->RemoveObserver(*this);
 }
 
 Controller::ReceiverWatch Controller::RegisterReceiverWatch(
@@ -513,7 +513,7 @@ Controller::ConnectRequest Controller::ReconnectConnection(
     delegate->OnError(Error::Code::kNoPresentationFound);
     return ConnectRequest();
   }
-  OSP_DCHECK(connection_manager_->GetConnection(connection->connection_id()))
+  OSP_CHECK(connection_manager_->GetConnection(connection->connection_id()))
       << "otherwise valid connection for reconnect is unknown to the "
          "connection manager";
   connection_manager_->RemoveConnection(connection.get());
@@ -560,9 +560,9 @@ Error Controller::OnPresentationTerminated(const std::string& presentation_id,
   for (auto* connection : presentation.connections) {
     connection->OnTerminated();
   }
-  TerminationRequest request;
-  request.request.presentation_id = presentation_id;
-  request.request.reason = msgs::PresentationTerminationReason::kUserRequest;
+  TerminationRequest request = {
+      .request = {.presentation_id = presentation_id,
+                  .reason = msgs::PresentationTerminationReason::kUserRequest}};
   group_streams_[presentation.service_id]->SendTerminationRequest(
       std::move(request));
   presentations_.erase(presentation_entry);

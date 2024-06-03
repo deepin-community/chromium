@@ -75,8 +75,10 @@
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-forward.h"
 #include "third_party/blink/public/mojom/media/capture_handle_config.mojom.h"
 #include "third_party/blink/public/mojom/page/display_cutout.mojom-shared.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
 #include "third_party/blink/public/mojom/page/page_visibility_state.mojom-shared.h"
 #include "ui/accessibility/ax_mode.h"
+#include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/platform/inspect/ax_event_recorder.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 #include "ui/base/ime/mojom/virtual_keyboard_types.mojom.h"
@@ -339,6 +341,11 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   // previous mode.
   void SetAccessibilityMode(ui::AXMode mode);
 
+  // Inform the WebContentsImpl object that a write-access Captured Surface
+  // Control API was invoked (sendWheel, setZoomLevel) for this object.
+  // A notification is then propagated to observers.
+  void DidCapturedSurfaceControl();
+
   // WebContents ------------------------------------------------------
   WebContentsDelegate* GetDelegate() final;
   void SetDelegate(WebContentsDelegate* delegate) override;
@@ -390,6 +397,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   bool ShouldShowLoadingUI() override;
   bool IsDocumentOnLoadCompletedInPrimaryMainFrame() override;
   bool IsWaitingForResponse() override;
+  bool HasUncommittedNavigationInPrimaryMainFrame() override;
   const net::LoadStateWithParam& GetLoadState() override;
   const std::u16string& GetLoadStateHost() override;
   void RequestAXTreeSnapshot(AXTreeSnapshotCallback callback,
@@ -573,7 +581,8 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   service_manager::InterfaceProvider* GetJavaInterfaces() override;
 #endif
   bool HasRecentInteraction() override;
-  [[nodiscard]] ScopedIgnoreInputEvents IgnoreInputEvents() override;
+  [[nodiscard]] ScopedIgnoreInputEvents IgnoreInputEvents(
+      std::optional<WebInputEventAuditCallback> audit_callback) override;
   bool HasActiveEffectivelyFullscreenVideo() override;
   void WriteIntoTrace(perfetto::TracedValue context) override;
   const base::Location& GetCreatorLocation() override;
@@ -590,7 +599,9 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   void ActivatePreviewPage() override;
 
   // Implementation of PageNavigator.
-  WebContents* OpenURL(const OpenURLParams& params) override;
+  WebContents* OpenURL(const OpenURLParams& params,
+                       base::OnceCallback<void(content::NavigationHandle&)>
+                           navigation_handle_callback) override;
 
   const blink::web_pref::WebPreferences& GetOrCreateWebPreferences() override;
   void NotifyPreferencesChanged() override;
@@ -669,10 +680,18 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
       const AXEventNotificationDetails& details) override;
   void AccessibilityLocationChangesReceived(
       const std::vector<AXLocationChangeNotificationDetails>& details) override;
+  ui::AXNode* GetAccessibilityRootNode() override;
   std::string DumpAccessibilityTree(
       bool internal,
       std::vector<ui::AXPropertyFilter> property_filters) override;
+  std::string DumpAccessibilityTree(
+      ui::AXApiType::Type api_type,
+      std::vector<ui::AXPropertyFilter> property_filters) override;
   void RecordAccessibilityEvents(
+      bool start_recording,
+      std::optional<ui::AXEventCallback> callback) override;
+  void RecordAccessibilityEvents(
+      ui::AXApiType::Type api_type,
       bool start_recording,
       std::optional<ui::AXEventCallback> callback) override;
   void AccessibilityFatalError() override;
@@ -748,6 +767,8 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   void OnSharedDictionaryAccessed(
       RenderFrameHostImpl*,
       const network::mojom::SharedDictionaryAccessDetails& details) override;
+  std::optional<blink::ParsedPermissionsPolicy>
+  GetPermissionsPolicyForIsolatedWebApp(RenderFrameHostImpl* source) override;
 
   // Called when WebAudio starts or stops playing audible audio in an
   // AudioContext.
@@ -850,6 +871,8 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   void DidFailLoadWithError(RenderFrameHostImpl* render_frame_host,
                             const GURL& url,
                             int error_code) override;
+  void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions) override;
 
   // RenderViewHostDelegate ----------------------------------------------------
   RenderViewHostDelegateView* GetDelegateView() override;
@@ -868,6 +891,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   const blink::RendererPreferences& GetRendererPrefs() const override;
   void DidReceiveInputEvent(RenderWidgetHostImpl* render_widget_host,
                             const blink::WebInputEvent& event) override;
+  bool ShouldIgnoreWebInputEvents(const blink::WebInputEvent& event) override;
   bool ShouldIgnoreInputEvents() override;
   void OnIgnoredUIEvent() override;
   void Activate() override;
@@ -896,10 +920,8 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
       ui::PageTransition page_transition,
       PreloadingHoldbackStatus holdback_status_override,
       PreloadingAttempt* preloading_attempt,
-      std::optional<base::RepeatingCallback<bool(const GURL&)>>
-          url_match_predicate = std::nullopt,
-      std::optional<base::RepeatingCallback<void(NavigationHandle&)>>
-          prerender_navigation_handle_callback = std::nullopt) override;
+      base::RepeatingCallback<bool(const GURL&)>,
+      base::RepeatingCallback<void(NavigationHandle&)>) override;
   void BackNavigationLikely(PreloadingPredictor predictor,
                             WindowOpenDisposition disposition) override;
   void SetOwnerLocationForDebug(
@@ -922,7 +944,9 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   void DidRedirectNavigation(NavigationHandle* navigation_handle) override;
   void ReadyToCommitNavigation(NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(NavigationHandle* navigation_handle) override;
-  void DidNavigateMainFramePreCommit(FrameTreeNode* frame_tree_node,
+  void DidCancelNavigationBeforeStart(
+      NavigationHandle* navigation_handle) override;
+  void DidNavigateMainFramePreCommit(NavigationHandle* navigation_handle,
                                      bool navigation_is_within_page) override;
   void DidNavigateMainFramePostCommit(
       RenderFrameHostImpl* render_frame_host,
@@ -951,10 +975,11 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   void OnSharedDictionaryAccessed(
       NavigationHandle*,
       const network::mojom::SharedDictionaryAccessDetails& details) override;
-
   void RegisterExistingOriginAsHavingDefaultIsolation(
       const url::Origin& origin,
       NavigationRequest* navigation_request_to_exclude) override;
+  bool MaybeCopyContentAreaAsBitmap(
+      base::OnceCallback<void(const SkBitmap&)> callback) override;
 
   // RenderWidgetHostDelegate --------------------------------------------------
 
@@ -970,6 +995,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   void OnVerticalScrollDirectionChanged(
       viz::VerticalScrollDirection scroll_direction) override;
   int GetVirtualKeyboardResizeHeight() override;
+  bool ShouldDoLearning() override;
 
   double GetPendingPageZoomLevel() override;
 
@@ -1020,7 +1046,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   // bool IsFullscreen() const override;
   blink::mojom::DisplayMode GetDisplayMode() const override;
   ui::WindowShowState GetWindowShowState() override;
-  DevicePostureProviderImpl* GetDevicePostureProvider() override;
+  blink::mojom::DevicePostureProvider* GetDevicePostureProvider() override;
   bool GetResizable() override;
   void LostPointerLock(RenderWidgetHostImpl* render_widget_host) override;
   bool HasPointerLock(RenderWidgetHostImpl* render_widget_host) override;
@@ -1403,6 +1429,9 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   const std::optional<base::Location>& ownership_location() const {
     return ownership_location_;
   }
+
+  std::optional<double> AdjustedChildZoom(
+      const RenderWidgetHostViewChildFrame* render_widget) override;
 
  private:
   using FrameTreeIterationCallback = base::RepeatingCallback<void(FrameTree&)>;
@@ -2102,6 +2131,9 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   // Counts the number of outstanding requests to ignore input events. They will
   // not be sent when this is greater than zero.
   int ignore_input_events_count_ = 0;
+  uint64_t next_web_input_event_audit_callback_id_ = 0;
+  base::flat_map<uint64_t, WebInputEventAuditCallback>
+      web_input_event_audit_callbacks_;
 
   // Pointer to the JavaScript dialog manager, lazily assigned. Used because the
   // delegate of this WebContentsImpl is nulled before its destructor is called.
@@ -2193,6 +2225,8 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   // to execute asynchronously. In such case, the parameters need to be saved
   // for the navigation to be started at a later point.
   std::unique_ptr<NavigationController::LoadURLParams> delayed_load_url_params_;
+  base::OnceCallback<void(content::NavigationHandle&)>
+      delayed_navigation_handle_callback_;
 
   // Whether overscroll should be unconditionally disabled.
   bool force_disable_overscroll_content_;
@@ -2344,13 +2378,14 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
   // manifest. This is in frame space coordinates.
   gfx::Rect window_controls_overlay_rect_;
 
-  // Observe native theme for changes to dark mode, preferred color scheme, and
-  // preferred contrast. Used to notify the renderer of preferred color scheme
-  // and preferred contrast changes.
+  // Observe native theme for changes to dark mode, forced_colors, preferred
+  // color scheme, and preferred contrast. Used to notify the renderer of
+  // preferred color scheme and preferred contrast changes.
   base::ScopedObservation<ui::NativeTheme, ui::NativeThemeObserver>
       native_theme_observation_{this};
 
   bool using_dark_colors_ = false;
+  bool in_forced_colors_ = false;
   ui::NativeTheme::PreferredColorScheme preferred_color_scheme_ =
       ui::NativeTheme::PreferredColorScheme::kLight;
   ui::NativeTheme::PreferredContrast preferred_contrast_ =

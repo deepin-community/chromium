@@ -201,6 +201,17 @@ BuildAttributionReportingIssueViolationType(
         kNavigationRegistrationWithoutTransientUserActivation:
       // This issue is not reported from the browser.
       NOTREACHED_NORETURN();
+    case blink::mojom::AttributionReportingIssueType::kInvalidInfoHeader:
+      return AttributionReportingIssueTypeEnum::InvalidInfoHeader;
+    case blink::mojom::AttributionReportingIssueType::kNoRegisterSourceHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterSourceHeader;
+    case blink::mojom::AttributionReportingIssueType::kNoRegisterTriggerHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterTriggerHeader;
+    case blink::mojom::AttributionReportingIssueType::kNoRegisterOsSourceHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterOsSourceHeader;
+    case blink::mojom::AttributionReportingIssueType::
+        kNoRegisterOsTriggerHeader:
+      return AttributionReportingIssueTypeEnum::NoRegisterOsTriggerHeader;
   }
 }
 
@@ -355,6 +366,13 @@ FederatedAuthRequestResultToProtocol(
     }
     case FederatedAuthRequestResult::kErrorNotSignedInWithIdp: {
       return FederatedAuthRequestIssueReasonEnum::NotSignedInWithIdp;
+    }
+    case FederatedAuthRequestResult::kErrorMissingTransientUserActivation: {
+      return FederatedAuthRequestIssueReasonEnum::
+          MissingTransientUserActivation;
+    }
+    case FederatedAuthRequestResult::kErrorReplacedByButtonMode: {
+      return FederatedAuthRequestIssueReasonEnum::ReplacedByButtonMode;
     }
     case FederatedAuthRequestResult::kSuccess: {
       NOTREACHED_NORETURN();

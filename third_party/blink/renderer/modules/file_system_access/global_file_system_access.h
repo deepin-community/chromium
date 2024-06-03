@@ -14,7 +14,8 @@ class OpenFilePickerOptions;
 class SaveFilePickerOptions;
 class DirectoryPickerOptions;
 class ExceptionState;
-class FileSystemHandle;
+class FileSystemDirectoryHandle;
+class FileSystemFileHandle;
 class LocalDOMWindow;
 class ScriptState;
 
@@ -22,19 +23,21 @@ class GlobalFileSystemAccess {
   STATIC_ONLY(GlobalFileSystemAccess);
 
  public:
-  static ScriptPromiseTyped<IDLSequence<FileSystemHandle>> showOpenFilePicker(
+  static ScriptPromise<IDLSequence<FileSystemFileHandle>> showOpenFilePicker(
       ScriptState*,
       LocalDOMWindow&,
       const OpenFilePickerOptions*,
       ExceptionState&);
-  static ScriptPromise showSaveFilePicker(ScriptState*,
-                                          LocalDOMWindow&,
-                                          const SaveFilePickerOptions*,
-                                          ExceptionState&);
-  static ScriptPromise showDirectoryPicker(ScriptState*,
-                                           LocalDOMWindow&,
-                                           const DirectoryPickerOptions*,
-                                           ExceptionState&);
+  static ScriptPromise<FileSystemFileHandle> showSaveFilePicker(
+      ScriptState*,
+      LocalDOMWindow&,
+      const SaveFilePickerOptions*,
+      ExceptionState&);
+  static ScriptPromise<FileSystemDirectoryHandle> showDirectoryPicker(
+      ScriptState*,
+      LocalDOMWindow&,
+      const DirectoryPickerOptions*,
+      ExceptionState&);
 };
 
 }  // namespace blink

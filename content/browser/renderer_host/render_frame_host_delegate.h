@@ -46,6 +46,7 @@
 #include "third_party/blink/public/mojom/frame/frame.mojom-forward.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
 #include "third_party/blink/public/mojom/media/capture_handle_config.mojom.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/base/window_open_disposition.h"
@@ -709,6 +710,16 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
   // If a timer for an unresponsive renderer fires, whether it should be
   // ignored.
   virtual bool ShouldIgnoreUnresponsiveRenderer();
+
+  // Returns the base permissions policy that should be applied to the Isolated
+  // Web App running in the given RenderFrameHostImpl. If std::nullopt is
+  // returned the default non-isolated permissions policy will be applied.
+  virtual std::optional<blink::ParsedPermissionsPolicy>
+  GetPermissionsPolicyForIsolatedWebApp(RenderFrameHostImpl* source);
+
+  // Updates the draggable regions defined by the app-region CSS property.
+  virtual void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions) {}
 
  protected:
   virtual ~RenderFrameHostDelegate() = default;
