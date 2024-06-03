@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/ash/network/network_portal_signin_controller.h"
 
+#include "ash/public/cpp/new_window_delegate.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/profiles/signin_profile_handler.h"
@@ -124,10 +125,8 @@ void NetworkPortalSigninController::ShowSignin(SigninSource source) {
   }
   auto portal_state = default_network->GetPortalState();
   if (portal_state != NetworkState::PortalState::kPortal &&
-      portal_state != NetworkState::PortalState::kPortalSuspected &&
-      portal_state != NetworkState::PortalState::kProxyAuthRequired) {
-    // If no portal or proxy signin is required, do not attempt to show the
-    // signin page.
+      portal_state != NetworkState::PortalState::kPortalSuspected) {
+    // If no portal signin is required, do not attempt to show the signin page.
     NET_LOG(EVENT) << "Show signin mode from: " << source << ": Network '"
                    << NetworkId(default_network)
                    << "' is in a non portal state: " << portal_state;
@@ -157,7 +156,11 @@ void NetworkPortalSigninController::ShowSignin(SigninSource source) {
       ShowSigninDialog(url);
       break;
     case SigninMode::kNormalTab:
-      ShowTab(ProfileManager::GetActiveUserProfile(), url);
+      if (chromeos::features::IsCaptivePortalPopupWindowEnabled()) {
+        ShowActiveProfileTab(url);
+      } else {
+        ShowTab(ProfileManager::GetActiveUserProfile(), url);
+      }
       break;
     case SigninMode::kSigninDefault: {
       if (chromeos::features::IsCaptivePortalPopupWindowEnabled()) {
@@ -170,8 +173,6 @@ void NetworkPortalSigninController::ShowSignin(SigninSource source) {
       break;
     }
     case SigninMode::kIncognitoDisabledByPolicy:
-      ABSL_FALLTHROUGH_INTENDED;
-    case SigninMode::kIncognitoDisabledByParentalControls: {
       if (chromeos::features::IsCaptivePortalPopupWindowEnabled()) {
         // Since the signin window enables extensions and disables navigation,
         // no special handling is required when Incognito browsing is disabled
@@ -180,6 +181,11 @@ void NetworkPortalSigninController::ShowSignin(SigninSource source) {
       } else {
         ShowTab(ProfileManager::GetActiveUserProfile(), url);
       }
+      break;
+    case SigninMode::kIncognitoDisabledByParentalControls: {
+      // Supervised users require SupervisedUserNavigationThrottle which is
+      // only available to non OTR profiles.
+      ShowTab(ProfileManager::GetActiveUserProfile(), url);
       break;
     }
   }
@@ -199,15 +205,15 @@ NetworkPortalSigninController::GetSigninMode(
     return SigninMode::kSigninDialog;
   }
 
+  if (user_manager::UserManager::Get()->IsLoggedInAsChildUser()) {
+    NET_LOG(DEBUG) << "GetSigninMode: Child User";
+    return SigninMode::kIncognitoDisabledByParentalControls;
+  }
+
   Profile* profile = ProfileManager::GetActiveUserProfile();
   if (!profile) {
     NET_LOG(DEBUG) << "GetSigninMode: No profile";
     return SigninMode::kSigninDialog;
-  }
-
-  // When showing a proxy auth window, use a normal tab with proxies enabled.
-  if (portal_state == NetworkState::PortalState::kProxyAuthRequired) {
-    return SigninMode::kNormalTab;
   }
 
   // This pref defaults to true, but if a policy is active the policy value
@@ -228,11 +234,6 @@ NetworkPortalSigninController::GetSigninMode(
       &availability);
   if (availability == policy::IncognitoModeAvailability::kDisabled) {
     return SigninMode::kIncognitoDisabledByPolicy;
-  }
-
-  if (IncognitoModePrefs::GetAvailability(profile->GetPrefs()) ==
-      policy::IncognitoModeAvailability::kDisabled) {
-    return SigninMode::kIncognitoDisabledByParentalControls;
   }
 
   return SigninMode::kSigninDefault;
@@ -310,7 +311,9 @@ void NetworkPortalSigninController::ShowSigninDialog(const GURL& url) {
 }
 
 void NetworkPortalSigninController::ShowSigninWindow(const GURL& url) {
-  chromeos::NetworkPortalSigninWindow::Get()->Show(url);
+  // Calls NetworkPortalSigninWindow::Show in the appropriate browser (Ash or
+  // Lacros).
+  ash::NewWindowDelegate::GetPrimary()->OpenCaptivePortalSignin(url);
 }
 
 void NetworkPortalSigninController::ShowTab(Profile* profile, const GURL& url) {
@@ -322,6 +325,13 @@ void NetworkPortalSigninController::ShowTab(Profile* profile, const GURL& url) {
   NavigateParams params(displayer.browser(), url, ui::PAGE_TRANSITION_LINK);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   ::Navigate(&params);
+}
+
+void NetworkPortalSigninController::ShowActiveProfileTab(const GURL& url) {
+  // Opens a new tab the appropriate browser (Ash or Lacros).
+  ash::NewWindowDelegate::GetPrimary()->OpenUrl(
+      url, NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+      NewWindowDelegate::Disposition::kNewForegroundTab);
 }
 
 std::ostream& operator<<(

@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,7 +40,6 @@
 #include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/java_handler_thread.h"
@@ -48,13 +48,13 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 #include "base/message_loop/message_pump_win.h"
 #include "base/process/memory.h"
 #include "base/win/current_module.h"
 #include "base/win/message_window.h"
 #include "base/win/scoped_handle.h"
-
-#include <windows.h>
 #endif
 
 using ::testing::IsNull;
@@ -294,7 +294,7 @@ const wchar_t kMessageBoxTitle[] = L"SingleThreadTaskExecutor Unit Test";
 // can cause implicit message loops.
 void MessageBoxFunc(TaskList* order, int cookie, bool is_reentrant) {
   order->RecordStart(MESSAGEBOX, cookie);
-  absl::optional<CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop>
+  std::optional<CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop>
       maybe_allow_nesting;
   if (is_reentrant)
     maybe_allow_nesting.emplace();
@@ -1364,28 +1364,6 @@ TEST_P(SingleThreadTaskExecutorTypedTest,
   run_loop.Run();
 }
 
-TEST_P(SingleThreadTaskExecutorTypedTest,
-       ApplicationTasksAllowedInNativeNestedLoopExplicitlyInScope) {
-  SingleThreadTaskExecutor executor(GetParam());
-  RunLoop run_loop;
-  executor.task_runner()->PostTask(
-      FROM_HERE,
-      BindOnce(
-          [](RunLoop* run_loop) {
-            {
-              CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop
-                  allow_nestable_tasks;
-              EXPECT_TRUE(CurrentThread::Get()
-                              ->ApplicationTasksAllowedInNativeNestedLoop());
-            }
-            EXPECT_FALSE(CurrentThread::Get()
-                             ->ApplicationTasksAllowedInNativeNestedLoop());
-            run_loop->Quit();
-          },
-          Unretained(&run_loop)));
-  run_loop.Run();
-}
-
 TEST_P(SingleThreadTaskExecutorTypedTest, IsIdleForTesting) {
   SingleThreadTaskExecutor executor(GetParam());
   EXPECT_TRUE(CurrentThread::Get()->IsIdleForTesting());
@@ -2065,6 +2043,29 @@ TEST(SingleThreadTaskExecutorTest, AlwaysHaveUserMessageWhenNesting) {
   g_loop_to_quit_from_message_handler = nullptr;
 }
 #endif  // BUILDFLAG(IS_WIN)
+
+TEST(SingleThreadTaskExecutorTest,
+     ApplicationTasksAllowedInNativeNestedLoopExplicitlyInScope) {
+  // Only UI pumps support native loops.
+  SingleThreadTaskExecutor executor(MessagePumpType::UI);
+  RunLoop run_loop;
+  executor.task_runner()->PostTask(
+      FROM_HERE,
+      BindOnce(
+          [](RunLoop* run_loop) {
+            {
+              CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop
+                  allow_nestable_tasks;
+              EXPECT_TRUE(CurrentThread::Get()
+                              ->ApplicationTasksAllowedInNativeNestedLoop());
+            }
+            EXPECT_FALSE(CurrentThread::Get()
+                             ->ApplicationTasksAllowedInNativeNestedLoop());
+            run_loop->Quit();
+          },
+          Unretained(&run_loop)));
+  run_loop.Run();
+}
 
 // Verify that tasks posted to and code running in the scope of the same
 // SingleThreadTaskExecutor access the same SequenceLocalStorage values.

@@ -12,17 +12,18 @@
 #include <algorithm>
 #include <sstream>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_memcpy_wrappers.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/numerics/safe_math.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxcrt/string_pool_template.h"
 #include "core/fxcrt/utf16.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/numerics/safe_math.h"
 
 // Instantiate.
 template class fxcrt::StringViewTemplate<wchar_t>;
@@ -57,192 +58,199 @@ constexpr wchar_t kWideTrimChars[] = L"\x09\x0a\x0b\x0c\x0d\x20";
 std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
                                             va_list argList) {
   size_t nMaxLen = 0;
-  for (const wchar_t* pStr = pFormat; *pStr != 0; pStr++) {
-    if (*pStr != '%' || *(pStr = pStr + 1) == '%') {
-      ++nMaxLen;
-      continue;
-    }
-    int iWidth = 0;
-    for (; *pStr != 0; pStr++) {
-      if (*pStr == '#') {
-        nMaxLen += 2;
-      } else if (*pStr == '*') {
-        iWidth = va_arg(argList, int);
-      } else if (*pStr != '-' && *pStr != '+' && *pStr != '0' && *pStr != ' ') {
-        break;
+  // SAFETY: TODO(tsepez): investigate lack of safety.
+  UNSAFE_BUFFERS({
+    for (const wchar_t* pStr = pFormat; *pStr != 0; pStr++) {
+      if (*pStr != '%' || *(pStr = pStr + 1) == '%') {
+        ++nMaxLen;
+        continue;
       }
-    }
-    if (iWidth == 0) {
-      iWidth = FXSYS_wtoi(pStr);
-      while (FXSYS_IsDecimalDigit(*pStr))
-        ++pStr;
-    }
-    if (iWidth < 0 || iWidth > 128 * 1024)
-      return std::nullopt;
-    uint32_t nWidth = static_cast<uint32_t>(iWidth);
-    int iPrecision = 0;
-    if (*pStr == '.') {
-      pStr++;
-      if (*pStr == '*') {
-        iPrecision = va_arg(argList, int);
-        pStr++;
-      } else {
-        iPrecision = FXSYS_wtoi(pStr);
+      int iWidth = 0;
+      for (; *pStr != 0; pStr++) {
+        if (*pStr == '#') {
+          nMaxLen += 2;
+        } else if (*pStr == '*') {
+          iWidth = va_arg(argList, int);
+        } else if (*pStr != '-' && *pStr != '+' && *pStr != '0' &&
+                   *pStr != ' ') {
+          break;
+        }
+      }
+      if (iWidth == 0) {
+        iWidth = FXSYS_wtoi(pStr);
         while (FXSYS_IsDecimalDigit(*pStr))
           ++pStr;
       }
-    }
-    if (iPrecision < 0 || iPrecision > 128 * 1024)
-      return std::nullopt;
-    uint32_t nPrecision = static_cast<uint32_t>(iPrecision);
-    int nModifier = 0;
-    if (*pStr == L'I' && *(pStr + 1) == L'6' && *(pStr + 2) == L'4') {
-      pStr += 3;
-      nModifier = FORCE_INT64;
-    } else {
-      switch (*pStr) {
-        case 'h':
-          nModifier = FORCE_ANSI;
-          pStr++;
-          break;
-        case 'l':
-          nModifier = FORCE_UNICODE;
-          pStr++;
-          break;
-        case 'F':
-        case 'N':
-        case 'L':
-          pStr++;
-          break;
+      if (iWidth < 0 || iWidth > 128 * 1024) {
+        return std::nullopt;
       }
-    }
-    size_t nItemLen = 0;
-    switch (*pStr | nModifier) {
-      case 'c':
-      case 'C':
-        nItemLen = 2;
-        va_arg(argList, int);
-        break;
-      case 'c' | FORCE_ANSI:
-      case 'C' | FORCE_ANSI:
-        nItemLen = 2;
-        va_arg(argList, int);
-        break;
-      case 'c' | FORCE_UNICODE:
-      case 'C' | FORCE_UNICODE:
-        nItemLen = 2;
-        va_arg(argList, int);
-        break;
-      case 's': {
-        const wchar_t* pstrNextArg = va_arg(argList, const wchar_t*);
-        if (pstrNextArg) {
-          nItemLen = wcslen(pstrNextArg);
-          if (nItemLen < 1) {
-            nItemLen = 1;
-          }
+      uint32_t nWidth = static_cast<uint32_t>(iWidth);
+      int iPrecision = 0;
+      if (*pStr == '.') {
+        pStr++;
+        if (*pStr == '*') {
+          iPrecision = va_arg(argList, int);
+          pStr++;
         } else {
-          nItemLen = 6;
-        }
-      } break;
-      case 'S': {
-        const char* pstrNextArg = va_arg(argList, const char*);
-        if (pstrNextArg) {
-          nItemLen = strlen(pstrNextArg);
-          if (nItemLen < 1) {
-            nItemLen = 1;
+          iPrecision = FXSYS_wtoi(pStr);
+          while (FXSYS_IsDecimalDigit(*pStr)) {
+            ++pStr;
           }
-        } else {
-          nItemLen = 6;
         }
-      } break;
-      case 's' | FORCE_ANSI:
-      case 'S' | FORCE_ANSI: {
-        const char* pstrNextArg = va_arg(argList, const char*);
-        if (pstrNextArg) {
-          nItemLen = strlen(pstrNextArg);
-          if (nItemLen < 1) {
-            nItemLen = 1;
-          }
-        } else {
-          nItemLen = 6;
-        }
-      } break;
-      case 's' | FORCE_UNICODE:
-      case 'S' | FORCE_UNICODE: {
-        const wchar_t* pstrNextArg = va_arg(argList, wchar_t*);
-        if (pstrNextArg) {
-          nItemLen = wcslen(pstrNextArg);
-          if (nItemLen < 1) {
-            nItemLen = 1;
-          }
-        } else {
-          nItemLen = 6;
-        }
-      } break;
-    }
-    if (nItemLen != 0) {
-      if (nPrecision != 0 && nItemLen > nPrecision) {
-        nItemLen = nPrecision;
       }
-      if (nItemLen < nWidth) {
-        nItemLen = nWidth;
+      if (iPrecision < 0 || iPrecision > 128 * 1024) {
+        return std::nullopt;
       }
-    } else {
-      switch (*pStr) {
-        case 'd':
-        case 'i':
-        case 'u':
-        case 'x':
-        case 'X':
-        case 'o':
-          if (nModifier & FORCE_INT64) {
-            va_arg(argList, int64_t);
+      uint32_t nPrecision = static_cast<uint32_t>(iPrecision);
+      int nModifier = 0;
+      if (*pStr == L'I' && *(pStr + 1) == L'6' && *(pStr + 2) == L'4') {
+        pStr += 3;
+        nModifier = FORCE_INT64;
+      } else {
+        switch (*pStr) {
+          case 'h':
+            nModifier = FORCE_ANSI;
+            pStr++;
+            break;
+          case 'l':
+            nModifier = FORCE_UNICODE;
+            pStr++;
+            break;
+          case 'F':
+          case 'N':
+          case 'L':
+            pStr++;
+            break;
+        }
+      }
+      size_t nItemLen = 0;
+      switch (*pStr | nModifier) {
+        case 'c':
+        case 'C':
+          nItemLen = 2;
+          va_arg(argList, int);
+          break;
+        case 'c' | FORCE_ANSI:
+        case 'C' | FORCE_ANSI:
+          nItemLen = 2;
+          va_arg(argList, int);
+          break;
+        case 'c' | FORCE_UNICODE:
+        case 'C' | FORCE_UNICODE:
+          nItemLen = 2;
+          va_arg(argList, int);
+          break;
+        case 's': {
+          const wchar_t* pstrNextArg = va_arg(argList, const wchar_t*);
+          if (pstrNextArg) {
+            nItemLen = wcslen(pstrNextArg);
+            if (nItemLen < 1) {
+              nItemLen = 1;
+            }
           } else {
-            va_arg(argList, int);
+            nItemLen = 6;
           }
-          nItemLen = 32;
-          if (nItemLen < nWidth + nPrecision) {
-            nItemLen = nWidth + nPrecision;
-          }
-          break;
-        case 'a':
-        case 'A':
-        case 'e':
-        case 'E':
-        case 'g':
-        case 'G':
-          va_arg(argList, double);
-          nItemLen = 128;
-          if (nItemLen < nWidth + nPrecision) {
-            nItemLen = nWidth + nPrecision;
-          }
-          break;
-        case 'f':
-          if (nWidth + nPrecision > 100) {
-            nItemLen = nPrecision + nWidth + 128;
+        } break;
+        case 'S': {
+          const char* pstrNextArg = va_arg(argList, const char*);
+          if (pstrNextArg) {
+            nItemLen = strlen(pstrNextArg);
+            if (nItemLen < 1) {
+              nItemLen = 1;
+            }
           } else {
-            double f;
-            char pszTemp[256];
-            f = va_arg(argList, double);
-            FXSYS_snprintf(pszTemp, sizeof(pszTemp), "%*.*f", nWidth,
-                           nPrecision + 6, f);
-            nItemLen = strlen(pszTemp);
+            nItemLen = 6;
           }
-          break;
-        case 'p':
-          va_arg(argList, void*);
-          nItemLen = 32;
-          if (nItemLen < nWidth + nPrecision) {
-            nItemLen = nWidth + nPrecision;
+        } break;
+        case 's' | FORCE_ANSI:
+        case 'S' | FORCE_ANSI: {
+          const char* pstrNextArg = va_arg(argList, const char*);
+          if (pstrNextArg) {
+            nItemLen = strlen(pstrNextArg);
+            if (nItemLen < 1) {
+              nItemLen = 1;
+            }
+          } else {
+            nItemLen = 6;
           }
-          break;
-        case 'n':
-          va_arg(argList, int*);
-          break;
+        } break;
+        case 's' | FORCE_UNICODE:
+        case 'S' | FORCE_UNICODE: {
+          const wchar_t* pstrNextArg = va_arg(argList, wchar_t*);
+          if (pstrNextArg) {
+            nItemLen = wcslen(pstrNextArg);
+            if (nItemLen < 1) {
+              nItemLen = 1;
+            }
+          } else {
+            nItemLen = 6;
+          }
+        } break;
       }
+      if (nItemLen != 0) {
+        if (nPrecision != 0 && nItemLen > nPrecision) {
+          nItemLen = nPrecision;
+        }
+        if (nItemLen < nWidth) {
+          nItemLen = nWidth;
+        }
+      } else {
+        switch (*pStr) {
+          case 'd':
+          case 'i':
+          case 'u':
+          case 'x':
+          case 'X':
+          case 'o':
+            if (nModifier & FORCE_INT64) {
+              va_arg(argList, int64_t);
+            } else {
+              va_arg(argList, int);
+            }
+            nItemLen = 32;
+            if (nItemLen < nWidth + nPrecision) {
+              nItemLen = nWidth + nPrecision;
+            }
+            break;
+          case 'a':
+          case 'A':
+          case 'e':
+          case 'E':
+          case 'g':
+          case 'G':
+            va_arg(argList, double);
+            nItemLen = 128;
+            if (nItemLen < nWidth + nPrecision) {
+              nItemLen = nWidth + nPrecision;
+            }
+            break;
+          case 'f':
+            if (nWidth + nPrecision > 100) {
+              nItemLen = nPrecision + nWidth + 128;
+            } else {
+              double f;
+              char pszTemp[256];
+              f = va_arg(argList, double);
+              FXSYS_snprintf(pszTemp, sizeof(pszTemp), "%*.*f", nWidth,
+                             nPrecision + 6, f);
+              nItemLen = strlen(pszTemp);
+            }
+            break;
+          case 'p':
+            va_arg(argList, void*);
+            nItemLen = 32;
+            if (nItemLen < nWidth + nPrecision) {
+              nItemLen = nWidth + nPrecision;
+            }
+            break;
+          case 'n':
+            va_arg(argList, int*);
+            break;
+        }
+      }
+      nMaxLen += nItemLen;
     }
-    nMaxLen += nItemLen;
-  }
+  });
   nMaxLen += 32;  // Fudge factor.
   return nMaxLen;
 }
@@ -360,7 +368,7 @@ WideString WideString::FormatV(const wchar_t* format, va_list argList) {
   if (!guess.has_value()) {
     return WideString();
   }
-  int maxLen = pdfium::base::checked_cast<int>(guess.value());
+  int maxLen = pdfium::checked_cast<int>(guess.value());
 
   while (maxLen < 32 * 1024) {
     va_copy(argListCopy, argList);
@@ -384,9 +392,11 @@ WideString WideString::Format(const wchar_t* pFormat, ...) {
   return ret;
 }
 
+// TODO(tsepez): should be UNSAFE_BUFFER_USAGE.
 WideString::WideString(const wchar_t* pStr, size_t nLen) {
   if (nLen) {
-    m_pData = StringData::Create({pStr, nLen});
+    // SAFETY: caller ensures `pStr` points to al least `nLen` wchar_t.
+    m_pData = StringData::Create(UNSAFE_BUFFERS(pdfium::make_span(pStr, nLen)));
   }
 }
 
@@ -609,6 +619,30 @@ ByteString WideString::ToUTF16LE() const {
   return result;
 }
 
+ByteString WideString::ToUCS2LE() const {
+  ByteString result;
+  size_t output_length = 0;
+  {
+    // Span's lifetime must end before ReleaseBuffer() below.
+    // 2 bytes required per UTF-16 code unit.
+    pdfium::span<uint8_t> buffer =
+        pdfium::as_writable_bytes(result.GetBuffer(GetLength() * 2 + 2));
+    for (wchar_t wc : AsStringView()) {
+#if defined(WCHAR_T_IS_32_BIT)
+      if (pdfium::IsSupplementary(wc)) {
+        continue;
+      }
+#endif
+      buffer[output_length++] = wc & 0xff;
+      buffer[output_length++] = wc >> 8;
+    }
+    buffer[output_length++] = 0;
+    buffer[output_length++] = 0;
+  }
+  result.ReleaseBuffer(output_length);
+  return result;
+}
+
 WideString WideString::EncodeEntities() const {
   WideString ret = *this;
   ret.Replace(L"&", L"&amp;");
@@ -772,84 +806,18 @@ int WideString::CompareNoCase(const wchar_t* str) const {
   return (!str || str[0] == 0) ? 0 : -1;
 }
 
-void WideString::Trim() {
-  TrimRight(kWideTrimChars);
-  TrimLeft(kWideTrimChars);
+void WideString::TrimWhitespace() {
+  TrimWhitespaceBack();
+  TrimWhitespaceFront();
 }
 
-void WideString::Trim(wchar_t target) {
-  wchar_t str[2] = {target, 0};
-  TrimRight(str);
-  TrimLeft(str);
+void WideString::TrimWhitespaceFront() {
+  TrimFront(kWideTrimChars);
 }
 
-void WideString::Trim(WideStringView targets) {
-  TrimRight(targets);
-  TrimLeft(targets);
+void WideString::TrimWhitespaceBack() {
+  TrimBack(kWideTrimChars);
 }
-
-void WideString::TrimLeft() {
-  TrimLeft(kWideTrimChars);
-}
-
-void WideString::TrimLeft(wchar_t target) {
-  wchar_t str[2] = {target, 0};
-  TrimLeft(str);
-}
-
-void WideString::TrimLeft(WideStringView targets) {
-  if (!m_pData || targets.IsEmpty())
-    return;
-
-  size_t len = GetLength();
-  if (len == 0)
-    return;
-
-  size_t pos = 0;
-  while (pos < len) {
-    size_t i = 0;
-    while (i < targets.GetLength() &&
-           targets.CharAt(i) != m_pData->m_String[pos]) {
-      i++;
-    }
-    if (i == targets.GetLength())
-      break;
-    pos++;
-  }
-  if (!pos)
-    return;
-
-  ReallocBeforeWrite(len);
-  size_t nDataLength = len - pos;
-  memmove(m_pData->m_String, m_pData->m_String + pos,
-          (nDataLength + 1) * sizeof(wchar_t));
-  m_pData->m_nDataLength = nDataLength;
-}
-
-void WideString::TrimRight() {
-  TrimRight(kWideTrimChars);
-}
-
-void WideString::TrimRight(wchar_t target) {
-  wchar_t str[2] = {target, 0};
-  TrimRight(str);
-}
-
-void WideString::TrimRight(WideStringView targets) {
-  if (IsEmpty() || targets.IsEmpty())
-    return;
-
-  size_t pos = GetLength();
-  while (pos && targets.Contains(m_pData->m_String[pos - 1]))
-    pos--;
-
-  if (pos < m_pData->m_nDataLength) {
-    ReallocBeforeWrite(m_pData->m_nDataLength);
-    m_pData->m_String[pos] = 0;
-    m_pData->m_nDataLength = pos;
-  }
-}
-
 int WideString::GetInteger() const {
   return m_pData ? FXSYS_wtoi(m_pData->m_String) : 0;
 }

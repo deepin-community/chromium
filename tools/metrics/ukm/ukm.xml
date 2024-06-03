@@ -1442,6 +1442,13 @@ be describing additional metrics about the same event.
       once.
     </summary>
   </metric>
+  <metric name="NumInterestGroupsWithOtherMultiBid">
+    <summary>
+      Number of instances in which an InterestGroup generated a complicated
+      sequence of multiple bids that doesn't match any of the other
+      'NumInterestGroupsWith...' cases.
+    </summary>
+  </metric>
   <metric name="NumInterestGroupsWithSameBidForKAnonAndNonKAnon">
     <summary>
       Number of instances in which an InterestGroup's top generated bid did
@@ -3159,6 +3166,9 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="Autofill.FormSubmitted">
+  <obsolete>
+    Deprecated as of 03/2024.
+  </obsolete>
   <owner>jsaul@google.com</owner>
   <summary>
     Recorded when user submits a form.
@@ -4331,7 +4341,7 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="Blink.DeveloperMetricsRare">
-  <owner>schenney@chromium.org</owner>
+  <owner>foolip@chromium.org</owner>
   <owner>chrome-webdev-metrics@google.com</owner>
   <summary>
     Collects data for a subset of UseCounter features of interest to the Web
@@ -4467,14 +4477,35 @@ be describing additional metrics about the same event.
       Records a 1 each time a mismatch dialog is shown.
     </summary>
   </metric>
+  <metric name="MultipleRequestsRpMode" enum="FedCmMultipleRequestsRpMode">
+    <summary>
+      Records the RpMode of two consecutive requests. Recorded every time when a
+      token request is invoked while there is another one pending.
+    </summary>
+  </metric>
+  <metric name="NumIdpsMismatch">
+    <summary>
+      Records the number of IDPs that result in a 'mismatch' status from a
+      single FedCM get() invocation. Recorded every time a FedCM get() call is
+      resolved. Records some integer 0 or greater. Uses exponential count
+      bucketing.
+    </summary>
+  </metric>
+  <metric name="NumIdpsRequested">
+    <summary>
+      Records the number of IDPs that are requested from a single FedCM get()
+      invocation. Recorded every time a FedCM get() call is resolved. Records
+      some integer greater than or equal to 1. Uses exponential count bucketing.
+    </summary>
+  </metric>
   <metric name="NumRequestsPerDocument">
     <summary>
       Records the number of navigator.credentials.get() requests made in a
-      document. Requests made when FedCM is disabled, when there is a pending
-      FedCM request or for the purpose of MDocs or multi-IDP are not counted.
-      Records at most one sample for every document where at least one
-      navigator.credentials.get() request is made. No samples are recorded if
-      the count is 0. The bucketing method used is base::UmaHistogramCounts100.
+      document. Requests made when FedCM is disabled or when there is a pending
+      FedCM request are not counted. Records at most one sample for every
+      document where at least one navigator.credentials.get() request is made.
+      No samples are recorded if the count is 0. The bucketing method used is
+      base::UmaHistogramCounts100.
     </summary>
   </metric>
   <metric name="PreventSilentAccessFrameType" enum="FedCmRequesterFrameType">
@@ -4484,6 +4515,13 @@ be describing additional metrics about the same event.
       some frame in the page invokes the preventSilentAccess() JavaScript call.
       Possible values are: main frame, same-site iframe, and cross-site iframe,
       where the site of the iframe is compared with the site of the main frame.
+    </summary>
+  </metric>
+  <metric name="RpMode" enum="FedCmRpMode">
+    <summary>
+      Records the RP mode of the FedCM API. Recorded once per API call together
+      with Status.RequestIdToken when the request is fulfilled (either resolved
+      or rejected).
     </summary>
   </metric>
   <metric name="Status.Disconnect" enum="FedCmDisconnectStatus">
@@ -4503,7 +4541,9 @@ be describing additional metrics about the same event.
   </metric>
   <metric name="Status.RequestIdToken" enum="FedCmRequestIdTokenStatus">
     <summary>
-      Records the status of a request id token call to the FedCM API.
+      Records the status of a request id token call to the FedCM API. Recorded
+      once per API call when the request is fulfilled (either resolved or
+      rejected).
     </summary>
   </metric>
   <metric name="Status.Revoke" enum="FedCmRevokeStatus">
@@ -4550,6 +4590,14 @@ be describing additional metrics about the same event.
       one sample for every disconnect call which sends a disconnect request.
     </summary>
   </metric>
+  <metric name="Timing.GetUserInfoToButtonMode">
+    <summary>
+      Records the time in milliseconds from when the getUserInfo() API is called
+      to the time when the Button Mode API is called. Recorded when the Button
+      mode is invoked and there was a getUserInfo call on this page. Recorded at
+      most once per getUserInfo API call.
+    </summary>
+  </metric>
   <metric name="Timing.IdTokenResponse">
     <summary>
       Records the time (in milliseconds) from when the user presses the Continue
@@ -4569,6 +4617,32 @@ be describing additional metrics about the same event.
     <summary>
       Records the time (in milliseconds) from when a call to the API was made to
       when the accounts dialog is shown.
+    </summary>
+  </metric>
+  <metric name="Timing.ShowAccountsDialogBreakdown.AccountsFetch">
+    <summary>
+      Records the time (in milliseconds) from when the accounts request was made
+      to when the fetch response is received. Only recorded when the accounts
+      are ready to show which means all fetches are done. In case of multiple
+      identity providers, the fetch that takes the longest will be recorded.
+    </summary>
+  </metric>
+  <metric name="Timing.ShowAccountsDialogBreakdown.ClientMetadataFetch">
+    <summary>
+      Records the time (in milliseconds) from when the client metadata request
+      was made to when the fetch response is received. Only recorded when the
+      accounts are ready to show which means all fetches are done. In case of
+      multiple identity providers, the fetch that takes the longest will be
+      recorded.
+    </summary>
+  </metric>
+  <metric name="Timing.ShowAccountsDialogBreakdown.WellKnownAndConfigFetch">
+    <summary>
+      Records the time (in milliseconds) from when a call to the API was made to
+      when the well-known and config files fetch are received. Only recorded
+      when the accounts are ready to show which means all fetches are done. In
+      case of multiple identity providers, the fetch that takes the longest will
+      be recorded.
     </summary>
   </metric>
   <metric name="Timing.TurnaroundTime">
@@ -4645,6 +4719,34 @@ be describing additional metrics about the same event.
       Records a 1 each time a mismatch dialog is shown.
     </summary>
   </metric>
+  <metric name="MultipleRequestsRpMode" enum="FedCmMultipleRequestsRpMode">
+    <summary>
+      Records the RpMode of two consecutive requests. Recorded every time when a
+      token request is invoked while there is another one pending.
+    </summary>
+  </metric>
+  <metric name="NumIdpsMismatch">
+    <summary>
+      Records the number of IDPs that result in a 'mismatch' status from a
+      single FedCM get() invocation. Recorded every time a FedCM get() call is
+      resolved. Records some integer 0 or greater. Uses exponential count
+      bucketing.
+    </summary>
+  </metric>
+  <metric name="NumIdpsRequested">
+    <summary>
+      Records the number of IDPs that are requested from a single FedCM get()
+      invocation. Recorded every time a FedCM get() call is resolved. Records
+      some integer greater than or equal to 1. Uses exponential count bucketing.
+    </summary>
+  </metric>
+  <metric name="RpMode" enum="FedCmRpMode">
+    <summary>
+      Records the RP mode of the FedCM API. Recorded once per API call together
+      with Status.RequestIdToken when the request is fulfilled (either resolved
+      or rejected).
+    </summary>
+  </metric>
   <metric name="Status.Disconnect" enum="FedCmDisconnectStatus">
     <summary>
       Records the status of a disconnect call to the FedCM API. Recorded once
@@ -4662,7 +4764,9 @@ be describing additional metrics about the same event.
   </metric>
   <metric name="Status.RequestIdToken" enum="FedCmRequestIdTokenStatus">
     <summary>
-      Records the status of a request id token call to the FedCM API.
+      Records the status of a request id token call to the FedCM API. Recorded
+      once per API call when the request is fulfilled (either resolved or
+      rejected).
     </summary>
   </metric>
   <metric name="Status.SignInStateMatch" enum="FedCmSignInStateMatchStatus">
@@ -4773,7 +4877,6 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="Blink.HTMLParsing">
-  <owner>schenney@chromium.org</owner>
   <owner>dom-dev@chromium.org</owner>
   <owner>nidhijaju@chromium.org</owner>
   <owner>chrome-loading@google.com</owner>
@@ -4921,7 +5024,7 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="Blink.PageLoad">
-  <owner>schenney@chromium.org</owner>
+  <owner>pdr@chromium.org</owner>
   <owner>paint-dev@chromium.org</owner>
   <summary>
     The aggregated time spent in each metric's component from creation of the
@@ -5085,6 +5188,12 @@ be describing additional metrics about the same event.
       The time spent parsing style sheets.
     </summary>
   </metric>
+  <metric name="PermissionElementIntersectionObserver">
+    <summary>
+      Time spent computing IntersectionObservations for permission elements, in
+      microseconds.
+    </summary>
+  </metric>
   <metric name="PossibleSynchronizedScrollCount">
     <obsolete>
       Was succeeded by PossibleSynchronizedScrollCount2 since this missed a case
@@ -5231,7 +5340,7 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="Blink.UpdateTime">
-  <owner>schenney@chromium.org</owner>
+  <owner>pdr@chromium.org</owner>
   <owner>paint-dev@chromium.org</owner>
   <summary>
     Metrics that measure various update times in Blink. This includes paint,
@@ -6173,6 +6282,26 @@ be describing additional metrics about the same event.
   <metric name="ParseStyleSheetBeginMainFrame">
     <summary>
       The total main frame time spent parsing style sheets.
+    </summary>
+  </metric>
+  <metric name="PermissionElementIntersectionObserver">
+    <summary>
+      Time spent computing IntersectionObservations for permission elements, in
+      microseconds.
+    </summary>
+    <aggregation>
+      <history>
+        <index fields="profile.country"/>
+        <statistics>
+          <quantiles type="std-percentiles"/>
+        </statistics>
+      </history>
+    </aggregation>
+  </metric>
+  <metric name="PermissionElementIntersectionObserverBeginMainFrame">
+    <summary>
+      The total main frame time used to compute IntersectionObservations for
+      permission elements, in microseconds.
     </summary>
   </metric>
   <metric name="PossibleSynchronizedScrollCount">
@@ -7903,7 +8032,6 @@ be describing additional metrics about the same event.
 
 <event name="Compose.PageEvents">
   <owner>chrome-compose-frontend@google.com</owner>
-  <owner>petewil@chromium.org</owner>
   <owner>dewittj@chromium.org</owner>
   <owner>carlosk@chromium.org</owner>
   <summary>
@@ -7964,6 +8092,20 @@ be describing additional metrics about the same event.
       text field's respective FormFieldData. Uses exponential buckets for
       privacy.
     </summary>
+  </metric>
+  <metric name="ProactiveNudgeShouldShow">
+    <summary>
+      The number of times the Compose proactive nudge should show during This
+      page load. Recorded any time Compose is asked to show the proactive nudge
+      even if it is eventually not shown. Added in M125.
+    </summary>
+    <aggregation>
+      <history>
+        <statistics>
+          <quantiles type="std-percentiles"/>
+        </statistics>
+      </history>
+    </aggregation>
   </metric>
 </event>
 
@@ -8705,6 +8847,9 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="Cookies.FirstPartyPartitionedInCrossSiteContextV2">
+  <obsolete>
+    Deprecated as of 04/2024.
+  </obsolete>
   <owner>selya@chromium.org</owner>
   <owner>dylancutler@google.com</owner>
   <summary>
@@ -8715,6 +8860,22 @@ be describing additional metrics about the same event.
     <summary>
       Records true if one or more first-party partitioned cookies in a cross
       site context are present.
+    </summary>
+  </metric>
+</event>
+
+<event name="Cookies.FirstPartyPartitionedInCrossSiteContextV3">
+  <owner>selya@chromium.org</owner>
+  <owner>dylancutler@google.com</owner>
+  <summary>
+    Recorded when a page loads that has a first-party partitioned cookie present
+    and the cookie's name is not receive-cookie-deprecation.
+  </summary>
+  <metric name="CookiePresent" enum="Boolean">
+    <summary>
+      Records true if one or more first-party partitioned cookies in a cross
+      site context are present and the cookie's name is not
+      receive-cookie-deprecation.
     </summary>
   </metric>
 </event>
@@ -9815,6 +9976,34 @@ be describing additional metrics about the same event.
   <summary>
     An event that is logged after a PIX code detection is triggered on the page.
   </summary>
+  <metric name="Attempts">
+    <summary>
+      The number of attempts at PIX code detection on a given page. Each attempt
+      is a full scan of the document DOM tree. Repeated attempts are made if a
+      PIX code was not found on the page, but the page URL is allowlisted. The
+      retry attempts are limited.
+    </summary>
+    <aggregation>
+      <history>
+        <statistics>
+          <quantiles type="std-percentiles"/>
+        </statistics>
+      </history>
+    </aggregation>
+  </metric>
+  <metric name="DetectionTriggeredOnDomContentLoaded" enum="Boolean">
+    <summary>
+      Whether PIX code detection was triggered on DOMContentLoaded instead of
+      DidFinishLoad.
+    </summary>
+    <aggregation>
+      <history>
+        <statistics>
+          <enumeration/>
+        </statistics>
+      </history>
+    </aggregation>
+  </metric>
   <metric name="LatencyInMillis">
     <summary>
       The duration (in milliseconds) for how long it took to scan the document
@@ -9940,6 +10129,82 @@ be describing additional metrics about the same event.
         </statistics>
       </history>
     </aggregation>
+  </metric>
+</event>
+
+<event name="GameDashboard.EditControlsWithEmptyState">
+  <owner>cuicuiruan@google.com</owner>
+  <owner>phshah@chromium.org</owner>
+  <owner>arc-gaming@google.com</owner>
+  <summary>
+    Logged whether Game Controls is empty when entering Game Controls edit mode.
+  </summary>
+  <metric name="Empty" enum="Boolean">
+    <summary>
+      Whether Game Controls is empty.
+    </summary>
+  </metric>
+</event>
+
+<event name="GameDashboard.RecordingStartSource">
+  <owner>cuicuiruan@google.com</owner>
+  <owner>phshah@chromium.org</owner>
+  <owner>arc-gaming@google.com</owner>
+  <summary>
+    Logged where the recording starts from.
+  </summary>
+  <metric name="Source" enum="GameDashboardMenu">
+    <summary>
+      Where is the recording started from, main menu or toolbar.
+    </summary>
+  </metric>
+</event>
+
+<event name="GameDashboard.ScreenshotTakeSource">
+  <owner>cuicuiruan@google.com</owner>
+  <owner>phshah@chromium.org</owner>
+  <owner>arc-gaming@google.com</owner>
+  <summary>
+    Logged where the screenshot is taken from.
+  </summary>
+  <metric name="Source" enum="GameDashboardMenu">
+    <summary>
+      Where is the screenshot taken from, main menu or toolbar.
+    </summary>
+  </metric>
+</event>
+
+<event name="GameDashboard.ToggleMainMenu">
+  <owner>cuicuiruan@google.com</owner>
+  <owner>phshah@chromium.org</owner>
+  <owner>arc-gaming@google.com</owner>
+  <summary>
+    Logged when the game dashboard main menu is toggled on or off and how it is
+    toggled.
+  </summary>
+  <metric name="ToggleMethod" enum="GameDashboardMainMenuToggleMethod">
+    <summary>
+      How the main menu is toggled.
+    </summary>
+  </metric>
+  <metric name="ToggleOn" enum="Boolean">
+    <summary>
+      Whether the main menu is toggled on or off.
+    </summary>
+  </metric>
+</event>
+
+<event name="GameDashboard.ToolbarToggleState">
+  <owner>cuicuiruan@google.com</owner>
+  <owner>phshah@chromium.org</owner>
+  <owner>arc-gaming@google.com</owner>
+  <summary>
+    Logged when the game dashboard toolbar is toggled on or off.
+  </summary>
+  <metric name="ToggleOn" enum="Boolean">
+    <summary>
+      Whether the toolbar is toggled on or off.
+    </summary>
   </metric>
 </event>
 
@@ -11022,7 +11287,6 @@ be describing additional metrics about the same event.
 <event name="Graphics.Smoothness.Latency">
   <owner>animations-dev@chromium.org</owner>
   <owner>jonross@chromium.org</owner>
-  <owner>schenney@chromium.org</owner>
   <summary>
     Tracks the duration of stages in the rendering pipeline while processing a
     single frame. All times are in microseconds.
@@ -13761,22 +14025,65 @@ be describing additional metrics about the same event.
       optimization guide prediction arriving for the navigation.
     </summary>
   </metric>
+  <metric
+      name="OptimizationGuidePredictionCorrectlyPredictedLowPriorityOrigins">
+    <summary>
+      The number of predicted subresource origins that were only used by the
+      page for low-priority subresource loads before it unloaded. This will be
+      recorded if the Optimization Guide was consulted for the page load and the
+      Optimization Guide had a prediction for it. If more than 100 subresource
+      origins were correctly predicted, this will be capped at 100.
+    </summary>
+  </metric>
+  <metric
+      name="OptimizationGuidePredictionCorrectlyPredictedLowPrioritySubresources">
+    <summary>
+      The number of predicted subresources that were only used by the page for
+      low-priority subresource loads before it unloaded. This will be recorded
+      if the Optimization Guide was consulted for the page load and the
+      Optimization Guide had a prediction for it. If more than 100 subresources
+      were predicted, this will be capped at 100.
+    </summary>
+  </metric>
+  <metric
+      name="OptimizationGuidePredictionCorrectlyPredictedLowPrioritySubresources.CrossOrigin">
+    <summary>
+      The number of predicted cross-origin subresources that were only used by
+      the page for low-priority subresource loads before it unloaded. This will
+      be recorded if the Optimization Guide was consulted for the page load and
+      the Optimization Guide had a prediction for it. If more than 100
+      subresources were predicted, this will be capped at 100.
+    </summary>
+  </metric>
   <metric name="OptimizationGuidePredictionCorrectlyPredictedOrigins">
     <summary>
       The number of subresource origins that were correctly predicted by the
-      Optimization Guide. This will be recorded if the Optimization Guide was
-      consulted for the page load and the Optimization Guide had a prediction
-      for it. If more than 100 subresource origins were correctly predicted,
-      this will be capped at 100.
+      Optimization Guide. This only counts origins of high-priority subresources
+      that are used before the page finishes loading. This will be recorded if
+      the Optimization Guide was consulted for the page load and the
+      Optimization Guide had a prediction for it. If more than 100 subresource
+      origins were correctly predicted, this will be capped at 100.
     </summary>
   </metric>
   <metric name="OptimizationGuidePredictionCorrectlyPredictedSubresources">
     <summary>
       The number of subresources that were correctly predicted by the
-      Optimization Guide. This will be recorded if the Optimization Guide was
-      consulted for the page load and the Optimization Guide had a prediction
-      for it. If more than 100 subresources were predicted, this will be capped
-      at 100.
+      Optimization Guide. This only counts high-priority subresources used
+      before the page finishes loading. This will be recorded if the
+      Optimization Guide was consulted for the page load and the Optimization
+      Guide had a prediction for it. If more than 100 subresources were
+      predicted, this will be capped at 100.
+    </summary>
+  </metric>
+  <metric
+      name="OptimizationGuidePredictionCorrectlyPredictedSubresources.CrossOrigin">
+    <summary>
+      The number of cross-origin subresources that were correctly predicted by
+      the Optimization Guide. This only counts high-priority subresources used
+      before the page finishes loading. This will be recorded if the
+      Optimization Guide was consulted for the page load and the Optimization
+      Guide had a prediction for it. If more than 100 subresources were
+      predicted, this will be capped at 100.
     </summary>
   </metric>
   <metric name="OptimizationGuidePredictionDecision"
@@ -13801,6 +14108,15 @@ be describing additional metrics about the same event.
       This will be recorded if the Optimization Guide was consulted for the page
       load and the Optimization Guide had a prediction for it. If more than 100
       subresources were predicted, this will be capped at 100.
+    </summary>
+  </metric>
+  <metric name="OptimizationGuidePredictionSubresources.CrossOrigin">
+    <summary>
+      The number of cross-origin subresources that were predicted by the
+      Optimization Guide. This will be recorded if the Optimization Guide was
+      consulted for the page load and the Optimization Guide had a prediction
+      for it. If more than 100 subresources were predicted, this will be capped
+      at 100.
     </summary>
   </metric>
   <metric name="SubresourceOriginPreconnectsInitiated">
@@ -15351,11 +15667,6 @@ be describing additional metrics about the same event.
       Measure of memory consumed by live allocations made from Oilpan.
     </summary>
   </metric>
-  <metric name="CanvasResourceProvider.SkSurface">
-    <summary>
-      Measure of memory used due to CanvasResourceProvider's SkSurface.
-    </summary>
-  </metric>
   <metric name="CommandBuffer">
     <summary>
       Measure of memory consumed by GL command buffer.
@@ -16228,7 +16539,7 @@ be describing additional metrics about the same event.
 
 <event name="Navigation.ReceivedResponse">
   <owner>miketaylr@chromium.org</owner>
-  <owner>potassium-katabolism@google.com</owner>
+  <owner>katabolism-finch@google.com</owner>
   <summary>
     Recorded when the navigation receives a response from the networking layer.
     Only recorded for main frames (i.e. top-level frames).
@@ -17101,6 +17412,28 @@ be describing additional metrics about the same event.
     <summary>
       A boolean signaling that the event has occurred; only records true values.
     </summary>
+  </metric>
+</event>
+
+<event name="Omnibox.SuggestionUsed" singular="True">
+  <owner>mahmadi@google.com</owner>
+  <owner>chrome-desktop-search@google.com</owner>
+  <summary>
+    Recorded when the user uses the omnibox to search or navigate.
+  </summary>
+  <metric name="ResultType" enum="ClientSummarizedResultType">
+    <summary>
+      A value that indicates if the user searched or navigated from the omnibox.
+      Used to understand which URLs most commonly lead to searches or
+      navigations from the omnibox.
+    </summary>
+    <aggregation>
+      <history>
+        <statistics>
+          <enumeration/>
+        </statistics>
+      </history>
+    </aggregation>
   </metric>
 </event>
 
@@ -18777,6 +19110,14 @@ be describing additional metrics about the same event.
       tools/metrics/histograms/enum.xml.
     </summary>
   </metric>
+  <metric name="MainFrameResource.NavigationStartToConnectStart">
+    <owner>nidhijaju@chromium.org</owner>
+    <owner>chrome-loading@google.com</owner>
+    <summary>
+      The duration from the start of the navigation to the start of the
+      connection establishment to the origin of the main frame request. In ms.
+    </summary>
+  </metric>
   <metric name="MainFrameResource.NavigationStartToReceiveHeadersStart">
     <summary>
       The duration from the start of the navigation to the start of the response
@@ -19162,6 +19503,14 @@ be describing additional metrics about the same event.
       LCP element is from a subframe, the difference in the navigation start of
       the main frame and that of the subframe is accounted for. This metric is
       not recorded when the LCP element is text or video.
+    </summary>
+  </metric>
+  <metric name="PaintTiming.LargestContentfulPaintImageIsCrossOrigin"
+      enum="Boolean">
+    <summary>
+      A bool that is set if the LCP element is an image that is cross-origin.
+      This metric is not recorded when the LCP element is not an image, or the
+      LCP element is not in the main frame.
     </summary>
   </metric>
   <metric name="PaintTiming.LargestContentfulPaintImageLoadEnd">
@@ -21008,6 +21357,18 @@ be describing additional metrics about the same event.
       initiated by a user gesture.
     </summary>
   </metric>
+  <metric name="OsPromptScreen" enum="ElementAnchoredBubbleVariant">
+    <summary>
+      An enum of type ElementAnchoredBubbleVariant. The screen that prompts the
+      user for the OS screen, if applicable.
+    </summary>
+  </metric>
+  <metric name="OsSystemSettingsScreen" enum="ElementAnchoredBubbleVariant">
+    <summary>
+      An enum of type ElementAnchoredBubbleVariant. The screen that directs the
+      user to the OS Settings, if applicable.
+    </summary>
+  </metric>
   <metric name="PermissionAutoRevocationHistory"
       enum="PermissionAutoRevocationHistory">
     <summary>
@@ -21065,6 +21426,12 @@ be describing additional metrics about the same event.
       is set if the corresponding adaptive triggering condition has been
       satisfied at least once in the past for the user. This metric is not
       recorded for users who don't have the activation dry run enabled.
+    </summary>
+  </metric>
+  <metric name="SiteLevelScreen" enum="ElementAnchoredBubbleVariant">
+    <summary>
+      An enum of type ElementAnchoredBubbleVariant. The site level screen shown
+      to the user, if any.
     </summary>
   </metric>
   <metric name="Source">
@@ -21539,7 +21906,6 @@ be describing additional metrics about the same event.
 
 <event name="PowerUsageScenariosIntervalData">
   <owner>fdoray@chromium.org</owner>
-  <owner>sebmarchand@chromium.org</owner>
   <owner>chrome-catan@google.com</owner>
   <summary>
     Metrics to measure power consumption in key usage scenarios, as well as the
@@ -22934,6 +23300,9 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="ReaderModeActivated" singular="True">
+  <obsolete>
+    Deprecated as of 02/2024.
+  </obsolete>
   <owner>gilmanmh@google.com</owner>
   <owner>kjbooker@google.com</owner>
   <owner>dtseng@chromium.org</owner>
@@ -22956,6 +23325,9 @@ be describing additional metrics about the same event.
 </event>
 
 <event name="ReaderModeReceivedDistillability">
+  <obsolete>
+    Deprecated as of 02/2024.
+  </obsolete>
   <owner>gilmanmh@google.com</owner>
   <owner>kjbooker@google.com</owner>
   <owner>dtseng@chromium.org</owner>
@@ -22979,7 +23351,7 @@ be describing additional metrics about the same event.
   </metric>
 </event>
 
-<event name="RedirectHeuristic.CookieAccess">
+<event name="RedirectHeuristic.CookieAccess2">
   <owner>amaliev@chromium.org</owner>
   <owner>dc-komics@google.com</owner>
   <summary>
@@ -22995,7 +23367,7 @@ be describing additional metrics about the same event.
   <metric name="AccessId">
     <summary>
       A random integer to identify this cookie access and associate this event
-      with a RedirectHeuristic.CookieAccessThirdParty event.
+      with a RedirectHeuristic.CookieAccessThirdParty2 event.
     </summary>
   </metric>
   <metric name="DoesFirstPartyPrecedeThirdParty" enum="Boolean">
@@ -23048,7 +23420,7 @@ be describing additional metrics about the same event.
   </metric>
 </event>
 
-<event name="RedirectHeuristic.CookieAccessThirdParty">
+<event name="RedirectHeuristic.CookieAccessThirdParty2">
   <owner>amaliev@chromium.org</owner>
   <owner>dc-komics@google.com</owner>
   <summary>
@@ -23058,7 +23430,7 @@ be describing additional metrics about the same event.
   <metric name="AccessId">
     <summary>
       A random integer to identify this cookie access and associate this event
-      with a RedirectHeuristic.CookieAccess event.
+      with a RedirectHeuristic.CookieAccess2 event.
     </summary>
   </metric>
 </event>
@@ -23221,6 +23593,43 @@ be describing additional metrics about the same event.
       inputs faster. This metric is equal to
       RendererScheduler.ExpectedTaskQueueingDuration of the main frame process.
     </summary>
+  </metric>
+</event>
+
+<event name="SafeBrowsingInterstitial">
+  <owner>skrakowi@chromium.org</owner>
+  <owner>chrome-counter-abuse-core@google.com</owner>
+  <summary>
+    Records that the user encountered a Safe Browsing interstitial and whether
+    they proceeded past the interstitial, bypassing the warning.
+  </summary>
+  <metric name="Bypassed" enum="Boolean">
+    <summary>
+      A boolean signaling that the user bypassed the interstitial; only records
+      true values. This event gets logged right when a user clicks to proceed on
+      the Safe Browsing interstitial UI.
+    </summary>
+    <aggregation>
+      <history>
+        <statistics>
+          <enumeration/>
+        </statistics>
+      </history>
+    </aggregation>
+  </metric>
+  <metric name="Shown" enum="Boolean">
+    <summary>
+      A boolean signaling that the interstitial was shown to the user; only
+      records true values. This event gets logged right when the Safe Browsing
+      interstitial is shown to the user.
+    </summary>
+    <aggregation>
+      <history>
+        <statistics>
+          <enumeration/>
+        </statistics>
+      </history>
+    </aggregation>
   </metric>
 </event>
 
@@ -24121,6 +24530,38 @@ be describing additional metrics about the same event.
       in the page. (boolean value. true: 1 or false: 0)
     </summary>
   </metric>
+  <metric name="MatchedCacheRouterSourceCount">
+    <summary>
+      Total number of sub-resources which were matched to
+      `RouterSourceEnum.cache` in ServiceWorker Static Routing API, from
+      navigation start until onload event. This is rounded down to the nearest
+      exponential bucket (with a bucket ratio on 1.15).
+    </summary>
+  </metric>
+  <metric name="MatchedFetchEventRouterSourceCount">
+    <summary>
+      Total number of sub-resources which were matched to
+      `RouterSourceEnum.fetch-event` in ServiceWorker Static Routing API, from
+      navigation start until onload event. This is rounded down to the nearest
+      exponential bucket (with a bucket ratio on 1.15).
+    </summary>
+  </metric>
+  <metric name="MatchedNetworkRouterSourceCount">
+    <summary>
+      Total number of sub-resources which were matched to
+      `RouterSourceEnum.network` in ServiceWorker Static Routing API, from
+      navigation start until onload event. This is rounded down to the nearest
+      exponential bucket (with a bucket ratio on 1.15).
+    </summary>
+  </metric>
+  <metric name="MatchedRaceNetworkAndFetchRouterSourceCount">
+    <summary>
+      Total number of sub-resources which were matched to the
+      `RouterSourceEnum.race-network-and-fetch-handler` in ServiceWorker Static
+      Routing API, from navigation start till onload event. This is rounded down
+      to the nearest exponential bucket (with a bucket ratio on 1.15).
+    </summary>
+  </metric>
   <metric name="ScriptFallback">
     <summary>
       True if there are network fallback sub-resources of CSSStyleSheet in the
@@ -24482,6 +24923,73 @@ be describing additional metrics about the same event.
     <summary>
       The state of if and how the page has been determined to be a product
       details page.
+    </summary>
+  </metric>
+</event>
+
+<event name="Shopping.ShoppingAction">
+  <owner>yuezhanggg@chromium.org</owner>
+  <owner>mdjones@chromium.org</owner>
+  <summary>
+    Recorded when an user takes action on shopping features in Chrome in the
+    current page.
+  </summary>
+  <metric name="DiscountCopied" enum="Boolean">
+    <summary>
+      Whether the user has clicked in the discount bubble to copy the discount
+      code.
+    </summary>
+  </metric>
+  <metric name="DiscountOpened" enum="Boolean">
+    <summary>
+      Whether the user has clicked and expanded the discount bubble in omnibox.
+    </summary>
+  </metric>
+  <metric name="PriceInsightsOpened" enum="Boolean">
+    <summary>
+      Whether the user has clicked the page action entry point to request to
+      show the price insights.
+    </summary>
+  </metric>
+  <metric name="PriceTracked" enum="Boolean">
+    <summary>
+      Whether the user has tracked the product on the current page using any of
+      the on-page entry points.
+    </summary>
+  </metric>
+</event>
+
+<event name="Shopping.ShoppingInformation">
+  <owner>yuezhanggg@chromium.org</owner>
+  <owner>mdjones@chromium.org</owner>
+  <summary>
+    Recorded when an user navigates to a shopping-related page and reports
+    shopping-related information about this page.
+  </summary>
+  <metric name="HasDiscount" enum="Boolean">
+    <summary>
+      Whether a discount from Chrome is available for this page.
+    </summary>
+  </metric>
+  <metric name="HasPriceInsights" enum="Boolean">
+    <summary>
+      Whether price insights is available for this page.
+    </summary>
+  </metric>
+  <metric name="IsPriceTrackable" enum="Boolean">
+    <summary>
+      Whether the page is price trackable.
+    </summary>
+  </metric>
+  <metric name="IsShoppingContent" enum="Boolean">
+    <summary>
+      Whether the page is classified as shopping content.
+    </summary>
+  </metric>
+  <metric name="PromotedFeature" enum="ShoppingContextualFeature">
+    <summary>
+      Which, if any, contextual shopping feature is promoted in expanded state
+      or in-product highlight.
     </summary>
   </metric>
 </event>
@@ -26501,6 +27009,20 @@ be describing additional metrics about the same event.
       is not reported). Used to compare the times when automated submission is
       enabled and disabled. Thus, we measure the time saved for a user. Recorded
       when the password manager detects that the login was successful.
+    </summary>
+  </metric>
+</event>
+
+<event name="Tpcd.Mitigations.Dt.FirstParty.Deployment2">
+  <owner>njeunje@google.com</owner>
+  <owner>tpcd-mitigations-team@google.com</owner>
+  <summary>
+    Recorded on a page load cadance for every third party cookie accessed.
+  </summary>
+  <metric name="Deployed" enum="Boolean">
+    <summary>
+      Indicates when an origin deployed its 1P (AKA First Party, top-level) DT
+      Token and thus was granted cookie access.
     </summary>
   </metric>
 </event>

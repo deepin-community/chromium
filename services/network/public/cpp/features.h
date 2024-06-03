@@ -84,10 +84,10 @@ extern uint32_t GetDataPipeDefaultAllocationSize(
     DataPipeAllocationSize = DataPipeAllocationSize::kDefaultSizeOnly);
 
 COMPONENT_EXPORT(NETWORK_CPP)
-extern uint32_t GetNetAdapterMaxBufSize();
+extern size_t GetNetAdapterMaxBufSize();
 
 COMPONENT_EXPORT(NETWORK_CPP)
-extern uint32_t GetLoaderChunkSize();
+extern size_t GetLoaderChunkSize();
 
 COMPONENT_EXPORT(NETWORK_CPP)
 BASE_DECLARE_FEATURE(kCorsNonWildcardRequestHeadersSupport);
@@ -142,6 +142,12 @@ BASE_DECLARE_FEATURE(kPrefetchNoVarySearch);
 COMPONENT_EXPORT(NETWORK_CPP)
 extern const base::FeatureParam<bool> kPrefetchNoVarySearchShippedByDefault;
 
+// If enabled, then the network service will parse the Cookie-Indices header.
+// This does not currently control changing cache behavior according to the
+// value of this header.
+COMPONENT_EXPORT(NETWORK_CPP)
+BASE_DECLARE_FEATURE(kCookieIndicesHeader);
+
 // Enables UMA to track received GetCookiesString IPCs. This feature is enabled
 // by default, it is just here to allow some tests to disable it. These tests
 // make use of TaskEnvironment::FastForward with very long delays (days) which
@@ -155,6 +161,8 @@ COMPONENT_EXPORT(NETWORK_CPP)
 BASE_DECLARE_FEATURE(kCompressionDictionaryTransport);
 COMPONENT_EXPORT(NETWORK_CPP)
 BASE_DECLARE_FEATURE(kCompressionDictionaryTransportOverHttp1);
+COMPONENT_EXPORT(NETWORK_CPP)
+BASE_DECLARE_FEATURE(kCompressionDictionaryTransportOverHttp2);
 COMPONENT_EXPORT(NETWORK_CPP)
 BASE_DECLARE_FEATURE(kCompressionDictionaryTransportRequireKnownRootCert);
 
@@ -186,6 +194,11 @@ COMPONENT_EXPORT(NETWORK_CPP)
 extern const base::FeatureParam<bool> kSkipTpcdMitigationsForAdsTrial;
 COMPONENT_EXPORT(NETWORK_CPP)
 extern const base::FeatureParam<bool> kSkipTpcdMitigationsForAdsTopLevelTrial;
+
+COMPONENT_EXPORT(NETWORK_CPP)
+BASE_DECLARE_FEATURE(kAvoidResourceRequestCopies);
+
+COMPONENT_EXPORT(NETWORK_CPP) BASE_DECLARE_FEATURE(kDocumentIsolationPolicy);
 
 }  // namespace features
 }  // namespace network

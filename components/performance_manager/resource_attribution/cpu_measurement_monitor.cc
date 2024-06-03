@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -20,6 +21,9 @@
 #include "base/sequence_checker.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
+#include "base/types/optional_util.h"
+#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/graph/frame_node.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/graph_operations.h"
@@ -31,13 +35,18 @@
 #include "components/performance_manager/public/resource_attribution/frame_context.h"
 #include "components/performance_manager/public/resource_attribution/worker_context.h"
 #include "components/performance_manager/resource_attribution/graph_change.h"
+#include "components/performance_manager/resource_attribution/node_data_describers.h"
 #include "components/performance_manager/resource_attribution/worker_client_pages.h"
 #include "content/public/common/process_type.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 namespace resource_attribution {
 
 namespace {
+
+using performance_manager::features::kResourceAttributionIncludeOrigins;
 
 // Returns true if `resource_context` refers to a node that's been removed from
 // the PM graph.
@@ -55,6 +64,10 @@ bool IsDeadContext(const ResourceContext& resource_context) {
                          [](const WorkerContext& context) {
                            return context.GetWorkerNode() == nullptr;
                          },
+                         [](const OriginInPageContext& context) {
+                           return context.GetPageContext().GetPageNode() ==
+                                  nullptr;
+                         },
                      },
                      resource_context);
 }
@@ -70,6 +83,31 @@ void ValidateCPUTimeResult(const CPUTimeResult& result) {
   CHECK(interval.is_positive());
 
   CHECK(!result.cumulative_cpu.is_negative());
+}
+
+template <typename FrameOrWorkerNode>
+std::optional<OriginInPageContext> OriginInPageContextForNode(
+    const FrameOrWorkerNode* node,
+    const PageNode* page_node,
+    GraphChange graph_change = NoGraphChange{}) {
+  if (!base::FeatureList::IsEnabled(kResourceAttributionIncludeOrigins)) {
+    return std::nullopt;
+  }
+  // If this node was just assigned a new URL, assign CPU usage before the
+  // change to the previous URL.
+  GraphChangeUpdateURL* url_change =
+      absl::get_if<GraphChangeUpdateURL>(&graph_change);
+  const GURL url = (url_change && url_change->node == node)
+                       ? url_change->previous_url
+                       : node->GetURL();
+  if (!url.is_valid()) {
+    return std::nullopt;
+  }
+  // TODO(http://crbug.com/333248839): Instead of creating the Origin from an
+  // URL, which loses some information, should store it as a node property. See
+  // https://chromium.googlesource.com/chromium/src/+/main/docs/security/origin-vs-url.md.
+  return OriginInPageContext(url::Origin::Create(url),
+                             page_node->GetResourceContext());
 }
 
 }  // namespace
@@ -138,6 +176,8 @@ QueryResultMap CPUMeasurementMonitor::UpdateAndGetCPUMeasurements() {
 
   // After a node is deleted its measurements should only be kept until used
   // for one query result. This was that query.
+  // TODO(http://crbug.com/333254816): That means multiple queries measuring the
+  // same node now race to see who gets the result.
   std::erase_if(measurement_results_,
                 [](const std::pair<ResourceContext, CPUTimeResult>& entry) {
                   return IsDeadContext(entry.first);
@@ -162,6 +202,16 @@ void CPUMeasurementMonitor::OnBeforeFrameNodeRemoved(
   // its final CPU usage is attributed to it before it's removed.
   UpdateCPUMeasurements(frame_node->GetProcessNode(),
                         GraphChangeRemoveFrame(frame_node));
+}
+
+void CPUMeasurementMonitor::OnURLChanged(const FrameNode* frame_node,
+                                         const GURL& previous_value) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Take a measurement of the process CPU usage, but assign this frame's CPU to
+  // its previous origin for OriginInPageContext, so that the CPU usage from
+  // before the navigation committed is attributed to the old origin.
+  UpdateCPUMeasurements(frame_node->GetProcessNode(),
+                        GraphChangeUpdateURL(frame_node, previous_value));
 }
 
 void CPUMeasurementMonitor::OnProcessLifetimeChange(
@@ -249,6 +299,15 @@ void CPUMeasurementMonitor::OnBeforeClientWorkerRemoved(
       GraphChangeRemoveClientWorkerFromWorker(worker_node, client_worker_node));
 }
 
+void CPUMeasurementMonitor::OnFinalResponseURLDetermined(
+    const WorkerNode* worker_node) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Take a measurement of the process CPU usage, but don't assign this worker's
+  // CPU to an OriginInPageContext, since the origin wasn't defined until now.
+  UpdateCPUMeasurements(worker_node->GetProcessNode(),
+                        GraphChangeUpdateURL(worker_node, GURL()));
+}
+
 base::Value::Dict CPUMeasurementMonitor::DescribeFrameNodeData(
     const FrameNode* node) const {
   return DescribeContextData(node->GetResourceContext());
@@ -305,6 +364,13 @@ void CPUMeasurementMonitor::UpdateCPUMeasurements(
   // Must call StartMonitoring() before getting measurements.
   CHECK(graph_);
   CHECK(process_node);
+
+  if (!base::FeatureList::IsEnabled(kResourceAttributionIncludeOrigins) &&
+      absl::holds_alternative<GraphChangeUpdateURL>(graph_change)) {
+    // No need to update measurements on origin changes when origins aren't
+    // being measured.
+    return;
+  }
 
   // Don't distribute measurements to nodes that are being added to the graph.
   // The current measurement covers the time before the node was added.
@@ -368,6 +434,12 @@ void CPUMeasurementMonitor::ApplyMeasurementDeltas(
       CHECK(frame_node);
       ApplyOverlappingDelta(frame_node->GetPageNode()->GetResourceContext(),
                             delta);
+      std::optional<OriginInPageContext> origin_in_page_context =
+          OriginInPageContextForNode(frame_node, frame_node->GetPageNode(),
+                                     graph_change);
+      if (origin_in_page_context.has_value()) {
+        ApplyOverlappingDelta(origin_in_page_context.value(), delta);
+      }
     } else if (ContextIs<WorkerContext>(context)) {
       const WorkerNode* worker_node =
           AsContext<WorkerContext>(context).GetWorkerNode();
@@ -375,6 +447,11 @@ void CPUMeasurementMonitor::ApplyMeasurementDeltas(
       for (const PageNode* page_node :
            GetWorkerClientPages(worker_node, graph_change)) {
         ApplyOverlappingDelta(page_node->GetResourceContext(), delta);
+        std::optional<OriginInPageContext> origin_in_page_context =
+            OriginInPageContextForNode(worker_node, page_node, graph_change);
+        if (origin_in_page_context.has_value()) {
+          ApplyOverlappingDelta(origin_in_page_context.value(), delta);
+        }
       }
     }
   }
@@ -400,8 +477,9 @@ void CPUMeasurementMonitor::ApplySequentialDelta(const ResourceContext& context,
   ValidateCPUTimeResult(result);
 }
 
-void CPUMeasurementMonitor::ApplyOverlappingDelta(const PageContext& context,
-                                                  const CPUTimeResult& delta) {
+void CPUMeasurementMonitor::ApplyOverlappingDelta(
+    const ResourceContext& context,
+    const CPUTimeResult& delta) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   ValidateCPUTimeResult(delta);
   auto [it, inserted] = measurement_results_.try_emplace(context, delta);
@@ -431,9 +509,7 @@ base::Value::Dict CPUMeasurementMonitor::DescribeContextData(
     const CPUTimeResult& result = it->second;
     const base::TimeDelta measurement_interval =
         result.metadata.measurement_time - result.start_time;
-    dict.Set("algorithm", static_cast<int>(result.metadata.algorithm));
-    dict.Set("measurement_time", performance_manager::TimeSinceEpochToValue(
-                                     result.metadata.measurement_time));
+    dict.Merge(DescribeResultMetadata(result.metadata));
     dict.Set("measurement_interval",
              performance_manager::TimeDeltaToValue(measurement_interval));
     dict.Set("cumulative_cpu",
@@ -448,7 +524,8 @@ CPUMeasurementMonitor::CPUMeasurement::CPUMeasurement(
       // Record the CPU usage immediately on starting to measure a process, so
       // that the first call to MeasureAndDistributeCPUUsage() will cover the
       // time between the measurement starting and the snapshot.
-      most_recent_measurement_(delegate_->GetCumulativeCPUUsage()),
+      most_recent_measurement_(
+          base::OptionalFromExpected(delegate_->GetCumulativeCPUUsage())),
       last_measurement_time_(base::TimeTicks::Now()) {}
 
 CPUMeasurementMonitor::CPUMeasurement::~CPUMeasurement() = default;
@@ -564,17 +641,6 @@ void CPUMeasurementMonitor::CPUMeasurement::MeasureAndDistributeCPUUsage(
   const base::TimeTicks measurement_interval_end = base::TimeTicks::Now();
   CHECK(!measurement_interval_start.is_null());
   CHECK(!measurement_interval_end.is_null());
-  // TODO(https://crbug.com/326201232): Turn this back into a CHECK or remove it
-  // after figuring out why it's being hit in production sometimes.
-  if (process_node->GetLaunchTime() > measurement_interval_start) {
-    SCOPED_CRASH_KEY_NUMBER(
-        "CPUMeasurement", "process_start",
-        (process_node->GetLaunchTime() - base::TimeTicks()).InNanoseconds());
-    SCOPED_CRASH_KEY_NUMBER(
-        "CPUMeasurement", "interval_start",
-        (measurement_interval_start - base::TimeTicks()).InNanoseconds());
-    base::debug::DumpWithoutCrashing();
-  }
   if (measurement_interval_start == measurement_interval_end) {
     // No time has passed to measure.
     return;
@@ -582,7 +648,7 @@ void CPUMeasurementMonitor::CPUMeasurement::MeasureAndDistributeCPUUsage(
   CHECK_LT(measurement_interval_start, measurement_interval_end);
 
   std::optional<base::TimeDelta> current_cpu_usage =
-      delegate_->GetCumulativeCPUUsage();
+      base::OptionalFromExpected(delegate_->GetCumulativeCPUUsage());
   if (!current_cpu_usage.has_value()) {
     // GetCumulativeCPUUsage() failed. Don't update the measurement state.
     return;

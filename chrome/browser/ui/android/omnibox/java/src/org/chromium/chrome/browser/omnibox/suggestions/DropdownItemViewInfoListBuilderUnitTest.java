@@ -41,9 +41,10 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.omnibox.suggestions.groupseparator.GroupSeparatorProcessor;
 import org.chromium.chrome.browser.omnibox.suggestions.header.HeaderProcessor;
-import org.chromium.chrome.browser.omnibox.suggestions.history_clusters.HistoryClustersProcessor;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.AutocompleteResult;
@@ -60,6 +61,7 @@ import java.util.List;
 
 /** Tests for {@link DropdownItemViewInfoListBuilder}. */
 @RunWith(BaseRobolectricTestRunner.class)
+@EnableFeatures(ChromeFeatureList.OMNIBOX_SUGGESTION_GROUPING_FOR_NON_ZPS)
 public class DropdownItemViewInfoListBuilderUnitTest {
     public @Rule TestRule mProcessor = new Features.JUnitProcessor();
     public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
@@ -69,7 +71,6 @@ public class DropdownItemViewInfoListBuilderUnitTest {
     private @Mock AutocompleteController mAutocompleteController;
     private @Mock SuggestionProcessor mMockSuggestionProcessor;
     private @Spy HeaderProcessor mMockHeaderProcessor = new HeaderProcessor(mContext);
-    private @Mock HistoryClustersProcessor.OpenHistoryClustersDelegate mOpenHistoryClustersDelegate;
 
     private GroupSeparatorProcessor mGroupSeparatorProcessor =
             new GroupSeparatorProcessor(mContext);
@@ -81,29 +82,31 @@ public class DropdownItemViewInfoListBuilderUnitTest {
                 .thenAnswer((mock) -> new PropertyModel(SuggestionCommonProperties.ALL_KEYS));
         when(mMockSuggestionProcessor.getViewTypeId()).thenReturn(OmniboxSuggestionUiType.DEFAULT);
 
-        mBuilder =
-                new DropdownItemViewInfoListBuilder(
-                        () -> null, (url) -> false, mOpenHistoryClustersDelegate);
+        mBuilder = new DropdownItemViewInfoListBuilder(() -> null, (url) -> false);
         mBuilder.registerSuggestionProcessor(mMockSuggestionProcessor);
         mBuilder.setGroupSeparatorProcessorForTest(mGroupSeparatorProcessor);
         mBuilder.setHeaderProcessorForTest(mMockHeaderProcessor);
     }
 
     /**
-     * Verify that two lists have exactly same content. Note: this works similarly to
-     * Assert.assertEquals(list1, list2), but instead of printing out the content of both lists,
-     * simply reports elements that differ. AutocompleteMatch.toString() is verbose enough that the
-     * result analysis may be difficult or even impossible for a small list if the output exceeds
-     * the Android's logcat entry length limit.
+     * Verify corner rounding and separator presence on a specific model.
+     *
+     * @param model the model to verify
+     * @param wantTopCornersRounded expected rounding state of top corners
+     * @param wantBottomCornersRounded expected rounding state of bottom corners
+     * @param wantSeparator expected state of the separator
      */
-    private <T> void verifyListsMatch(List<T> expected, List<T> actual) {
-        Assert.assertEquals(expected.size(), actual.size());
-        for (int index = 0; index < expected.size(); index++) {
-            Assert.assertEquals(
-                    "Item at position " + index + " does not match",
-                    expected.get(index),
-                    actual.get(index));
-        }
+    void verifyRounding(
+            PropertyModel model,
+            boolean wantTopCornersRounded,
+            boolean wantBottomCornersRounded,
+            boolean wantSeparator) {
+        Assert.assertEquals(
+                wantTopCornersRounded, model.get(DropdownCommonProperties.BG_TOP_CORNER_ROUNDED));
+        Assert.assertEquals(
+                wantBottomCornersRounded,
+                model.get(DropdownCommonProperties.BG_BOTTOM_CORNER_ROUNDED));
+        Assert.assertEquals(wantSeparator, model.get(DropdownCommonProperties.SHOW_DIVIDER));
     }
 
     @Test
@@ -205,20 +208,30 @@ public class DropdownItemViewInfoListBuilderUnitTest {
 
         Assert.assertEquals(model.get(0).type, OmniboxSuggestionUiType.DEFAULT);
         Assert.assertEquals(model.get(0).groupConfig, defaultGroupConfig);
+        verifyRounding(model.get(0).model, true, true, false);
 
         Assert.assertEquals(model.get(1).type, OmniboxSuggestionUiType.HEADER);
         Assert.assertEquals(model.get(1).groupConfig, SECTION_2_WITH_HEADER);
+        verifyRounding(model.get(1).model, false, false, false);
+
         Assert.assertEquals(model.get(2).type, OmniboxSuggestionUiType.DEFAULT);
         Assert.assertEquals(model.get(2).groupConfig, SECTION_2_WITH_HEADER);
+        verifyRounding(model.get(2).model, true, false, true);
+
         Assert.assertEquals(model.get(3).type, OmniboxSuggestionUiType.DEFAULT);
         Assert.assertEquals(model.get(3).groupConfig, SECTION_2_WITH_HEADER);
+        verifyRounding(model.get(3).model, false, true, false);
 
         Assert.assertEquals(model.get(4).type, OmniboxSuggestionUiType.HEADER);
         Assert.assertEquals(model.get(4).groupConfig, SECTION_3_WITH_HEADER);
+        verifyRounding(model.get(4).model, false, false, false);
+
         Assert.assertEquals(model.get(5).type, OmniboxSuggestionUiType.DEFAULT);
         Assert.assertEquals(model.get(5).groupConfig, SECTION_3_WITH_HEADER);
+        verifyRounding(model.get(5).model, true, false, true);
         Assert.assertEquals(model.get(6).type, OmniboxSuggestionUiType.DEFAULT);
         Assert.assertEquals(model.get(6).groupConfig, SECTION_3_WITH_HEADER);
+        verifyRounding(model.get(6).model, false, true, false);
     }
 
     @Test

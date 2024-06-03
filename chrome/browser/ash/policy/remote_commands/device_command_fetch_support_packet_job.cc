@@ -36,7 +36,6 @@
 #include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_remote_command_utils.h"
 #include "chrome/browser/ash/policy/uploading/system_log_uploader.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/policy/messaging_layer/proto/synced/log_upload_event.pb.h"
@@ -47,6 +46,7 @@
 #include "chrome/browser/support_tool/support_tool_util.h"
 #include "chrome/browser/ui/webui/support_tool/support_tool_ui_utils.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "components/feedback/redaction_tool/pii_types.h"
@@ -76,7 +76,6 @@ constexpr char kIssueCaseIdKey[] = "issueCaseId";
 constexpr char kIssueDescriptionKey[] = "issueDescription";
 constexpr char kRequestedDataCollectorsKey[] = "requestedDataCollectors";
 constexpr char kRequestedPiiTypesKey[] = "requestedPiiTypes";
-constexpr char kRequesterId[] = "requesterMetadata";
 
 // JSON keys and values used for creating the upload metadata to File Storage
 // Server (go/crosman_fss_action#scotty-upload-agent).
@@ -290,11 +289,6 @@ bool DeviceCommandFetchSupportPacketJob::ParseCommandPayloadImpl(
     support_packet_details_.requested_pii_types =
         GetPiiTypes(*requested_pii_types);
   }
-
-  const std::string* requester_metadata =
-      details_dict->FindString(kRequesterId);
-  support_packet_details_.requester_metadata =
-      requester_metadata ? *requester_metadata : std::string();
 
   return true;
 }

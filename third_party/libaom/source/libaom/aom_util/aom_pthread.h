@@ -28,6 +28,7 @@ extern "C" {
 #define NOMINMAX
 #undef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#include <errno.h>    // NOLINT
 #include <process.h>  // NOLINT
 #include <stddef.h>   // NOLINT
 #include <windows.h>  // NOLINT
@@ -51,6 +52,15 @@ typedef CONDITION_VARIABLE pthread_cond_t;
 
 //------------------------------------------------------------------------------
 // simplistic pthread emulation layer
+
+// _beginthreadex requires __stdcall
+#if defined(__GNUC__) && \
+    (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
+#define THREADFN __attribute__((force_align_arg_pointer)) unsigned int __stdcall
+#else
+#define THREADFN unsigned int __stdcall
+#endif
+#define THREAD_EXIT_SUCCESS 0
 
 static INLINE int pthread_attr_init(pthread_attr_t *attr) {
   (void)attr;
@@ -148,6 +158,8 @@ static INLINE int pthread_cond_wait(pthread_cond_t *const condition,
 }
 #else                 // _WIN32
 #include <pthread.h>  // NOLINT
+#define THREADFN void *
+#define THREAD_EXIT_SUCCESS NULL
 #endif
 
 #ifdef __cplusplus

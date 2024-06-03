@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/map_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
@@ -49,8 +50,6 @@ void EventAckData::IncrementInflightEvent(
     start_ok = false;
   }
 
-  // TODO(lazyboy): Clean up |unacked_events_| if RenderProcessHost died before
-  // it got a chance to ack |event_id|. This shouldn't happen in common cases.
   auto insert_result = unacked_events_.try_emplace(
       event_id,
       EventInfo{request_uuid, render_process_id, start_ok, dispatch_start_time,
@@ -91,9 +90,9 @@ void EventAckData::EmitDispatchTimeMetrics(EventInfo& event_info) {
     const char* active_metric_name =
         event_info.lazy_background_active_on_dispatch
             ? "Extensions.Events.DispatchToAckTime.ExtensionServiceWorker2."
-              "Active"
+              "Active3"
             : "Extensions.Events.DispatchToAckTime.ExtensionServiceWorker2."
-              "Inactive";
+              "Inactive3";
     base::UmaHistogramCustomMicrosecondsTimes(
         active_metric_name,
         /*sample=*/base::TimeTicks::Now() - event_info.dispatch_start_time,
@@ -163,19 +162,37 @@ void EventAckData::DecrementInflightEvent(
     // or not running at this point.
     case content::ServiceWorkerExternalRequestResult::kWorkerNotFound:
     case content::ServiceWorkerExternalRequestResult::kWorkerNotRunning:
-    // TODO(crbug.com/1521084): Perform more graceful shutdown when
-    // ServiceWorkerContextCore is torn down.
     // Null context can happen in the rare case if ServiceWorkerContextCore is
     // torn down when EventRouter + BrowserContext are still alive and an
     // event happens to be acked here.
     case content::ServiceWorkerExternalRequestResult::kNullContext:
-      break;
+      // TODO(crbug.com/1521084): Perform more graceful shutdown when
+      // ServiceWorkerContextCore is torn down.
+
+    // kBadRequestId can expectedly happen if a new instance of a worker starts
+    // while an ack for the previous worker is in-flight to the browser. We then
+    // receive the ack and ServiceWorkerContext can't find the
+    // external/in-flight request because the previous worker's
+    // `ServiceWorkerVersion` has been replaced by the new worker's
+    // `ServiceWorkerVersion`. The new version then does not have a record of
+    // the external/in-flight request and returns kBadRequestId.
     case content::ServiceWorkerExternalRequestResult::kBadRequestId:
-      LOG(ERROR) << "FinishExternalRequest failed: "
-                 << static_cast<int>(result);
-      std::move(failure_callback).Run();
+      // TODO(crbug.com/40072982): Reliably detect when the above occurs and
+      // continue to not kill the renderer. But if the event is not for an old
+      // instance of the worker then consider CHECK()-ing since this could
+      // indicate a bug in the tracking of external requests in the browser.
       break;
   }
+}
+
+void EventAckData::ClearUnackedEventsForRenderProcess(int render_process_id) {
+  std::erase_if(unacked_events_, [render_process_id](const auto& entry) {
+    return entry.second.render_process_id == render_process_id;
+  });
+}
+
+EventAckData::EventInfo* EventAckData::GetUnackedEventForTesting(int event_id) {
+  return base::FindOrNull(unacked_events_, event_id);
 }
 
 }  // namespace extensions

@@ -389,6 +389,7 @@ PRIMITIVES = (
 
 ATTRIBUTE_MIN_VERSION = 'MinVersion'
 ATTRIBUTE_DEFAULT = 'Default'
+ATTRIBUTE_ESTIMATE_SIZE = 'EstimateSize'
 ATTRIBUTE_EXTENSIBLE = 'Extensible'
 ATTRIBUTE_NO_INTERRUPT = 'NoInterrupt'
 ATTRIBUTE_STABLE = 'Stable'
@@ -1024,6 +1025,11 @@ class Method:
         if self.attributes else True
 
   @property
+  def estimate_message_size(self):
+    return self.attributes.get(ATTRIBUTE_ESTIMATE_SIZE) \
+        if self.attributes else False
+
+  @property
   def unlimited_message_size(self):
     return self.attributes.get(ATTRIBUTE_UNLIMITED_SIZE) \
         if self.attributes else False
@@ -1232,7 +1238,7 @@ class Enum(ValueKind):
       spec = 'x:' + mojom_name
     else:
       spec = None
-    ValueKind.__init__(self, spec, False, module)
+    super().__init__(spec, False, module)
     self.mojom_name = mojom_name
     self.name = None
     self.native_only = False
@@ -1677,3 +1683,9 @@ def ContainsNativeTypes(kind):
     return False
 
   return Check(kind)
+
+
+def EnsureUnnullable(kind):
+  if IsNullableKind(kind):
+    return kind.MakeUnnullableKind()
+  return kind

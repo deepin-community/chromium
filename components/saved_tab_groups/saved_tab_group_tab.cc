@@ -7,13 +7,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "components/saved_tab_groups/saved_tab_group.h"
 
+namespace tab_groups {
+
 SavedTabGroupTab::SavedTabGroupTab(
     const GURL& url,
     const std::u16string& title,
     const base::Uuid& group_guid,
     std::optional<size_t> position,
     std::optional<base::Uuid> saved_tab_guid,
-    std::optional<base::Token> local_tab_id,
+    std::optional<LocalTabID> local_tab_id,
     std::optional<base::Time> creation_time_windows_epoch_micros,
     std::optional<base::Time> update_time_windows_epoch_micros,
     std::optional<gfx::Image> favicon)
@@ -108,3 +110,5 @@ bool SavedTabGroupTab::IsSyncEquivalent(const SavedTabGroupTab& other) const {
          saved_group_guid() == other.saved_group_guid() &&
          title() == other.title() && position() == other.position();
 }
+
+}  // namespace tab_groups

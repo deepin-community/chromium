@@ -5,13 +5,13 @@
 #include "chrome/browser/ui/ash/shelf/app_service/exo_app_type_resolver.h"
 
 #include <optional>
+#include <string_view>
 
 #include "ash/components/arc/arc_util.h"
 #include "ash/constants/app_types.h"
 #include "ash/wm/window_properties.h"
-#include "base/strings/string_piece.h"
-#include "chrome/browser/ash/borealis/borealis_window_manager.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
+#include "chromeos/ash/components/borealis/borealis_util.h"
 #include "chromeos/crosapi/cpp/crosapi_constants.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/app_restore/app_restore_utils.h"
@@ -24,7 +24,7 @@
 namespace {
 
 // Returns true, if the given ID represents Lacros.
-bool IsLacrosAppId(base::StringPiece app_id) {
+bool IsLacrosAppId(std::string_view app_id) {
   return base::StartsWith(app_id, crosapi::kLacrosAppIdPrefix);
 }
 
@@ -76,9 +76,6 @@ void ExoAppTypeResolver::PopulateProperties(
   if (IsLacrosAppId(params.app_id)) {
     out_properties_container.SetProperty(
         aura::client::kAppType, static_cast<int>(ash::AppType::LACROS));
-    // Make sure Lacros is treated as opaque for occlusion tracking purposes.
-    out_properties_container.SetProperty(
-        chromeos::kWindowManagerManagesOpacityKey, true);
     // Lacros is trusted not to abuse window activation, so grant it a
     // non-expiring permission to activate.
     out_properties_container.SetProperty(
@@ -115,7 +112,7 @@ void ExoAppTypeResolver::PopulateProperties(
 
   out_properties_container.SetProperty(exo::kMaximumSizeForResizabilityOnly,
                                        true);
-  if (borealis::BorealisWindowManager::IsBorealisWindowId(
+  if (ash::borealis::IsBorealisWindowId(
           params.app_id.empty() ? params.startup_id : params.app_id)) {
     // TODO(b/165865831): Stop using CROSTINI_APP for borealis windows.
     out_properties_container.SetProperty(

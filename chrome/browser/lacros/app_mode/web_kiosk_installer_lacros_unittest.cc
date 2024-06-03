@@ -15,12 +15,12 @@
 #include "chrome/browser/web_applications/test/fake_web_contents_manager.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/crosapi/mojom/web_kiosk_service.mojom.h"
 #include "chromeos/lacros/lacros_service.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "components/webapps/common/web_app_id.h"
 #include "components/webapps/common/web_page_metadata.mojom.h"
 #include "content/public/test/browser_task_environment.h"
@@ -131,7 +131,7 @@ class WebKioskInstallerLacrosTest : public testing::Test {
     auto& install_page_state =
         web_contents_manager().GetOrCreatePageState(install_url);
     install_page_state.url_load_result =
-        web_app::WebAppUrlLoaderResult::kUrlLoaded;
+        webapps::WebAppUrlLoaderResult::kUrlLoaded;
     install_page_state.redirection_url = std::nullopt;
 
     install_page_state.opt_metadata =
@@ -141,15 +141,16 @@ class WebKioskInstallerLacrosTest : public testing::Test {
     install_page_state.manifest_url = manifest_url;
     install_page_state.valid_manifest_for_web_app = true;
 
-    install_page_state.opt_manifest = blink::mojom::Manifest::New();
-    install_page_state.opt_manifest->scope =
-        url::Origin::Create(start_url).GetURL();
-    install_page_state.opt_manifest->start_url = start_url;
-    install_page_state.opt_manifest->id =
+    install_page_state.manifest_before_default_processing =
+        blink::mojom::Manifest::New();
+    install_page_state.manifest_before_default_processing->start_url =
+        start_url;
+    install_page_state.manifest_before_default_processing->id =
         web_app::GenerateManifestIdFromStartUrlOnly(start_url);
-    install_page_state.opt_manifest->display =
+    install_page_state.manifest_before_default_processing->display =
         blink::mojom::DisplayMode::kStandalone;
-    install_page_state.opt_manifest->short_name = u"Basic app name";
+    install_page_state.manifest_before_default_processing->short_name =
+        u"Basic app name";
 
     return web_app::GenerateAppId(/*manifest_id=*/std::nullopt, start_url);
   }
@@ -195,9 +196,9 @@ class WebKioskInstallerLacrosTest : public testing::Test {
   apps::AppServiceTest app_service_test_;
 
   FakeWebKioskService web_kiosk_service_;
-  std::unique_ptr<WebKioskInstallerLacros> installer_;
   TestingProfileManager testing_profile_manager_{
       TestingBrowserProcess::GetGlobal()};
+  std::unique_ptr<WebKioskInstallerLacros> installer_;
   raw_ptr<TestingProfile> profile_;
   KioskSessionServiceLacros kiosk_session_service_lacros_;
 };

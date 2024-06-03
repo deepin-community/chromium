@@ -2299,7 +2299,7 @@ protected:
 
     /**
      */
-    virtual void onDrawSlug(const sktext::gpu::Slug* slug);
+    virtual void onDrawSlug(const sktext::gpu::Slug* slug, const SkPaint& paint);
 
 private:
     enum class PredrawFlags : unsigned {
@@ -2466,7 +2466,7 @@ private:
     /**
      * Draw an sktext::gpu::Slug given the current canvas state.
      */
-    void drawSlug(const sktext::gpu::Slug* slug);
+    void drawSlug(const sktext::gpu::Slug* slug, const SkPaint& paint);
 
     /** Experimental
      *  Saves the specified subset of the current pixels in the current layer,
@@ -2567,6 +2567,14 @@ private:
     // Compute the clip's bounds based on all clipped SkDevice's reported device bounds transformed
     // into the canvas' global space.
     SkRect computeDeviceClipBounds(bool outsetForAA=true) const;
+
+    // Attempt to draw a rrect with an analytic blur. If the paint does not contain a blur, or the
+    // geometry can't be drawn with an analytic blur by the device, a layer is returned for a
+    // regular draw. If the draw succeeds or predrawNotify fails, nullopt is returned indicating
+    // that nothing further should be drawn.
+    std::optional<AutoLayerForImageFilter> attemptBlurredRRectDraw(const SkRRect&,
+                                                                   const SkPaint&,
+                                                                   SkEnumBitMask<PredrawFlags>);
 
     class AutoUpdateQRBounds;
     void validateClip() const;

@@ -9,6 +9,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -29,7 +30,6 @@
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
@@ -49,6 +49,7 @@
 #include "chrome/browser/metrics/desktop_platform_features_metrics_provider.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_profile_session_durations_service_factory.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_metrics_provider.h"
+#include "chrome/browser/metrics/family_link_user_metrics_provider.h"
 #include "chrome/browser/metrics/https_engagement_metrics_provider.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/metrics/network_quality_estimator_provider_impl.h"
@@ -111,7 +112,6 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/buildflags.h"
-#include "components/supervised_user/core/common/buildflags.h"
 #include "components/sync/service/passphrase_type_metrics_provider.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync_device_info/device_count_metrics_provider.h"
@@ -157,8 +157,10 @@
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "ash/constants/ash_features.h"
 #include "base/feature_list.h"
+#include "chrome/browser/ash/arc/vmm/vmm_metrics_provider.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/printing/printer_metrics_provider.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/keyboard_backlight_color_metrics_provider.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_theme_metrics_provider.h"
@@ -172,8 +174,8 @@
 #include "chrome/browser/metrics/family_user_metrics_provider.h"
 #include "chrome/browser/metrics/per_user_state_manager_chromeos.h"
 #include "chrome/browser/metrics/update_engine_metrics_provider.h"
+#include "chrome/browser/ui/ash/shelf/chrome_shelf_metrics_provider.h"
 #include "chrome/browser/ui/webui/ash/settings/services/metrics/os_settings_metrics_provider.h"
-#include "components/metrics/structured/structured_metrics_provider.h"  // nogncheck
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -197,8 +199,8 @@
 #include "components/metrics/motherboard_metrics_provider.h"
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
-#include "third_party/crashpad/crashpad/client/crashpad_info.h"  // nogncheck
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/metrics/chrome_metrics_service_crash_reporter.h"
 #endif
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -213,10 +215,6 @@
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/metrics/bluetooth_metrics_provider.h"
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "chrome/browser/metrics/family_link_user_metrics_provider.h"
-#endif
 
 namespace {
 
@@ -233,20 +231,10 @@ const int kMaxHistogramGatheringWaitDuration = 60000;  // 60 seconds.
 // Needs to be kept in sync with the writer in
 // third_party/crashpad/crashpad/handler/handler_main.cc.
 const char kCrashpadHistogramAllocatorName[] = "CrashpadMetrics";
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
-// The stream type assigned to the minidump stream that holds the serialized
-// system profile proto.
-const uint32_t kSystemProfileMinidumpStreamType = 0x4B6B0003;
-
-// A serialized environment (SystemProfileProto) that was registered with the
-// crash reporter, or the empty string if no environment was registered yet.
-// Ownership must be maintained after registration as the crash reporter does
-// not assume it.
-// TODO(manzagop): revisit this if the Crashpad API evolves.
-base::LazyInstance<std::string>::Leaky g_environment_for_crash_reporter =
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+base::LazyInstance<ChromeMetricsServiceCrashReporter>::Leaky g_crash_reporter =
     LAZY_INSTANCE_INITIALIZER;
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
 
 void RegisterFileMetricsPreferences(PrefRegistrySimple* registry) {
   metrics::FileMetricsProvider::RegisterSourcePrefs(registry,
@@ -273,7 +261,7 @@ void RegisterFileMetricsPreferences(PrefRegistrySimple* registry) {
 void RegisterOrRemovePreviousRunMetricsFile(
     bool metrics_reporting_enabled,
     const base::FilePath& dir,
-    base::StringPiece metrics_name,
+    std::string_view metrics_name,
     metrics::FileMetricsProvider::SourceAssociation association,
     metrics::FileMetricsProvider* file_metrics_provider) {
   base::FilePath metrics_file =
@@ -662,29 +650,14 @@ std::string ChromeMetricsServiceClient::GetVersionString() {
 }
 
 void ChromeMetricsServiceClient::OnEnvironmentUpdate(std::string* environment) {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
-  DCHECK(environment);
-
-  // Register the environment with the crash reporter. Note this only registers
-  // the first environment, meaning ulterior updates to the environment are not
-  // reflected in crash report environments (e.g. fieldtrial information). This
-  // approach is due to the Crashpad API at time of implementation (registered
-  // data cannot be updated). It would however be unwise to rely on such a
-  // mechanism to retrieve the value of the dynamic fields due to the
-  // environment update lag. Also note there is a window from startup to this
-  // point during which crash reports will not have an environment set.
-  if (!g_environment_for_crash_reporter.Get().empty()) {
-    return;
-  }
-
-  g_environment_for_crash_reporter.Get() = std::move(*environment);
-
-  crashpad::CrashpadInfo::GetCrashpadInfo()->AddUserDataMinidumpStream(
-      kSystemProfileMinidumpStreamType,
-      reinterpret_cast<const void*>(
-          g_environment_for_crash_reporter.Get().data()),
-      g_environment_for_crash_reporter.Get().size());
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
+  // TODO(https://bugs.chromium.org/p/crashpad/issues/detail?id=135): call this
+  // on Mac when the Crashpad API supports it.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+  // Register the environment with the crash reporter. Note that there is a
+  // window from startup to this point during which crash reports will not have
+  // an environment set.
+  g_crash_reporter.Get().OnEnvironmentUpdate(*environment);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
 }
 
 void ChromeMetricsServiceClient::MergeSubprocessHistograms() {
@@ -714,7 +687,7 @@ std::unique_ptr<metrics::MetricsLogUploader>
 ChromeMetricsServiceClient::CreateUploader(
     const GURL& server_url,
     const GURL& insecure_server_url,
-    base::StringPiece mime_type,
+    std::string_view mime_type,
     metrics::MetricsLogUploader::MetricServiceType service_type,
     const metrics::MetricsLogUploader::UploadCallback& on_upload_complete) {
   return std::make_unique<metrics::NetMetricsLogUploader>(
@@ -781,6 +754,10 @@ void ChromeMetricsServiceClient::Initialize() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 
   AsyncInitSystemProfileProvider();
+
+  // TODO(tluk): Consider setting up the UserActivityDetector observation for
+  // all platforms once the detector is well supported on these other platforms.
+  user_activity_observation_.Observe(ui::UserActivityDetector::Get());
 
   // Set is_demo_mode_ to true in ukm_consent_state_observer if the device is
   // currently in Demo Mode.
@@ -911,10 +888,8 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS_LACROS))
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<FamilyLinkUserMetricsProvider>());
-#endif
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
   metrics_service_->RegisterMetricsProvider(
@@ -949,17 +924,6 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<ash::PrinterMetricsProvider>());
 
-  // TODO(b/282057109) The StructuredMetricsService owns the recorder. While we
-  // are transitioning from the provider to the service, the provider will be
-  // given a pointer to the recorder. Will be removed when the provider is
-  // deprecated.
-  if (!base::FeatureList::IsEnabled(
-          metrics::structured::kEnabledStructuredMetricsService)) {
-    metrics_service_->RegisterMetricsProvider(
-        std::make_unique<metrics::structured::StructuredMetricsProvider>(
-            structured_metrics_service_->recorder()));
-  }
-
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<AssistantServiceMetricsProvider>());
 
@@ -971,6 +935,9 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<ChromeOSFamilyLinkUserMetricsProvider>());
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<ChromeShelfMetricsProvider>());
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<UpdateEngineMetricsProvider>());
@@ -989,6 +956,8 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
       std::make_unique<ash::settings::OsSettingsMetricsProvider>());
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<WallpaperMetricsProvider>());
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<arc::VmmMetricsProvider>());
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -1065,6 +1034,10 @@ void ChromeMetricsServiceClient::RegisterUKMProviders() {
       std::make_unique<metrics::ComponentMetricsProvider>(
           std::make_unique<ChromeComponentMetricsProviderDelegate>(
               g_browser_process->component_updater())));
+}
+
+void ChromeMetricsServiceClient::NotifyApplicationNotIdle() {
+  metrics_service_->OnApplicationNotIdle();
 }
 
 void ChromeMetricsServiceClient::CollectFinalHistograms() {
@@ -1179,23 +1152,6 @@ bool ChromeMetricsServiceClient::RegisterForProfileEvents(Profile* profile) {
     return true;
   }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_CHROMEOS_ASH)
-  // Begin initializing the structured metrics system. Initialization must wait
-  // until a profile is added, because it reads keys stored within the user's
-  // cryptohome. We only initialize for profiles that are valid candidates
-  // for metrics collection, ignoring the sign-in profile, lock screen app
-  // profile, and guest sessions.
-  //
-  // TODO(crbug.com/1016655): This call would be better placed in
-  // metrics::structured::Recorder, but can't be because it depends on Chrome
-  // code. Investigate whether there's a way of checking this from the
-  // component.
-  metrics::structured::Recorder::GetInstance()->ProfileAdded(
-      profile->GetPath());
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
-       // BUILDFLAG(IS_CHROMEOS_ASH)
-
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // If the device is in Demo Mode, observe the sync service to enable UKM to
   // collect app data and return true.
@@ -1249,12 +1205,16 @@ void ChromeMetricsServiceClient::OnProfileManagerDestroying() {
   profile_manager_observer_.Reset();
 }
 
+void ChromeMetricsServiceClient::OnUserActivity(const ui::Event* event) {
+  NotifyApplicationNotIdle();
+}
+
 void ChromeMetricsServiceClient::LoadingStateChanged(bool /*is_loading*/) {
-  metrics_service_->OnApplicationNotIdle();
+  NotifyApplicationNotIdle();
 }
 
 void ChromeMetricsServiceClient::OnURLOpenedFromOmnibox(OmniboxLog* log) {
-  metrics_service_->OnApplicationNotIdle();
+  NotifyApplicationNotIdle();
 }
 
 bool ChromeMetricsServiceClient::IsOnCellularConnection() {
@@ -1327,7 +1287,7 @@ void ChromeMetricsServiceClient::OnRenderProcessHostCreated(
 void ChromeMetricsServiceClient::RenderProcessExited(
     content::RenderProcessHost* host,
     const content::ChildProcessTerminationInfo& info) {
-  metrics_service_->OnApplicationNotIdle();
+  NotifyApplicationNotIdle();
 }
 
 void ChromeMetricsServiceClient::RenderProcessHostDestroyed(
@@ -1349,7 +1309,7 @@ void ChromeMetricsServiceClient::AsyncInitSystemProfileProvider() {
 #endif
 
 // static
-bool ChromeMetricsServiceClient::IsWebstoreExtension(base::StringPiece id) {
+bool ChromeMetricsServiceClient::IsWebstoreExtension(std::string_view id) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // Only acceptable if at least one profile knows the extension and all
   // profiles that know the extension say it was from the web-store.

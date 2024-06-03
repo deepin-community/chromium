@@ -22,10 +22,13 @@ import androidx.annotation.StringRes;
 import androidx.test.espresso.Espresso;
 import androidx.test.espresso.NoMatchingViewException;
 
+import org.chromium.base.test.transit.Condition;
+import org.chromium.base.test.transit.ConditionStatus;
 import org.chromium.base.test.transit.Elements;
 import org.chromium.base.test.transit.TransitStation;
 import org.chromium.base.test.transit.TravelException;
 import org.chromium.base.test.transit.Trip;
+import org.chromium.base.test.transit.UiThreadCondition;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.chrome.browser.hub.HubFieldTrial;
 import org.chromium.chrome.browser.hub.PaneId;
@@ -47,6 +50,18 @@ public abstract class HubBaseStation extends TransitStation {
             sharedViewElement(
                     allOf(isDescendantOfA(withId(R.id.hub_toolbar)), withId(R.id.pane_switcher)));
 
+    public static final ViewElement REGULAR_TOGGLE_TAB_BUTTON =
+            sharedViewElement(
+                    allOf(
+                            withContentDescription(
+                                    R.string.accessibility_tab_switcher_standard_stack)));
+
+    public static final ViewElement INCOGNITO_TOGGLE_TAB_BUTTON =
+            sharedViewElement(
+                    allOf(
+                            withContentDescription(
+                                    R.string.accessibility_tab_switcher_incognito_stack)));
+
     protected final ChromeTabbedActivityTestRule mChromeTabbedActivityTestRule;
 
     /**
@@ -65,6 +80,25 @@ public abstract class HubBaseStation extends TransitStation {
         elements.declareView(HUB_TOOLBAR);
         elements.declareView(HUB_PANE_HOST);
         elements.declareView(HUB_MENU_BUTTON);
+
+        Condition incognitoTabsExist =
+                new UiThreadCondition() {
+                    @Override
+                    public ConditionStatus check() {
+                        int incognitoTabCount =
+                                mChromeTabbedActivityTestRule.tabsCount(/* incognito= */ true);
+                        return whether(
+                                incognitoTabCount > 0, "%d incognito tabs", incognitoTabCount);
+                    }
+
+                    @Override
+                    public String buildDescription() {
+                        return "Incognito tabs exist";
+                    }
+                };
+
+        elements.declareViewIf(REGULAR_TOGGLE_TAB_BUTTON, incognitoTabsExist);
+        elements.declareViewIf(INCOGNITO_TOGGLE_TAB_BUTTON, incognitoTabsExist);
 
         elements.declareLogicalElement(
                 unscopedUiThreadLogicalElement(
@@ -88,11 +122,12 @@ public abstract class HubBaseStation extends TransitStation {
         // additional back state e.g. in-pane navigations, between pane navigations, etc. Figure out
         // a solution that better handles the complexity.
         PageStation destination =
-                new PageStation(
-                        mChromeTabbedActivityTestRule,
-                        /* incognito= */ false,
-                        /* isOpeningTab= */ false);
-        return Trip.travelSync(this, destination, (t) -> Espresso.pressBack());
+                PageStation.newPageStationBuilder()
+                        .withActivityTestRule(mChromeTabbedActivityTestRule)
+                        .withIsOpeningTab(false)
+                        .withIsSelectingTab(true)
+                        .build();
+        return Trip.travelSync(this, destination, () -> Espresso.pressBack());
     }
 
     /**
@@ -100,8 +135,8 @@ public abstract class HubBaseStation extends TransitStation {
      *
      * @return the corresponding subclass of {@link HubBaseStation}.
      */
-    public <T extends HubBaseStation> T selectPane(@PaneId int paneId,
-        Class<T> expectedDestination) {
+    public <T extends HubBaseStation> T selectPane(
+            @PaneId int paneId, Class<T> expectedDestination) {
         recheckActiveConditions();
 
         if (getPaneId() == paneId) {
@@ -119,12 +154,24 @@ public abstract class HubBaseStation extends TransitStation {
             throw TravelException.newTripException(this, destinationStation, throwable);
         }
 
-        @StringRes int contentDescriptionId =
-            HubStationUtils.getContentDescriptionForIdPaneSelection(paneId);
-        return Trip.travelSync(this, destinationStation,
-                (t) -> {
+        @StringRes
+        int contentDescriptionId = HubStationUtils.getContentDescriptionForIdPaneSelection(paneId);
+        return Trip.travelSync(
+                this,
+                destinationStation,
+                () -> {
                     clickPaneSwitcherForPaneWithContentDescription(contentDescriptionId);
                 });
+    }
+
+    /** Convenience method to select the Regular Tab Switcher pane. */
+    public HubTabSwitcherStation selectRegularTabList() {
+        return selectPane(PaneId.TAB_SWITCHER, HubTabSwitcherStation.class);
+    }
+
+    /** Convenience method to select the Incognito Tab Switcher pane. */
+    public HubIncognitoTabSwitcherStation selectIncognitoTabList() {
+        return selectPane(PaneId.INCOGNITO_TAB_SWITCHER, HubIncognitoTabSwitcherStation.class);
     }
 
     private boolean isHubLayoutShowing() {

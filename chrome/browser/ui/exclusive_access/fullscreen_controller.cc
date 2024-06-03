@@ -9,13 +9,17 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/ui/blocked_content/popunder_preventer.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
@@ -23,6 +27,9 @@
 #include "chrome/browser/ui/status_bubble.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/history/core/browser/history_service.h"
+#include "components/history/core/browser/history_types.h"
+#include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "content/public/browser/fullscreen_types.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
@@ -48,11 +55,77 @@ using content::WebContents;
 
 namespace {
 
+constexpr char kHistogramFullscreenWebsiteStateAtApiRequest[] =
+    "WebCore.Fullscreen.WebsiteStateAtApiRequest";
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class WebsiteStateAtFullscreenRequest {
+  kNotAllowlistedNotVisited = 0,
+  kNotAllowlistedVisited = 1,
+  kNotAllowlistedVisitStateUnknown = 2,
+  kAllowlistedNotVisited = 3,
+  kAllowlistedVisited = 4,
+  kAllowlistedVisitStateUnknown = 5,
+  kAllowlistStateUnknownNotVisited = 6,
+  kAllowlistStateUnknownVisited = 7,
+  kAllowlistStateUnknownVisitStateUnknown = 8,
+  kMaxValue = kAllowlistStateUnknownVisitStateUnknown,
+};
+
 bool IsAnotherScreen(const WebContents& web_contents,
                      const int64_t display_id) {
   if (display_id == display::kInvalidDisplayId)
     return false;
   return display_id != FullscreenController::GetDisplayId(web_contents);
+}
+
+void RecordWebsiteStateAtApiRequest(history::HistoryLastVisitResult result,
+                                    std::optional<bool> on_allowlist) {
+  auto state = WebsiteStateAtFullscreenRequest::kNotAllowlistedNotVisited;
+  if (!result.success) {
+    if (!on_allowlist.has_value()) {
+      state = WebsiteStateAtFullscreenRequest::
+          kAllowlistStateUnknownVisitStateUnknown;
+    } else if (*on_allowlist) {
+      state = WebsiteStateAtFullscreenRequest::kAllowlistedVisitStateUnknown;
+    } else {
+      state = WebsiteStateAtFullscreenRequest::kNotAllowlistedVisitStateUnknown;
+    }
+  } else if (!result.last_visit.is_null()) {
+    if (!on_allowlist.has_value()) {
+      state = WebsiteStateAtFullscreenRequest::kAllowlistStateUnknownVisited;
+    } else if (*on_allowlist) {
+      state = WebsiteStateAtFullscreenRequest::kAllowlistedVisited;
+    } else {
+      state = WebsiteStateAtFullscreenRequest::kNotAllowlistedVisited;
+    }
+  } else if (!on_allowlist.has_value()) {
+    state = WebsiteStateAtFullscreenRequest::kAllowlistStateUnknownNotVisited;
+  } else if (*on_allowlist) {
+    state = WebsiteStateAtFullscreenRequest::kAllowlistedNotVisited;
+  }
+  base::UmaHistogramEnumeration(kHistogramFullscreenWebsiteStateAtApiRequest,
+                                state);
+}
+
+void CheckUrlForAllowlistAndRecordMetric(
+    const GURL& url,
+    history::HistoryLastVisitResult result) {
+  if (!g_browser_process->safe_browsing_service() ||
+      !g_browser_process->safe_browsing_service()->database_manager()) {
+    RecordWebsiteStateAtApiRequest(result, std::nullopt);
+    return;
+  }
+  g_browser_process->safe_browsing_service()
+      ->database_manager()
+      ->CheckUrlForHighConfidenceAllowlist(
+          url, "RT" /*realtime*/,
+          base::BindOnce(
+              [](history::HistoryLastVisitResult result, bool on_allowlist) {
+                RecordWebsiteStateAtApiRequest(result, on_allowlist);
+              },
+              result));
 }
 
 }  // namespace
@@ -164,6 +237,7 @@ bool FullscreenController::CanEnterFullscreenModeForTab(
 void FullscreenController::EnterFullscreenModeForTab(
     content::RenderFrameHost* requesting_frame,
     const int64_t display_id) {
+  RecordMetricsOnFullscreenApiRequested(requesting_frame);
   DCHECK(requesting_frame);
   // This function should never fail. Any possible failures must be checked in
   // |CanEnterFullscreenModeForTab()| instead. Silently dropping the request
@@ -240,12 +314,6 @@ void FullscreenController::EnterFullscreenModeForTab(
 }
 
 void FullscreenController::ExitFullscreenModeForTab(WebContents* web_contents) {
-  // Reset the popunder preventer after the window exits content fullscreen.
-  // This activates any popup windows that were created while fullscreen.
-  base::ScopedClosureRunner reset_popunder_preventer(
-      base::BindOnce(&std::unique_ptr<PopunderPreventer>::reset,
-                     base::Unretained(&popunder_preventer_), nullptr));
-
   if (MaybeToggleFullscreenWithinTab(web_contents, false)) {
     // During tab capture of fullscreen-within-tab views, the browser window
     // fullscreen state is unchanged, so return now.
@@ -394,6 +462,10 @@ void FullscreenController::FullscreenTransitionCompleted() {
 #endif  // DCHECK_IS_ON()
   tab_fullscreen_target_display_id_ = display::kInvalidDisplayId;
   started_fullscreen_transition_ = false;
+  if (!IsTabFullscreen()) {
+    // Activate any popup windows created while content fullscreen, after exit.
+    popunder_preventer_.reset();
+  }
 }
 
 void FullscreenController::RunOrDeferUntilTransitionIsComplete(
@@ -419,6 +491,20 @@ bool FullscreenController::HandleUserPressedEscape() {
   ExitExclusiveAccessIfNecessary();
   base::RecordAction(base::UserMetricsAction("ExitFullscreen_Esc"));
   return true;
+}
+
+void FullscreenController::HandleUserHeldEscape() {
+  if (RequiresPressAndHoldEscToExit()) {
+    ExitFullscreenModeInternal();
+    base::RecordAction(
+        base::UserMetricsAction("ExitFullscreen_PressAndHoldEsc"));
+  }
+}
+
+void FullscreenController::HandleUserReleasedEscapeEarly() {}
+
+bool FullscreenController::RequiresPressAndHoldEscToExit() const {
+  return IsFullscreenForBrowser();
 }
 
 void FullscreenController::ExitExclusiveAccessToPreviousState() {
@@ -629,6 +715,28 @@ GURL FullscreenController::GetEmbeddingOrigin() const {
   DCHECK(exclusive_access_tab());
 
   return exclusive_access_tab()->GetLastCommittedURL();
+}
+
+void FullscreenController::RecordMetricsOnFullscreenApiRequested(
+    content::RenderFrameHost* requesting_frame) {
+  history::HistoryService* service =
+      HistoryServiceFactory::GetForProfileWithoutCreating(
+          exclusive_access_manager()->context()->GetProfile());
+  if (service) {
+    // Check if the origin has been visited more than a day ago and whether it's
+    // on an allowlist, then record those bits of information in a metric.
+    service->GetLastVisitToOrigin(
+        url::Origin(requesting_frame->GetLastCommittedOrigin()), base::Time(),
+        base::Time::Now() - base::Days(1),
+        base::BindOnce(&CheckUrlForAllowlistAndRecordMetric,
+                       GURL(requesting_frame->GetLastCommittedURL())),
+        &task_tracker_);
+  } else {
+    // The history is unknown, so just check if the URL is on the allowlist and
+    // record that.
+    CheckUrlForAllowlistAndRecordMetric(requesting_frame->GetLastCommittedURL(),
+                                        history::HistoryLastVisitResult());
+  }
 }
 
 void FullscreenController::RecordMetricsOnEnteringFullscreen() {

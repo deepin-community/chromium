@@ -40,6 +40,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_policy_handler.h"
@@ -165,7 +166,7 @@ DownloadToolbarButtonView::DownloadToolbarButtonView(BrowserView* browser_view)
                      ? kDownloadToolbarButtonChromeRefreshIcon
                      : kDownloadToolbarButtonIcon,
                  kDownloadToolbarButtonIcon);
-  GetViewAccessibility().OverrideHasPopup(ax::mojom::HasPopup::kDialog);
+  GetViewAccessibility().SetHasPopup(ax::mojom::HasPopup::kDialog);
   tooltip_texts_[0] = l10n_util::GetStringUTF16(IDS_TOOLTIP_DOWNLOAD_ICON);
   SetTooltipText(tooltip_texts_.at(0));
   SetVisible(false);
@@ -386,6 +387,11 @@ void DownloadToolbarButtonView::UpdateDownloadIcon(
   }
 }
 
+void DownloadToolbarButtonView::AnnounceAccessibleAlertNow(
+    const std::u16string& alert_text) {
+  GetViewAccessibility().AnnounceText(alert_text);
+}
+
 bool DownloadToolbarButtonView::IsFullscreenWithParentViewHidden() const {
 #if BUILDFLAG(IS_MAC)
   if (fullscreen_utils::IsInContentFullscreen(browser_)) {
@@ -473,8 +479,9 @@ bool DownloadToolbarButtonView::IsShowingDetails() const {
 }
 
 void DownloadToolbarButtonView::UpdateIcon() {
-  if (!GetWidget())
+  if (!GetWidget()) {
     return;
+  }
 
   // Schedule paint to update the progress ring.
   if (redraw_progress_soon_) {
@@ -588,15 +595,17 @@ void DownloadToolbarButtonView::OpenSecurityDialog(
 
 void DownloadToolbarButtonView::CloseDialog(
     views::Widget::ClosedReason reason) {
-  if (bubble_delegate_)
+  if (bubble_delegate_) {
     bubble_delegate_->GetWidget()->CloseWithReason(reason);
+  }
 }
 
 void DownloadToolbarButtonView::ResizeDialog() {
   // Resize may be called when there is no delegate, e.g. during bubble
   // construction.
-  if (bubble_delegate_)
+  if (bubble_delegate_) {
     bubble_delegate_->SizeToContents();
+  }
 }
 
 void DownloadToolbarButtonView::OnDialogInteracted() {
@@ -683,7 +692,10 @@ void DownloadToolbarButtonView::CreateBubbleDialogDelegate() {
     bubble_delegate_->GetWidget()
         ->GetCompositor()
         ->RequestSuccessfulPresentationTimeForNextFrame(base::BindOnce(
-            [](base::TimeTicks click_time, base::TimeTicks presentation_time) {
+            [](base::TimeTicks click_time,
+               const viz::FrameTimingDetails& frame_timing_details) {
+              base::TimeTicks presentation_time =
+                  frame_timing_details.presentation_feedback.timestamp;
               UmaHistogramTimes(
                   "Download.Bubble.ToolbarButtonClickToFullViewShownLatency",
                   presentation_time - click_time);
@@ -693,6 +705,7 @@ void DownloadToolbarButtonView::CreateBubbleDialogDelegate() {
     button_click_time_ = base::TimeTicks();
   }
 
+  CloseAutofillPopup();
   if (ShouldShowBubbleAsInactive()) {
     bubble_delegate_->GetWidget()->ShowInactive();
     bubble_closer_ = std::make_unique<BubbleCloser>(this);
@@ -871,6 +884,19 @@ bool DownloadToolbarButtonView::ShouldShowBubbleAsInactive() const {
   // The partial view shows up without user interaction, so it should not
   // steal focus from the web contents.
   return is_primary_partial_view_;
+}
+
+void DownloadToolbarButtonView::CloseAutofillPopup() {
+  content::WebContents* web_contents =
+      browser_->tab_strip_model()->GetActiveWebContents();
+  if (!web_contents) {
+    return;
+  }
+  if (auto* autofill_client =
+          autofill::ContentAutofillClient::FromWebContents(web_contents)) {
+    autofill_client->HideAutofillPopup(
+        autofill::PopupHidingReason::kOverlappingWithAnotherPrompt);
+  }
 }
 
 SkColor DownloadToolbarButtonView::GetIconColor() const {

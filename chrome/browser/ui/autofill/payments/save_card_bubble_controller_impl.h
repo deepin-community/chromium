@@ -29,7 +29,7 @@ enum class BubbleType;
 
 // Implementation of per-tab class to control the local/server save credit card
 // bubble, the local/server save CVC bubble, and Omnibox icon.
-// TODO(crbug.com/1487232): Refactor SaveCardBubbleControllerImpl to split the
+// TODO(crbug.com/40934022): Refactor SaveCardBubbleControllerImpl to split the
 // states into different classes.
 class SaveCardBubbleControllerImpl
     : public AutofillBubbleControllerBase,
@@ -115,6 +115,7 @@ class SaveCardBubbleControllerImpl
   bool IsUploadSave() const override;
   BubbleType GetBubbleType() const override;
   bool IsPaymentsSyncTransportEnabledWithoutSyncFeature() const override;
+  void HideSaveCardBubble() override;
 
   // SavePaymentIconController:
   std::u16string GetSavePaymentIconTooltipText() const override;
@@ -154,6 +155,9 @@ class SaveCardBubbleControllerImpl
   void UpdateSaveCardIcon();
 
   void OpenUrl(const GURL& url);
+
+  // Returns whether the web contents related to the controller is active.
+  bool IsWebContentsActive();
 
   // Should outlive this object.
   raw_ptr<PersonalDataManager> personal_data_manager_;

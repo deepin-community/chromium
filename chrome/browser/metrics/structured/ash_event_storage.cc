@@ -6,6 +6,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/task/current_thread.h"
+#include "chrome/browser/profiles/profile.h"
 #include "components/metrics/structured/lib/histogram_util.h"
 #include "third_party/metrics_proto/structured_data.pb.h"
 
@@ -36,8 +37,7 @@ void AshEventStorage::OnReady() {
 }
 
 void AshEventStorage::AddEvent(StructuredEventProto event) {
-  PersistentProto<EventsProto>* event_store_to_write =
-      GetStoreToWriteEvent(event);
+  PersistentProto<EventsProto>* event_store_to_write = GetStoreToWriteEvent();
 
   if (!event_store_to_write) {
     pre_storage_events_.emplace_back(std::move(event));
@@ -88,12 +88,26 @@ void AshEventStorage::Purge() {
   }
 }
 
-void AshEventStorage::OnProfileAdded(const base::FilePath& path) {
+void AshEventStorage::AddBatchEvents(
+    const google::protobuf::RepeatedPtrField<StructuredEventProto>& events) {
+  PersistentProto<EventsProto>* event_store = GetStoreToWriteEvent();
+  if (event_store) {
+    event_store->get()->mutable_non_uma_events()->MergeFrom(events);
+    event_store->QueueWrite();
+  } else if (!is_initialized_) {
+    pre_storage_events_.insert(pre_storage_events_.end(), events.begin(),
+                               events.end());
+  }
+}
+
+void AshEventStorage::ProfileAdded(const Profile& profile) {
   DCHECK(base::CurrentUIThread::IsSet());
 
   if (is_user_initialized_) {
     return;
   }
+
+  const base::FilePath& path = profile.GetPath();
 
   // The directory used to store unsent logs. Relative to the user's cryptohome.
   // This file is created by chromium.
@@ -105,23 +119,6 @@ void AshEventStorage::OnProfileAdded(const base::FilePath& path) {
                      weak_factory_.GetWeakPtr()),
       base::BindRepeating(&AshEventStorage::OnWrite,
                           weak_factory_.GetWeakPtr()));
-}
-
-void AshEventStorage::AddBatchEvents(
-    const google::protobuf::RepeatedPtrField<StructuredEventProto>& events) {
-  for (const auto& event : events) {
-    PersistentProto<EventsProto>* event_store = GetStoreToWriteEvent(event);
-
-    if (event_store) {
-      *event_store->get()->add_non_uma_events() = event;
-      event_store->QueueWrite();
-      continue;
-    }
-
-    if (!is_initialized_) {
-      pre_storage_events_.emplace_back(event);
-    }
-  }
 }
 
 void AshEventStorage::CopyEvents(EventsProto* events_proto) const {
@@ -232,8 +229,7 @@ bool AshEventStorage::IsPreUserStorageReadable() const {
   return pre_user_events_ && is_initialized_;
 }
 
-PersistentProto<EventsProto>* AshEventStorage::GetStoreToWriteEvent(
-    const StructuredEventProto& event) {
+PersistentProto<EventsProto>* AshEventStorage::GetStoreToWriteEvent() {
   // If user storage is ready, all events should be stored in user event store
   // regardless of the type.
   if (IsProfileReady()) {

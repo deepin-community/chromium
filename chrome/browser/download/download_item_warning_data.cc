@@ -15,6 +15,7 @@ using WarningAction = DownloadItemWarningData::WarningAction;
 using WarningActionEvent = DownloadItemWarningData::WarningActionEvent;
 using ClientSafeBrowsingReportRequest =
     safe_browsing::ClientSafeBrowsingReportRequest;
+using DeepScanTrigger = DownloadItemWarningData::DeepScanTrigger;
 
 namespace {
 constexpr int kWarningActionEventMaxLength = 20;
@@ -117,6 +118,7 @@ void DownloadItemWarningData::AddWarningActionEvent(DownloadItem* download,
           AddWarningActionEventOutcome::ADDED_WARNING_FIRST_SHOWN);
       RecordWarningActionAdded(action);
       data->warning_first_shown_time_ = base::Time::Now();
+      data->warning_first_shown_surface_ = surface;
     } else {
       RecordAddWarningActionEventOutcome(
           AddWarningActionEventOutcome::NOT_ADDED_WARNING_SHOWN_ALREADY_LOGGED);
@@ -295,6 +297,41 @@ void DownloadItemWarningData::SetIsFullyExtractedArchive(
   }
 
   GetOrCreate(download)->fully_extracted_archive_ = extracted;
+}
+
+// static
+DeepScanTrigger DownloadItemWarningData::DownloadDeepScanTrigger(
+    const download::DownloadItem* download) {
+  return GetWithDefault(download, &DownloadItemWarningData::deep_scan_trigger_,
+                        DeepScanTrigger::TRIGGER_UNKNOWN);
+}
+
+// static
+void DownloadItemWarningData::SetDeepScanTrigger(
+    download::DownloadItem* download,
+    DeepScanTrigger trigger) {
+  if (!download) {
+    return;
+  }
+
+  GetOrCreate(download)->deep_scan_trigger_ = trigger;
+}
+
+// static
+base::Time DownloadItemWarningData::WarningFirstShownTime(
+    const download::DownloadItem* download) {
+  return GetWithDefault(download,
+                        &DownloadItemWarningData::warning_first_shown_time_,
+                        base::Time());
+}
+
+// static
+std::optional<DownloadItemWarningData::WarningSurface>
+DownloadItemWarningData::WarningFirstShownSurface(
+    const download::DownloadItem* download) {
+  return GetWithDefault(download,
+                        &DownloadItemWarningData::warning_first_shown_surface_,
+                        std::optional<WarningSurface>());
 }
 
 DownloadItemWarningData::DownloadItemWarningData() = default;

@@ -28,6 +28,7 @@
 #include <utility>
 
 #include "src/tint/lang/core/ir/transform/helper_test.h"
+#include "src/tint/lang/core/ir/validator.h"
 #include "src/tint/lang/core/type/struct.h"
 #include "src/tint/lang/wgsl/writer/raise/raise.h"
 
@@ -37,7 +38,10 @@ namespace {
 using namespace tint::core::fluent_types;     // NOLINT
 using namespace tint::core::number_suffixes;  // NOLINT
 
-using WgslWriter_RaiseTest = core::ir::transform::TransformTest;
+class WgslWriter_RaiseTest : public core::ir::transform::TransformTest {
+  public:
+    WgslWriter_RaiseTest() { capabilities.Add(core::ir::Capability::kAllowRefTypes); }
+};
 
 TEST_F(WgslWriter_RaiseTest, BuiltinConversion) {
     auto* f = b.Function("f", ty.void_());
@@ -60,6 +64,7 @@ TEST_F(WgslWriter_RaiseTest, BuiltinConversion) {
 %f = func():void -> %b1 {
   %b1 = block {
     %2:i32 = wgsl.max 1i, 2i
+    %3:i32 = let %2
     ret
   }
 }
@@ -99,13 +104,14 @@ TEST_F(WgslWriter_RaiseTest, WorkgroupBarrier) {
 
     auto* expect = R"(
 %b1 = block {  # root
-  %W:ptr<workgroup, i32, read_write> = var
+  %W:ref<workgroup, i32, read_write> = var
 }
 
 %f = func():i32 -> %b2 {
   %b2 = block {
-    %3:i32 = wgsl.workgroupUniformLoad %W
-    ret %3
+    %3:ptr<workgroup, i32, read_write> = ref-to-ptr %W
+    %4:i32 = wgsl.workgroupUniformLoad %3
+    ret %4
   }
 }
 )";
@@ -146,7 +152,7 @@ TEST_F(WgslWriter_RaiseTest, WorkgroupBarrier_NoMatch) {
 
     auto* expect = R"(
 %b1 = block {  # root
-  %W:ptr<workgroup, i32, read_write> = var
+  %W:ref<workgroup, i32, read_write> = var
 }
 
 %f = func():i32 -> %b2 {
@@ -154,8 +160,9 @@ TEST_F(WgslWriter_RaiseTest, WorkgroupBarrier_NoMatch) {
     %3:void = wgsl.workgroupBarrier
     store %W, 42i
     %4:i32 = load %W
-    %5:void = wgsl.workgroupBarrier
-    ret %4
+    %5:i32 = let %4
+    %6:void = wgsl.workgroupBarrier
+    ret %5
   }
 }
 )";

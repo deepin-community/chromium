@@ -215,6 +215,11 @@ class SystemWebAppManagerTest : public ChromeRenderViewHostTestHarness {
         FROM_HERE, run_loop.QuitClosure());
     run_loop.Run();
   }
+
+  void AwaitSystemWebAppCommandsCompletePostStartup() {
+    base::RunLoop().RunUntilIdle();
+    provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  }
 };
 
 // Test that changing the set of System Apps uninstalls apps.
@@ -850,22 +855,22 @@ TEST_F(SystemWebAppManagerTest, AbandonFailedInstalls) {
   externally_managed_app_manager().SetDropRequestsForTesting(true);
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
 
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
 
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
 
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
 
   // 1 successful, 1 abandoned, and 3 more abanonded retries is 5.
@@ -883,7 +888,7 @@ TEST_F(SystemWebAppManagerTest, AbandonFailedInstalls) {
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().set_current_version(base::Version("2.0.0.0"));
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   EXPECT_EQ(5u, install_requests.size());
 
@@ -891,8 +896,7 @@ TEST_F(SystemWebAppManagerTest, AbandonFailedInstalls) {
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().set_current_version(base::Version("3.0.0.0"));
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
-  provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
 
   EXPECT_EQ(6u, install_requests.size());
@@ -931,22 +935,22 @@ TEST_F(SystemWebAppManagerTest, AbandonFailedInstallsLocaleChange) {
   // We use RunUntilIdle because the install requests are dropped, so
   // on_app_synchronized() won't be called.
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
 
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
 
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
 
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
 
   // 1 successful, 1 abandoned, and 3 more abanonded retries is 5.
@@ -963,7 +967,7 @@ TEST_F(SystemWebAppManagerTest, AbandonFailedInstallsLocaleChange) {
   externally_managed_app_manager().SetDropRequestsForTesting(false);
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
   EXPECT_EQ(5u, install_requests.size());
 
@@ -971,8 +975,7 @@ TEST_F(SystemWebAppManagerTest, AbandonFailedInstallsLocaleChange) {
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().set_current_locale("fr/fr");
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
-  provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
 }
 
@@ -1005,7 +1008,7 @@ TEST_F(SystemWebAppManagerTest, SucceedsAfterOneRetry) {
   externally_managed_app_manager().SetDropRequestsForTesting(true);
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
 
   EXPECT_EQ(2u, install_requests.size());
@@ -1014,7 +1017,7 @@ TEST_F(SystemWebAppManagerTest, SucceedsAfterOneRetry) {
 
   system_web_app_manager().ResetForTesting();
   system_web_app_manager().Start();
-  base::RunLoop().RunUntilIdle();
+  AwaitSystemWebAppCommandsCompletePostStartup();
   externally_managed_app_manager().ClearSynchronizeRequestsForTesting();
 
   // Retry a few times, but not until abandonment.
@@ -1232,7 +1235,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimer) {
   web_app::TestWebAppUrlLoader* loader = url_loader.get();
   timers[0]->SetUrlLoaderForTesting(std::move(url_loader));
   loader->SetNextLoadUrlResult(AppUrl1(),
-                               web_app::WebAppUrlLoader::Result::kUrlLoaded);
+                               webapps::WebAppUrlLoaderResult::kUrlLoaded);
 
   EXPECT_EQ(base::Seconds(60), timers[0]->period_for_testing());
   base::RunLoop().RunUntilIdle();
@@ -1248,7 +1251,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimer) {
   EXPECT_EQ(1u, timers[0]->opened_count_for_testing());
 
   loader->SetNextLoadUrlResult(AppUrl1(),
-                               web_app::WebAppUrlLoader::Result::kUrlLoaded);
+                               webapps::WebAppUrlLoaderResult::kUrlLoaded);
 
   EXPECT_EQ(SystemWebAppBackgroundTask::WAIT_PERIOD,
             timers[0]->get_state_for_testing());
@@ -1259,7 +1262,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimer) {
   EXPECT_EQ(2u, timers[0]->opened_count_for_testing());
 
   loader->SetNextLoadUrlResult(
-      AppUrl1(), web_app::WebAppUrlLoader::Result::kFailedUnknownReason);
+      AppUrl1(), webapps::WebAppUrlLoaderResult::kFailedUnknownReason);
 
   task_environment()->FastForwardBy(base::Seconds(61));
 
@@ -1286,7 +1289,7 @@ TEST_F(SystemWebAppManagerTimerTest,
         loader = url_loader.get();
         timers[0]->SetUrlLoaderForTesting(std::move(url_loader));
         loader->SetNextLoadUrlResult(
-            AppUrl1(), web_app::WebAppUrlLoader::Result::kUrlLoaded);
+            AppUrl1(), webapps::WebAppUrlLoaderResult::kUrlLoaded);
       }));
   system_web_app_manager().Start();
   waiter.Wait();
@@ -1304,7 +1307,7 @@ TEST_F(SystemWebAppManagerTimerTest,
             timers[0]->get_state_for_testing());
 
   loader->SetNextLoadUrlResult(AppUrl1(),
-                               web_app::WebAppUrlLoader::Result::kUrlLoaded);
+                               webapps::WebAppUrlLoaderResult::kUrlLoaded);
 
   task_environment()->FastForwardBy(base::Seconds(300));
 
@@ -1329,7 +1332,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimerStartsImmediately) {
         loader = url_loader.get();
         timers[0]->SetUrlLoaderForTesting(std::move(url_loader));
         loader->SetNextLoadUrlResult(
-            AppUrl1(), web_app::WebAppUrlLoader::Result::kUrlLoaded);
+            AppUrl1(), webapps::WebAppUrlLoaderResult::kUrlLoaded);
       }));
   system_web_app_manager().Start();
   waiter.Wait();
@@ -1351,7 +1354,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimerStartsImmediately) {
             timers[0]->get_state_for_testing());
 
   loader->SetNextLoadUrlResult(AppUrl1(),
-                               web_app::WebAppUrlLoader::Result::kUrlLoaded);
+                               webapps::WebAppUrlLoaderResult::kUrlLoaded);
 
   task_environment()->FastForwardBy(base::Seconds(300));
 
@@ -1377,7 +1380,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimerWaitsForIdle) {
         loader = url_loader.get();
         timers[0]->SetUrlLoaderForTesting(std::move(url_loader));
         loader->SetNextLoadUrlResult(
-            AppUrl1(), web_app::WebAppUrlLoader::Result::kUrlLoaded);
+            AppUrl1(), webapps::WebAppUrlLoaderResult::kUrlLoaded);
       }));
   system_web_app_manager().Start();
   waiter.Wait();
@@ -1407,7 +1410,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimerWaitsForIdle) {
     EXPECT_EQ(1u, timers[0]->opened_count_for_testing());
     EXPECT_EQ(base::Time(), timers[0]->polling_since_time_for_testing());
     loader->SetNextLoadUrlResult(AppUrl1(),
-                                 web_app::WebAppUrlLoader::Result::kUrlLoaded);
+                                 webapps::WebAppUrlLoaderResult::kUrlLoaded);
     task_environment()->FastForwardBy(base::Seconds(300));
 
     EXPECT_EQ(2u, timers[0]->timer_activated_count_for_testing());
@@ -1416,7 +1419,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimerWaitsForIdle) {
   {
     ui::ScopedSetIdleState scoped_locked(ui::IDLE_STATE_LOCKED);
     loader->SetNextLoadUrlResult(AppUrl1(),
-                                 web_app::WebAppUrlLoader::Result::kUrlLoaded);
+                                 webapps::WebAppUrlLoaderResult::kUrlLoaded);
     task_environment()->FastForwardBy(base::Seconds(300));
     EXPECT_EQ(SystemWebAppBackgroundTask::WAIT_PERIOD,
               timers[0]->get_state_for_testing());
@@ -1443,7 +1446,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimerRunsAfterIdleLimitReached) {
         loader = url_loader.get();
         timers[0]->SetUrlLoaderForTesting(std::move(url_loader));
         loader->SetNextLoadUrlResult(
-            AppUrl1(), web_app::WebAppUrlLoader::Result::kUrlLoaded);
+            AppUrl1(), webapps::WebAppUrlLoaderResult::kUrlLoaded);
       }));
   system_web_app_manager().Start();
   waiter.Wait();
@@ -1480,7 +1483,7 @@ TEST_F(SystemWebAppManagerTimerTest, TestTimerRunsAfterIdleLimitReached) {
   EXPECT_EQ(1u, timers[0]->opened_count_for_testing());
 
   loader->SetNextLoadUrlResult(AppUrl1(),
-                               web_app::WebAppUrlLoader::Result::kUrlLoaded);
+                               webapps::WebAppUrlLoaderResult::kUrlLoaded);
 }
 
 TEST_F(SystemWebAppManagerTest,

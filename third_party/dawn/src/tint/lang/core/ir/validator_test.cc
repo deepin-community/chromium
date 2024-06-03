@@ -26,15 +26,22 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "gmock/gmock.h"
+
+#include "src/tint/lang/core/address_space.h"
 #include "src/tint/lang/core/ir/builder.h"
+#include "src/tint/lang/core/ir/function_param.h"
 #include "src/tint/lang/core/ir/ir_helper_test.h"
 #include "src/tint/lang/core/ir/validator.h"
 #include "src/tint/lang/core/type/array.h"
+#include "src/tint/lang/core/type/manager.h"
 #include "src/tint/lang/core/type/matrix.h"
+#include "src/tint/lang/core/type/memory_view.h"
 #include "src/tint/lang/core/type/pointer.h"
+#include "src/tint/lang/core/type/reference.h"
 #include "src/tint/lang/core/type/struct.h"
 #include "src/tint/utils/text/string.h"
 
@@ -60,7 +67,7 @@ TEST_F(IR_ValidatorTest, RootBlock_NonVar) {
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_EQ(res.Failure().reason.Str(),
-              R"(:2:3 error: root block: invalid instruction: tint::core::ir::Loop
+              R"(:2:3 error: loop: root block: invalid instruction: tint::core::ir::Loop
   loop [b: %b2] {  # loop_1
   ^^^^^^^^^^^^^
 
@@ -770,7 +777,7 @@ TEST_F(IR_ValidatorTest, Access_IndexVectorPtr_WithCapability) {
         b.Return(f);
     });
 
-    auto res = ir::Validate(mod, EnumSet<Capability>{Capability::kAllowVectorElementPointer});
+    auto res = ir::Validate(mod, Capabilities{Capability::kAllowVectorElementPointer});
     ASSERT_EQ(res, Success);
 }
 
@@ -815,7 +822,7 @@ TEST_F(IR_ValidatorTest, Access_IndexVectorPtr_ViaMatrixPtr_WithCapability) {
         b.Return(f);
     });
 
-    auto res = ir::Validate(mod, EnumSet<Capability>{Capability::kAllowVectorElementPointer});
+    auto res = ir::Validate(mod, Capabilities{Capability::kAllowVectorElementPointer});
     ASSERT_EQ(res, Success);
 }
 
@@ -922,7 +929,7 @@ TEST_F(IR_ValidatorTest, Block_TerminatorInMiddle) {
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_EQ(res.Failure().reason.Str(),
-              R"(:3:5 error: block: terminator which isn't the final instruction
+              R"(:3:5 error: return: block: terminator which isn't the final instruction
     ret
     ^^^
 
@@ -1138,7 +1145,7 @@ note: # Disassembly
 }
 
 TEST_F(IR_ValidatorTest, Var_RootBlock_NullResult) {
-    auto* v = mod.instructions.Create<ir::Var>(nullptr);
+    auto* v = mod.allocators.instructions.Create<ir::Var>(nullptr);
     mod.root_block->Append(v);
 
     auto res = ir::Validate(mod);
@@ -1160,7 +1167,7 @@ note: # Disassembly
 }
 
 TEST_F(IR_ValidatorTest, Var_Function_NullResult) {
-    auto* v = mod.instructions.Create<ir::Var>(nullptr);
+    auto* v = mod.allocators.instructions.Create<ir::Var>(nullptr);
 
     auto* f = b.Function("my_func", ty.void_());
 
@@ -1219,7 +1226,7 @@ note: # Disassembly
 }
 
 TEST_F(IR_ValidatorTest, Let_NullResult) {
-    auto* v = mod.instructions.Create<ir::Let>(nullptr, b.Constant(1_i));
+    auto* v = mod.allocators.instructions.Create<ir::Let>(nullptr, b.Constant(1_i));
 
     auto* f = b.Function("my_func", ty.void_());
 
@@ -1248,7 +1255,7 @@ note: # Disassembly
 }
 
 TEST_F(IR_ValidatorTest, Let_NullValue) {
-    auto* v = mod.instructions.Create<ir::Let>(b.InstructionResult(ty.f32()), nullptr);
+    auto* v = mod.allocators.instructions.Create<ir::Let>(b.InstructionResult(ty.f32()), nullptr);
 
     auto* f = b.Function("my_func", ty.void_());
 
@@ -1277,7 +1284,8 @@ note: # Disassembly
 }
 
 TEST_F(IR_ValidatorTest, Let_WrongType) {
-    auto* v = mod.instructions.Create<ir::Let>(b.InstructionResult(ty.f32()), b.Constant(1_i));
+    auto* v =
+        mod.allocators.instructions.Create<ir::Let>(b.InstructionResult(ty.f32()), b.Constant(1_i));
 
     auto* f = b.Function("my_func", ty.void_());
 
@@ -1447,7 +1455,7 @@ TEST_F(IR_ValidatorTest, Instruction_OrphanedInstruction) {
 
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
-    EXPECT_EQ(res.Failure().reason.Str(), R"(error: orphaned instruction: load
+    EXPECT_EQ(res.Failure().reason.Str(), R"(error: load: orphaned instruction: load
 note: # Disassembly
 %my_func = func():void -> %b1 {
   %b1 = block {
@@ -1513,8 +1521,8 @@ note: # Disassembly
 }
 
 TEST_F(IR_ValidatorTest, Binary_Result_Nullptr) {
-    auto* bin = mod.instructions.Create<ir::CoreBinary>(nullptr, BinaryOp::kAdd, b.Constant(3_i),
-                                                        b.Constant(2_i));
+    auto* bin = mod.allocators.instructions.Create<ir::CoreBinary>(
+        nullptr, BinaryOp::kAdd, b.Constant(3_i), b.Constant(2_i));
 
     auto* f = b.Function("my_func", ty.void_());
 
@@ -1570,8 +1578,8 @@ note: # Disassembly
 }
 
 TEST_F(IR_ValidatorTest, Unary_Result_Nullptr) {
-    auto* bin =
-        mod.instructions.Create<ir::CoreUnary>(nullptr, UnaryOp::kNegation, b.Constant(2_i));
+    auto* bin = mod.allocators.instructions.Create<ir::CoreUnary>(nullptr, UnaryOp::kNegation,
+                                                                  b.Constant(2_i));
 
     auto* f = b.Function("my_func", ty.void_());
 
@@ -1644,7 +1652,7 @@ TEST_F(IR_ValidatorTest, ExitIf) {
 
 TEST_F(IR_ValidatorTest, ExitIf_NullIf) {
     auto* if_ = b.If(true);
-    if_->True()->Append(mod.instructions.Create<ExitIf>(nullptr));
+    if_->True()->Append(mod.allocators.instructions.Create<ExitIf>(nullptr));
 
     auto* f = b.Function("my_func", ty.void_());
     auto sb = b.Append(f->Block());
@@ -2034,7 +2042,7 @@ TEST_F(IR_ValidatorTest, ExitSwitch_NullSwitch) {
     auto* switch_ = b.Switch(true);
 
     auto* def = b.DefaultCase(switch_);
-    def->Append(mod.instructions.Create<ExitSwitch>(nullptr));
+    def->Append(mod.allocators.instructions.Create<ExitSwitch>(nullptr));
 
     auto* f = b.Function("my_func", ty.void_());
     auto sb = b.Append(f->Block());
@@ -2414,7 +2422,7 @@ TEST_F(IR_ValidatorTest, ExitLoop) {
 TEST_F(IR_ValidatorTest, ExitLoop_NullLoop) {
     auto* loop = b.Loop();
     loop->Continuing()->Append(b.NextIteration(loop));
-    loop->Body()->Append(mod.instructions.Create<ExitLoop>(nullptr));
+    loop->Body()->Append(mod.allocators.instructions.Create<ExitLoop>(nullptr));
 
     auto* f = b.Function("my_func", ty.void_());
     auto sb = b.Append(f->Block());
@@ -3121,7 +3129,8 @@ TEST_F(IR_ValidatorTest, Load_NullFrom) {
     auto* f = b.Function("my_func", ty.void_());
 
     b.Append(f->Block(), [&] {
-        b.Append(mod.instructions.Create<ir::Load>(b.InstructionResult(ty.i32()), nullptr));
+        b.Append(
+            mod.allocators.instructions.Create<ir::Load>(b.InstructionResult(ty.i32()), nullptr));
         b.Return(f);
     });
 
@@ -3150,14 +3159,15 @@ TEST_F(IR_ValidatorTest, Load_SourceNotMemoryView) {
 
     b.Append(f->Block(), [&] {
         auto* let = b.Let("l", 1_i);
-        b.Append(mod.instructions.Create<ir::Load>(b.InstructionResult(ty.f32()), let->Result(0)));
+        b.Append(mod.allocators.instructions.Create<ir::Load>(b.InstructionResult(ty.f32()),
+                                                              let->Result(0)));
         b.Return(f);
     });
 
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_EQ(res.Failure().reason.Str(),
-              R"(:4:19 error: load source operand is not a memory view
+              R"(:4:19 error: load: load source operand is not a memory view
     %3:f32 = load %l
                   ^^
 
@@ -3181,14 +3191,15 @@ TEST_F(IR_ValidatorTest, Load_TypeMismatch) {
 
     b.Append(f->Block(), [&] {
         auto* var = b.Var(ty.ptr<function, i32>());
-        b.Append(mod.instructions.Create<ir::Load>(b.InstructionResult(ty.f32()), var->Result(0)));
+        b.Append(mod.allocators.instructions.Create<ir::Load>(b.InstructionResult(ty.f32()),
+                                                              var->Result(0)));
         b.Return(f);
     });
 
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_EQ(res.Failure().reason.Str(),
-              R"(:4:19 error: result type does not match source store type
+              R"(:4:19 error: load: result type does not match source store type
     %3:f32 = load %2
                   ^^
 
@@ -3211,7 +3222,7 @@ TEST_F(IR_ValidatorTest, Store_NullTo) {
     auto* f = b.Function("my_func", ty.void_());
 
     b.Append(f->Block(), [&] {
-        b.Append(mod.instructions.Create<ir::Store>(nullptr, b.Constant(42_i)));
+        b.Append(mod.allocators.instructions.Create<ir::Store>(nullptr, b.Constant(42_i)));
         b.Return(f);
     });
 
@@ -3240,7 +3251,7 @@ TEST_F(IR_ValidatorTest, Store_NullFrom) {
 
     b.Append(f->Block(), [&] {
         auto* var = b.Var(ty.ptr<function, i32>());
-        b.Append(mod.instructions.Create<ir::Store>(var->Result(0), nullptr));
+        b.Append(mod.allocators.instructions.Create<ir::Store>(var->Result(0), nullptr));
         b.Return(f);
     });
 
@@ -3270,14 +3281,14 @@ TEST_F(IR_ValidatorTest, Store_TargetNotMemoryView) {
 
     b.Append(f->Block(), [&] {
         auto* let = b.Let("l", 1_i);
-        b.Append(mod.instructions.Create<ir::Store>(let->Result(0), b.Constant(42_u)));
+        b.Append(mod.allocators.instructions.Create<ir::Store>(let->Result(0), b.Constant(42_u)));
         b.Return(f);
     });
 
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_EQ(res.Failure().reason.Str(),
-              R"(:4:15 error: store target operand is not a memory view
+              R"(:4:15 error: store: store target operand is not a memory view
     store %l, 42u
               ^^^
 
@@ -3301,14 +3312,14 @@ TEST_F(IR_ValidatorTest, Store_TypeMismatch) {
 
     b.Append(f->Block(), [&] {
         auto* var = b.Var(ty.ptr<function, i32>());
-        b.Append(mod.instructions.Create<ir::Store>(var->Result(0), b.Constant(42_u)));
+        b.Append(mod.allocators.instructions.Create<ir::Store>(var->Result(0), b.Constant(42_u)));
         b.Return(f);
     });
 
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_EQ(res.Failure().reason.Str(),
-              R"(:4:15 error: value type does not match store type
+              R"(:4:15 error: store: value type does not match store type
     store %2, 42u
               ^^^
 
@@ -3332,8 +3343,8 @@ TEST_F(IR_ValidatorTest, LoadVectorElement_NullResult) {
 
     b.Append(f->Block(), [&] {
         auto* var = b.Var(ty.ptr<function, vec3<f32>>());
-        b.Append(mod.instructions.Create<ir::LoadVectorElement>(nullptr, var->Result(0),
-                                                                b.Constant(1_i)));
+        b.Append(mod.allocators.instructions.Create<ir::LoadVectorElement>(nullptr, var->Result(0),
+                                                                           b.Constant(1_i)));
         b.Return(f);
     });
 
@@ -3363,8 +3374,8 @@ TEST_F(IR_ValidatorTest, LoadVectorElement_NullFrom) {
     auto* f = b.Function("my_func", ty.void_());
 
     b.Append(f->Block(), [&] {
-        b.Append(mod.instructions.Create<ir::LoadVectorElement>(b.InstructionResult(ty.f32()),
-                                                                nullptr, b.Constant(1_i)));
+        b.Append(mod.allocators.instructions.Create<ir::LoadVectorElement>(
+            b.InstructionResult(ty.f32()), nullptr, b.Constant(1_i)));
         b.Return(f);
     });
 
@@ -3393,8 +3404,8 @@ TEST_F(IR_ValidatorTest, LoadVectorElement_NullIndex) {
 
     b.Append(f->Block(), [&] {
         auto* var = b.Var(ty.ptr<function, vec3<f32>>());
-        b.Append(mod.instructions.Create<ir::LoadVectorElement>(b.InstructionResult(ty.f32()),
-                                                                var->Result(0), nullptr));
+        b.Append(mod.allocators.instructions.Create<ir::LoadVectorElement>(
+            b.InstructionResult(ty.f32()), var->Result(0), nullptr));
         b.Return(f);
     });
 
@@ -3423,8 +3434,8 @@ TEST_F(IR_ValidatorTest, StoreVectorElement_NullTo) {
     auto* f = b.Function("my_func", ty.void_());
 
     b.Append(f->Block(), [&] {
-        b.Append(mod.instructions.Create<ir::StoreVectorElement>(nullptr, b.Constant(1_i),
-                                                                 b.Constant(2_i)));
+        b.Append(mod.allocators.instructions.Create<ir::StoreVectorElement>(
+            nullptr, b.Constant(1_i), b.Constant(2_i)));
         b.Return(f);
     });
 
@@ -3453,8 +3464,8 @@ TEST_F(IR_ValidatorTest, StoreVectorElement_NullIndex) {
 
     b.Append(f->Block(), [&] {
         auto* var = b.Var(ty.ptr<function, vec3<f32>>());
-        b.Append(mod.instructions.Create<ir::StoreVectorElement>(var->Result(0), nullptr,
-                                                                 b.Constant(2_i)));
+        b.Append(mod.allocators.instructions.Create<ir::StoreVectorElement>(var->Result(0), nullptr,
+                                                                            b.Constant(2_i)));
         b.Return(f);
     });
 
@@ -3468,7 +3479,7 @@ TEST_F(IR_ValidatorTest, StoreVectorElement_NullIndex) {
   %b1 = block {
   ^^^^^^^^^^^
 
-:4:37 error: value type does not match vector pointer element type
+:4:37 error: store_vector_element: value type does not match vector pointer element type
     store_vector_element %2, undef, 2i
                                     ^^
 
@@ -3492,8 +3503,8 @@ TEST_F(IR_ValidatorTest, StoreVectorElement_NullValue) {
 
     b.Append(f->Block(), [&] {
         auto* var = b.Var(ty.ptr<function, vec3<f32>>());
-        b.Append(mod.instructions.Create<ir::StoreVectorElement>(var->Result(0), b.Constant(1_i),
-                                                                 nullptr));
+        b.Append(mod.allocators.instructions.Create<ir::StoreVectorElement>(
+            var->Result(0), b.Constant(1_i), nullptr));
         b.Return(f);
     });
 
@@ -3518,5 +3529,112 @@ note: # Disassembly
 )");
 }
 
+template <typename T>
+static const type::Type* TypeBuilder(type::Manager& m) {
+    return m.Get<T>();
+}
+template <typename T>
+static const type::Type* RefTypeBuilder(type::Manager& m) {
+    return m.ref<AddressSpace::kFunction, T>();
+}
+using TypeBuilderFn = decltype(&TypeBuilder<i32>);
+
+using IR_ValidatorRefTypeTest = IRTestParamHelper<std::tuple</* holds_ref */ bool,
+                                                             /* refs_allowed */ bool,
+                                                             /* type_builder */ TypeBuilderFn>>;
+
+TEST_P(IR_ValidatorRefTypeTest, Var) {
+    bool holds_ref = std::get<0>(GetParam());
+    bool refs_allowed = std::get<1>(GetParam());
+    auto* type = std::get<2>(GetParam())(ty);
+
+    auto* fn = b.Function("my_func", ty.void_());
+    b.Append(fn->Block(), [&] {
+        if (auto* view = type->As<type::MemoryView>()) {
+            b.Var(view);
+        } else {
+            b.Var(ty.ptr<function>(type));
+        }
+
+        b.Return(fn);
+    });
+
+    Capabilities caps;
+    if (refs_allowed) {
+        caps.Add(Capability::kAllowRefTypes);
+    }
+    auto res = ir::Validate(mod, caps);
+    if (!holds_ref || refs_allowed) {
+        ASSERT_EQ(res, Success) << res.Failure();
+    } else {
+        ASSERT_NE(res, Success);
+        EXPECT_THAT(res.Failure().reason.Str(),
+                    testing::HasSubstr("3:5 error: var: reference type is not permitted"));
+    }
+}
+
+TEST_P(IR_ValidatorRefTypeTest, FnParam) {
+    bool holds_ref = std::get<0>(GetParam());
+    bool refs_allowed = std::get<1>(GetParam());
+    auto* type = std::get<2>(GetParam())(ty);
+
+    auto* fn = b.Function("my_func", ty.void_());
+    fn->SetParams(Vector{b.FunctionParam(type)});
+    b.Append(fn->Block(), [&] { b.Return(fn); });
+
+    Capabilities caps;
+    if (refs_allowed) {
+        caps.Add(Capability::kAllowRefTypes);
+    }
+    auto res = ir::Validate(mod, caps);
+    if (!holds_ref) {
+        ASSERT_EQ(res, Success) << res.Failure();
+    } else {
+        ASSERT_NE(res, Success);
+        EXPECT_THAT(res.Failure().reason.Str(),
+                    testing::HasSubstr("references are not permitted as parameter types"));
+    }
+}
+
+TEST_P(IR_ValidatorRefTypeTest, FnRet) {
+    bool holds_ref = std::get<0>(GetParam());
+    bool refs_allowed = std::get<1>(GetParam());
+    auto* type = std::get<2>(GetParam())(ty);
+
+    auto* fn = b.Function("my_func", type);
+    b.Append(fn->Block(), [&] { b.Unreachable(); });
+
+    Capabilities caps;
+    if (refs_allowed) {
+        caps.Add(Capability::kAllowRefTypes);
+    }
+    auto res = ir::Validate(mod, caps);
+    if (!holds_ref) {
+        ASSERT_EQ(res, Success) << res.Failure();
+    } else {
+        ASSERT_NE(res, Success);
+        EXPECT_THAT(res.Failure().reason.Str(),
+                    testing::HasSubstr("references are not permitted as return types"));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(NonRefTypes,
+                         IR_ValidatorRefTypeTest,
+                         testing::Combine(/* holds_ref */ testing::Values(false),
+                                          /* refs_allowed */ testing::Values(false, true),
+                                          /* type_builder */
+                                          testing::Values(TypeBuilder<i32>,
+                                                          TypeBuilder<bool>,
+                                                          TypeBuilder<vec4<f32>>,
+                                                          TypeBuilder<array<f32, 3>>)));
+
+INSTANTIATE_TEST_SUITE_P(RefTypes,
+                         IR_ValidatorRefTypeTest,
+                         testing::Combine(/* holds_ref */ testing::Values(true),
+                                          /* refs_allowed */ testing::Values(false, true),
+                                          /* type_builder */
+                                          testing::Values(RefTypeBuilder<i32>,
+                                                          RefTypeBuilder<bool>,
+                                                          RefTypeBuilder<vec4<f32>>)));
 }  // namespace
 }  // namespace tint::core::ir

@@ -33,7 +33,6 @@
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_script_execution_callback.h"
 #include "third_party/blink/public/web/web_script_source.h"
-#include "url/gurl.h"
 
 using perfetto::protos::pbzero::ChromeTrackEvent;
 
@@ -68,7 +67,7 @@ class ScriptInjection::FrameWatcher : public content::RenderFrameObserver {
   }
   void OnDestruct() override { injection_->invalidate_render_frame(); }
 
-  raw_ptr<ScriptInjection, ExperimentalRenderer> injection_;
+  raw_ptr<ScriptInjection> injection_;
 };
 
 ScriptInjection::ScriptInjection(
@@ -256,7 +255,8 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
     case mojom::ExecutionWorld::kUserScript:
       world_id =
           IsolatedWorldManager::GetInstance().GetOrCreateIsolatedWorldForHost(
-              *injection_host_, execution_world);
+              *injection_host_, execution_world,
+              injector_->GetExecutionWorldId());
       if (injection_host_->id().type == mojom::HostID::HostType::kExtensions &&
           log_activity_) {
         DOMActivityLogger::AttachToWorld(world_id, injection_host_->id().id);

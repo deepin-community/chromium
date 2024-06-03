@@ -7,7 +7,6 @@ import collections
 import logging
 import json
 import os
-import sys
 import time
 from typing import Any, List, Optional, Set, Tuple
 
@@ -18,6 +17,7 @@ from gpu_tests import common_typing as ct
 from gpu_tests import gpu_helper
 from gpu_tests import gpu_integration_test
 from gpu_tests import webgl_test_util
+from gpu_tests.util import host_information
 from gpu_tests.util import websocket_server as wss
 from gpu_tests.util import websocket_utils
 
@@ -98,37 +98,47 @@ class WebGLConformanceIntegrationTestBase(
     return True
 
   def _GetSerialGlobs(self) -> Set[str]:
-    return {
-        # crbug.com/1345466. Can be removed once OpenGL is no longer used on
-        # Mac.
-        'deqp/functional/gles3/transformfeedback/*',
-        # crbug.com/1347970. Flaking for unknown reasons on Metal backend.
-        'deqp/functional/gles3/textureshadow/*',
-        # crbug.com/1412460. Flaky timeouts on Mac Intel.
-        'deqp/functional/gles3/shadermatrix/*',
-        'deqp/functional/gles3/shaderoperator/*',
-    }
+    serial_globs = set()
+    if host_information.IsMac():
+      if host_information.IsAmdGpu():
+        serial_globs |= {
+            # crbug.com/1345466. Can be removed once OpenGL is no longer used on
+            # Mac.
+            'deqp/functional/gles3/transformfeedback/*',
+        }
+      if host_information.IsIntelGpu():
+        serial_globs |= {
+            # crbug.com/1412460. Flaky timeouts on Mac Intel.
+            'deqp/functional/gles3/shadermatrix/*',
+            'deqp/functional/gles3/shaderoperator/*',
+        }
+    return serial_globs
 
   def _GetSerialTests(self) -> Set[str]:
-    return {
-        # crbug.com/1347970.
-        'conformance/textures/misc/texture-video-transparent.html',
-    }
+    serial_tests = set()
+    if host_information.IsLinux() and host_information.IsNvidiaGpu():
+      serial_tests |= {
+          # crbug.com/328528533. Regularly takes 2-3 minutes to complete on
+          # Linux/NVIDIA/Debug and can flakily hit the 5 minute timeout.
+          'conformance/uniforms/uniform-samplers-test.html',
+      }
+    return serial_tests
 
   @classmethod
   def AddCommandlineArgs(cls, parser: ct.CmdArgParser) -> None:
     super().AddCommandlineArgs(parser)
-    parser.add_option('--webgl-conformance-version',
-                      help='Version of the WebGL conformance tests to run.',
-                      default='1.0.4')
-    parser.add_option(
+    parser.add_argument('--webgl-conformance-version',
+                        help='Version of the WebGL conformance tests to run.',
+                        default='1.0.4')
+    parser.add_argument(
         '--webgl2-only',
-        help='Whether we include webgl 1 tests if version is 2.0.0 or above.',
-        default='false')
-    parser.add_option('--enable-metal-debug-layers',
-                      action='store_true',
-                      default=False,
-                      help='Whether to enable Metal debug layers')
+        action='store_true',
+        default=False,
+        help='Whether we include webgl 1 tests if version is 2.0.0 or above.')
+    parser.add_argument('--enable-metal-debug-layers',
+                        action='store_true',
+                        default=False,
+                        help='Whether to enable Metal debug layers')
 
   @classmethod
   def StartBrowser(cls) -> None:
@@ -169,7 +179,7 @@ class WebGLConformanceIntegrationTestBase(
     #
     test_paths = cls._ParseTests('00_test_list.txt',
                                  options.webgl_conformance_version,
-                                 (options.webgl2_only == 'true'), None)
+                                 options.webgl2_only, None)
     assert cls._webgl_version is not None
     for test_path in test_paths:
       test_path_with_args = test_path
@@ -209,7 +219,7 @@ class WebGLConformanceIntegrationTestBase(
   @classmethod
   def _ModifyBrowserEnvironment(cls) -> None:
     super()._ModifyBrowserEnvironment()
-    if (sys.platform == 'darwin'
+    if (host_information.IsMac()
         and cls.GetOriginalFinderOptions().enable_metal_debug_layers):
       if cls._original_environ is None:
         cls._original_environ = os.environ.copy()

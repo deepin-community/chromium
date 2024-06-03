@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -17,9 +16,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/android/preferences/autofill/settings_launcher_helper.h"
+#include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
 #include "chrome/browser/keyboard_accessory/android/manual_filling_utils.h"
-#include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
@@ -152,9 +151,9 @@ void CreditCardAccessoryControllerImpl::RegisterFillingSourceObserver(
 
 std::optional<AccessorySheetData>
 CreditCardAccessoryControllerImpl::GetSheetData() const {
-  // Note that also GetManager() can return nullptr.
+  // Note that also GetAutofillManager() can return nullptr.
   const BrowserAutofillManager* autofill_manager =
-      GetWebContents().GetFocusedFrame() ? GetManager() : nullptr;
+      GetWebContents().GetFocusedFrame() ? GetAutofillManager() : nullptr;
 
   std::vector<UserInfo> info_to_add;
   bool allow_filling =
@@ -211,7 +210,7 @@ void CreditCardAccessoryControllerImpl::OnFillingTriggered(
   content::RenderFrameHost* rfh = GetWebContents().GetFocusedFrame();
   if (!rfh)
     return;  // Without focused frame, driver and manager will be undefined.
-  if (!GetDriver() || !GetManager()) {
+  if (!GetDriver() || !GetAutofillManager()) {
     // Even with a valid frame, driver or manager might be invalid. Log these
     // cases to check how we can recover and fail gracefully so users can retry.
     base::debug::DumpWithoutCrashing();
@@ -221,8 +220,8 @@ void CreditCardAccessoryControllerImpl::OnFillingTriggered(
   // Credit card number fields have a GUID populated to allow deobfuscation
   // before filling.
   if (selection.id().empty()) {
-    GetDriver()->ApplyFieldAction(mojom::ActionPersistence::kFill,
-                                  mojom::TextReplacement::kReplaceAll,
+    GetDriver()->ApplyFieldAction(mojom::FieldActionType::kReplaceAll,
+                                  mojom::ActionPersistence::kFill,
                                   focused_field_id, selection.text_to_fill());
     return;
   }
@@ -240,7 +239,7 @@ void CreditCardAccessoryControllerImpl::OnFillingTriggered(
   }
 
   last_focused_field_id_ = focused_field_id;
-  GetManager()->GetCreditCardAccessManager().FetchCreditCard(
+  GetAutofillManager()->GetCreditCardAccessManager().FetchCreditCard(
       UnwrapCardOrVirtualCard(*card_iter),
       base::BindOnce(&CreditCardAccessoryControllerImpl::OnCreditCardFetched,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -270,38 +269,8 @@ void CreditCardAccessoryControllerImpl::OnToggleChanged(
 }
 
 // static
-bool CreditCardAccessoryController::AllowedForWebContents(
-    content::WebContents* web_contents) {
-  DCHECK(web_contents) << "Need valid WebContents to attach controller to!";
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillEnableManualFallbackForVirtualCards)) {
-    Profile* profile =
-        Profile::FromBrowserContext(web_contents->GetBrowserContext());
-    PersonalDataManager* personal_data_manager =
-        PersonalDataManagerFactory::GetForProfile(profile);
-    if (personal_data_manager) {
-      std::vector<CreditCard*> cards =
-          personal_data_manager->GetCreditCardsToSuggest();
-      bool has_virtual_card = base::ranges::any_of(cards, [](const auto& card) {
-        return card->virtual_card_enrollment_state() ==
-               CreditCard::VirtualCardEnrollmentState::kEnrolled;
-      });
-      if (has_virtual_card) {
-        // Virtual cards are available. We should always show manual fallback
-        // for virtual cards.
-        return true;
-      }
-    }
-  }
-
-  return true;
-}
-
-// static
 CreditCardAccessoryController* CreditCardAccessoryController::GetOrCreate(
     content::WebContents* web_contents) {
-  DCHECK(CreditCardAccessoryController::AllowedForWebContents(web_contents));
-
   CreditCardAccessoryControllerImpl::CreateForWebContents(web_contents);
   return CreditCardAccessoryControllerImpl::FromWebContents(web_contents);
 }
@@ -352,8 +321,8 @@ void CreditCardAccessoryControllerImpl::OnCreditCardFetched(
   DCHECK(credit_card);
   DCHECK(GetDriver());
 
-  GetDriver()->ApplyFieldAction(mojom::ActionPersistence::kFill,
-                                mojom::TextReplacement::kReplaceAll,
+  GetDriver()->ApplyFieldAction(mojom::FieldActionType::kReplaceAll,
+                                mojom::ActionPersistence::kFill,
                                 last_focused_field_id_, credit_card->number());
   last_focused_field_id_ = {};
 }
@@ -423,7 +392,7 @@ std::vector<const CachedServerCardInfo*>
 CreditCardAccessoryControllerImpl::GetUnmaskedCreditCards() const {
   if (!GetWebContents().GetFocusedFrame())
     return std::vector<const CachedServerCardInfo*>();
-  const BrowserAutofillManager* autofill_manager = GetManager();
+  const BrowserAutofillManager* autofill_manager = GetAutofillManager();
   if (!autofill_manager) {
     return std::vector<const CachedServerCardInfo*>();
   }
@@ -435,14 +404,14 @@ CreditCardAccessoryControllerImpl::GetUnmaskedCreditCards() const {
     return card_info->card.record_type() !=
            CreditCard::RecordType::kVirtualCard;
   };
-  base::EraseIf(unmasked_cards, not_virtual_card);
+  std::erase_if(unmasked_cards, not_virtual_card);
   return unmasked_cards;
 }
 
 std::vector<const AutofillOfferData*>
 CreditCardAccessoryControllerImpl::GetPromoCodeOffers() const {
   const AutofillManager* autofill_manager =
-      GetWebContents().GetFocusedFrame() ? GetManager() : nullptr;
+      GetWebContents().GetFocusedFrame() ? GetAutofillManager() : nullptr;
   if (!personal_data_manager_ || !autofill_manager)
     return std::vector<const AutofillOfferData*>();
 
@@ -467,12 +436,14 @@ AutofillDriver* CreditCardAccessoryControllerImpl::GetDriver() {
                                       GetWebContents().GetFocusedFrame());
 }
 
-const BrowserAutofillManager* CreditCardAccessoryControllerImpl::GetManager()
-    const {
-  return const_cast<CreditCardAccessoryControllerImpl*>(this)->GetManager();
+const BrowserAutofillManager*
+CreditCardAccessoryControllerImpl::GetAutofillManager() const {
+  return const_cast<CreditCardAccessoryControllerImpl*>(this)
+      ->GetAutofillManager();
 }
 
-BrowserAutofillManager* CreditCardAccessoryControllerImpl::GetManager() {
+BrowserAutofillManager*
+CreditCardAccessoryControllerImpl::GetAutofillManager() {
   DCHECK(GetWebContents().GetFocusedFrame());
   if (af_manager_for_testing_)
     return af_manager_for_testing_;

@@ -25,11 +25,14 @@
 #include "components/password_manager/core/browser/affiliation/mock_affiliated_match_helper.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_manager_buildflags.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/login_database.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
 #include "components/password_manager/core/browser/password_store/password_store_change.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -134,7 +137,8 @@ class PasswordStoreBuiltInBackendTest : public testing::Test {
     }
 
     store_ = std::make_unique<PasswordStoreBuiltInBackend>(
-        std::move(database), syncer::WipeModelUponSyncDisabledBehavior::kNever);
+        std::move(database), syncer::WipeModelUponSyncDisabledBehavior::kNever,
+        &pref_service_);
     PasswordStoreBackend* backend = store_.get();
     backend->InitBackend(affiliated_match_helper,
                          /*remote_form_changes_received=*/base::DoNothing(),
@@ -147,6 +151,10 @@ class PasswordStoreBuiltInBackendTest : public testing::Test {
   void SetUp() override {
     OSCryptMocker::SetUp();
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+#if !BUILDFLAG(USE_LOGIN_DATABASE_AS_BACKEND)
+    pref_service_.registry()->RegisterBooleanPref(
+        password_manager::prefs::kEmptyProfileStoreLoginDatabase, false);
+#endif
   }
 
   void TearDown() override {
@@ -169,6 +177,8 @@ class PasswordStoreBuiltInBackendTest : public testing::Test {
     task_environment_.AdvanceClock(millis);
   }
 
+  TestingPrefServiceSimple* pref_service() { return &pref_service_; }
+
  private:
   void SetupTempDir();
 
@@ -184,6 +194,7 @@ class PasswordStoreBuiltInBackendTest : public testing::Test {
 
   base::ScopedTempDir temp_dir_;
   std::unique_ptr<PasswordStoreBuiltInBackend> store_;
+  TestingPrefServiceSimple pref_service_;
 };
 
 TEST_F(PasswordStoreBuiltInBackendTest, NonASCIIData) {
@@ -842,6 +853,36 @@ TEST_F(PasswordStoreBuiltInBackendTest,
   backend->GetAllLoginsWithAffiliationAndBrandingAsync(mock_reply.Get());
   RunUntilIdle();
 }
+
+#if !BUILDFLAG(USE_LOGIN_DATABASE_AS_BACKEND)
+TEST_F(PasswordStoreBuiltInBackendTest, NotAbleToSavePasswordsEmptyDB) {
+  base::test::ScopedFeatureList features(
+      password_manager::features::kUnifiedPasswordManagerSyncOnlyInGMSCore);
+  pref_service()->SetBoolean(
+      password_manager::prefs::kEmptyProfileStoreLoginDatabase, true);
+  PasswordStoreBackend* backend = Initialize();
+  EXPECT_FALSE(backend->IsAbleToSavePasswords());
+}
+
+TEST_F(PasswordStoreBuiltInBackendTest, IsAbleToSavePasswords) {
+  base::test::ScopedFeatureList features(
+      password_manager::features::kUnifiedPasswordManagerSyncOnlyInGMSCore);
+  pref_service()->SetBoolean(
+      password_manager::prefs::kEmptyProfileStoreLoginDatabase, false);
+  PasswordStoreBackend* backend = Initialize();
+  EXPECT_TRUE(backend->IsAbleToSavePasswords());
+}
+
+TEST_F(PasswordStoreBuiltInBackendTest, AbleToSavePasswordsFeatureDisabled) {
+  base::test::ScopedFeatureList features;
+  features.InitAndDisableFeature(
+      password_manager::features::kUnifiedPasswordManagerSyncOnlyInGMSCore);
+  pref_service()->SetBoolean(
+      password_manager::prefs::kEmptyProfileStoreLoginDatabase, false);
+  PasswordStoreBackend* backend = Initialize();
+  EXPECT_TRUE(backend->IsAbleToSavePasswords());
+}
+#endif
 
 TEST_F(PasswordStoreBuiltInBackendTest, NotAbleSavePasswordsWhenDatabaseIsBad) {
   PasswordStoreBackend* bad_backend =

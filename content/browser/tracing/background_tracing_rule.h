@@ -6,7 +6,9 @@
 #define CONTENT_BROWSER_TRACING_BACKGROUND_TRACING_RULE_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/observer_list_types.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "content/browser/tracing/background_tracing_config_impl.h"
@@ -16,7 +18,7 @@
 
 namespace content {
 
-class CONTENT_EXPORT BackgroundTracingRule {
+class CONTENT_EXPORT BackgroundTracingRule : public base::CheckedObserver {
  public:
   using MetadataProto =
       perfetto::protos::pbzero::BackgroundTracingMetadata::TriggerRule;
@@ -30,7 +32,7 @@ class CONTENT_EXPORT BackgroundTracingRule {
   BackgroundTracingRule(const BackgroundTracingRule&) = delete;
   BackgroundTracingRule& operator=(const BackgroundTracingRule&) = delete;
 
-  virtual ~BackgroundTracingRule();
+  ~BackgroundTracingRule() override;
 
   virtual void Install(RuleTriggeredCallback);
   virtual void Uninstall();
@@ -52,15 +54,17 @@ class CONTENT_EXPORT BackgroundTracingRule {
       const perfetto::protos::gen::TriggerRule& config);
 
   const std::string& rule_id() const { return rule_id_; }
+  std::optional<int32_t> triggered_value() const { return triggered_value_; }
 
   bool is_crash() const { return is_crash_; }
+
+  bool OnRuleTriggered(std::optional<int32_t> value);
 
  protected:
   virtual std::string GetDefaultRuleId() const;
 
   virtual void DoInstall() = 0;
   virtual void DoUninstall() = 0;
-  bool OnRuleTriggered();
 
   bool installed() const { return installed_; }
 
@@ -77,6 +81,7 @@ class CONTENT_EXPORT BackgroundTracingRule {
   base::OneShotTimer trigger_timer_;
   base::OneShotTimer activation_timer_;
   std::string rule_id_;
+  std::optional<int32_t> triggered_value_;
   bool is_crash_ = false;
 };
 

@@ -124,6 +124,15 @@ class Page;
 // The preferred way to keep a reference to a RenderFrameHost is storing a
 // GlobalRenderFrameHostId and using RenderFrameHost::FromID() when you need to
 // access it.
+//
+// Any code that uses RenderFrameHost must be aware of back-forward cache, see
+// LifecycleState. The main side-effect is that any IPCs that are processed on a
+// freezable task queue can stall indefinitely. See
+// MainThreadTaskQueue::QueueTraits::can_be_frozen. Code that uses
+// RenderFrameHost should refrain from passing this negative externality on to
+// higher-level dependencies. In short: code that uses RenderFrameHost must be
+// back-forward cache aware, and code that does not use RenderFrameHost should
+// not have to be back-forward cache aware.
 class CONTENT_EXPORT RenderFrameHost : public IPC::Listener,
                                        public IPC::Sender {
   // Do not remove this macro!
@@ -740,7 +749,7 @@ class CONTENT_EXPORT RenderFrameHost : public IPC::Listener,
   // to this, IsActive() is preferred instead of using LifecycleState::kActive.
   // TODO(crbug.com/1177198): Make IsActive and GetLifecycleState() == kActive
   // always match.
-  virtual bool IsActive() = 0;
+  virtual bool IsActive() const = 0;
 
   // Checks that the RenderFrameHost is inactive (with some exceptions) and
   // ensures that it will be never activated if it is inactive when calling this

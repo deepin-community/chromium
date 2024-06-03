@@ -34,6 +34,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/profiles/avatar_toolbar_button_delegate.h"
 #include "chrome/browser/ui/views/profiles/profile_menu_coordinator.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/grit/branded_strings.h"
@@ -93,7 +94,7 @@ AvatarToolbarButton::AvatarToolbarButton(BrowserView* browser_view)
   // and LabelButton image/label placement is still flipped like usual.
   SetFlipCanvasOnPaintForRTLUI(false);
 
-  GetViewAccessibility().OverrideHasPopup(ax::mojom::HasPopup::kMenu);
+  GetViewAccessibility().SetHasPopup(ax::mojom::HasPopup::kMenu);
 
   // For consistency with identity representation, we need to have the avatar on
   // the left and the (potential) user name on the right.
@@ -111,11 +112,12 @@ AvatarToolbarButton::AvatarToolbarButton(BrowserView* browser_view)
 AvatarToolbarButton::~AvatarToolbarButton() = default;
 
 void AvatarToolbarButton::UpdateIcon() {
-  // If widget isn't set, the button doesn't have access to the theme provider
-  // to set colors. Defer updating until AddedToWidget(). This may get called as
-  // a result of OnUserIdentityChanged() called from the constructor when the
+  // If the delegate state manager isn't initialized, that means the widget is
+  // not set yet and the button doesn't have access to the theme provider to set
+  // colors. Defer updating until AddedToWidget(). This may get called as a
+  // result of OnUserIdentityChanged() called from the constructor when the
   // button is not yet added to the ToolbarView's hierarchy.
-  if (!GetWidget()) {
+  if (!delegate_->IsStateManagerInitialized()) {
     return;
   }
 
@@ -124,19 +126,33 @@ void AvatarToolbarButton::UpdateIcon() {
     SetImageModel(
         state, delegate_->GetAvatarIcon(icon_size, GetForegroundColor(state)));
   }
-  // If `OnUserIdentityChanged()` has been called and the image is not empty,
-  // show the animation. If the animation is shown, also resets the delegate's
-  // `TextState` so that the animation will not be triggered again.
-  // TODO(b/324018028): This call should be moved within the delegate.
-  delegate_->MaybeShowIdentityAnimation();
 
   SetInsets();
+
+  for (auto& observer : observer_list_) {
+    observer.OnIconUpdated();
+  }
+}
+
+void AvatarToolbarButton::AddedToWidget() {
+  // `AddedToWidget()` can potentially be called more than once. E.g: on Mac
+  // when entering/exiting fullscreen.
+  if (!delegate_->IsStateManagerInitialized()) {
+    delegate_->InitializeStateManager();
+  }
+
+  ToolbarButton::AddedToWidget();
+
+  // A call to `OnThemeChanged()` occurred before adding the widget, and could
+  // not be processed since the delegate was not initialized yet.
+  // This will also end up calling `UpdateIcon()`.
+  OnThemeChanged();
 }
 
 void AvatarToolbarButton::Layout(PassKey) {
   LayoutSuperclass<ToolbarButton>(this);
 
-  // TODO(crbug.com/1108671): this is a hack to avoid mismatch between avatar
+  // TODO(crbug.com/40707582): this is a hack to avoid mismatch between avatar
   // bitmap scaling and DIP->canvas pixel scaling in fractional DIP scaling
   // modes (125%, 133%, etc.) that can cause the right-hand or bottom pixel row
   // of the avatar image to be sliced off at certain specific browser sizes and
@@ -175,7 +191,7 @@ void AvatarToolbarButton::UpdateText() {
         !IsLabelPresentAndVisible());
   }
 
-  // TODO(crbug.com/1078221): this is a hack because toolbar buttons don't
+  // TODO(crbug.com/40689215): this is a hack because toolbar buttons don't
   // correctly calculate their preferred size until they've been laid out once
   // or twice, because they modify their own borders and insets in response to
   // their size and have their own preferred size caching mechanic. These should
@@ -304,17 +320,25 @@ void AvatarToolbarButton::MaybeShowProfileSwitchIPH() {
 }
 
 void AvatarToolbarButton::OnMouseExited(const ui::MouseEvent& event) {
-  delegate_->OnMouseExited();
+  for (auto& observer : observer_list_) {
+    observer.OnMouseExited();
+  }
   ToolbarButton::OnMouseExited(event);
 }
 
 void AvatarToolbarButton::OnBlur() {
-  delegate_->OnBlur();
+  for (auto& observer : observer_list_) {
+    observer.OnBlur();
+  }
   ToolbarButton::OnBlur();
 }
 
 void AvatarToolbarButton::OnThemeChanged() {
   ToolbarButton::OnThemeChanged();
+  if (!delegate_->IsStateManagerInitialized()) {
+    return;
+  }
+
   delegate_->OnThemeChanged(GetColorProvider());
   UpdateText();
   if (features::IsChromeRefresh2023()) {
@@ -326,6 +350,11 @@ void AvatarToolbarButton::OnThemeChanged() {
 void AvatarToolbarButton::SetIPHMinDelayAfterCreationForTesting(
     base::TimeDelta delay) {
   g_iph_min_delay_after_creation = delay;
+}
+
+// static
+void AvatarToolbarButton::SetTextDurationForTesting(base::TimeDelta duration) {
+  AvatarToolbarButtonDelegate::SetTextDurationForTesting(duration);
 }
 
 void AvatarToolbarButton::ButtonPressed(bool is_source_accelerator) {
@@ -346,8 +375,10 @@ void AvatarToolbarButton::ButtonPressed(bool is_source_accelerator) {
 void AvatarToolbarButton::AfterPropertyChange(const void* key,
                                               int64_t old_value) {
   if (key == user_education::kHasInProductHelpPromoKey) {
-    delegate_->SetHasInProductHelpPromo(
-        GetProperty(user_education::kHasInProductHelpPromoKey));
+    for (auto& observer : observer_list_) {
+      observer.OnIPHPromoChanged(
+          GetProperty(user_education::kHasInProductHelpPromoKey));
+    }
   }
   ToolbarButton::AfterPropertyChange(key, old_value);
 }
@@ -410,6 +441,33 @@ int AvatarToolbarButton::GetIconSize() const {
 
   return features::IsChromeRefresh2023() ? kDefaultIconSizeChromeRefresh
                                          : kIconSizeForNonTouchUi;
+}
+
+void AvatarToolbarButton::AddObserver(Observer* observer) {
+  observer_list_.AddObserver(observer);
+}
+
+void AvatarToolbarButton::RemoveObserver(Observer* observer) {
+  observer_list_.RemoveObserver(observer);
+}
+
+void AvatarToolbarButton::NotifyShowNameClearedForTesting() const {
+  for (auto& observer : observer_list_) {
+    observer.OnShowNameClearedForTesting();  // IN-TEST
+  }
+}
+
+void AvatarToolbarButton::NotifyManagementTransientTextClearedForTesting()
+    const {
+  for (auto& observer : observer_list_) {
+    observer.OnShowManagementTransientTextClearedForTesting();  // IN-TEST
+  }
+}
+
+void AvatarToolbarButton::NotifyShowSigninPausedDelayEnded() const {
+  for (auto& observer : observer_list_) {
+    observer.OnShowSigninPausedDelayEnded();  // IN-TEST
+  }
 }
 
 BEGIN_METADATA(AvatarToolbarButton)

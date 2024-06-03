@@ -17,16 +17,19 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/ax_event_notification_details.h"
 
+namespace ui {
+class AXPlatformTreeManagerDelegate;
+}
+
 namespace content {
 
 class BrowserAccessibilityCocoaBrowserTest;
-class WebAXPlatformTreeManagerDelegate;
 
 class CONTENT_EXPORT BrowserAccessibilityManagerMac
     : public BrowserAccessibilityManager {
  public:
   BrowserAccessibilityManagerMac(const ui::AXTreeUpdate& initial_tree,
-                                 WebAXPlatformTreeManagerDelegate* delegate);
+                                 ui::AXPlatformTreeManagerDelegate* delegate);
 
   BrowserAccessibilityManagerMac(const BrowserAccessibilityManagerMac&) =
       delete;
@@ -46,6 +49,13 @@ class CONTENT_EXPORT BrowserAccessibilityManagerMac
                       int action_request_id) override;
   void FireGeneratedEvent(ui::AXEventGenerator::Event event_type,
                           const ui::AXNode* node) override;
+
+  void FireAriaNotificationEvent(
+      BrowserAccessibility* node,
+      const std::string& announcement,
+      const std::string& notification_id,
+      ax::mojom::AriaNotificationInterrupt interrupt_property,
+      ax::mojom::AriaNotificationPriority priority_property) override;
 
   bool OnAccessibilityEvents(
       const AXEventNotificationDetails& details) override;
@@ -71,9 +81,6 @@ class CONTENT_EXPORT BrowserAccessibilityManagerMac
       id edit_text_marker) const;
 
   bool IsInGeneratedEventBatch(ui::AXEventGenerator::Event event_type) const;
-
-  // Returns whether this page is a new tab page on Chrome.
-  bool IsChromeNewTabPage();
 
   bool ShouldFireLoadCompleteNotification();
 

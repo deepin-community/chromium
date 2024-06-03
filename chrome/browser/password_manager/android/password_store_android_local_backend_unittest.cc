@@ -239,7 +239,10 @@ TEST_F(PasswordStoreAndroidLocalBackendTest,
       "Marcus McSpartanGregor", "S0m3th1ngCr34t1v3",
       GURL(u"https://m.example.com/"),
       PasswordForm::MatchType::kGrouped | PasswordForm::MatchType::kPSL));
-  // Grouped only match is filtered.
+  // Grouped only match.
+  expected_logins.push_back(CreateEntry(
+      "Marcus McSpartanGregor", "S0m3th1ngCr34t1v3",
+      GURL(u"https://example.org/"), PasswordForm::MatchType::kGrouped));
 
   EXPECT_CALL(
       mock_reply,
@@ -382,6 +385,40 @@ TEST_F(PasswordStoreAndroidLocalBackendTest, RecordPasswordStoreMetrics) {
   histogram_tester.ExpectUniqueSample(
       "PasswordManager.PasswordStore.LocalBackend.UpdateLoginCalledOnStore",
       true, 1);
+}
+
+TEST_F(PasswordStoreAndroidLocalBackendTest,
+       ResetTemporarySavingSuspensionAfterSuccessfulLogin) {
+  backend().InitBackend(
+      /*affiliated_match_helper=*/nullptr,
+      PasswordStoreAndroidLocalBackend::RemoteChangesReceived(),
+      base::NullCallback(), base::DoNothing());
+  EXPECT_TRUE(backend().IsAbleToSavePasswords());
+
+  std::string TestURL1("https://example.com/");
+  PasswordFormDigest form_digest(PasswordForm::Scheme::kHtml, TestURL1,
+                                 GURL(TestURL1));
+  EXPECT_CALL(*bridge_helper(), GetAffiliatedLoginsForSignonRealm)
+      .WillOnce(Return(kJobId));
+  backend().GetGroupedMatchingLoginsAsync(form_digest, base::DoNothing());
+  AndroidBackendError error{AndroidBackendErrorType::kExternalError};
+  error.api_error_code =
+      static_cast<int>(AndroidBackendAPIErrorCode::kApiNotConnected);
+  consumer().OnError(kJobId, std::move(error));
+
+  EXPECT_FALSE(backend().IsAbleToSavePasswords());
+
+  // Simulate a successful logins call.
+  base::MockCallback<LoginsOrErrorReply> mock_reply;
+  EXPECT_CALL(*bridge_helper(), GetAffiliatedLoginsForSignonRealm)
+      .WillOnce(Return(kJobId));
+  backend().GetGroupedMatchingLoginsAsync(form_digest, mock_reply.Get());
+  EXPECT_CALL(mock_reply, Run);
+  task_environment_.FastForwardBy(kTestLatencyDelta);
+  consumer().OnCompleteWithLogins(kJobId, {});
+  RunUntilIdle();
+
+  EXPECT_TRUE(backend().IsAbleToSavePasswords());
 }
 
 class PasswordStoreAndroidLocalBackendRetriesTest

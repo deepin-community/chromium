@@ -6,6 +6,7 @@
 import collections
 import contextlib
 import errno
+import glob
 import json
 import logging
 import os
@@ -1911,6 +1912,193 @@ class CipdWrapper(SCMWrapper):
     CIPD packages should be updated at the root by running
     `CipdRoot.run('update')`.
     """
+
+
+class GcsRoot(object):
+    """Root to keep track of all GCS objects, per checkout"""
+
+    def __init__(self, root_dir):
+        self._mutator_lock = threading.Lock()
+        self._root_dir = root_dir
+        # Populated when the DEPS file is parsed
+        # The objects here have not yet been downloaded and written into
+        # the .gcs_entries file
+        self._parsed_objects = {}
+        # .gcs_entries keeps track of which GCS deps have already been installed
+        # Maps checkout_name -> {GCS dep path -> [object_name]}
+        # This file is in the same directory as .gclient
+        self._gcs_entries_file = os.path.join(self._root_dir, '.gcs_entries')
+        # Contents of the .gcs_entries file
+        self._gcs_entries = self.read_gcs_entries()
+
+    @property
+    def root_dir(self):
+        return self._root_dir
+
+    def add_object(self, checkout_name, dep_path, object_name):
+        """Records the object in the _parsed_objects variable
+
+        This does not actually download the object"""
+        with self._mutator_lock:
+            if checkout_name not in self._parsed_objects:
+                self._parsed_objects[checkout_name] = {}
+            if dep_path not in self._parsed_objects[checkout_name]:
+                self._parsed_objects[checkout_name][dep_path] = [object_name]
+            else:
+                self._parsed_objects[checkout_name][dep_path].append(
+                    object_name)
+
+    def read_gcs_entries(self):
+        """Reads .gcs_entries file and loads the content into _gcs_entries"""
+        if not os.path.exists(self._gcs_entries_file):
+            return {}
+
+        with open(self._gcs_entries_file, 'r') as f:
+            content = f.read().rstrip()
+            if content:
+                return json.loads(content)
+            return {}
+
+    def resolve_objects(self, checkout_name):
+        """Updates .gcs_entries with objects in _parsed_objects
+
+        This should only be called after the objects have been downloaded
+        and extracted."""
+        with self._mutator_lock:
+            object_dict = self._parsed_objects.get(checkout_name)
+            if not object_dict:
+                return
+            self._gcs_entries[checkout_name] = object_dict
+            with open(self._gcs_entries_file, 'w') as f:
+                f.write(json.dumps(self._gcs_entries, indent=2))
+            self._parsed_objects[checkout_name] = {}
+
+    def clobber_deps_with_updated_objects(self, checkout_name):
+        """Clobber the path if an object or GCS dependency is removed/added
+
+        This must be called before the GCS dependencies are
+        downloaded and extracted."""
+        with self._mutator_lock:
+            parsed_object_dict = self._parsed_objects.get(checkout_name, {})
+            parsed_paths = set(parsed_object_dict.keys())
+
+            resolved_object_dict = self._gcs_entries.get(checkout_name, {})
+            resolved_paths = set(resolved_object_dict.keys())
+
+            # If any GCS deps are added or removed entirely, clobber that path
+            intersected_paths = parsed_paths.intersection(resolved_paths)
+            # Added paths
+            for path in parsed_paths - intersected_paths:
+                full_path = os.path.join(self.root_dir, path)
+                gclient_utils.rmtree(full_path)
+            # Removed paths
+            for path in resolved_paths - intersected_paths:
+                full_path = os.path.join(self.root_dir, path)
+                gclient_utils.rmtree(full_path)
+
+            # If any objects within a GCS dep are added/removed, clobber that
+            # entire path
+            for path in intersected_paths:
+                resolved_objects = resolved_object_dict[path]
+                parsed_objects = parsed_object_dict[path]
+
+                full_path = os.path.join(self.root_dir, path)
+                if (len(resolved_objects) != len(parsed_objects)
+                        and os.path.exists(full_path)):
+                    self.clobber_tar_content_names(full_path)
+                    self.clobber_hash_files(full_path)
+                    self.clobber_migration_files(full_path)
+
+    def clobber_tar_content_names(self, entry_directory):
+        """Delete paths written in .*_content_names files"""
+        content_names_files = glob.glob(
+            os.path.join(entry_directory, '.*_content_names'))
+        for file in content_names_files:
+            with open(file, 'r') as f:
+                names = json.loads(f.read().strip())
+                for name in names:
+                    name_path = os.path.join(entry_directory, name)
+                    if os.path.isdir(
+                            name_path) or not os.path.exists(name_path):
+                        continue
+                    os.remove(os.path.join(entry_directory, name))
+            os.remove(file)
+
+    def clobber_hash_files(self, entry_directory):
+        files = glob.glob(os.path.join(entry_directory, '.*_hash'))
+        for f in files:
+            os.remove(f)
+
+    def clobber_migration_files(self, entry_directory):
+        files = glob.glob(os.path.join(entry_directory,
+                                       '.*_is_first_class_gcs'))
+        for f in files:
+            os.remove(f)
+
+    def clobber(self):
+        """Remove all dep path gcs items and clear .gcs_entries"""
+        for _, objects_dict in self._gcs_entries.items():
+            for dep_path, _ in objects_dict.items():
+                full_path = os.path.join(self.root_dir, dep_path)
+                self.clobber_tar_content_names(full_path)
+                self.clobber_hash_files(full_path)
+                self.clobber_migration_files(full_path)
+
+        if os.path.exists(self._gcs_entries_file):
+            os.remove(self._gcs_entries_file)
+        with self._mutator_lock:
+            self._gcs_entries = {}
+
+
+class GcsWrapper(SCMWrapper):
+    """Wrapper for GCS.
+
+  Currently only supports content from Google Cloud Storage.
+  """
+    name = 'gcs'
+
+    def __init__(self,
+                 url=None,
+                 root_dir=None,
+                 relpath=None,
+                 out_fh=None,
+                 out_cb=None):
+        super(GcsWrapper, self).__init__(url=url,
+                                         root_dir=root_dir,
+                                         relpath=relpath,
+                                         out_fh=out_fh,
+                                         out_cb=out_cb)
+
+    #override
+    def GetCacheMirror(self):
+        return None
+
+    #override
+    def GetActualRemoteURL(self, options):
+        return None
+
+    #override
+    def DoesRemoteURLMatch(self, options):
+        del options
+        return True
+
+    def revert(self, options, args, file_list):
+        """Does nothing."""
+
+    def diff(self, options, args, file_list):
+        """GCS has no notion of diffing."""
+
+    def pack(self, options, args, file_list):
+        """GCS has no notion of diffing."""
+
+    def revinfo(self, options, args, file_list):
+        """Does nothing"""
+
+    def status(self, options, args, file_list):
+        pass
+
+    def update(self, options, args, file_list):
+        """Does nothing."""
 
 
 class CogWrapper(SCMWrapper):

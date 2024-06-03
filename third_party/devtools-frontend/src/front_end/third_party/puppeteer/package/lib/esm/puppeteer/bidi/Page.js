@@ -94,7 +94,6 @@ import { evaluationString, parsePDFOptions, timeout } from '../common/util.js';
 import { assert } from '../util/assert.js';
 import { bubble } from '../util/decorators.js';
 import { isErrorLike } from '../util/ErrorLike.js';
-import { BidiElementHandle } from './ElementHandle.js';
 import { BidiFrame } from './Frame.js';
 import { BidiKeyboard, BidiMouse, BidiTouchscreen } from './Input.js';
 import { rewriteNavigationError } from './util.js';
@@ -193,21 +192,26 @@ let BidiPage = (() => {
         async focusedFrame() {
             const env_1 = { stack: [], error: void 0, hasError: false };
             try {
-                const frame = __addDisposableResource(env_1, await this.mainFrame()
+                const handle = __addDisposableResource(env_1, (await this.mainFrame()
                     .isolatedRealm()
                     .evaluateHandle(() => {
-                    let frame;
                     let win = window;
-                    while (win?.document.activeElement instanceof HTMLIFrameElement) {
-                        frame = win.document.activeElement;
-                        win = frame.contentWindow;
+                    while (win.document.activeElement instanceof win.HTMLIFrameElement ||
+                        win.document.activeElement instanceof win.HTMLFrameElement) {
+                        if (win.document.activeElement.contentWindow === null) {
+                            break;
+                        }
+                        win = win.document.activeElement.contentWindow;
                     }
-                    return frame;
-                }), false);
-                if (!(frame instanceof BidiElementHandle)) {
-                    return this.mainFrame();
-                }
-                return await frame.contentFrame();
+                    return win;
+                })), false);
+                const value = handle.remoteValue();
+                assert(value.type === 'window');
+                const frame = this.frames().find(frame => {
+                    return frame._id === value.value.context;
+                });
+                assert(frame);
+                return frame;
             }
             catch (e_1) {
                 env_1.error = e_1;
@@ -307,6 +311,11 @@ let BidiPage = (() => {
             const { timeout: ms = this._timeoutSettings.timeout(), path = undefined } = options;
             const { printBackground: background, margin, landscape, width, height, pageRanges: ranges, scale, preferCSSPageSize, } = parsePDFOptions(options, 'cm');
             const pageRanges = ranges ? ranges.split(', ') : [];
+            await firstValueFrom(from(this.mainFrame()
+                .isolatedRealm()
+                .evaluate(() => {
+                return document.fonts.ready;
+            })).pipe(raceWith(timeout(ms))));
             const data = await firstValueFrom(from(this.#frame.browsingContext.print({
                 background,
                 margin,
@@ -434,8 +443,34 @@ let BidiPage = (() => {
         workers() {
             return [...this.#workers];
         }
-        setRequestInterception() {
-            throw new UnsupportedOperation();
+        #interception;
+        async setRequestInterception(enable) {
+            if (enable && !this.#interception) {
+                this.#interception = await this.#frame.browsingContext.addIntercept({
+                    phases: ["beforeRequestSent" /* Bidi.Network.InterceptPhase.BeforeRequestSent */],
+                });
+            }
+            else if (!enable && this.#interception) {
+                await this.#frame.browsingContext.userContext.browser.removeIntercept(this.#interception);
+                this.#interception = undefined;
+            }
+        }
+        /**
+         * @internal
+         */
+        _credentials = null;
+        #authInterception;
+        async authenticate(credentials) {
+            if (credentials && !this.#authInterception) {
+                this.#authInterception = await this.#frame.browsingContext.addIntercept({
+                    phases: ["authRequired" /* Bidi.Network.InterceptPhase.AuthRequired */],
+                });
+            }
+            else if (!credentials && this.#authInterception) {
+                await this.#frame.browsingContext.userContext.browser.removeIntercept(this.#authInterception);
+                this.#authInterception = undefined;
+            }
+            this._credentials = credentials;
         }
         setDragInterception() {
             throw new UnsupportedOperation();
@@ -481,8 +516,6 @@ let BidiPage = (() => {
                     // Chrome-specific properties.
                     ...cdpSpecificCookiePropertiesFromPuppeteerToBidi(cookie, 'sameParty', 'sourceScheme', 'priority', 'url'),
                 };
-                // TODO: delete cookie before setting them.
-                // await this.deleteCookie(bidiCookie);
                 if (cookie.partitionKey !== undefined) {
                     await this.browserContext().userContext.setCookie(bidiCookie, cookie.partitionKey);
                 }
@@ -491,15 +524,26 @@ let BidiPage = (() => {
                 }
             }
         }
-        deleteCookie() {
-            throw new UnsupportedOperation();
+        async deleteCookie(...cookies) {
+            await Promise.all(cookies.map(async (deleteCookieRequest) => {
+                const cookieUrl = deleteCookieRequest.url ?? this.url();
+                const normalizedUrl = URL.canParse(cookieUrl)
+                    ? new URL(cookieUrl)
+                    : undefined;
+                const domain = deleteCookieRequest.domain ?? normalizedUrl?.hostname;
+                assert(domain !== undefined, `At least one of the url and domain needs to be specified`);
+                const filter = {
+                    domain: domain,
+                    name: deleteCookieRequest.name,
+                    ...(deleteCookieRequest.path !== undefined
+                        ? { path: deleteCookieRequest.path }
+                        : {}),
+                };
+                await this.#frame.browsingContext.deleteCookie(filter);
+            }));
         }
-        removeExposedFunction() {
-            // TODO: Quick win?
-            throw new UnsupportedOperation();
-        }
-        authenticate() {
-            throw new UnsupportedOperation();
+        async removeExposedFunction(name) {
+            await this.#frame.removeExposedFunction(name);
         }
         setExtraHTTPHeaders() {
             throw new UnsupportedOperation();

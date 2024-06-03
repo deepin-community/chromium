@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
@@ -17,7 +18,6 @@
 #include "base/json/json_reader.h"
 #include "base/json/values_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
@@ -35,7 +35,7 @@ namespace {
 // These literals must not be changed since they affect the forward and
 // backward compatibility with //chrome/updater.
 constexpr char kUpdaterPrefsActiveVersion[] = "active_version";
-constexpr char kUpdaterPrefsLastChecked[] = "update_time";
+constexpr char kUpdaterPrefsLastChecked[] = "last_checked";
 constexpr char kUpdaterPrefsLastStarted[] = "last_started";
 }  // namespace
 
@@ -102,7 +102,7 @@ UpdaterState::StateReaderChromiumUpdater::StateReaderChromiumUpdater(
     : parsed_json_(std::move(parsed_json)) {}
 
 base::Time UpdaterState::StateReaderChromiumUpdater::FindTimeKey(
-    base::StringPiece key) const {
+    std::string_view key) const {
   return base::ValueToTime(parsed_json_.Find(key)).value_or(base::Time());
 }
 

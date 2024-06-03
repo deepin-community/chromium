@@ -199,8 +199,18 @@ static constexpr FeatureEnumAndInfo kFeatureInfo[] = {
       "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
       "pixel_local_storage.md",
       FeatureInfo::FeatureState::Experimental}},
+    {Feature::Unorm16TextureFormats,
+     {"Supports R/RG/RGBA16 unorm texture formats",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "norm16_texture_formats.md",
+      FeatureInfo::FeatureState::Stable}},
+    {Feature::Snorm16TextureFormats,
+     {"Supports R/RG/RGBA16 snorm texture formats",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "norm16_texture_formats.md",
+      FeatureInfo::FeatureState::Stable}},
     {Feature::Norm16TextureFormats,
-     {"Supports R/RG/RGBA16 norm texture formats",
+     {"DEPRECATED Supports R/RG/RGBA16 norm texture formats.",
       "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
       "norm16_texture_formats.md",
       FeatureInfo::FeatureState::Stable}},
@@ -295,6 +305,46 @@ static constexpr FeatureEnumAndInfo kFeatureInfo[] = {
       "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
       "adapter_properties.md",
       FeatureInfo::FeatureState::Stable}},
+    {Feature::AdapterPropertiesVk,
+     {"Support querying Vulkan info from the adapter.",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "adapter_properties.md",
+      FeatureInfo::FeatureState::Stable}},
+    {Feature::SharedBufferMemoryD3D12Resource,
+     {"Support importing ID3D12Resource as shared buffer memory.",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/shared_buffer.md",
+      FeatureInfo::FeatureState::Experimental}},
+    {Feature::R8UnormStorage,
+     {"Supports using r8unorm texture as storage texture.",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "r8unorm_storage.md",
+      FeatureInfo::FeatureState::Experimental}},
+    {Feature::FormatCapabilities,
+     {"Supports querying the capabilities of a texture format.",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "format_capabilities.md",
+      FeatureInfo::FeatureState::Stable}},
+    {Feature::DrmFormatCapabilities,
+     {"Supports querying the DRM-related capabilities of a texture format.",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "format_capabilities.md",
+      FeatureInfo::FeatureState::Stable}},
+    {Feature::StaticSamplers,
+     {"Support setting samplers statically as part of bind group layout",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "static_samplers.md",
+      FeatureInfo::FeatureState::Experimental}},
+    {Feature::YCbCrVulkanSamplers,
+     {"Support setting VkSamplerYcbcrConversionCreateInfo as part of static vulkan sampler "
+      "descriptor",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "y_cb_cr_vulkan_samplers.md",
+      FeatureInfo::FeatureState::Experimental}},
+    {Feature::ShaderModuleCompilationOptions,
+     {"Support overriding default shader module compilation options.",
+      "https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/dawn/features/"
+      "shader_module_compilation_options.md",
+      FeatureInfo::FeatureState::Experimental}},
 };
 
 }  // anonymous namespace

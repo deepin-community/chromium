@@ -212,10 +212,6 @@ void BookmarkModelTypeProcessor::OnUpdateReceived(
   // TODO(crbug.com/1356900): validate incoming updates, e.g. `gc_directive`
   // must be empty for Bookmarks.
 
-  syncer::LogUpdatesReceivedByProcessorHistogram(
-      syncer::BOOKMARKS,
-      /*is_initial_sync=*/!bookmark_tracker_, updates.size());
-
   // Clients before M94 did not populate the parent UUID in specifics.
   PopulateParentGuidInSpecifics(bookmark_tracker_.get(), &updates);
 
@@ -331,9 +327,6 @@ void BookmarkModelTypeProcessor::ModelReadyToSync(
 
   sync_pb::BookmarkModelMetadata model_metadata;
   model_metadata.ParseFromString(metadata_str);
-
-  syncer::MigrateLegacyInitialSyncDone(
-      *model_metadata.mutable_model_type_state(), syncer::BOOKMARKS);
 
   if (pending_clear_metadata_) {
     pending_clear_metadata_ = false;
@@ -469,7 +462,7 @@ void BookmarkModelTypeProcessor::ConnectIfReady() {
   }
 
   // Issue error and stop sync if bookmarks exceed limit.
-  // TODO(crbug.com/1347466): Think about adding two different limits: one for
+  // TODO(crbug.com/40854724): Think about adding two different limits: one for
   // when sync just starts, the other (larger one) as hard limit, incl.
   // incremental changes.
   const size_t count = bookmark_tracker_
@@ -690,7 +683,9 @@ void BookmarkModelTypeProcessor::GetAllNodesForDebugging(
   const bookmarks::BookmarkNode* model_root_node = bookmark_model_->root_node();
   int i = 0;
   for (const auto& child : model_root_node->children()) {
-    AppendNodeAndChildrenForDebugging(child.get(), i++, &all_nodes);
+    if (bookmark_model_->IsNodeSyncable(child.get())) {
+      AppendNodeAndChildrenForDebugging(child.get(), i++, &all_nodes);
+    }
   }
 
   std::move(callback).Run(syncer::BOOKMARKS, std::move(all_nodes));

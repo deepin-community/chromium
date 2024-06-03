@@ -1,4 +1,4 @@
-// Copyright 2023 The Chromium Authors
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,8 +16,7 @@ class PlaceholderScreen;
 
 // Interface for dependency injection between PlaceholderScreen and its
 // WebUI representation.
-class PlaceholderScreenView
-    : public base::SupportsWeakPtr<PlaceholderScreenView> {
+class PlaceholderScreenView {
  public:
   inline constexpr static StaticOobeScreenId kScreenId{"placeholder",
                                                        "PlaceholderScreen"};
@@ -26,6 +25,9 @@ class PlaceholderScreenView
 
   // Shows the contents of the screen.
   virtual void Show() = 0;
+
+  // Gets a WeakPtr to the instance.
+  virtual base::WeakPtr<PlaceholderScreenView> AsWeakPtr() = 0;
 };
 
 class PlaceholderScreenHandler : public BaseScreenHandler,
@@ -46,6 +48,10 @@ class PlaceholderScreenHandler : public BaseScreenHandler,
 
   // PlaceholderScreenView:
   void Show() override;
+  base::WeakPtr<PlaceholderScreenView> AsWeakPtr() override;
+
+ private:
+  base::WeakPtrFactory<PlaceholderScreenView> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

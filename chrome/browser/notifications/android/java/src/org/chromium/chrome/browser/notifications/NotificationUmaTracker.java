@@ -81,7 +81,8 @@ public class NotificationUmaTracker {
         SystemNotificationType.BLUETOOTH,
         SystemNotificationType.USB,
         SystemNotificationType.UPM_ERROR,
-        SystemNotificationType.WEBAPK_INSTALL_FAILED
+        SystemNotificationType.WEBAPK_INSTALL_FAILED,
+        SystemNotificationType.DATA_SHARING
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface SystemNotificationType {
@@ -125,8 +126,9 @@ public class NotificationUmaTracker {
         int USB = 36;
         int UPM_ERROR = 37;
         int WEBAPK_INSTALL_FAILED = 38;
+        int DATA_SHARING = 39;
 
-        int NUM_ENTRIES = 39;
+        int NUM_ENTRIES = 40;
     }
 
     /*
@@ -299,6 +301,27 @@ public class NotificationUmaTracker {
         int DENIED_ASKED_ONCE = 3;
         int DENIED_ASKED_TWICE = 4;
         int DENIED_ASKED_MORE_THAN_TWICE = 5;
+
+        int NUM_ENTRIES = 6;
+    }
+
+    /** The stages of the job handling a notification intent. */
+    @IntDef({
+        IntentHandlerJobStage.SCHEDULE_JOB,
+        IntentHandlerJobStage.SCHEDULE_JOB_FAILED,
+        IntentHandlerJobStage.ON_START_JOB,
+        IntentHandlerJobStage.ON_STOP_JOB,
+        IntentHandlerJobStage.DISPATCH_EVENT,
+        IntentHandlerJobStage.NATIVE_STARTUP
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface IntentHandlerJobStage {
+        int SCHEDULE_JOB = 0;
+        int SCHEDULE_JOB_FAILED = 1;
+        int ON_START_JOB = 2;
+        int ON_STOP_JOB = 3;
+        int NATIVE_STARTUP = 4;
+        int DISPATCH_EVENT = 5;
 
         int NUM_ENTRIES = 6;
     }
@@ -540,6 +563,31 @@ public class NotificationUmaTracker {
                 "Mobile.SystemNotification.Permission.StartupState",
                 state,
                 NotificationPermissionState.NUM_ENTRIES);
+    }
+
+    /**
+     * Records whether the origin was already in the provisionally unsubscribed state when
+     * processing a tap on the `PRE_UNSUBSCRIBE` action button.
+     */
+    public void recordIsDuplicatePreUnsubscribe(boolean isDuplicate) {
+        RecordHistogram.recordBooleanHistogram(
+                "Mobile.SystemNotification.Permission.OneTapUnsubscribe.IsDuplicatePreUnsubscribe",
+                isDuplicate);
+    }
+
+    /**
+     * Records a sample to indicate that the job to handle a notification intent has reached a given
+     * stage.
+     *
+     * @param stage The stage reached.
+     * @param intentAction The action of the intent being processed.
+     */
+    public void recordIntentHandlerJobStage(@IntentHandlerJobStage int stage, String intentAction) {
+        RecordHistogram.recordSparseHistogram("Notifications.Android.JobStage", stage);
+        if (NotificationConstants.ACTION_PRE_UNSUBSCRIBE.equals(intentAction)) {
+            RecordHistogram.recordSparseHistogram(
+                    "Notifications.Android.JobStage.PreUnsubscribe", stage);
+        }
     }
 
     /**

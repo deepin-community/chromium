@@ -171,7 +171,7 @@ class SurveyClientImpl implements SurveyClient {
         mOnCrashUploadPermissionChangeCallback =
                 permitted -> {
                     if (!permitted) {
-                        // TODO(crbug/1482447): Dismiss the on going survey if possible.
+                        // TODO(crbug.com/40281825): Dismiss the on going survey if possible.
                         mUiDelegate.dismiss();
                     }
                 };
@@ -200,7 +200,7 @@ class SurveyClientImpl implements SurveyClient {
         mController.showSurveyIfAvailable(
                 mActivityRef.get(),
                 mConfig.mTriggerId,
-                R.drawable.fre_product_logo,
+                R.drawable.chrome_sync_logo,
                 mLifecycleDispatcher,
                 mAggregatedSurveyPsd);
         if (mLifecycleDispatcher != null && mLifecycleObserver != null) {

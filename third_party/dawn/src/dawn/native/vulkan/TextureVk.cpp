@@ -526,6 +526,20 @@ VkFormat VulkanImageFormat(const Device* device, wgpu::TextureFormat format) {
     DAWN_UNREACHABLE();
 }
 
+// Converts Dawn texture format to Vulkan formats.
+VkFormat ColorVulkanImageFormat(wgpu::TextureFormat format) {
+    switch (format) {
+#define X(wgpuFormat, vkFormat) \
+    case wgpuFormat:            \
+        return vkFormat;
+        SIMPLE_FORMAT_MAPPING(X)
+#undef X
+        default:
+            return VK_FORMAT_UNDEFINED;
+    }
+    DAWN_UNREACHABLE();
+}
+
 ResultOrError<wgpu::TextureFormat> FormatFromVkFormat(const Device* device, VkFormat vkFormat) {
     switch (vkFormat) {
 #define X(wgpuFormat, vkFormat) \
@@ -769,7 +783,7 @@ ResultOrError<Ref<Texture>> Texture::CreateFromSharedTextureMemory(
     const UnpackedPtr<TextureDescriptor>& textureDescriptor) {
     Ref<Texture> texture =
         AcquireRef(new Texture(ToBackend(memory->GetDevice()), textureDescriptor));
-    texture->mSharedTextureMemoryContents = memory->GetContents();
+    texture->mSharedResourceMemoryContents = memory->GetContents();
     texture->mSharedTextureMemoryObjects = {memory->GetVkImage(), memory->GetVkDeviceMemory()};
     texture->mHandle = texture->mSharedTextureMemoryObjects.vkImage->Get();
     texture->mExternalAllocation = texture->mSharedTextureMemoryObjects.vkDeviceMemory->Get();
@@ -938,7 +952,7 @@ MaybeError Texture::InitializeFromExternal(const ExternalImageDescriptorVk* desc
     VkFormat format = VulkanImageFormat(device, GetFormat().format);
     VkImageUsageFlags usage = VulkanImageUsage(GetInternalUsage(), GetFormat());
 
-    bool supportsDisjoint;
+    [[maybe_unused]] bool supportsDisjoint;
     DAWN_INVALID_IF(
         !externalMemoryService->SupportsCreateImage(descriptor, format, usage, &supportsDisjoint),
         "Creating an image from external memory is not supported.");
@@ -946,7 +960,6 @@ MaybeError Texture::InitializeFromExternal(const ExternalImageDescriptorVk* desc
     // the combined aspect without checking for disjoint support.
     // TODO(dawn:1548): Support multi-planar images with the DISJOINT feature and potentially allow
     // acting on planes individually? Always using Color is valid even for disjoint images.
-    DAWN_UNUSED(supportsDisjoint);
     DAWN_ASSERT(!GetFormat().IsMultiPlanar() || mCombinedAspect == Aspect::Color);
 
     mExternalState = ExternalState::PendingAcquire;
@@ -1067,7 +1080,7 @@ std::vector<VkSemaphore> Texture::AcquireWaitRequirements() {
 
 void Texture::SetPendingAcquire(VkImageLayout pendingAcquireOldLayout,
                                 VkImageLayout pendingAcquireNewLayout) {
-    DAWN_ASSERT(GetSharedTextureMemoryContents() != nullptr);
+    DAWN_ASSERT(GetSharedResourceMemoryContents() != nullptr);
     mExternalState = ExternalState::PendingAcquire;
     mLastExternalState = ExternalState::PendingAcquire;
 
@@ -1176,7 +1189,7 @@ void Texture::DestroyImpl() {
     // to skip the deallocation of the (absence of) VkDeviceMemory.
     device->GetResourceMemoryAllocator()->Deallocate(&mMemoryAllocation);
 
-    if (mExternalAllocation != VK_NULL_HANDLE && GetSharedTextureMemoryContents() == nullptr) {
+    if (mExternalAllocation != VK_NULL_HANDLE && GetSharedResourceMemoryContents() == nullptr) {
         device->GetFencedDeleter()->DeleteWhenUnused(mExternalAllocation);
     }
 

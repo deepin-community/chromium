@@ -1111,37 +1111,6 @@ int AXNode::GetTextContentLengthUTF16() const {
   return GetComputedNodeData().GetOrComputeTextContentLengthUTF16();
 }
 
-gfx::RectF AXNode::GetTextContentRangeBoundsUTF8(int start_offset,
-                                                 int end_offset) const {
-  DCHECK(!tree_->GetTreeUpdateInProgressState());
-  DCHECK_LE(start_offset, end_offset)
-      << "Invalid `start_offset` and `end_offset`.\n"
-      << start_offset << ' ' << end_offset << "\nin\n"
-      << *this;
-  // Since we DCHECK that `start_offset` <= `end_offset`, there is no need to
-  // check whether `start_offset` is also in range.
-  if (end_offset > GetTextContentLengthUTF8())
-    return gfx::RectF();
-
-  // TODO(nektar): Update this to use
-  // "base/strings/utf_offset_string_conversions.h" which provides caching of
-  // offsets.
-  std::u16string out_trancated_string_utf16;
-  if (!base::UTF8ToUTF16(GetTextContentUTF8().data(),
-                         base::checked_cast<size_t>(start_offset),
-                         &out_trancated_string_utf16)) {
-    return gfx::RectF();
-  }
-  start_offset = base::checked_cast<int>(out_trancated_string_utf16.length());
-  if (!base::UTF8ToUTF16(GetTextContentUTF8().data(),
-                         base::checked_cast<size_t>(end_offset),
-                         &out_trancated_string_utf16)) {
-    return gfx::RectF();
-  }
-  end_offset = base::checked_cast<int>(out_trancated_string_utf16.length());
-  return GetTextContentRangeBoundsUTF16(start_offset, end_offset);
-}
-
 gfx::RectF AXNode::GetTextContentRangeBoundsUTF16(int start_offset,
                                                   int end_offset) const {
   DCHECK(!tree_->GetTreeUpdateInProgressState());
@@ -1149,16 +1118,19 @@ gfx::RectF AXNode::GetTextContentRangeBoundsUTF16(int start_offset,
       << "Invalid `start_offset` and `end_offset`.\n"
       << start_offset << ' ' << end_offset << "\nin\n"
       << *this;
+
+  int text_content_length = GetTextContentLengthUTF16();
   // Since we DCHECK that `start_offset` <= `end_offset`, there is no need to
   // check whether `start_offset` is also in range.
-  if (end_offset > GetTextContentLengthUTF16())
+  if (end_offset > text_content_length) {
     return gfx::RectF();
+  }
 
   const std::vector<int32_t>& character_offsets =
       GetIntListAttribute(ax::mojom::IntListAttribute::kCharacterOffsets);
   int character_offsets_length =
       base::checked_cast<int>(character_offsets.size());
-  // Charactger offsets are always based on the UTF-16 representation of the
+  // Character offsets are always based on the UTF-16 representation of the
   // text.
   if (character_offsets_length < GetTextContentLengthUTF16()) {
     // Blink might not return pixel offsets for all characters. Clamp the
@@ -1376,6 +1348,49 @@ AXNode* AXNode::GetTableCellFromCoords(int row_index, int col_index) const {
                                               [static_cast<size_t>(col_index)]);
 }
 
+AXNode* AXNode::GetTableCellFromAriaCoords(int aria_row_index,
+                                           int aria_col_index) const {
+  DCHECK(!tree_->GetTreeUpdateInProgressState());
+  const AXTableInfo* table_info = GetAncestorTableInfo();
+  if (!table_info) {
+    return nullptr;
+  }
+
+  if (aria_row_index < 1 || aria_row_index > table_info->aria_row_count ||
+      aria_col_index < 1 || aria_col_index > table_info->aria_col_count) {
+    return nullptr;
+  }
+
+  // Aria rows/columns are not guaranteed to be contiguous, and can also
+  // span multiple "rows" or "columns".
+  // So while we do need to check many of the internal rows/columns, we can do
+  // some skipping around, and don't need to continue to search if we are past
+  // the specified row/column.
+  for (size_t row = 0; row < table_info->row_count; ++row) {
+    for (size_t col = 0; col < table_info->col_count; ++col) {
+      AXNode* node = tree_->GetFromId(table_info->cell_ids[row][col]);
+      CHECK(node);
+
+      std::optional<int> current_aria_row = node->GetTableCellAriaRowIndex();
+      std::optional<int> current_aria_col = node->GetTableCellAriaColIndex();
+      if (!current_aria_row || *current_aria_row < aria_row_index) {
+        break;
+      } else if (*current_aria_row > aria_row_index) {
+        return nullptr;
+      }
+      if (!current_aria_col || *current_aria_col < aria_col_index) {
+        continue;
+      } else if (*current_aria_col > aria_col_index) {
+        return nullptr;
+      }
+      DCHECK(*current_aria_row == aria_row_index &&
+             *current_aria_col == aria_col_index);
+      return node;
+    }
+  }
+  return nullptr;
+}
+
 std::vector<AXNodeID> AXNode::GetTableColHeaderNodeIds() const {
   DCHECK(!tree_->GetTreeUpdateInProgressState());
   const AXTableInfo* table_info = GetAncestorTableInfo();
@@ -1439,7 +1454,7 @@ AXNode::GetExtraMacNodes() const {
 }
 
 bool AXNode::IsGenerated() const {
-  bool is_generated_node = id() < 0;
+  bool is_generated_node = id() < 0 && id() > kInitialEmptyDocumentRootNodeID;
 #if DCHECK_IS_ON()
   // Currently, the only generated nodes are columns and table header
   // containers, and when those roles occur, they are always extra mac nodes.
@@ -1801,8 +1816,7 @@ bool AXNode::SetRoleMatchesItemRole(const AXNode* ordered_set) const {
     case ax::mojom::Role::kDescriptionList:
       // Only the term for each description list entry should receive posinset
       // and setsize.
-      return item_role == ax::mojom::Role::kDescriptionListTerm ||
-             item_role == ax::mojom::Role::kTerm;
+      return item_role == ax::mojom::Role::kTerm;
     case ax::mojom::Role::kComboBoxSelect:
       // kComboBoxSelect wraps a kMenuListPopUp.
       return item_role == ax::mojom::Role::kMenuListPopup;
@@ -2177,12 +2191,13 @@ bool AXNode::IsLikelyARIAActiveDescendant() const {
             ax::mojom::IntAttribute::kActivedescendantId)) {
       return true;
     }
-    // Check for an ancestor listbox that is controlled by a textfield combobox
-    // that also has an aria-activedescendant.
-    // Note: blink will map aria-owns to aria-controls in the textfield combobox
-    // case as it was the older technique, but treating as an actual aria-owns
-    // makes no sense as a textfield cannot have children.
-    if (ancestor_node->GetRole() == ax::mojom::Role::kListBox) {
+    // Check for an ancestor listbox/tree/grid/treegrid/dialog that is
+    // controlled by a textfield combobox that also has an
+    // aria-activedescendant. Note: blink will map aria-owns to aria-controls in
+    // the textfield combobox case as it was the older technique, but treating
+    // as an actual aria-owns makes no sense as a textfield cannot have
+    // children.
+    if (ui::IsComboBoxContainer(ancestor_node->GetRole())) {
       std::set<AXNodeID> nodes_that_control_this_list =
           tree()->GetReverseRelations(ax::mojom::IntListAttribute::kControlsIds,
                                       ancestor_node->id());

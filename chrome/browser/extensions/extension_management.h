@@ -82,7 +82,7 @@ class ExtensionManagement : public KeyedService {
   //                     it afterwards.
   // * kForcePinned: Extension starts pinned to the toolbar, and the user
   //                 cannot unpin it.
-  // TODO(crbug.com/1071314): Add kDefaultPinned state.
+  // TODO(crbug.com/40126725): Add kDefaultPinned state.
   enum class ToolbarPinMode {
     kDefaultUnpinned = 0,
     kForcePinned,
@@ -197,10 +197,6 @@ class ExtensionManagement : public KeyedService {
   // ExtensionSettings policy.
   // Returns false if an individual scoped setting isn't defined.
   bool UsesDefaultPolicyHostRestrictions(const Extension* extension);
-
-  // Checks if a URL is on the blocked host permissions list for a specific
-  // extension.
-  bool IsPolicyBlockedHost(const Extension* extension, const GURL& url);
 
   // Returns blocked permission set for |extension|.
   std::unique_ptr<const PermissionSet> GetBlockedPermissions(

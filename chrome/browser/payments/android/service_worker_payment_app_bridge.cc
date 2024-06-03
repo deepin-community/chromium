@@ -15,7 +15,7 @@
 #include "chrome/android/chrome_jni_headers/ServiceWorkerPaymentAppBridge_jni.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "components/payments/content/android/payment_handler_host.h"
 #include "components/payments/content/payment_event_response_util.h"
 #include "components/payments/content/payment_handler_host.h"
@@ -82,9 +82,7 @@ void OnGetServiceWorkerPaymentAppsInfo(
 
   for (const auto& app_info : apps) {
     Java_ServiceWorkerPaymentAppBridge_addPaymentAppInfo(
-        env, jappsInfo,
-        ConvertUTF8ToJavaString(env, app_info.second->scope.host()),
-        ConvertUTF8ToJavaString(env, app_info.second->name),
+        env, jappsInfo, app_info.second->scope.host(), app_info.second->name,
         app_info.second->icon == nullptr
             ? nullptr
             : gfx::ConvertToJavaBitmap(*app_info.second->icon));
@@ -159,7 +157,5 @@ JNI_ServiceWorkerPaymentAppBridge_GetSourceIdForPaymentAppFromScope(
   // invoked app inside
   // ChromePaymentRequestService::openPaymentHandlerWindowInternal.
   return content::PaymentAppProviderUtil::GetSourceIdForPaymentAppFromScope(
-      url::GURLAndroid::ToNativeGURL(env, jscope)
-          .get()
-          ->DeprecatedGetOriginAsURL());
+      url::GURLAndroid::ToNativeGURL(env, jscope).DeprecatedGetOriginAsURL());
 }

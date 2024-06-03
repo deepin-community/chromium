@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/reference
-  - Chromium OS > Developer Library > Reference
+  - ChromiumOS > Developer Library > Reference
 page_name: cros-deploy
 title: cros deploy
 ---
@@ -25,7 +25,7 @@ packages.  See the [Kernel Development guide][deploying-kernel] for supported
 methods.
 
 [script]: https://chromium.googlesource.com/chromiumos/chromite/+/HEAD/cli/cros/cros_deploy.py
-[deploying-kernel]: kernel_development.md#Build-and-deploy
+[deploying-kernel]: /chromium-os/developer-library/guides/kernel/kernel-development/#Build-and-deploy
 
 [TOC]
 
@@ -89,14 +89,6 @@ Enter your choice to continue [0-1]: 1
 When there are multiple versions available, `cros deploy` chooses the best visible
 one. For example, if you `cros workon` a package, `cros deploy` will try to use
 the 9999 version instead.
-
-### Installation root
-
-By default, `cros deploy` installs all packages at root ("/"). The user can
-override this with `--root`. This is necessary for many development packages,
-which are installed in `/usr/local`.
-([A bug is open](https://issuetracker.google.com/issues/226160872)
-to auto-detect the correct location to install to.)
 
 ## Known problems and fixes
 

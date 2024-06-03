@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <utility>
+
 #include "base/debug/crash_logging.h"
 #include "base/functional/bind.h"
 #include "base/json/json_string_value_serializer.h"
@@ -461,15 +462,29 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
     NotifyApiFunctionCalled(extension->id(), params.name, params.arguments,
                             browser_context_);
 
+    // Since sandboxed frames listed in the manifest don't get access to the
+    // extension APIs, this will only be true in an extension frame in an iframe
+    // with the sandbox attribute specified, or served with a CSP header.
+    bool is_sandboxed =
+        render_frame_host && render_frame_host->IsSandboxed(
+                                 network::mojom::WebSandboxFlags::kOrigin);
     // Note: Deliberately don't include external component extensions here -
     // this lets us differentiate between "built-in" extension calls and
     // external extension calls
     if (extension->location() == mojom::ManifestLocation::kComponent) {
       base::UmaHistogramSparse("Extensions.Functions.ComponentExtensionCalls",
                                function->histogram_value());
+      if (is_sandboxed) {
+        base::UmaHistogramBoolean(
+            "Extensions.Functions.DidSandboxedComponentExtensionAPICall", true);
+      }
     } else {
       base::UmaHistogramSparse("Extensions.Functions.ExtensionCalls",
                                function->histogram_value());
+      if (is_sandboxed) {
+        base::UmaHistogramBoolean(
+            "Extensions.Functions.DidSandboxedExtensionAPICall", true);
+      }
     }
 
     if (IsRequestFromServiceWorker(params)) {

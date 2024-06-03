@@ -12,7 +12,7 @@ Welcome to Chromium OS. This document serves as a quick start guide to
 installing your own Chromium OS image on a device. For more detailed
 information, or if steps in this quick start guide don't work for you, please
 refer to the [Chromium OS Developer's
-Guide](https://chromium.googlesource.com/chromiumos/docs/+/HEAD/developer_guide.md).
+Guide](/chromium-os/developer-library/guides/development/developer-guide/).
 
 ### Prerequisites
 

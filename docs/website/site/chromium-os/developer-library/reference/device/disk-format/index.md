@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/reference
-  - Chromium OS > Developer Library > Reference
+  - ChromiumOS > Developer Library > Reference
 page_name: disk-format
 title: Disk format
 ---
@@ -200,9 +200,9 @@ growth. Here’s the current layout:
 |  6        | kernel C                             | Minimal-size partition for future third kernel. There are rare cases where a third partition could help us avoid recovery mode (AU in progress + random corruption on boot partition + system crash). We decided it's not worth the space in V1, but that may change. |
 |  7        | rootfs C                             | Minimal-size partition for future third rootfs. Same reasons as above.                                                                                                                                                                                                |
 |  8        | OEM customization                    | Web pages, links, themes, etc. from OEM.                                                                                                                                                                                                                              |
-|  9        | minios A                             | MiniOS recovery partition A (Only supported on disk layout v3 and newer).                                                                                                                                                                                                             |
-| 10        | minios B                             | MiniOS recovery partition B (Only supported on disk layout v3 and newer).                                                                                                                                                                                                                       |
-| 11        | Powerwash data                       | Powerwash data, including enterprise rollback data (Only supported on disk layout v3 and newer).                                                                                                                                                                                                                       |
+|  9        | minios A                             | MiniOS recovery partition A (Only supported on disk layout v3 and newer).                                                                                                                                                                                             |
+| 10        | minios B                             | MiniOS recovery partition B (Only supported on disk layout v3 and newer).                                                                                                                                                                                             |
+| 11        | Powerwash data                       | Powerwash data, including enterprise rollback data (Only supported on disk layout v3 and newer).                                                                                                                                                                      |
 | 12        | EFI System Partition                 | Contains 64-bit grub2 bootloader for EFI BIOSes, and second-stage syslinux bootloader for legacy BIOSes.                                                                                                                                                              |
 
 Note that the reserved partitions will actually be present on the image, so that
@@ -296,7 +296,7 @@ Resizing] document for details.
 
 Here’s the current fixed-disk layout:
 
-![Current fixed-disk layout](images/disk_layout.png)
+![Current fixed-disk layout](/chromium-os/developer-library/reference/device/disk-format/disk_layout.png)
 
 ## Secure boot
 
@@ -383,7 +383,7 @@ partition.
 
 Here’s the flow in graphical form:
 
-![Boot flow](images/boot_flow.png)
+![Boot flow](/chromium-os/developer-library/reference/device/disk-format/boot_flow.png)
 
 ## Kernel partition format
 
@@ -391,7 +391,7 @@ The same library that sanity-checks the GPT and selects the kernel partition
 also checks the kernel’s cryptographic signature. The kernel partition consists
 of the following structure:
 
-![Kernel partition layout](images/kernel_partition_layout.png)
+![Kernel partition layout](/chromium-os/developer-library/reference/device/disk-format/kernel_partition_layout.png)
 
 The first 64K bytes are the cryptographic signature header blob, which contains
 the keys and signatures needed to verify the rest of the kernel blob (plus a few

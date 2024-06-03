@@ -350,12 +350,12 @@ class ClipboardOzone::AsyncClipboardOzone {
   base::flat_map<ClipboardBuffer, PlatformClipboard::DataMap> offered_data_;
 
   // Provides communication to a system clipboard under ozone level.
-  raw_ptr<PlatformClipboard> platform_clipboard_ = nullptr;
+  raw_ptr<PlatformClipboard, DanglingUntriaged> platform_clipboard_ = nullptr;
 
   // Reference to the ClipboardOzone object instantiating this
   // ClipboardOzone::AsyncClipboardOzone object. It is used to set
   // the correct source when some text is copied from Ash and pasted to Lacros.
-  const raw_ptr<ClipboardOzone> clipboard_ozone_;
+  const raw_ptr<ClipboardOzone, DanglingUntriaged> clipboard_ozone_;
 
   ClipboardSequenceNumberToken clipboard_sequence_number_;
   ClipboardSequenceNumberToken selection_sequence_number_;
@@ -674,7 +674,8 @@ void ClipboardOzone::WritePortableAndPlatformRepresentations(
     ClipboardBuffer buffer,
     const ObjectMap& objects,
     std::vector<Clipboard::PlatformRepresentation> platform_representations,
-    std::unique_ptr<DataTransferEndpoint> data_src) {
+    std::unique_ptr<DataTransferEndpoint> data_src,
+    uint32_t privacy_types) {
   DCHECK(CalledOnValidThread());
 
   async_clipboard_ozone_->PrepareForWriting();
@@ -757,6 +758,18 @@ void ClipboardOzone::WriteData(const ClipboardFormatType& format,
                                base::span<const uint8_t> data) {
   std::vector<uint8_t> owned_data(data.begin(), data.end());
   async_clipboard_ozone_->InsertData(std::move(owned_data), {format.GetName()});
+}
+
+void ClipboardOzone::WriteClipboardHistory() {
+  // TODO(crbug.com/40945200): Add support for this.
+}
+
+void ClipboardOzone::WriteUploadCloudClipboard() {
+  // TODO(crbug.com/40945200): Add support for this.
+}
+
+void ClipboardOzone::WriteConfidentialDataForPassword() {
+  // TODO(crbug.com/40945200): Add support for this.
 }
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)

@@ -65,6 +65,7 @@
 #include "net/base/http_user_agent_settings.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/isolation_info.h"
+#include "net/base/mock_network_change_notifier.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/network_isolation_key.h"
@@ -173,6 +174,10 @@
 #include "services/network/public/mojom/p2p_trusted.mojom.h"
 #endif  // BUILDFLAG(IS_P2P_ENABLED)
 
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/build_info.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
 namespace network {
 
 namespace {
@@ -237,15 +242,17 @@ std::unique_ptr<TestURLLoaderClient> FetchRequest(
 
   // If |site_for_cookies| is null, any non-empty NIK is fine. Otherwise, the
   // NIK must be consistent with |site_for_cookies|.
-  if (request.site_for_cookies.IsNull()) {
-    params->isolation_info = net::IsolationInfo::Create(
-        net::IsolationInfo::RequestType::kOther,
-        url::Origin::Create(GURL(kTopFrameOriginForFetchRequest)),
-        url::Origin::Create(GURL(kFrameOriginForFetchRequest)),
-        request.site_for_cookies);
-  } else {
-    params->isolation_info = net::IsolationInfo::CreateForInternalRequest(
-        url::Origin::Create(request.site_for_cookies.RepresentativeUrl()));
+  if (params->isolation_info.IsEmpty()) {
+    if (request.site_for_cookies.IsNull()) {
+      params->isolation_info = net::IsolationInfo::Create(
+          net::IsolationInfo::RequestType::kOther,
+          url::Origin::Create(GURL(kTopFrameOriginForFetchRequest)),
+          url::Origin::Create(GURL(kFrameOriginForFetchRequest)),
+          request.site_for_cookies);
+    } else {
+      params->isolation_info = net::IsolationInfo::CreateForInternalRequest(
+          url::Origin::Create(request.site_for_cookies.RepresentativeUrl()));
+    }
   }
 
   network_context->CreateURLLoaderFactory(
@@ -711,6 +718,44 @@ TEST_F(NetworkContextTest, EnableBrotli) {
   }
 }
 
+TEST_F(NetworkContextTest, BoundNetwork) {
+#if BUILDFLAG(IS_ANDROID)
+  if (base::android::BuildInfo::GetInstance()->sdk_int() <
+      base::android::SDK_VERSION_MARSHMALLOW) {
+    GTEST_SKIP()
+        << "bound_network is supported starting from Android Marshmallow";
+  }
+
+  // The actual network handle doesn't really matter, this test just wants to
+  // confirm that it is correctly passed down to the owned URLRequestContext.
+  constexpr net::handles::NetworkHandle network = 2;
+  auto scoped_mock_network_change_notifier =
+      std::make_unique<net::test::ScopedMockNetworkChangeNotifier>();
+  auto* mock_ncn =
+      scoped_mock_network_change_notifier->mock_network_change_notifier();
+  mock_ncn->ForceNetworkHandlesSupported();
+
+  mojom::NetworkContextParamsPtr context_params =
+      CreateNetworkContextParamsForTesting();
+  context_params->bound_network = network;
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(std::move(context_params));
+
+  EXPECT_EQ(network_context->url_request_context()->bound_network(), network);
+  EXPECT_EQ(network_context->url_request_context()
+                ->host_resolver()
+                ->GetTargetNetworkForTesting(),
+            network);
+  EXPECT_EQ(network_context->url_request_context()
+                ->host_resolver()
+                ->GetManagerForTesting()
+                ->target_network_for_testing(),
+            network);
+#else   // !BUILDFLAG(IS_ANDROID)
+  GTEST_SKIP() << "bound_network is supported only on Android";
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
 TEST_F(NetworkContextTest, UnhandedProtocols) {
   const GURL kUnsupportedUrls[] = {
       // These are handled outside the network service.
@@ -796,6 +841,42 @@ TEST_F(NetworkContextTest, EnableReportingWithStore) {
                   ->GetContextForTesting()
                   ->store());
 }
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+
+TEST_F(NetworkContextTest, DeviceBoundSessionsDefaultParam) {
+  mojom::NetworkContextParamsPtr context_params =
+      CreateNetworkContextParamsForTesting();
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(std::move(context_params));
+  EXPECT_FALSE(
+      network_context->url_request_context()->device_bound_session_service());
+}
+
+TEST_F(NetworkContextTest, DeviceBoundSessionsEnableParam) {
+  mojom::NetworkContextParamsPtr context_params =
+      CreateNetworkContextParamsForTesting();
+  context_params->device_bound_sessions_enabled = true;
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(std::move(context_params));
+  EXPECT_TRUE(
+      network_context->url_request_context()->device_bound_session_service());
+}
+
+TEST_F(NetworkContextTest, DeviceBoundSessionsDisableParam) {
+  mojom::NetworkContextParamsPtr context_params =
+      CreateNetworkContextParamsForTesting();
+  context_params->device_bound_sessions_enabled = false;
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(std::move(context_params));
+  EXPECT_FALSE(
+      network_context->url_request_context()->device_bound_session_service());
+}
+
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 
 TEST_F(NetworkContextTest, DisableNetworkErrorLogging) {
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -5342,18 +5423,14 @@ TEST_F(NetworkContextTest, ClearBadProxiesCache) {
   net::ProxyResolutionService* proxy_resolution_service =
       network_context->url_request_context()->proxy_resolution_service();
 
-  // Very starting conditions: zero bad proxies.
+  // Verify starting conditions: zero bad proxies.
   EXPECT_EQ(0UL, proxy_resolution_service->proxy_retry_info().size());
 
   // Simulate network error to add one proxy to the bad proxy list.
   net::ProxyInfo proxy_info;
   proxy_info.UseNamedProxy("http://foo1.com");
+  proxy_info.Fallback(net::OK, net::NetLogWithSource());
   proxy_resolution_service->ReportSuccess(proxy_info);
-  std::vector<net::ProxyChain> proxies;
-  proxies.push_back(net::ProxyUriToProxyChain("http://foo1.com",
-                                              net::ProxyServer::SCHEME_HTTP));
-  proxy_resolution_service->MarkProxiesAsBadUntil(
-      proxy_info, base::Days(1), proxies, net::NetLogWithSource());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1UL, proxy_resolution_service->proxy_retry_info().size());
 
@@ -7832,6 +7909,508 @@ TEST_F(NetworkContextExpectBadMessageTest, DataUrl) {
                    mojom::kBrowserProcessId, std::move(factory_params));
 
   AssertBadMessage();
+}
+
+TEST_F(NetworkContextTest, RevokeNetworkForNoncesTest) {
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(CreateNetworkContextParamsForTesting());
+
+  const base::UnguessableToken nonce1 = base::UnguessableToken::Create();
+  const base::UnguessableToken nonce2 = base::UnguessableToken::Create();
+  const base::UnguessableToken nonce3 = base::UnguessableToken::Create();
+
+  const GURL kFooHttpsUrl = GURL("https://foo.com");
+
+  // Revoke nonce1 and nonce3 but not nonce2.
+  {
+    base::test::TestFuture<void> revoked;
+    network_context->RevokeNetworkForNonces(
+        {nonce1, nonce3}, base::BindOnce(revoked.GetCallback()));
+    EXPECT_TRUE(revoked.Wait());
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce1, kFooHttpsUrl));
+    EXPECT_TRUE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce2, kFooHttpsUrl));
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce3, kFooHttpsUrl));
+  }
+
+  // Redundant revocations should have no effect.
+  {
+    base::test::TestFuture<void> revoked;
+    network_context->RevokeNetworkForNonces(
+        {nonce3, nonce1}, base::BindOnce(revoked.GetCallback()));
+    EXPECT_TRUE(revoked.Wait());
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce1, kFooHttpsUrl));
+    EXPECT_TRUE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce2, kFooHttpsUrl));
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce3, kFooHttpsUrl));
+  }
+
+  // Revoke nonce2 too.
+  {
+    base::test::TestFuture<void> revoked;
+    network_context->RevokeNetworkForNonces(
+        {nonce2}, base::BindOnce(revoked.GetCallback()));
+    EXPECT_TRUE(revoked.Wait());
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce1, kFooHttpsUrl));
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce2, kFooHttpsUrl));
+  }
+}
+
+TEST_F(NetworkContextTest, RevokeNetworkForNoncesDisablesNewRequestsTest) {
+  net::test_server::EmbeddedTestServer test_server(
+      net::test_server::EmbeddedTestServer::TYPE_HTTPS);
+  test_server.AddDefaultHandlers(
+      base::FilePath(FILE_PATH_LITERAL("services/test/data")));
+  ASSERT_TRUE(test_server.Start());
+  GURL server_url = test_server.GetURL("/echo");
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(CreateNetworkContextParamsForTesting());
+
+  const base::UnguessableToken nonce = base::UnguessableToken::Create();
+  const base::UnguessableToken nonce2 = base::UnguessableToken::Create();
+  ResourceRequest request;
+  request.url = server_url;
+
+  // A nonced network request should initially succeed.
+  {
+    auto params = mojom::URLLoaderFactoryParams::New();
+    params->isolation_info =
+        net::IsolationInfo::CreateTransientWithNonce(nonce);
+    std::unique_ptr<TestURLLoaderClient> client =
+        FetchRequest(request, network_context.get(), mojom::kURLLoadOptionNone,
+                     mojom::kBrowserProcessId, std::move(params));
+    EXPECT_EQ(net::OK, client->completion_status().error_code);
+  }
+
+  {
+    base::test::TestFuture<void> revoked;
+    network_context->RevokeNetworkForNonces(
+        {nonce}, base::BindOnce(revoked.GetCallback()));
+    EXPECT_TRUE(revoked.Wait());
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce, server_url));
+  }
+
+  // After revoking network for the nonce, the request should fail with
+  // NETWORK_ACCESS_REVOKED.
+  {
+    auto params = mojom::URLLoaderFactoryParams::New();
+    params->isolation_info =
+        net::IsolationInfo::CreateTransientWithNonce(nonce);
+    std::unique_ptr<TestURLLoaderClient> client =
+        FetchRequest(request, network_context.get(), mojom::kURLLoadOptionNone,
+                     mojom::kBrowserProcessId, std::move(params));
+    EXPECT_EQ(net::ERR_NETWORK_ACCESS_REVOKED,
+              client->completion_status().error_code);
+  }
+
+  {
+    base::test::TestFuture<void> exempted;
+    network_context->ExemptUrlFromNetworkRevocationForNonce(
+        GURL(server_url), nonce, base::BindOnce(exempted.GetCallback()));
+    EXPECT_TRUE(exempted.Wait());
+  }
+
+  // After exempting the url, the request should succeed even though the nonce
+  // is revoked.
+  {
+    auto params = mojom::URLLoaderFactoryParams::New();
+    params->is_trusted = true;
+    params->isolation_info =
+        net::IsolationInfo::CreateTransientWithNonce(nonce);
+    std::unique_ptr<TestURLLoaderClient> client =
+        FetchRequest(request, network_context.get(), mojom::kURLLoadOptionNone,
+                     mojom::kBrowserProcessId, std::move(params));
+    EXPECT_EQ(net::OK, client->completion_status().error_code);
+  }
+
+  // But the exemption should have no effect on other nonces.
+  {
+    base::test::TestFuture<void> revoked;
+    network_context->RevokeNetworkForNonces(
+        {nonce2}, base::BindOnce(revoked.GetCallback()));
+    EXPECT_TRUE(revoked.Wait());
+    EXPECT_FALSE(
+        network_context->IsNetworkForNonceAndUrlAllowed(nonce2, server_url));
+  }
+  {
+    auto params = mojom::URLLoaderFactoryParams::New();
+    params->isolation_info =
+        net::IsolationInfo::CreateTransientWithNonce(nonce2);
+    std::unique_ptr<TestURLLoaderClient> client =
+        FetchRequest(request, network_context.get(), mojom::kURLLoadOptionNone,
+                     mojom::kBrowserProcessId, std::move(params));
+    EXPECT_EQ(net::ERR_NETWORK_ACCESS_REVOKED,
+              client->completion_status().error_code);
+  }
+}
+
+TEST_F(NetworkContextTest,
+       RevokeNetworkForNoncesCancelsRequestsInProgressTest) {
+  net::EmbeddedTestServer test_server;
+  net::test_server::RegisterDefaultHandlers(&test_server);
+  ASSERT_TRUE(test_server.Start());
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(CreateNetworkContextParamsForTesting());
+
+  const base::UnguessableToken nonce = base::UnguessableToken::Create();
+  const base::UnguessableToken nonce2 = base::UnguessableToken::Create();
+  ResourceRequest request;
+  GURL test_url = test_server.GetURL("/hung");
+  request.url = test_url;
+
+  // Exempt `test_url` from network revocation for irrelevant `nonce2`.
+  // This will show that exemptions for unrelated nonces are ignored.
+  base::test::TestFuture<void> exempted;
+  network_context->ExemptUrlFromNetworkRevocationForNonce(
+      test_url, nonce2, base::BindOnce(exempted.GetCallback()));
+  EXPECT_TRUE(exempted.Wait());
+
+  mojo::Remote<mojom::URLLoaderFactory> loader_factory;
+  mojom::URLLoaderFactoryParamsPtr params =
+      mojom::URLLoaderFactoryParams::New();
+  params->process_id = mojom::kBrowserProcessId;
+  params->is_orb_enabled = false;
+  params->isolation_info = net::IsolationInfo::CreateTransientWithNonce(nonce);
+  HangingTestURLLoaderHeaderClient header_client(
+      params->header_client.InitWithNewPipeAndPassReceiver());
+  network_context->CreateURLLoaderFactory(
+      loader_factory.BindNewPipeAndPassReceiver(), std::move(params));
+
+  mojo::PendingRemote<mojom::URLLoader> loader;
+  TestURLLoaderClient client;
+  loader_factory->CreateLoaderAndStart(
+      loader.InitWithNewPipeAndPassReceiver(), 0 /* request_id */,
+      mojom::kURLLoadOptionUseHeaderClient, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Wait for OnBeforeSendHeaders.
+  header_client.WaitForOnBeforeSendHeaders();
+
+  // Revoke network access for the nonce.
+  base::test::TestFuture<void> revoked;
+  network_context->RevokeNetworkForNonces(
+      {nonce}, base::BindOnce(revoked.GetCallback()));
+  EXPECT_TRUE(revoked.Wait());
+
+  // Continue sending headers.
+  header_client.CallOnBeforeSendHeadersCallback();
+
+  // Run the request to completion.
+  client.RunUntilComplete();
+
+  // The request should have been cancelled due to network revocation.
+  EXPECT_EQ(client.completion_status().error_code,
+            net::ERR_NETWORK_ACCESS_REVOKED);
+}
+
+TEST_F(NetworkContextTest,
+       RevokeNetworkForNoncesCancelsRequestsInProgressForSecondNonceTest) {
+  net::EmbeddedTestServer test_server;
+  net::test_server::RegisterDefaultHandlers(&test_server);
+  ASSERT_TRUE(test_server.Start());
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(CreateNetworkContextParamsForTesting());
+
+  const base::UnguessableToken nonce = base::UnguessableToken::Create();
+  const base::UnguessableToken nonce2 = base::UnguessableToken::Create();
+  ResourceRequest request;
+  GURL test_url = test_server.GetURL("/hung");
+  request.url = test_url;
+
+  mojo::Remote<mojom::URLLoaderFactory> loader_factory;
+  mojom::URLLoaderFactoryParamsPtr params =
+      mojom::URLLoaderFactoryParams::New();
+  params->process_id = mojom::kBrowserProcessId;
+  params->is_orb_enabled = false;
+  params->isolation_info = net::IsolationInfo::CreateTransientWithNonce(nonce);
+  HangingTestURLLoaderHeaderClient header_client(
+      params->header_client.InitWithNewPipeAndPassReceiver());
+  network_context->CreateURLLoaderFactory(
+      loader_factory.BindNewPipeAndPassReceiver(), std::move(params));
+
+  mojo::PendingRemote<mojom::URLLoader> loader;
+  TestURLLoaderClient client;
+  loader_factory->CreateLoaderAndStart(
+      loader.InitWithNewPipeAndPassReceiver(), 0 /* request_id */,
+      mojom::kURLLoadOptionUseHeaderClient, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Wait for OnBeforeSendHeaders.
+  header_client.WaitForOnBeforeSendHeaders();
+
+  // Revoke network access for both `nonce` and `nonce2`. This confirms that
+  // requests for nonces beyond the first get cancelled.
+  base::test::TestFuture<void> revoked;
+  network_context->RevokeNetworkForNonces(
+      {nonce2, nonce}, base::BindOnce(revoked.GetCallback()));
+  EXPECT_TRUE(revoked.Wait());
+
+  // Continue sending headers.
+  header_client.CallOnBeforeSendHeadersCallback();
+
+  // Run the request to completion.
+  client.RunUntilComplete();
+
+  // The request should have been cancelled due to network revocation.
+  EXPECT_EQ(client.completion_status().error_code,
+            net::ERR_NETWORK_ACCESS_REVOKED);
+}
+
+TEST_F(NetworkContextTest,
+       RevokeNetworkForNoncesAllowsExemptedRequestsInProgressTest) {
+  net::EmbeddedTestServer test_server;
+  net::test_server::RegisterDefaultHandlers(&test_server);
+  ASSERT_TRUE(test_server.Start());
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(CreateNetworkContextParamsForTesting());
+
+  const base::UnguessableToken nonce = base::UnguessableToken::Create();
+  ResourceRequest request;
+  GURL test_url = test_server.GetURL("/echoheader?foo");
+  request.url = test_url;
+
+  // Exempt `test_url` from network revocation for `nonce`.
+  base::test::TestFuture<void> exempted;
+  network_context->ExemptUrlFromNetworkRevocationForNonce(
+      test_url, nonce, base::BindOnce(exempted.GetCallback()));
+  EXPECT_TRUE(exempted.Wait());
+
+  mojo::Remote<mojom::URLLoaderFactory> loader_factory;
+  mojom::URLLoaderFactoryParamsPtr params =
+      mojom::URLLoaderFactoryParams::New();
+  params->process_id = mojom::kBrowserProcessId;
+  params->is_orb_enabled = false;
+  params->isolation_info = net::IsolationInfo::CreateTransientWithNonce(nonce);
+  HangingTestURLLoaderHeaderClient header_client(
+      params->header_client.InitWithNewPipeAndPassReceiver());
+  network_context->CreateURLLoaderFactory(
+      loader_factory.BindNewPipeAndPassReceiver(), std::move(params));
+
+  mojo::PendingRemote<mojom::URLLoader> loader;
+  TestURLLoaderClient client;
+  loader_factory->CreateLoaderAndStart(
+      loader.InitWithNewPipeAndPassReceiver(), 0 /* request_id */,
+      mojom::kURLLoadOptionUseHeaderClient, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Pause the request in progress.
+  header_client.WaitForOnBeforeSendHeaders();
+
+  // Revoke network access for the nonce.
+  base::test::TestFuture<void> revoked;
+  network_context->RevokeNetworkForNonces(
+      {nonce}, base::BindOnce(revoked.GetCallback()));
+  EXPECT_TRUE(revoked.Wait());
+
+  // Run the request to completion.
+  header_client.CallOnBeforeSendHeadersCallback();
+  header_client.WaitForOnHeadersReceived();
+  header_client.CallOnHeadersReceivedCallback();
+  client.RunUntilComplete();
+
+  // The request should have succeeded because the url was exempted.
+  EXPECT_EQ(client.completion_status().error_code, net::OK);
+}
+
+TEST_F(NetworkContextTest,
+       RevokeNetworkForNoncesAllowsUnrelatedNonceRequestsInProgressTest) {
+  net::EmbeddedTestServer test_server;
+  net::test_server::RegisterDefaultHandlers(&test_server);
+  ASSERT_TRUE(test_server.Start());
+
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(CreateNetworkContextParamsForTesting());
+
+  const base::UnguessableToken nonce = base::UnguessableToken::Create();
+  const base::UnguessableToken nonce2 = base::UnguessableToken::Create();
+  ResourceRequest request;
+  request.url = test_server.GetURL("/echoheader?foo");
+
+  mojo::Remote<mojom::URLLoaderFactory> loader_factory;
+  mojom::URLLoaderFactoryParamsPtr params =
+      mojom::URLLoaderFactoryParams::New();
+  params->process_id = mojom::kBrowserProcessId;
+  params->is_orb_enabled = false;
+  params->isolation_info = net::IsolationInfo::CreateTransientWithNonce(nonce);
+  HangingTestURLLoaderHeaderClient header_client(
+      params->header_client.InitWithNewPipeAndPassReceiver());
+  network_context->CreateURLLoaderFactory(
+      loader_factory.BindNewPipeAndPassReceiver(), std::move(params));
+
+  mojo::PendingRemote<mojom::URLLoader> loader;
+  TestURLLoaderClient client;
+  loader_factory->CreateLoaderAndStart(
+      loader.InitWithNewPipeAndPassReceiver(), 0 /* request_id */,
+      mojom::kURLLoadOptionUseHeaderClient, request, client.CreateRemote(),
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+
+  // Pause the request in progress.
+  header_client.WaitForOnBeforeSendHeaders();
+
+  // Revoke network access for an unrelated nonce `nonce2`.
+  base::test::TestFuture<void> revoked;
+  network_context->RevokeNetworkForNonces(
+      {nonce2}, base::BindOnce(revoked.GetCallback()));
+  EXPECT_TRUE(revoked.Wait());
+
+  // Run the request to completion.
+  header_client.CallOnBeforeSendHeadersCallback();
+  header_client.WaitForOnHeadersReceived();
+  header_client.CallOnHeadersReceivedCallback();
+  client.RunUntilComplete();
+
+  // The request should have succeeded because the url was exempted.
+  EXPECT_EQ(client.completion_status().error_code, net::OK);
+}
+
+// ExemptUrlFromNetworkRevocationForNonce(exempted_url, nonce) exempts
+// future requests that have the same "url without filename" as `exempted_url`
+// under the nonce `nonce`.
+TEST_F(NetworkContextTest, ExemptUrlFromNetworkRevocationForNonceTest) {
+  std::unique_ptr<NetworkContext> network_context =
+      CreateContextWithParams(CreateNetworkContextParamsForTesting());
+
+  const std::string kFooHttpsUrl = "https://foo.com";
+  const std::string kFooHttpUrl = "http://foo.com";
+  const std::string kBarHttpsUrl = "https://bar.com";
+
+  const base::UnguessableToken nonce = base::UnguessableToken::Create();
+  const base::UnguessableToken nonce2 = base::UnguessableToken::Create();
+
+  // For `nonce` exempt kFooHttpsUrl but not kBarHttpsUrl.
+  {
+    base::test::TestFuture<void> exempted;
+    network_context->ExemptUrlFromNetworkRevocationForNonce(
+        GURL(kFooHttpsUrl), nonce, base::BindOnce(exempted.GetCallback()));
+    EXPECT_TRUE(exempted.Wait());
+  }
+  // Since `nonce` isn't revoked yet, everything should be allowed.
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl)));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "?baz=qux")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "#section")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "/baz/qux.html")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpUrl)));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl)));
+
+  // Revoke `nonce`.
+  {
+    base::test::TestFuture<void> revoked;
+    network_context->RevokeNetworkForNonces(
+        {nonce}, base::BindOnce(revoked.GetCallback()));
+    EXPECT_TRUE(revoked.Wait());
+  }
+  // Now for `nonce` kFooHttpsUrl should be exempted, but kBarHttpsUrl blocked.
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl)));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "?baz=qux")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "#section")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "/baz/qux.html")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpUrl)));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl)));
+
+  // Redundant exemptions should have no effect.
+  {
+    base::test::TestFuture<void> exempted;
+    network_context->ExemptUrlFromNetworkRevocationForNonce(
+        GURL(kFooHttpsUrl), nonce, base::BindOnce(exempted.GetCallback()));
+    EXPECT_TRUE(exempted.Wait());
+  }
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl)));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "?baz=qux")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "#section")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "/baz/qux.html")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpUrl)));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl)));
+
+  // For `nonce` exempt a file rooted at kBarHttpsUrl too.
+  {
+    base::test::TestFuture<void> exempted;
+    network_context->ExemptUrlFromNetworkRevocationForNonce(
+        GURL(kBarHttpsUrl + "/baz/qux.html?a=b"), nonce,
+        base::BindOnce(exempted.GetCallback()));
+    EXPECT_TRUE(exempted.Wait());
+  }
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl)));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl)));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl + "/baz/qux.html?c=d")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl + "/baz")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl + "/baz/")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl + "/baz/corge.html")));
+
+  // Revoke `nonce2`.
+  {
+    base::test::TestFuture<void> revoked;
+    network_context->RevokeNetworkForNonces(
+        {nonce2}, base::BindOnce(revoked.GetCallback()));
+    EXPECT_TRUE(revoked.Wait());
+  }
+  // Nothing should be exempted for `nonce2`.
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce2, GURL(kFooHttpsUrl)));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce2, GURL(kFooHttpsUrl + "?baz=qux")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce2, GURL(kFooHttpsUrl + "#section")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce2, GURL(kFooHttpsUrl + "/baz/qux.html")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce2, GURL(kFooHttpUrl)));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce2, GURL(kBarHttpsUrl)));
+
+  // Exempt kFooHttpsUrl for `nonce2`.
+  {
+    base::test::TestFuture<void> exempted;
+    network_context->ExemptUrlFromNetworkRevocationForNonce(
+        GURL(kFooHttpsUrl), nonce, base::BindOnce(exempted.GetCallback()));
+    EXPECT_TRUE(exempted.Wait());
+  }
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl)));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "?baz=qux")));
+  EXPECT_TRUE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "#section")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpsUrl + "/baz/qux.html")));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kFooHttpUrl)));
+  EXPECT_FALSE(network_context->IsNetworkForNonceAndUrlAllowed(
+      nonce, GURL(kBarHttpsUrl)));
 }
 
 class NetworkContextBrowserCookieTest

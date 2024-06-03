@@ -16,7 +16,6 @@
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
-#include "third_party/blink/renderer/platform/scheduler/main_thread/main_thread_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/public/task_attribution_info.h"
 #include "third_party/blink/renderer/platform/scheduler/public/task_attribution_tracker.h"
 
@@ -26,6 +25,27 @@ namespace {
 
 const size_t SOFT_NAVIGATION_PAINT_AREA_PRECENTAGE = 2;
 const size_t HUNDRED_PERCENT = 100;
+
+const char kPageLoadInternalSoftNavigationOutcome[] =
+    "PageLoad.Internal.SoftNavigationOutcome";
+
+// These values are logged to UMA. Entries should not be renumbered and numeric
+// values should never be reused. Please keep in sync with
+// "SoftNavigationOutcome" in tools/metrics/histograms/enums.xml. Note also that
+// these form a bitmask; future conditions should continue this pattern.
+// LINT.IfChange
+enum SoftNavigationOutcome {
+  kSoftNavigationDetected = 0,
+  kNoAncestorTask = 1,
+  kNoPaint = 2,
+  kNoAncestorTaskOrPaint = 3,
+  kNoDomModification = 4,
+  kNoAncestorOrDomModification = 5,
+  kNoPaintOrDomModification = 6,
+  kNoConditionsMet = 7,
+  kMaxValue = kNoConditionsMet,
+};
+// LINT.ThenChange(/tools/metrics/histograms/enums.xml:SoftNavigationOutcome)
 
 void LogAndTraceDetectedSoftNavigation(LocalFrame* frame,
                                        LocalDOMWindow* window,
@@ -81,6 +101,7 @@ void RecordUmaForPageLoadInternalSoftNavigationFromReferenceInvalidTiming(
     }
   }
 }
+
 }  // namespace internal
 
 // static
@@ -91,8 +112,8 @@ SoftNavigationHeuristics::SoftNavigationHeuristics(LocalDOMWindow& window)
     : Supplement<LocalDOMWindow>(window) {
   LocalFrame* frame = window.GetFrame();
   CHECK(frame && frame->View());
-  gfx::Size viewport_size = frame->View()->GetLayoutSize();
-  viewport_area_ = viewport_size.width() * viewport_size.height();
+
+  viewport_area_ = frame->View()->GetLayoutSize().Area64();
 }
 
 SoftNavigationHeuristics* SoftNavigationHeuristics::From(
@@ -113,6 +134,41 @@ SoftNavigationHeuristics* SoftNavigationHeuristics::From(
     ProvideTo(window, heuristics);
   }
   return heuristics;
+}
+
+void SoftNavigationHeuristics::Dispose() {
+  if (has_potential_soft_navigation_task_ &&
+      potential_soft_navigation_tasks_.empty()) {
+    RecordUmaForNonSoftNavigationInteractions();
+  }
+}
+
+void SoftNavigationHeuristics::RecordUmaForNonSoftNavigationInteractions()
+    const {
+  for (const auto& task_id_and_interaction_data :
+       interaction_task_id_to_interaction_data_) {
+    const PerInteractionData& data = *task_id_and_interaction_data.value;
+
+    // For all interactions which included a URL modification, log the
+    // criteria which were not met. Note that we assume here that an ancestor
+    // task was found when the URL change was made.
+    if (data.flag_set.Has(kURLChange)) {
+      if (!data.flag_set.Has(FlagType::kMainModification)) {
+        if (!paint_conditions_met_) {
+          base::UmaHistogramEnumeration(
+              kPageLoadInternalSoftNavigationOutcome,
+              SoftNavigationOutcome::kNoDomModification);
+        } else {
+          base::UmaHistogramEnumeration(
+              kPageLoadInternalSoftNavigationOutcome,
+              SoftNavigationOutcome::kNoPaintOrDomModification);
+        }
+      } else if (!paint_conditions_met_) {
+        base::UmaHistogramEnumeration(kPageLoadInternalSoftNavigationOutcome,
+                                      SoftNavigationOutcome::kNoPaint);
+      }
+    }
+  }
 }
 
 void SoftNavigationHeuristics::SetIsTrackingSoftNavigationHeuristicsOnDocument(
@@ -153,17 +209,12 @@ void SoftNavigationHeuristics::UserInitiatedInteraction() {
 
 std::optional<scheduler::TaskAttributionId>
 SoftNavigationHeuristics::GetUserInteractionAncestorTaskIfAny() {
-  using IterationStatus = scheduler::TaskAttributionTracker::IterationStatus;
-
   if (potential_soft_navigation_tasks_.empty()) {
     return std::nullopt;
   }
-  ThreadScheduler* scheduler = ThreadScheduler::Current();
-  DCHECK(scheduler);
-  if (scheduler::TaskAttributionTracker* tracker =
-          scheduler->GetTaskAttributionTracker()) {
-    scheduler::TaskAttributionInfo* task =
-        tracker->RunningTask(GetExecutionContext()->GetIsolate());
+  if (auto* tracker = scheduler::TaskAttributionTracker::From(
+          GetSupplementable()->GetIsolate())) {
+    scheduler::TaskAttributionInfo* task = tracker->RunningTask();
     if (!task) {
       return std::nullopt;
     }
@@ -173,16 +224,9 @@ SoftNavigationHeuristics::GetUserInteractionAncestorTaskIfAny() {
       return cached_result->value;
     }
     std::optional<scheduler::TaskAttributionId> ancestor_task_id;
-    // Check if any of `potential_soft_navigation_tasks_` is an ancestor of
-    // `task`.
-    tracker->ForEachAncestor(
-        *task, [&](const scheduler::TaskAttributionInfo& ancestor) {
-          if (potential_soft_navigation_tasks_.Contains(&ancestor)) {
-            ancestor_task_id = ancestor.Id();
-            return IterationStatus::kStop;
-          }
-          return IterationStatus::kContinue;
-        });
+    if (potential_soft_navigation_tasks_.Contains(task)) {
+      ancestor_task_id = task->Id();
+    }
     soft_navigation_descendant_cache_.insert(task->Id().value(),
                                              ancestor_task_id);
     return ancestor_task_id;
@@ -210,6 +254,10 @@ SoftNavigationHeuristics::SetFlagIfDescendantAndCheck(FlagType type) {
 void SoftNavigationHeuristics::SameDocumentNavigationStarted() {
   last_soft_navigation_ancestor_task_ =
       SetFlagIfDescendantAndCheck(FlagType::kURLChange);
+  if (!last_soft_navigation_ancestor_task_) {
+    base::UmaHistogramEnumeration(kPageLoadInternalSoftNavigationOutcome,
+                                  SoftNavigationOutcome::kNoAncestorTask);
+  }
   TRACE_EVENT1("scheduler",
                "SoftNavigationHeuristics::SameDocumentNavigationStarted",
                "descendant", !!last_soft_navigation_ancestor_task_);
@@ -441,6 +489,10 @@ void SoftNavigationHeuristics::ReportSoftNavigationToMetrics(
     // This notifies UKM about this soft navigation.
     frame_client->DidObserveSoftNavigation(metrics);
   }
+
+  // Count "successful soft nav" in histogram
+  base::UmaHistogramEnumeration(kPageLoadInternalSoftNavigationOutcome,
+                                SoftNavigationOutcome::kSoftNavigationDetected);
 }
 
 void SoftNavigationHeuristics::ResetPaintsIfNeeded() {
@@ -561,12 +613,9 @@ void SoftNavigationHeuristics::ProcessCustomWeakness(
   // can schedule a task or microtask to reset the heuristic.
   if (has_potential_soft_navigation_task_ &&
       potential_soft_navigation_tasks_.empty()) {
+    RecordUmaForNonSoftNavigationInteractions();
     ResetHeuristic();
   }
-}
-
-ExecutionContext* SoftNavigationHeuristics::GetExecutionContext() {
-  return GetSupplementable();
 }
 
 LocalFrame* SoftNavigationHeuristics::GetLocalFrameIfNotDetached() const {
@@ -593,7 +642,9 @@ SoftNavigationHeuristics::EventScope SoftNavigationHeuristics::CreateEventScope(
     }
   }
 
-  return SoftNavigationHeuristics::EventScope(this);
+  return SoftNavigationHeuristics::EventScope(
+      this, scheduler::TaskAttributionTracker::From(
+                GetSupplementable()->GetIsolate()));
 }
 
 void SoftNavigationHeuristics::OnSoftNavigationEventScopeDestroyed() {
@@ -613,26 +664,23 @@ void SoftNavigationHeuristics::OnSoftNavigationEventScopeDestroyed() {
 // SoftNavigationHeuristics::EventScope implementation
 // ///////////////////////////////////////////
 SoftNavigationHeuristics::EventScope::EventScope(
-    SoftNavigationHeuristics* heuristics)
+    SoftNavigationHeuristics* heuristics,
+    scheduler::TaskAttributionTracker* tracker)
     : heuristics_(heuristics) {
   CHECK(heuristics_);
-  ThreadScheduler* scheduler = ThreadScheduler::Current();
-  DCHECK(scheduler);
-  auto* tracker = scheduler->GetTaskAttributionTracker();
-  if (!tracker) {
-    return;
+  if (tracker) {
+    observer_scope_ = tracker->RegisterObserver(heuristics_);
   }
-  nested_ = !tracker->RegisterObserverIfNeeded(heuristics_);
 }
 
 SoftNavigationHeuristics::EventScope::EventScope(EventScope&& other)
     : heuristics_(std::exchange(other.heuristics_, nullptr)),
-      nested_(other.nested_) {}
+      observer_scope_(std::move(other.observer_scope_)) {}
 
 SoftNavigationHeuristics::EventScope&
 SoftNavigationHeuristics::EventScope::operator=(EventScope&& other) {
   heuristics_ = std::exchange(other.heuristics_, nullptr);
-  nested_ = other.nested_;
+  observer_scope_ = std::move(other.observer_scope_);
   return *this;
 }
 
@@ -641,17 +689,6 @@ SoftNavigationHeuristics::EventScope::~EventScope() {
     return;
   }
   heuristics_->OnSoftNavigationEventScopeDestroyed();
-
-  // Only the top level EventScope should unregister the observer.
-  if (!nested_) {
-    ThreadScheduler* scheduler = ThreadScheduler::Current();
-    DCHECK(scheduler);
-    auto* tracker = scheduler->GetTaskAttributionTracker();
-    if (!tracker) {
-      return;
-    }
-    tracker->UnregisterObserver(heuristics_);
-  }
 }
 
 }  // namespace blink

@@ -78,43 +78,10 @@ const std::string ComposeNavigationTypeString(
 // Check the eligibility based on the allowlist. This doesn't mean the
 // experiment is actually enabled. The eligibility is checked and UMA is
 // reported for the analysis purpose.
-bool HasRaceNetworkRequestEligibleScript(
-    scoped_refptr<ServiceWorkerVersion> version) {
+bool HasAutoPreloadEligibleScript(scoped_refptr<ServiceWorkerVersion> version) {
   return content::service_worker_loader_helpers::
       FetchHandlerBypassedHashStrings()
           .contains(version->sha256_script_checksum());
-}
-
-bool IsEligibleForRaceNetworkRequestByOriginTrial(
-    scoped_refptr<ServiceWorkerVersion> version) {
-  return version->origin_trial_tokens() &&
-         version->origin_trial_tokens()->contains(
-             "ServiceWorkerBypassFetchHandlerWithRaceNetworkRequest");
-}
-
-bool IsEligibleForRaceNetworkRequest(
-    scoped_refptr<ServiceWorkerVersion> version) {
-  if (!base::FeatureList::IsEnabled(
-          features::kServiceWorkerBypassFetchHandler)) {
-    return false;
-  }
-  if (features::kServiceWorkerBypassFetchHandlerTarget.Get() !=
-      features::ServiceWorkerBypassFetchHandlerTarget::
-          kAllWithRaceNetworkRequest) {
-    return false;
-  }
-
-  switch (features::kServiceWorkerBypassFetchHandlerStrategy.Get()) {
-    // kFeatureOptIn means that the feature relies on the manual feature
-    // toggle from about://flags etc, which is triggered by developers.
-    case features::ServiceWorkerBypassFetchHandlerStrategy::kFeatureOptIn:
-      return true;
-    // If kAllowList, the allowlist should be specified. In this case,
-    // RaceNetworkRequest is allowed only when the sha256 checksum of the
-    // script is in the allowlist.
-    case features::ServiceWorkerBypassFetchHandlerStrategy::kAllowList:
-      return HasRaceNetworkRequestEligibleScript(version);
-  }
 }
 
 std::string GetContainerHostClientId(int frame_tree_node_id) {
@@ -325,8 +292,6 @@ void ServiceWorkerMainResourceLoader::StartRequest(
       router_info->matched_source_type = source_type;
       response_head_->service_worker_router_info = std::move(router_info);
 
-      // TODO(crbug.com/1371756): support other sources in the full form.
-      // https://github.com/yoshisatoyanagisawa/service-worker-static-routing-api/blob/main/final-form.md
       switch (source_type) {
         case network::mojom::ServiceWorkerRouterSourceType::kNetwork:
           // Network fallback is requested.
@@ -453,38 +418,33 @@ void ServiceWorkerMainResourceLoader::MaybeDispatchPreload(
   switch (race_network_request_mode) {
     case RaceNetworkRequestMode::kForced:
       if (StartRaceNetworkRequest(context_wrapper, version)) {
-        return;
+        SetDispatchedPreloadType(DispatchedPreloadType::kRaceNetworkRequest);
       }
       break;
     case RaceNetworkRequestMode::kDefault:
-      if (MaybeStartRaceNetworkRequest(context_wrapper, version)) {
-        return;
+      if (base::GetFieldTrialParamByFeatureAsBool(
+              features::kServiceWorkerAutoPreload, "respect_navigation_preload",
+              /*default_value=*/true)) {
+        // Prioritize NavigationPreload than AutoPreload if the
+        // respect_navigation_preload feature param is true.
+        if (MaybeStartNavigationPreload(context_wrapper)) {
+          return;
+        }
+        if (MaybeStartAutoPreload(context_wrapper, version)) {
+          return;
+        }
+      } else {
+        if (MaybeStartAutoPreload(context_wrapper, version)) {
+          return;
+        }
+        if (MaybeStartNavigationPreload(context_wrapper)) {
+          return;
+        }
       }
       break;
     case RaceNetworkRequestMode::kSkipped:
+      MaybeStartNavigationPreload(context_wrapper);
       break;
-  }
-
-  bool respect_navigation_preload = base::GetFieldTrialParamByFeatureAsBool(
-      features::kServiceWorkerAutoPreload, "respect_navigation_preload",
-      /*default_value=*/true);
-
-  if (respect_navigation_preload) {
-    // Prioritize NavigationPreload than AutoPreload if the
-    // respect_navigation_preload feature param is true.
-    if (MaybeStartNavigationPreload(context_wrapper)) {
-      return;
-    }
-    if (MaybeStartAutoPreload(context_wrapper, version)) {
-      return;
-    }
-  } else {
-    if (MaybeStartAutoPreload(context_wrapper, version)) {
-      return;
-    }
-    if (MaybeStartNavigationPreload(context_wrapper)) {
-      return;
-    }
   }
 }
 
@@ -503,7 +463,7 @@ bool ServiceWorkerMainResourceLoader::MaybeStartAutoPreload(
   bool use_allowlist = base::GetFieldTrialParamByFeatureAsBool(
       features::kServiceWorkerAutoPreload, "use_allowlist",
       /*default_value=*/false);
-  if (use_allowlist && !HasRaceNetworkRequestEligibleScript(version)) {
+  if (use_allowlist && !HasAutoPreloadEligibleScript(version)) {
     return false;
   }
 
@@ -551,42 +511,6 @@ bool ServiceWorkerMainResourceLoader::MaybeStartAutoPreload(
           /*default_value=*/true)
           ? blink::mojom::ServiceWorkerFetchHandlerBypassOption::kAutoPreload
           : blink::mojom::ServiceWorkerFetchHandlerBypassOption::kDefault);
-
-  return result;
-}
-
-bool ServiceWorkerMainResourceLoader::MaybeStartRaceNetworkRequest(
-    scoped_refptr<ServiceWorkerContextWrapper> context,
-    scoped_refptr<ServiceWorkerVersion> version) {
-  bool is_enabled_by_feature_flag = IsEligibleForRaceNetworkRequest(version);
-  bool is_enabled_by_origin_trial =
-      IsEligibleForRaceNetworkRequestByOriginTrial(version);
-
-  if (!(is_enabled_by_feature_flag || is_enabled_by_origin_trial)) {
-    // Even if the feature is not enabled, if the SW has an eligible script, set
-    // the option as |kRaceNetworkRequestHoldback| for the measuring purpose.
-    if (HasRaceNetworkRequestEligibleScript(version)) {
-      version->set_fetch_handler_bypass_option(
-          blink::mojom::ServiceWorkerFetchHandlerBypassOption::
-              kRaceNetworkRequestHoldback);
-    }
-    return false;
-  }
-
-  bool result = StartRaceNetworkRequest(context, version);
-  if (is_enabled_by_origin_trial) {
-    version->CountFeature(
-        blink::mojom::WebFeature::
-            kServiceWorkerBypassFetchHandlerForAllWithRaceNetworkRequestByOriginTrial);
-  } else if (is_enabled_by_feature_flag) {
-    version->CountFeature(
-        blink::mojom::WebFeature::
-            kServiceWorkerBypassFetchHandlerForAllWithRaceNetworkRequest);
-  }
-
-  if (result) {
-    SetDispatchedPreloadType(DispatchedPreloadType::kRaceNetworkRequest);
-  }
 
   return result;
 }
@@ -988,6 +912,14 @@ void ServiceWorkerMainResourceLoader::StartResponse(
   // ServiceWorker, we have to check the security level of the responses.
   DCHECK(version->GetMainScriptResponse());
   response_head_->ssl_info = version->GetMainScriptResponse()->ssl_info;
+
+  CHECK(version->policy_container_host(), base::NotFatalUntil::M129);
+  // TODO(https://crbug.com/339200481): Find out why some ServiceWorker versions
+  // have null policy container host.
+  if (version->policy_container_host()) {
+    response_head_->client_address_space =
+        version->policy_container_host()->ip_address_space();
+  }
 
   // Handle a redirect response. ComputeRedirectInfo returns non-null redirect
   // info if the given response is a redirect.

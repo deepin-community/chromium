@@ -94,6 +94,7 @@
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_event.h"
+#include "ui/accessibility/ax_tree_update.h"
 #include "ui/events/types/scroll_types.h"
 #include "v8/include/v8.h"
 
@@ -140,6 +141,7 @@ class URLLoader;
 class WebURLRequest;
 class WebURLResponse;
 class WebView;
+class WebLinkPreviewTriggerer;
 struct FramePolicy;
 struct Impression;
 struct JavaScriptFrameworkDetectionResult;
@@ -465,7 +467,7 @@ class BLINK_EXPORT WebLocalFrameClient {
   virtual void DidOpenDocumentInputStream(const WebURL&) {}
 
   // Called when a frame's page lifecycle state gets updated.
-  virtual void DidSetPageLifecycleState() {}
+  virtual void DidSetPageLifecycleState(bool restoring_from_bfcache) {}
 
   // Immediately notifies the browser of a change in the current HistoryItem.
   // Prefer DidUpdateCurrentHistoryItem().
@@ -578,13 +580,15 @@ class BLINK_EXPORT WebLocalFrameClient {
   // an input to next frame latency. This reports the timings of the max
   // input-to-frame latency for each interaction. `max_event_start` is when
   // input was received, `max_event_end` is when the next frame was
-  // presented and `max_event_queued_main_thread` is when the input was queued.
-  // See https://web.dev/inp/#whats-in-an-interaction for more
+  // presented, `max_event_queued_main_thread` is when the input was queued and
+  // `max_event_commit_finish` is when the next commit finished after event has
+  // been processed. See https://web.dev/inp/#whats-in-an-interaction for more
   // detailed motivation and explanation.
   virtual void DidObserveUserInteraction(
       base::TimeTicks max_event_start,
-      base::TimeTicks max_event_end,
       base::TimeTicks max_event_queued_main_thread,
+      base::TimeTicks max_event_commit_finish,
+      base::TimeTicks max_event_end,
       UserInteractionType interaction_type,
       uint64_t interaction_offset) {}
 
@@ -646,9 +650,6 @@ class BLINK_EXPORT WebLocalFrameClient {
   // The main frame scrolled.
   virtual void DidChangeScrollOffset() {}
 
-  // Informs the browser that the draggable regions have been updated.
-  virtual void DraggableRegionsChanged() {}
-
   // MediaStream -----------------------------------------------------
 
   virtual WebMediaStreamDeviceObserver* MediaStreamDeviceObserver() {
@@ -682,7 +683,14 @@ class BLINK_EXPORT WebLocalFrameClient {
 
   // Called when accessibility is ready to serialize.
   // Returns true if a serialization occurs.
-  virtual bool AXReadyCallback() { return false; }
+  virtual bool SendAccessibilitySerialization(
+      std::vector<ui::AXTreeUpdate> updates,
+      std::vector<ui::AXEvent> events,
+      bool had_load_complete_messages) {
+    return false;
+  }
+
+  virtual bool IsAccessibilityEnabled() const { return false; }
 
   // Audio Output Devices API --------------------------------------------
 
@@ -862,6 +870,11 @@ class BLINK_EXPORT WebLocalFrameClient {
       const WebURL& base_url) {
     return nullptr;
   }
+
+  virtual std::unique_ptr<WebLinkPreviewTriggerer> CreateLinkPreviewTriggerer();
+
+  virtual void SetLinkPreviewTriggererForTesting(
+      std::unique_ptr<WebLinkPreviewTriggerer> trigger);
 };
 
 }  // namespace blink

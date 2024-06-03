@@ -5,6 +5,7 @@
 #include "content/browser/media/media_browsertest.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/strings/string_number_conversions.h"
@@ -154,7 +155,7 @@ class MediaTest : public testing::WithParamInterface<bool>,
     MediaBrowserTest::SetUpCommandLine(command_line);
   }
 
-  void MaybePlayVideo(base::StringPiece codec_string,
+  void MaybePlayVideo(std::string_view codec_string,
                       const std::string& file_name) {
     constexpr char kTestVideoPlaybackScript[] = R"({
       const video = document.createElement('video');
@@ -211,25 +212,6 @@ class MediaTest : public testing::WithParamInterface<bool>,
     RunMediaTestPage("player.html", query_params, expected_title, true);
   }
 };
-
-// Android doesn't support Theora.
-#if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
-IN_PROC_BROWSER_TEST_P(MediaTest, VideoBearTheora) {
-  if (base::FeatureList::IsEnabled(media::kTheoraVideoCodec)) {
-    PlayVideo("bear.ogv");
-  } else {
-    GTEST_SKIP() << "Theora isn't supported";
-  }
-}
-
-IN_PROC_BROWSER_TEST_P(MediaTest, VideoBearSilentTheora) {
-  if (base::FeatureList::IsEnabled(media::kTheoraVideoCodec)) {
-    PlayVideo("bear_silent.ogv");
-  } else {
-    GTEST_SKIP() << "Theora isn't supported";
-  }
-}
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 IN_PROC_BROWSER_TEST_P(MediaTest, VideoBearWebm) {
   PlayVideo("bear.webm");

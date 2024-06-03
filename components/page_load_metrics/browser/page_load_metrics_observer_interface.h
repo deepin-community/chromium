@@ -314,11 +314,16 @@ class PageLoadMetricsObserverInterface {
       content::NavigationHandle* navigation_handle) = 0;
 
   // Called before OnCommit. The observer should return whether it wishes to
-  // observe navigations whose main resource has MIME type |mine_type|. The
+  // observe navigations whose main resource has MIME type |mime_type|. The
   // default is to observe HTML and XHTML only. Note that PageLoadTrackers only
   // track XHTML, HTML, and MHTML (related/multipart).
   virtual ObservePolicy ShouldObserveMimeType(
       const std::string& mime_type) const = 0;
+
+  // Called before OnCommit. The observer should return whether it wishes to
+  // observe navigations for |url|'s scheme. The default is to observe http and
+  // https only.
+  virtual ObservePolicy ShouldObserveScheme(const GURL& url) const = 0;
 
   // The callbacks below are only invoked after a navigation commits, for
   // tracked page loads. Page loads that don't meet the criteria for being
@@ -461,7 +466,8 @@ class PageLoadMetricsObserverInterface {
   // subframe's position is updated explicitly or inherently (e.g. sticky
   // position while the page is being scrolled).
   //
-  // TODO(crbug/1048175): Expose intersections to observers via shared delegate.
+  // TODO(crbug.com/40117157): Expose intersections to observers via shared
+  // delegate.
   virtual void OnMainFrameIntersectionRectChanged(
       content::RenderFrameHost* rfh,
       const gfx::Rect& main_frame_intersection_rect) = 0;

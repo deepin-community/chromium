@@ -45,6 +45,8 @@ fuzztest_cc_library(
     fuzztest_macros
   HDRS
     "fuzztest_macros.h"
+  SRCS
+    "fuzztest_macros.cc"
   DEPS
     fuzztest::io
     fuzztest::registration
@@ -77,6 +79,7 @@ fuzztest_cc_library(
     fuzztest::registry
     fuzztest::runtime
     absl::flags
+    absl::flags_reflection
     absl::strings
     absl::str_format
     absl::time
@@ -161,6 +164,7 @@ fuzztest_cc_library(
   SRCS
     "internal/compatibility_mode.cc"
   DEPS
+    fuzztest::domain_core
     fuzztest::fixture_driver
     fuzztest::logging
     fuzztest::runtime
@@ -180,6 +184,35 @@ fuzztest_cc_library(
   SRCS
     "internal/configuration.cc"
   DEPS
+    absl::check
+    absl::status
+    absl::statusor
+    absl::strings
+    absl::string_view
+    absl::time
+)
+
+fuzztest_cc_test(
+  NAME
+    configuration_test
+  SRCS
+    "internal/configuration_test.cc"
+  DEPS
+    fuzztest::configuration
+    absl::statusor
+    absl::time
+    GTest::gmock_main
+)
+
+fuzztest_cc_library(
+  NAME
+    corpus_database
+  HDRS
+    "internal/corpus_database.h"
+  SRCS
+    "internal/corpus_database.cc"
+  DEPS
+    fuzztest::configuration
     fuzztest::io
     absl::strings
     absl::string_view
@@ -225,6 +258,7 @@ fuzztest_cc_library(
     absl::random_random
     absl::random_bit_gen_ref
     absl::random_distributions
+    absl::status
     absl::strings
     absl::synchronization
     absl::span
@@ -240,7 +274,9 @@ fuzztest_cc_library(
     "internal/domains/bit_flag_combination_of_impl.h"
     "internal/domains/container_mutation_helpers.h"
     "internal/domains/container_of_impl.h"
+    "internal/domains/domain.h"
     "internal/domains/domain_base.h"
+    "internal/domains/domain_type_erasure.h"
     "internal/domains/element_of_impl.h"
     "internal/domains/filter_impl.h"
     "internal/domains/flat_map_impl.h"
@@ -261,6 +297,7 @@ fuzztest_cc_library(
     fuzztest::coverage
     fuzztest::logging
     fuzztest::meta
+    fuzztest::printer
     fuzztest::seed_seq
     fuzztest::serialization
     fuzztest::status
@@ -268,6 +305,7 @@ fuzztest_cc_library(
     fuzztest::type_support
     absl::flat_hash_map
     absl::flat_hash_set
+    absl::function_ref
     absl::bits
     absl::int128
     absl::random_random
@@ -291,9 +329,11 @@ fuzztest_cc_library(
     fuzztest::any
     fuzztest::domain_core
     fuzztest::logging
+    fuzztest::meta
+    fuzztest::printer
     fuzztest::registration
     fuzztest::type_support
-    absl::memory
+    absl::status
     absl::str_format
     absl::span
 )
@@ -322,11 +362,13 @@ fuzztest_cc_library(
     "internal/googletest_adaptor.cc"
   DEPS
     fuzztest::configuration
+    fuzztest::corpus_database
     fuzztest::io
     fuzztest::registry
     fuzztest::runtime
     absl::strings
     absl::string_view
+    absl::str_format
     GTest::gtest
 )
 
@@ -387,6 +429,16 @@ fuzztest_cc_library(
 
 fuzztest_cc_library(
   NAME
+    printer
+  HDRS
+    "internal/printer.h"
+  DEPS
+    fuzztest::meta
+    absl::str_format
+)
+
+fuzztest_cc_library(
+  NAME
     regexp_dfa
   HDRS
     "internal/domains/regexp_dfa.h"
@@ -408,8 +460,10 @@ fuzztest_cc_library(
   DEPS
     fuzztest::domain_core
     fuzztest::meta
+    fuzztest::printer
     fuzztest::type_support
     absl::any_invocable
+    absl::status
     absl::str_format
     absl::span
 )
@@ -440,18 +494,21 @@ fuzztest_cc_library(
     "internal/runtime.cc"
   DEPS
     fuzztest::configuration
+    fuzztest::corpus_database
     fuzztest::coverage
     fuzztest::domain_core
     fuzztest::fixture_driver
     fuzztest::io
     fuzztest::logging
     fuzztest::meta
+    fuzztest::printer
     fuzztest::registration
     fuzztest::seed_seq
     fuzztest::serialization
     fuzztest::type_support
     absl::any_invocable
     absl::function_ref
+    absl::check
     absl::random_random
     absl::random_bit_gen_ref
     absl::random_distributions
@@ -637,6 +694,8 @@ fuzztest_cc_library(
   DEPS
     fuzztest::absl_helpers
     fuzztest::meta
+    fuzztest::printer
+    absl::function_ref
     absl::symbolize
     absl::int128
     absl::strings
@@ -651,6 +710,8 @@ fuzztest_cc_test(
     "internal/type_support_test.cc"
   DEPS
     fuzztest::domain
+    fuzztest::meta
+    fuzztest::printer
     test_protobuf
     fuzztest::type_support
     absl::int128

@@ -6,7 +6,10 @@
 #define COMPONENTS_WINHTTP_SCOPED_HINTERNET_H_
 
 #include <windows.h>
+
 #include <winhttp.h>
+
+#include <string_view>
 
 #include "base/memory/ref_counted.h"
 #include "base/scoped_generic.h"
@@ -32,8 +35,10 @@ using ScopedHInternet =
 
 // Creates a new WinHTTP session using the given user agent and properly
 // configured for the Windows OS version.
-ScopedHInternet CreateSessionHandle(const wchar_t* user_agent,
-                                    int proxy_access_type);
+ScopedHInternet CreateSessionHandle(std::wstring_view user_agent,
+                                    int proxy_access_type,
+                                    std::wstring_view proxy = {},
+                                    std::wstring_view proxy_bypass = {});
 
 // A WinHTTP handle which can be shared. A session handle is typically shared
 // by network fetchers since the session maintains the authentication state

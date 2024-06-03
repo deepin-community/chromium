@@ -13,6 +13,8 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/span.h"
 #include "core/fxge/cfx_color.h"
@@ -32,8 +34,6 @@
 #include "core/fxge/renderdevicedriver_iface.h"
 #include "core/fxge/text_char_pos.h"
 #include "core/fxge/text_glyph_pos.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 #if defined(PDF_USE_SKIA)
 #include "third_party/skia/include/core/SkTypes.h"  // nogncheck
@@ -877,11 +877,11 @@ void CFX_RenderDevice::DrawZeroAreaPath(
                             path_options, blend_type);
 }
 
-bool CFX_RenderDevice::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
+bool CFX_RenderDevice::GetDIBits(RetainPtr<CFX_DIBitmap> bitmap,
                                  int left,
                                  int top) {
   return (m_RenderCaps & FXRC_GET_BITS) &&
-         m_pDeviceDriver->GetDIBits(pBitmap, left, top);
+         m_pDeviceDriver->GetDIBits(std::move(bitmap), left, top);
 }
 
 bool CFX_RenderDevice::SetDIBits(RetainPtr<const CFX_DIBBase> bitmap,

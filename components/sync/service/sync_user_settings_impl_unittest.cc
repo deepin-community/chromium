@@ -12,6 +12,7 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/model_type.h"
@@ -93,6 +94,12 @@ class SyncUserSettingsImplTest : public testing::Test,
 
   void SetSyncAccountState(SyncPrefs::SyncAccountState sync_account_state) {
     sync_account_state_ = sync_account_state;
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+    if (sync_account_state ==
+        SyncPrefs::SyncAccountState::kSignedInNotSyncing) {
+      pref_service_.SetBoolean(prefs::kExplicitBrowserSignin, true);
+    }
+#endif
   }
 
   std::unique_ptr<SyncUserSettingsImpl> MakeSyncUserSettings(
@@ -151,11 +158,11 @@ TEST_F(SyncUserSettingsImplTest, GetSelectedTypesWhileSignedOut) {
   // Sanity check: signed-in there are selected types.
   SetSyncAccountState(SyncPrefs::SyncAccountState::kSignedInNotSyncing);
   ASSERT_FALSE(
-      MakeSyncUserSettings(GetUserTypes())->GetSelectedTypes().Empty());
+      MakeSyncUserSettings(GetUserTypes())->GetSelectedTypes().empty());
 
   // But signed out there are none.
   SetSyncAccountState(SyncPrefs::SyncAccountState::kNotSignedIn);
-  EXPECT_TRUE(MakeSyncUserSettings(GetUserTypes())->GetSelectedTypes().Empty());
+  EXPECT_TRUE(MakeSyncUserSettings(GetUserTypes())->GetSelectedTypes().empty());
 }
 
 TEST_F(SyncUserSettingsImplTest, DefaultSelectedTypesWhileSignedIn) {
@@ -166,6 +173,9 @@ TEST_F(SyncUserSettingsImplTest, DefaultSelectedTypesWhileSignedIn) {
 #if !BUILDFLAG(IS_IOS)
                             kReadingListEnableSyncTransportModeUponSignIn,
 #endif  // !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+                            switches::kExplicitBrowserSigninUIOnDesktop,
+#endif
                             kEnablePasswordsAccountStorageForNonSyncingUsers,
                             kSyncEnableContactInfoDataTypeInTransportMode,
                             kEnablePreferencesAccountStorage},
@@ -179,8 +189,8 @@ TEST_F(SyncUserSettingsImplTest, DefaultSelectedTypesWhileSignedIn) {
       sync_user_settings->GetRegisteredSelectableTypes();
   UserSelectableTypeSet selected_types = sync_user_settings->GetSelectedTypes();
   // History and Tabs require a separate opt-in.
-  // Apps, Extensions, Themes, and SavedTabGroups are not supported in transport
-  // mode.
+  // Apps, Extensions, Themes and SavedTabGroups are not supported in
+  // transport mode.
   UserSelectableTypeSet expected_disabled_types = {
       UserSelectableType::kHistory, UserSelectableType::kTabs,
       UserSelectableType::kApps,    UserSelectableType::kExtensions,
@@ -188,11 +198,6 @@ TEST_F(SyncUserSettingsImplTest, DefaultSelectedTypesWhileSignedIn) {
   if (!base::FeatureList::IsEnabled(kSyncSharedTabGroupDataInTransportMode)) {
     expected_disabled_types.Put(UserSelectableType::kSharedTabGroupData);
   }
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  // On Desktop, kPasswords is disabled by default.
-  expected_disabled_types.Put(UserSelectableType::kPasswords);
-#endif
 
   EXPECT_EQ(selected_types,
             Difference(registered_types, expected_disabled_types));
@@ -514,9 +519,17 @@ TEST_F(SyncUserSettingsImplTest, ShouldSyncSessionsOnlyIfOpenTabsIsSelected) {
   sync_user_settings->SetSelectedTypes(
       /*sync_everything=*/false,
       /*types=*/{UserSelectableType::kHistory, UserSelectableType::kTabs});
+#if BUILDFLAG(IS_ANDROID)
+  // For android, we enable SAVED_TAB_GROUP under OpenTabs as well.
+  EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
+            Union(AlwaysPreferredUserTypes(),
+                  {HISTORY, HISTORY_DELETE_DIRECTIVES, SAVED_TAB_GROUP,
+                   SESSIONS, USER_EVENTS}));
+#else
   EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
             Union(AlwaysPreferredUserTypes(),
                   {HISTORY, HISTORY_DELETE_DIRECTIVES, SESSIONS, USER_EVENTS}));
+#endif  // BUILDFLAG(IS_ANDROID)
 
   // History only: SESSIONS is gone.
   sync_user_settings->SetSelectedTypes(
@@ -527,11 +540,19 @@ TEST_F(SyncUserSettingsImplTest, ShouldSyncSessionsOnlyIfOpenTabsIsSelected) {
                   {HISTORY, HISTORY_DELETE_DIRECTIVES, USER_EVENTS}));
 
   // OpenTabs only: Only SESSIONS is there.
+#if BUILDFLAG(IS_ANDROID)
+  sync_user_settings->SetSelectedTypes(
+      /*sync_everything=*/false,
+      /*types=*/{UserSelectableType::kTabs});
+  EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
+            Union(AlwaysPreferredUserTypes(), {SAVED_TAB_GROUP, SESSIONS}));
+#else
   sync_user_settings->SetSelectedTypes(
       /*sync_everything=*/false,
       /*types=*/{UserSelectableType::kTabs});
   EXPECT_EQ(GetPreferredUserTypes(*sync_user_settings),
             Union(AlwaysPreferredUserTypes(), {SESSIONS}));
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 TEST_F(SyncUserSettingsImplTest, ShouldMutePassphrasePrompt) {
@@ -565,18 +586,6 @@ TEST_F(SyncUserSettingsImplTest, ShouldClearPassphrasePromptMuteUponUpgrade) {
   sync_user_settings->MarkPassphrasePromptMutedForCurrentProductVersion();
   EXPECT_TRUE(
       sync_user_settings->IsPassphrasePromptMutedForCurrentProductVersion());
-}
-
-// Protects against GetSelectedTypes() incorrectly requiring a
-// SetBookmarksAndReadingListAccountStorageOptIn() for syncing users.
-// TODO(crbug.com/1440628): Remove when the temporary opt-in is deleted.
-TEST_F(SyncUserSettingsImplTest, BookmarksOnByDefaultForSyncingUsers) {
-  SetSyncAccountState(SyncPrefs::SyncAccountState::kSyncing);
-  std::unique_ptr<SyncUserSettingsImpl> sync_user_settings =
-      MakeSyncUserSettings(GetUserTypes());
-
-  EXPECT_TRUE(sync_user_settings->GetSelectedTypes().Has(
-      UserSelectableType::kBookmarks));
 }
 
 TEST_F(SyncUserSettingsImplTest, EncryptionBootstrapTokenForSyncingUser) {

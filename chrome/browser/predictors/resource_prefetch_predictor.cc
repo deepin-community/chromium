@@ -325,18 +325,18 @@ bool ResourcePrefetchPredictor::TryEnsureRecordingPrecondition() {
 }
 
 void ResourcePrefetchPredictor::RecordPageRequestSummary(
-    std::unique_ptr<PageRequestSummary> summary) {
+    const PageRequestSummary& summary) {
   if (!TryEnsureRecordingPrecondition()) {
     return;
   }
 
-  LearnRedirect(summary->initial_url.host(), summary->main_frame_url);
-  LearnOrigins(summary->main_frame_url.host(),
-               summary->main_frame_url.DeprecatedGetOriginAsURL(),
-               summary->origins);
+  LearnRedirect(summary.initial_url.host(), summary.main_frame_url);
+  LearnOrigins(summary.main_frame_url.host(),
+               summary.main_frame_url.DeprecatedGetOriginAsURL(),
+               summary.origins);
 
   if (observer_)
-    observer_->OnNavigationLearned(*summary);
+    observer_->OnNavigationLearned(summary);
 }
 
 bool ResourcePrefetchPredictor::PredictPreconnectOrigins(
@@ -405,12 +405,13 @@ std::optional<LcppData> ResourcePrefetchPredictor::GetLcppData(
     return std::nullopt;
   }
 
-  if (!url.is_valid() || url.host().empty() || net::IsLocalhost(url) ||
-      !url.SchemeIsHTTPOrHTTPS()) {
+  if (!IsURLValidForLcpp(url)) {
     return std::nullopt;
   }
+  const std::string key = GetLCPPDatabaseKey(url);
+
   LcppData data;
-  if (!lcpp_data_->TryGetData(url.host(), &data)) {
+  if (!lcpp_data_->TryGetData(key, &data)) {
     return std::nullopt;
   }
   return data;
@@ -643,23 +644,23 @@ void ResourcePrefetchPredictor::LearnOrigins(
     origin_data_->UpdateData(host, data);
 }
 
-void ResourcePrefetchPredictor::LearnLcpp(const std::string& host,
+void ResourcePrefetchPredictor::LearnLcpp(const GURL& url,
                                           const LcppDataInputs& inputs) {
   if (!TryEnsureRecordingPrecondition()) {
     return;
   }
 
-  if (host.size() > ResourcePrefetchPredictorTables::kMaxStringLength) {
+  if (!IsURLValidForLcpp(url)) {
     return;
   }
-
+  const std::string key = GetLCPPDatabaseKey(url);
   LcppData data;
-  bool exists = lcpp_data_->TryGetData(host, &data);
+  bool exists = lcpp_data_->TryGetData(key, &data);
   data.set_last_visit_time(
       base::Time::Now().ToDeltaSinceWindowsEpoch().InMicroseconds());
 
   if (!exists) {
-    data.set_host(host);
+    data.set_host(key);
   }
 
   if (!IsValidLcppStat(data.lcpp_stat())) {
@@ -670,14 +671,14 @@ void ResourcePrefetchPredictor::LearnLcpp(const std::string& host,
   bool data_updated = UpdateLcppDataWithLcppDataInputs(config_, inputs, data);
   DCHECK(IsValidLcppStat(data.lcpp_stat()));
   if (data_updated) {
-    lcpp_data_->UpdateData(host, data);
+    lcpp_data_->UpdateData(key, data);
     if (observer_) {
       observer_->OnLcppLearned();
     }
   }
 }
 
-void ResourcePrefetchPredictor::OnURLsDeleted(
+void ResourcePrefetchPredictor::OnHistoryDeletions(
     history::HistoryService* history_service,
     const history::DeletionInfo& deletion_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);

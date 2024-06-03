@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "media/filters/hls_rendition_impl.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/task_environment.h"
@@ -80,8 +82,7 @@ class HlsRenditionImplUnittest : public testing::Test {
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
-  std::unique_ptr<HlsRenditionImpl> MakeVodRendition(
-      base::StringPiece content) {
+  std::unique_ptr<HlsRenditionImpl> MakeVodRendition(std::string_view content) {
     constexpr hls::types::DecimalInteger version = 3;
     auto uri = GURL("https://example.m3u8");
     auto parsed = hls::MediaPlaylist::Parse(content, uri, version, nullptr);
@@ -98,7 +99,7 @@ class HlsRenditionImplUnittest : public testing::Test {
 
   std::unique_ptr<HlsRenditionImpl> MakeLiveRendition(
       GURL uri,
-      base::StringPiece content) {
+      std::string_view content) {
     constexpr hls::types::DecimalInteger version = 3;
     auto parsed = hls::MediaPlaylist::Parse(content, uri, version, nullptr);
     if (!parsed.has_value()) {
@@ -348,9 +349,10 @@ TEST_F(HlsRenditionImplUnittest, TestRenditionHasEnoughDataFetchNewManifest) {
   task_environment_.FastForwardBy(base::Seconds(23));
   EXPECT_CALL(*mock_hrh_,
               UpdateRenditionManifestUri("test", GURL("http://example.com"), _))
-      .WillOnce([](std::string role, GURL uri, base::OnceClosure cb) {
-        std::move(cb).Run();
-      });
+      .WillOnce(
+          [](std::string role, GURL uri, base::OnceCallback<void(bool)> cb) {
+            std::move(cb).Run(true);
+          });
 
   // CheckState should in this case respond with a delay of 12 - 10/2 seconds.
   rendition->CheckState(base::Seconds(0), 0.0,
@@ -457,7 +459,7 @@ TEST_F(HlsRenditionImplUnittest, TestPauseAndUnpause) {
   // come back with a 0 second delay.
   EXPECT_CALL(*mock_mdeh_, RequestSeek(base::Seconds(202)));
   EXPECT_CALL(*mock_hrh_, UpdateRenditionManifestUri("test", _, _))
-      .WillOnce(base::test::RunOnceClosure<2>());
+      .WillOnce(base::test::RunOnceCallback<2>(true));
   task_environment_.FastForwardBy(base::Seconds(190));
   rendition->CheckState(base::Seconds(10), 1.0,
                         BindCheckState(base::Seconds(0)));

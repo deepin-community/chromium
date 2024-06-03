@@ -21,8 +21,10 @@
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "base/time/time.h"
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -618,6 +620,7 @@ class CloudPolicyClientWithFetchReasonTest
 };
 
 TEST_P(CloudPolicyClientWithFetchReasonTest, FetchReason) {
+  base::HistogramTester histogram_tester;
   RegisterClient();
   ExpectAndCaptureJob(GetPolicyResponse());
 
@@ -625,6 +628,8 @@ TEST_P(CloudPolicyClientWithFetchReasonTest, FetchReason) {
   client_->FetchPolicy(GetReason());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(job_request_.policy_request().reason(), GetProtoReason());
+  EXPECT_THAT(histogram_tester.GetAllSamples(kPolicyFetchingTimeHistogramName),
+              ElementsAre(_));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1600,6 +1605,17 @@ TEST_F(CloudPolicyClientTest, UploadEnterpriseMachineCertificateEmpty) {
   EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
 }
 
+TEST_F(CloudPolicyClientTest, UploadEnterpriseMachineCertificateNotRegistered) {
+  base::test::TestFuture<CloudPolicyClient::Result> result_future;
+
+  client_->UploadEnterpriseMachineCertificate(kMachineCertificate,
+                                              result_future.GetCallback());
+
+  const CloudPolicyClient::Result& result = result_future.Get();
+  EXPECT_EQ(result,
+            CloudPolicyClient::Result(CloudPolicyClient::NotRegistered()));
+}
+
 TEST_F(CloudPolicyClientTest, UploadEnterpriseEnrollmentCertificateEmpty) {
   RegisterClient();
 
@@ -2132,7 +2148,7 @@ TEST_P(CloudPolicyClientUploadSecurityEventTest, Test) {
 TEST_F(CloudPolicyClientTest, RealtimeReportMerge) {
   auto config = std::make_unique<RealtimeReportingJobConfiguration>(
       client_.get(), service_.configuration()->GetRealtimeReportingServerUrl(),
-      /*include_device_info*/ true, /*add_connector_url_params=*/false,
+      /*include_device_info*/ true,
       RealtimeReportingJobConfiguration::UploadCompleteCallback());
 
   // Add one report to the config.

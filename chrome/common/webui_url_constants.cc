@@ -89,16 +89,15 @@ const char kChromeUIEDUCoexistenceLoginURLV2[] =
     "chrome://chrome-signin/edu-coexistence";
 const char kChromeUIAccessCodeCastHost[] = "access-code-cast";
 const char kChromeUIAccessCodeCastURL[] = "chrome://access-code-cast/";
+const char kChromeUIDataSharingInternalsHost[] = "data-sharing-internals";
 const char kChromeUIExtensionIconHost[] = "extension-icon";
 const char kChromeUIExtensionIconURL[] = "chrome://extension-icon/";
 const char kChromeUIExtensionsHost[] = "extensions";
 const char kChromeUIExtensionsInternalsHost[] = "extensions-internals";
 const char kChromeUIExtensionsInternalsURL[] = "chrome://extensions-internals";
 const char kChromeUIExtensionsURL[] = "chrome://extensions/";
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
 const char kChromeUIFamilyLinkUserInternalsHost[] =
     "family-link-user-internals";
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
 const char kChromeUIFaviconHost[] = "favicon";
 const char kChromeUIFaviconURL[] = "chrome://favicon/";
 const char kChromeUIFavicon2Host[] = "favicon2";
@@ -127,6 +126,8 @@ const char kChromeUIInterstitialURL[] = "chrome://interstitials/";
 const char kChromeUIKillHost[] = "kill";
 const char kChromeUILauncherInternalsHost[] = "launcher-internals";
 const char kChromeUILauncherInternalsURL[] = "chrome://launcher-internals";
+const char kChromeUILensSearchBubbleHost[] = "lens-search-bubble";
+const char kChromeUILensSearchBubbleURL[] = "chrome://lens-search-bubble/";
 const char kChromeUISensorInfoHost[] = "sensor-info";
 const char kChromeUISensorInfoURL[] = "chrome://sensor-info/";
 const char kChromeUILocalStateHost[] = "local-state";
@@ -165,7 +166,6 @@ const char kChromeUIPasswordManagerCheckupURL[] =
     "chrome://password-manager/checkup?start=true";
 const char kChromeUIPasswordManagerSettingsURL[] =
     "chrome://password-manager/settings";
-const char kChromeUIPerformanceSettingsURL[] = "chrome://settings/performance";
 const char kChromeUIPerformanceSidePanelHost[] =
     "performance-side-panel.top-chrome";
 const char kChromeUIPerformanceSidePanelURL[] =
@@ -291,6 +291,10 @@ const char kChromeUIHistoryClustersSidePanelHost[] =
     "history-clusters-side-panel.top-chrome";
 const char kChromeUIHistoryClustersSidePanelURL[] =
     "chrome://history-clusters-side-panel.top-chrome/";
+const char kChromeUILensHost[] = "lens";
+const char kChromeUILensUntrustedURL[] = "chrome-untrusted://lens/";
+const char kChromeUILensUntrustedSidePanelURL[] =
+    "chrome-untrusted://lens/side_panel/side_panel.html";
 const char kChromeUIUntrustedReadAnythingSidePanelHost[] =
     "read-anything-side-panel.top-chrome";
 const char kChromeUIUntrustedReadAnythingSidePanelURL[] =
@@ -604,8 +608,10 @@ const char kAllSitesSettingsSubpage[] = "content/all";
 const char kFileSystemSubpage[] = "content/filesystem";
 const char kFileSystemSettingsSubpage[] = "content/filesystem/siteDetails";
 const char kOnDeviceSiteDataSubpage[] = "content/siteData";
+const char kOfferWritingHelpSubpage[] = "content/offerWritingHelp";
 const char kCookieSettingsSubPage[] = "cookies";
 const char kExperimentalAISettingsSubPage[] = "ai";
+const char kDefaultBrowserSubPage[] = "defaultBrowser";
 const char kDownloadsSubPage[] = "downloads";
 const char kHandlerSettingsSubPage[] = "handlers";
 const char kImportDataSubPage[] = "importData";
@@ -637,8 +643,6 @@ const char kPeopleSubPage[] = "people";
 
 #if !BUILDFLAG(IS_ANDROID)
 const char kAdPrivacySubPagePath[] = "/adPrivacy";
-const char kPerformanceSubPagePath[] = "/performance";
-const char kPreloadingSubPagePath[] = "/preloading";
 const char kTrackingProtectionSubPagePath[] = "/trackingProtection";
 const char kCookiesSubPagePath[] = "/cookies";
 #endif
@@ -659,8 +663,6 @@ const char kChromeUICastFeedbackHost[] = "cast-feedback";
 
 #if BUILDFLAG(ENABLE_LENS_DESKTOP_GOOGLE_BRANDED_FEATURES)
 const char kChromeUILensURL[] = "chrome://lens/";
-const char kChromeUILensUntrustedURL[] = "chrome-untrusted://lens/";
-const char kChromeUILensHost[] = "lens";
 #endif
 
 // Extension sub pages.
@@ -687,9 +689,7 @@ const char* const kChromeHostURLs[] = {
 #endif
     kChromeUIDeviceLogHost,
     kChromeUIDownloadInternalsHost,
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
     kChromeUIFamilyLinkUserInternalsHost,
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
     kChromeUIFlagsHost,
     kChromeUIGCMInternalsHost,
     kChromeUIHistoryHost,

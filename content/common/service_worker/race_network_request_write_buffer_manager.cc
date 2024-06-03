@@ -68,10 +68,10 @@ void RaceNetworkRequestWriteBufferManager::ResetProducer() {
 }
 
 void RaceNetworkRequestWriteBufferManager::Watch(
-    mojo::SimpleWatcher::ReadyCallback callback) {
+    mojo::SimpleWatcher::ReadyCallbackWithState callback) {
   watcher_.Watch(producer_.get(),
                  MOJO_HANDLE_SIGNAL_WRITABLE | MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-                 std::move(callback));
+                 MOJO_WATCH_CONDITION_SATISFIED, std::move(callback));
 }
 
 void RaceNetworkRequestWriteBufferManager::CancelWatching() {
@@ -80,7 +80,7 @@ void RaceNetworkRequestWriteBufferManager::CancelWatching() {
 
 MojoResult RaceNetworkRequestWriteBufferManager::BeginWriteData() {
   void* buffer;
-  uint32_t num_write_bytes;
+  size_t num_write_bytes;
   MojoResult result = producer_->BeginWriteData(&buffer, &num_write_bytes,
                                                 MOJO_WRITE_DATA_FLAG_NONE);
   buffer_ = base::make_span(static_cast<char*>(buffer), num_write_bytes);
@@ -106,7 +106,7 @@ std::tuple<MojoResult, size_t> RaceNetworkRequestWriteBufferManager::WriteData(
   auto buffer = read_buffer.size() > data_pipe_buffer_size_
                     ? read_buffer.subspan(0, data_pipe_buffer_size_)
                     : read_buffer;
-  uint32_t num_bytes = buffer.size();
+  size_t num_bytes = buffer.size();
   MojoResult result = producer_->WriteData(buffer.data(), &num_bytes,
                                            MOJO_WRITE_DATA_FLAG_ALL_OR_NONE);
   num_bytes_written_ += num_bytes;
@@ -129,12 +129,6 @@ size_t RaceNetworkRequestWriteBufferManager::CopyAndCompleteWriteDataWithSize(
 
   SCOPED_CRASH_KEY_NUMBER("SWRace", "physical_memory_mb",
                           base::SysInfo::AmountOfPhysicalMemoryMB());
-  SCOPED_CRASH_KEY_NUMBER("SWRace", "available_physical_memory_mb",
-                          base::SysInfo::AmountOfAvailablePhysicalMemory());
-  SCOPED_CRASH_KEY_NUMBER("SWRace", "is_lowend_device",
-                          base::SysInfo::IsLowEndDevice());
-  SCOPED_CRASH_KEY_NUMBER("SWRace", "data_pipe_buffer_size",
-                          data_pipe_buffer_size_);
   SCOPED_CRASH_KEY_NUMBER("SWRace", "num_bytes_to_consume",
                           num_bytes_to_consume);
 
@@ -149,11 +143,6 @@ size_t RaceNetworkRequestWriteBufferManager::CopyAndCompleteWriteDataWithSize(
       static_cast<volatile const char*>(read_buffer.data());
   for (size_t i = 0; i < read_buffer.size(); ++i) {
     read_buffer_v[i];
-  }
-  volatile const char* write_buffer_v =
-      static_cast<volatile char*>(buffer_.data());
-  for (size_t i = 0; i < buffer_size(); ++i) {
-    write_buffer_v[i];
   }
   memcpy(buffer_.data(), read_buffer.data(), num_bytes_to_consume);
   MojoResult result = EndWriteData(num_bytes_to_consume);

@@ -12,8 +12,10 @@
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/supervised_user/core/browser/family_link_user_log_record.h"
+#include "components/supervised_user/core/browser/supervised_user_url_filter.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
+#include "components/url_formatter/url_formatter.h"
 #include "components/url_matcher/url_util.h"
 #include "url/gurl.h"
 
@@ -55,6 +57,22 @@ std::optional<WebFilterType> GetWebFilterForHistogram(
   return merged_log_segment;
 }
 }  // namespace
+
+std::string FamilyRoleToString(kidsmanagement::FamilyRole role) {
+  switch (role) {
+    case kidsmanagement::CHILD:
+      return "child";
+    case kidsmanagement::MEMBER:
+      return "member";
+    case kidsmanagement::PARENT:
+      return "parent";
+    case kidsmanagement::HEAD_OF_HOUSEHOLD:
+      return "family_manager";
+    default:
+      // Keep the previous semantics - other values were not allowed.
+      NOTREACHED_NORETURN();
+  }
+}
 
 std::string FilteringBehaviorReasonToString(FilteringBehaviorReason reason) {
   switch (reason) {
@@ -105,6 +123,39 @@ bool EmitLogRecordHistograms(
     did_emit_histogram = true;
   }
   return did_emit_histogram;
+}
+
+UrlFormatter::UrlFormatter(
+    const SupervisedUserURLFilter& supervised_user_url_filter,
+    FilteringBehaviorReason filtering_behavior_reason)
+    : supervised_user_url_filter_(supervised_user_url_filter),
+      filtering_behavior_reason_(filtering_behavior_reason) {}
+
+UrlFormatter::~UrlFormatter() = default;
+
+GURL UrlFormatter::FormatUrl(const GURL& url) const {
+  // Strip the trivial subdomain.
+  GURL stripped_url(url_formatter::FormatUrl(
+      url, url_formatter::kFormatUrlOmitTrivialSubdomains,
+      base::UnescapeRule::SPACES, nullptr, nullptr, nullptr));
+
+  // If the url is blocked due to an entry in the block list,
+  // check if the blocklist entry is a trivial www-subdomain conflict and skip
+  // the stripping.
+  bool skip_trivial_subdomain_strip =
+      filtering_behavior_reason_ == FilteringBehaviorReason::MANUAL &&
+      stripped_url.host() != url.host() &&
+      supervised_user_url_filter_->IsHostInBlocklist(url.host());
+
+  GURL target_url = skip_trivial_subdomain_strip ? url : stripped_url;
+
+  // TODO(b/322484529): Standardize the url formatting for local approvals
+  // across platforms.
+#if !BUILDFLAG(IS_CHROMEOS)
+  return NormalizeUrl(target_url);
+#else
+  return target_url;
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace supervised_user

@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observation.h"
 
-#include "base/debug/stack_trace.h"
+#include "base/metrics/histogram_macros.h"
 #include "third_party/blink/renderer/core/dom/element_rare_data_vector.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/intersection_observer/element_intersection_observer_data.h"
@@ -59,14 +59,32 @@ int64_t IntersectionObservation::ComputeIntersection(
 #if CHECK_SKIPPED_UPDATE_ON_SCROLL()
   std::optional<IntersectionGeometry::CachedRects> cached_rects_backup;
 #endif
-  if (RuntimeEnabledFeatures::IntersectionOptimizationEnabled() &&
-      cached_rects_.valid && cached_rects_.min_scroll_delta_to_update.x() > 0 &&
-      cached_rects_.min_scroll_delta_to_update.y() > 0) {
+  if (RuntimeEnabledFeatures::IntersectionOptimizationEnabled()) {
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    enum UpdateType {
+      kNoUpdate = 0,
+      kScrollOnly = 1,
+      kCachedRectInvalid_Unused = 2,
+      kFullUpdate = 3,
+      kMaxValue = 3,
+    };
+    UpdateType update_type = kNoUpdate;
+    if (!(compute_flags & kScrollAndVisibilityOnly)) {
+      update_type = kFullUpdate;
+    } else if (cached_rects_.min_scroll_delta_to_update.x() <= 0 ||
+               cached_rects_.min_scroll_delta_to_update.y() <= 0) {
+      update_type = kScrollOnly;
+    }
+    UMA_HISTOGRAM_ENUMERATION("Blink.IntersectionObservation.UpdateType",
+                              update_type);
+    if (update_type == kNoUpdate) {
 #if CHECK_SKIPPED_UPDATE_ON_SCROLL()
-    cached_rects_backup.emplace(cached_rects_);
+      cached_rects_backup.emplace(cached_rects_);
 #else
-    return 0;
+      return 0;
 #endif
+    }
   }
 
   unsigned geometry_flags = GetIntersectionGeometryFlags(compute_flags);
@@ -86,9 +104,17 @@ int64_t IntersectionObservation::ComputeIntersection(
 #if CHECK_SKIPPED_UPDATE_ON_SCROLL()
   if (cached_rects_backup) {
     // A skipped update on scroll should generate the same result.
-    CHECK_EQ(last_threshold_index_, geometry.ThresholdIndex())
-        << "Previous: " << cached_rects_backup->ToString()
-        << "\nNew: " << cached_rects_.ToString();
+    if (last_threshold_index_ != geometry.ThresholdIndex()) {
+      SCOPED_CRASH_KEY_STRING1024("IO", "Previous",
+                                  cached_rects_backup->ToString().Utf8());
+      SCOPED_CRASH_KEY_STRING1024("IO", "New", cached_rects_.ToString().Utf8());
+      auto* controller =
+          Target()->GetDocument().GetIntersectionObserverController();
+      SCOPED_CRASH_KEY_STRING256(
+          "IO", "debug",
+          controller ? controller->DebugInfo().Utf8() : "no controller");
+      CHECK_EQ(last_threshold_index_, geometry.ThresholdIndex());
+    }
     CHECK_EQ(last_is_visible_, geometry.IsVisible());
     cached_rects_ = cached_rects_backup.value();
     return 0;
@@ -138,18 +164,22 @@ void IntersectionObservation::Trace(Visitor* visitor) const {
   visitor->Trace(target_);
 }
 
-bool IntersectionObservation::CanUseCachedRectsForTesting() const {
+bool IntersectionObservation::CanUseCachedRectsForTesting(
+    bool scroll_and_visibility_only) const {
   // This is to avoid the side effects of IntersectionGeometry.
   IntersectionGeometry::CachedRects cached_rects_copy = cached_rects_;
 
   std::optional<IntersectionGeometry::RootGeometry> root_geometry;
-  IntersectionGeometry geometry(observer_->root(), *target_,
-                                /* root_margin */ {},
-                                /* thresholds */ {0},
-                                /* target_margin */ {},
-                                /* scroll_margin */ {},
-                                /* flags */ 0, root_geometry,
-                                &cached_rects_copy);
+  IntersectionGeometry geometry(
+      observer_->root(), *target_,
+      /* root_margin */ {},
+      /* thresholds */ {0},
+      /* target_margin */ {},
+      /* scroll_margin */ {},
+      scroll_and_visibility_only
+          ? IntersectionGeometry::kScrollAndVisibilityOnly
+          : 0,
+      root_geometry, &cached_rects_copy);
 
   return geometry.CanUseCachedRectsForTesting();
 }
@@ -215,6 +245,9 @@ unsigned IntersectionObservation::GetIntersectionGeometryFlags(
     // TODO(wangxianzhu): Let internal clients decide whether to respect
     // filters.
     geometry_flags |= IntersectionGeometry::kRespectFilters;
+  }
+  if (compute_flags & kScrollAndVisibilityOnly) {
+    geometry_flags |= IntersectionGeometry::kScrollAndVisibilityOnly;
   }
   return geometry_flags;
 }

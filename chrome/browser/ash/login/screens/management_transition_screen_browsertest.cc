@@ -185,9 +185,7 @@ IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest, PRE_TransitionTimeout) {
   arc::SetArcPlayStoreEnabledForProfile(profile, true);
 }
 
-// Flaky on linux-chromeos-rel (see https://crbug.com/1032997)
-IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest,
-                       DISABLED_TransitionTimeout) {
+IN_PROC_BROWSER_TEST_P(ManagementTransitionScreenTest, TransitionTimeout) {
   OobeScreenWaiter(ManagementTransitionScreenView::kScreenId).Wait();
 
   test::OobeJS().ExpectVisiblePath(kManagementDialog);

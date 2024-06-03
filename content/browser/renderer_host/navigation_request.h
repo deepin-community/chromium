@@ -35,6 +35,7 @@
 #include "content/browser/renderer_host/navigation_throttle_runner.h"
 #include "content/browser/renderer_host/navigation_type.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/renderer_host/scoped_view_transition_resources.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/browser/webui/web_ui_impl.h"
@@ -325,7 +326,7 @@ class CONTENT_EXPORT NavigationRequest
   bool ShouldRequestSiteIsolationForCOOP();
 
   // NavigationHandle implementation:
-  int64_t GetNavigationId() override;
+  int64_t GetNavigationId() const override;
   ukm::SourceId GetNextPageUkmSourceId() override;
   const GURL& GetURL() override;
   SiteInstanceImpl* GetStartingSiteInstance() override;
@@ -419,6 +420,7 @@ class CONTENT_EXPORT NavigationRequest
   bool IsServedFromBackForwardCache() override;
   void SetIsOverridingUserAgent(bool override_ua) override;
   void SetSilentlyIgnoreErrors() override;
+  void SetVisitedLinkSalt(uint64_t salt) override;
   network::mojom::WebSandboxFlags SandboxFlagsInitiator() override;
   network::mojom::WebSandboxFlags SandboxFlagsInherited() override;
   network::mojom::WebSandboxFlags SandboxFlagsToCommit() override;
@@ -443,6 +445,8 @@ class CONTENT_EXPORT NavigationRequest
   blink::mojom::RendererContentSettingsPtr GetContentSettingsForTesting()
       override;
   void SetIsAdTagged() override;
+  // NOTE: Read function comments in NavigationHandle before use!
+  std::optional<url::Origin> GetOriginToCommit() override;
   // End of NavigationHandle implementation.
 
   // mojom::NavigationRendererCancellationListener implementation:
@@ -883,19 +887,6 @@ class CONTENT_EXPORT NavigationRequest
   // possible.
   url::Origin GetTentativeOriginAtRequestTime();
 
-  // Will calculate the origin that this NavigationRequest will commit. (This
-  // should be reasonably accurate, but some browser-vs-renderer inconsistencies
-  // might still exist - they are currently tracked in
-  // https://crbug.com/1220238).
-  //
-  // Returns `nullopt` if the navigation will not commit (e.g. in case of
-  // downloads, or 204 responses).  This may happen if and only if
-  // `NavigationRequest::GetRenderFrameHost` returns null.
-  //
-  // This method may only be called after a response has been delivered for
-  // processing, or after the navigation fails with an error page.
-  std::optional<url::Origin> GetOriginToCommit();
-
   // Same as `GetOriginToCommit()`, except that includes information about how
   // the origin gets calculated, to help debug if the browser-side calculated
   // origin for this navigation differs from the origin calculated on the
@@ -1054,8 +1045,8 @@ class CONTENT_EXPORT NavigationRequest
 
   base::WeakPtr<NavigationRequest> GetWeakPtr();
 
-  bool is_potentially_prerendered_page_activation_for_testing() const {
-    return is_potentially_prerendered_page_activation_for_testing_;
+  bool is_running_potential_prerender_activation_checks() const {
+    return is_running_potential_prerender_activation_checks_;
   }
 
   int prerender_frame_tree_node_id() const {
@@ -1167,7 +1158,9 @@ class CONTENT_EXPORT NavigationRequest
 
   // Initializes state which is passed from the old Document to the new Document
   // for a ViewTransition.
-  void SetViewTransitionState(blink::ViewTransitionState view_transition_state);
+  void SetViewTransitionState(
+      std::unique_ptr<ScopedViewTransitionResources> resources,
+      blink::ViewTransitionState view_transition_state);
 
   // Returns a const reference to a blink::RuntimeFeatureStateContext (RFSC)
   // object. Once the commit params are sent to the renderer we no longer allow
@@ -1310,7 +1303,7 @@ class CONTENT_EXPORT NavigationRequest
       EarlyRenderFrameHostSwapType type) {
     early_render_frame_host_swap_type_ = type;
   }
-  EarlyRenderFrameHostSwapType early_render_frame_host_swap_type() {
+  EarlyRenderFrameHostSwapType early_render_frame_host_swap_type() const {
     return early_render_frame_host_swap_type_;
   }
 
@@ -1323,9 +1316,25 @@ class CONTENT_EXPORT NavigationRequest
   bool HasLoader() const;
 
   // Notifies that an IPC will be sent to the old Document's renderer to
-  // dispatch the `pageconceal` event. Returns the parameters which should be
+  // dispatch the `pageswap` event. Returns the parameters which should be
   // used for the event if this is a same-origin navigation.
-  blink::mojom::PageConcealEventParamsPtr WillDispatchPageConceal();
+  blink::mojom::PageSwapEventParamsPtr WillDispatchPageSwap();
+
+  // Returns true if this navigation is eligible for dispatching a `pageswap`
+  // event on the old Document and the event has not been dispatched already.
+  bool ShouldDispatchPageSwapEvent() const;
+
+  // Returns true if there have been any cross-origin redirects in the
+  // navigation's lifetime. A redirect is cross-origin if the redirect url is
+  // cross-origin with "previous URL" of the navigation. previous URL here is
+  // either the initial URL (which the navigation started with) or the URL from
+  // the last redirect.
+  //
+  // Note: This will be false if the initial url is cross-origin and there are
+  // no redirects.
+  bool did_encounter_cross_origin_redirect() const {
+    return did_encounter_cross_origin_redirect_;
+  }
 
  private:
   friend class NavigationRequestTest;
@@ -1958,18 +1967,6 @@ class CONTENT_EXPORT NavigationRequest
   // 'prerender_frame_tree_node_id_' has an value assigned.
   void MaybeAssignInvalidPrerenderFrameTreeNodeId();
 
-  // Check if the current navigation request is to an isolated app and injects
-  // the appropriate Cross-Origin-Opener-Policy, Cross-Origin-Embedder-Policy,
-  // Cross-Origin-Resource-Policy, and X-Frame-Options headers to enforce the
-  // security requirements for isolated apps.
-  //
-  // This is a temporary method to make sure that these policies are enforced
-  // for isolated apps. Longer term, it would be better to validate that these
-  // headers are included for isolated apps by developers.
-  // TODO(https://crbug.com/1311061): Remove or replace this method with the
-  // header validation logic for isolated apps.
-  void MaybeInjectIsolatedAppHeaders();
-
   // The NavigationDownloadPolicy is currently fully computed by the renderer
   // process. It is left empty for browser side initiated navigation. This is a
   // problem. This function is an incomplete attempt to start computing it from
@@ -2041,6 +2038,8 @@ class CONTENT_EXPORT NavigationRequest
   url::Origin GetOriginForURLLoaderFactoryUnchecked();
 
   void MaybeRecordTraceEventsAndHistograms();
+
+  void ResetViewTransitionState();
 
   // Never null. The pointee node owns this navigation request instance.
   // This field is not a raw_ptr because of incompatibilities with tracing
@@ -2527,7 +2526,7 @@ class CONTENT_EXPORT NavigationRequest
   // activation. This is needed as PrerenderHost hasn't been reserved and
   // prerender_frame_tree_node_id() is not available yet while they are
   // running.
-  bool is_potentially_prerendered_page_activation_for_testing_ = false;
+  bool is_running_potential_prerender_activation_checks_ = false;
 
   // Set to true before the fenced frame url mapping. Reset to false when the
   // mapping finishes. If the initial mapping state of the urn:uuid is pending,
@@ -2590,7 +2589,9 @@ class CONTENT_EXPORT NavigationRequest
   // NavigationRequest.
   std::vector<ConsoleMessage> console_messages_;
 
-  // Indicates that this navigation is for PDF content in a renderer.
+  // Indicates that this navigation is for PDF content in a renderer. On
+  // Android, this can only be true when a PDF NativePage is created for
+  // a main frame navigation.
   bool is_pdf_ = false;
 
   // Indicates that this navigation is an embedder-initiated navigation of a
@@ -2848,12 +2849,23 @@ class CONTENT_EXPORT NavigationRequest
   // value is available.
   std::optional<url::Origin> tentative_data_origin_to_commit_;
 
-  // `pageconceal` can be fired at different stages of the navigation lifecycle:
+  // `pageswap` can be fired at different stages of the navigation lifecycle:
   // - ready to commit if this navigation is associated with a ViewTransition.
   // - unload old document if there is no ViewTransition opt-in.
-  // This tracks whether the pageconceal event has been fired for this
+  // This tracks whether the pageswap event has been fired for this
   // navigation.
-  bool did_fire_page_conceal_ = false;
+  bool did_fire_page_swap_ = false;
+
+  // Set if there has been any cross-origin redirects in the lifetime of this
+  // request.
+  bool did_encounter_cross_origin_redirect_ = false;
+
+  // A scoped reference on the ViewTransition resources generated for this
+  // navigation. This is set after we received the cached results from the old
+  // Document's renderer. If the navigation commits, the resources are
+  // transferred to the new Document's view. If the navigation finishes without
+  // committing, the resources are destroyed with this request.
+  std::unique_ptr<ScopedViewTransitionResources> view_transition_resources_;
 
   base::WeakPtrFactory<NavigationRequest> weak_factory_{this};
 };

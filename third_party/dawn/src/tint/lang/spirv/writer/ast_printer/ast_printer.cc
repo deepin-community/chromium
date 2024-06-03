@@ -29,6 +29,7 @@
 
 #include <unordered_map>
 
+#include "src/tint/api/options/depth_range_offsets.h"
 #include "src/tint/lang/spirv/writer/ast_raise/for_loop_to_loop.h"
 #include "src/tint/lang/spirv/writer/ast_raise/merge_return.h"
 #include "src/tint/lang/spirv/writer/ast_raise/var_for_dynamic_index.h"
@@ -45,6 +46,7 @@
 #include "src/tint/lang/wgsl/ast/transform/direct_variable_access.h"
 #include "src/tint/lang/wgsl/ast/transform/disable_uniformity_analysis.h"
 #include "src/tint/lang/wgsl/ast/transform/expand_compound_assignment.h"
+#include "src/tint/lang/wgsl/ast/transform/fold_constants.h"
 #include "src/tint/lang/wgsl/ast/transform/manager.h"
 #include "src/tint/lang/wgsl/ast/transform/multiplanar_external_texture.h"
 #include "src/tint/lang/wgsl/ast/transform/preserve_padding.h"
@@ -63,6 +65,8 @@ namespace tint::spirv::writer {
 SanitizedResult Sanitize(const Program& in, const Options& options) {
     ast::transform::Manager manager;
     ast::transform::DataMap data;
+
+    manager.Add<ast::transform::FoldConstants>();
 
     if (options.clamp_frag_depth) {
         manager.Add<ast::transform::ClampFragDepth>();

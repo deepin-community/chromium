@@ -344,9 +344,7 @@ bool VP8VaapiVideoEncoderDelegate::Initialize(
       return false;
   }
 
-  return UpdateRates(initial_bitrate_allocation,
-                     config.initial_framerate.value_or(
-                         VideoEncodeAccelerator::kDefaultFramerate));
+  return UpdateRates(initial_bitrate_allocation, config.framerate);
 }
 
 gfx::Size VP8VaapiVideoEncoderDelegate::GetCodedSize() const {
@@ -409,15 +407,11 @@ BitstreamBufferMetadata VP8VaapiVideoEncoderDelegate::GetMetadata(
     const EncodeJob& encode_job,
     size_t payload_size) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  auto metadata =
-      VaapiVideoEncoderDelegate::GetMetadata(encode_job, payload_size);
-  CHECK(metadata.end_of_picture);
-  if (metadata.dropped_frame()) {
-    // BitstreamBufferMetadata should not have a codec specific metadata,
-    // when a frame is dropped.
-    return metadata;
-  }
-
+  CHECK(!encode_job.IsFrameDropped());
+  CHECK_NE(payload_size, 0u);
+  BitstreamBufferMetadata metadata(
+      payload_size, encode_job.IsKeyframeRequested(), encode_job.timestamp());
+  CHECK(metadata.end_of_picture());
   auto picture = GetVP8Picture(encode_job);
   DCHECK(picture);
   metadata.vp8 = picture->metadata_for_encoding;
@@ -535,11 +529,22 @@ VP8VaapiVideoEncoderDelegate::SetFrameHeader(
     DVLOGF(3) << "Drop frame";
     return PrepareEncodeJobResult::kDrop;
   }
-  picture.frame_hdr->quantization_hdr.y_ac_qi = rate_ctrl_->GetQP();
+  picture.frame_hdr->quantization_hdr.y_ac_qi =
+      base::checked_cast<uint8_t>(rate_ctrl_->GetQP());
+  libvpx::UVDeltaQP uv_delta_qp = rate_ctrl_->GetUVDeltaQP();
+  picture.frame_hdr->quantization_hdr.uv_dc_delta =
+      base::checked_cast<int8_t>(uv_delta_qp.uvdc_delta_q);
+  picture.frame_hdr->quantization_hdr.uv_ac_delta =
+      base::checked_cast<int8_t>(uv_delta_qp.uvac_delta_q);
   picture.frame_hdr->loopfilter_hdr.level =
       base::checked_cast<uint8_t>(rate_ctrl_->GetLoopfilterLevel());
+
   DVLOGF(4) << "qp="
             << static_cast<int>(picture.frame_hdr->quantization_hdr.y_ac_qi)
+            << ", uv_dc_delta="
+            << static_cast<int>(picture.frame_hdr->quantization_hdr.uv_dc_delta)
+            << ", uv_ac_delta="
+            << static_cast<int>(picture.frame_hdr->quantization_hdr.uv_ac_delta)
             << ", filter_level="
             << static_cast<int>(picture.frame_hdr->loopfilter_hdr.level)
             << (keyframe ? " (keyframe)" : "")

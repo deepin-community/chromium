@@ -4,10 +4,13 @@
 
 #include "chrome/updater/util/win_util.h"
 
+#include <objbase.h>
+
+#include <windows.h>
+
 #include <regstr.h>
 #include <shellapi.h>
 #include <shlobj.h>
-#include <windows.h>
 
 #include <optional>
 #include <string>
@@ -42,12 +45,14 @@
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/scoped_localalloc.h"
+#include "base/win/win_util.h"
 #include "chrome/updater/test/integration_tests_impl.h"
 #include "chrome/updater/test_scope.h"
 #include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/util/unit_test_util.h"
 #include "chrome/updater/util/unit_test_util_win.h"
+#include "chrome/updater/win/scoped_impersonation.h"
 #include "chrome/updater/win/test/test_executables.h"
 #include "chrome/updater/win/test/test_strings.h"
 #include "chrome/updater/win/win_constants.h"
@@ -143,12 +148,9 @@ TEST(WinUtil, ShellExecuteAndWait) {
 }
 
 TEST(WinUtil, RunElevated) {
-  // TODO(crbug.com/1314521): Click on UAC prompts in Updater tests that require
-  // elevation
   if (!::IsUserAnAdmin()) {
     return;
   }
-
   const base::CommandLine test_process_cmd_line =
       GetTestProcessCommandLine(GetTestScope(), test::GetTestName());
   EXPECT_THAT(RunElevated(test_process_cmd_line.GetProgram(),
@@ -577,6 +579,83 @@ TEST(WinUtil, GetTextForSystemError) {
   EXPECT_EQ(
       GetTextForSystemError(MAKE_HRESULT(SEVERITY_ERROR, FACILITY_ITF, 0x200)),
       L"0x80040200");
+}
+
+TEST(WinUtil, GetLoggedOnUserToken) {
+  if (!::IsUserAnAdmin() || !IsUACOn()) {
+    return;
+  }
+
+  ASSERT_TRUE(::IsUserAnAdmin());
+  HResultOr<ScopedKernelHANDLE> token = GetLoggedOnUserToken();
+  ASSERT_TRUE(token.has_value());
+
+  ScopedImpersonation impersonate;
+  ASSERT_TRUE(SUCCEEDED(impersonate.Impersonate(token.value().get())));
+  ASSERT_FALSE(::IsUserAnAdmin());
+}
+
+TEST(WinUtil, IsAuditMode) {
+  if (!::IsUserAnAdmin()) {
+    GTEST_SKIP();
+  }
+  ASSERT_FALSE(IsAuditMode());
+  ASSERT_EQ(base::win::RegKey(HKEY_LOCAL_MACHINE, kSetupStateKey, KEY_SET_VALUE)
+                .WriteValue(L"ImageState", L"IMAGE_STATE_UNDEPLOYABLE"),
+            ERROR_SUCCESS);
+  ASSERT_TRUE(IsAuditMode());
+  ASSERT_EQ(base::win::RegKey(HKEY_LOCAL_MACHINE, kSetupStateKey, KEY_SET_VALUE)
+                .DeleteValue(L"ImageState"),
+            ERROR_SUCCESS);
+}
+
+TEST(WinUtil, OemInstallState) {
+  if (!::IsUserAnAdmin()) {
+    GTEST_SKIP();
+  }
+  ASSERT_EQ(base::win::RegKey(HKEY_LOCAL_MACHINE, kSetupStateKey, KEY_SET_VALUE)
+                .WriteValue(L"ImageState", L"IMAGE_STATE_UNDEPLOYABLE"),
+            ERROR_SUCCESS);
+  ASSERT_TRUE(SetOemInstallState());
+  ASSERT_TRUE(IsOemInstalling());
+
+  DWORD oem_install_time_minutes = 0;
+  ASSERT_EQ(
+      base::win::RegKey(HKEY_LOCAL_MACHINE, CLIENTS_KEY,
+                        Wow6432(KEY_QUERY_VALUE))
+          .ReadValueDW(kRegValueOemInstallTimeMin, &oem_install_time_minutes),
+      ERROR_SUCCESS);
+
+  // Rewind to 71 hours and 58 minutes before now.
+  ASSERT_EQ(
+      base::win::RegKey(HKEY_LOCAL_MACHINE, CLIENTS_KEY, Wow6432(KEY_SET_VALUE))
+          .WriteValue(
+              kRegValueOemInstallTimeMin,
+              (base::Minutes(oem_install_time_minutes + 2) - kMinOemModeTime)
+                  .InMinutes()),
+      ERROR_SUCCESS);
+  ASSERT_TRUE(IsOemInstalling());
+
+  // Rewind to 72 hours and 2 minutes before now.
+  ASSERT_EQ(
+      base::win::RegKey(HKEY_LOCAL_MACHINE, CLIENTS_KEY, Wow6432(KEY_SET_VALUE))
+          .WriteValue(
+              kRegValueOemInstallTimeMin,
+              (base::Minutes(oem_install_time_minutes - 2) - kMinOemModeTime)
+                  .InMinutes()),
+      ERROR_SUCCESS);
+  ASSERT_FALSE(IsOemInstalling());
+
+  ASSERT_TRUE(ResetOemInstallState());
+  ASSERT_EQ(base::win::RegKey(HKEY_LOCAL_MACHINE, kSetupStateKey, KEY_SET_VALUE)
+                .DeleteValue(L"ImageState"),
+            ERROR_SUCCESS);
+}
+
+TEST(WinUtil, StringFromGuid) {
+  GUID guid = {0};
+  EXPECT_HRESULT_SUCCEEDED(::CoCreateGuid(&guid));
+  EXPECT_EQ(base::win::WStringFromGUID(guid), StringFromGuid(guid));
 }
 
 }  // namespace updater

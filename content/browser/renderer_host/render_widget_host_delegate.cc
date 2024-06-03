@@ -32,6 +32,11 @@ bool RenderWidgetHostDelegate::HandleKeyboardEvent(
   return false;
 }
 
+bool RenderWidgetHostDelegate::ShouldIgnoreWebInputEvents(
+    const blink::WebInputEvent& event) {
+  return false;
+}
+
 bool RenderWidgetHostDelegate::ShouldIgnoreInputEvents() {
   return false;
 }
@@ -90,7 +95,7 @@ ui::WindowShowState RenderWidgetHostDelegate::GetWindowShowState() {
   return ui::WindowShowState::SHOW_STATE_DEFAULT;
 }
 
-DevicePostureProviderImpl*
+blink::mojom::DevicePostureProvider*
 RenderWidgetHostDelegate::GetDevicePostureProvider() {
   return nullptr;
 }
@@ -158,6 +163,15 @@ bool RenderWidgetHostDelegate::IsPortal() {
 
 int RenderWidgetHostDelegate::GetVirtualKeyboardResizeHeight() {
   return 0;
+}
+
+bool RenderWidgetHostDelegate::ShouldDoLearning() {
+  return true;
+}
+
+std::optional<double> RenderWidgetHostDelegate::AdjustedChildZoom(
+    const RenderWidgetHostViewChildFrame* render_widget) {
+  return std::nullopt;
 }
 
 }  // namespace content

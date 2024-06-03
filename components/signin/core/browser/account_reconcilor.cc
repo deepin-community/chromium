@@ -345,7 +345,8 @@ void AccountReconcilor::OnRefreshTokensLoaded() {
 
 void AccountReconcilor::OnErrorStateOfRefreshTokenUpdatedForAccount(
     const CoreAccountInfo& account_info,
-    const GoogleServiceAuthError& error) {
+    const GoogleServiceAuthError& error,
+    signin_metrics::SourceForRefreshTokenOperation token_operation_source) {
   // Gaia cookies may be invalidated server-side and the client does not get any
   // notification when this happens.
   // Gaia cookies derived from refresh tokens are always invalidated server-side
@@ -395,7 +396,7 @@ void AccountReconcilor::StartReconcile(Trigger trigger) {
     return;
   }
 
-  // TODO(crbug.com/967603): remove when root cause is found.
+  // TODO(crbug.com/40629374): remove when root cause is found.
   CHECK(delegate_);
   CHECK(client_);
   if (!delegate_->IsReconcileEnabled() || !client_->AreSigninCookiesAllowed()) {
@@ -597,14 +598,6 @@ void AccountReconcilor::OnAccountsInCookieUpdated(
   // Revoking the token for the primary account is not supported (it should be
   // signed out or put to auth error state instead).
   delegate_->RevokeSecondaryTokensForReconcileIfNeeded(verified_gaia_accounts);
-  if (!delegate_->IsUpdateCookieAllowed()) {
-    // TODO(b/320279580): Record reconcilor operation if tokens were revoked to
-    // match cookies.
-    error_during_last_reconcile_ = GoogleServiceAuthError::AuthErrorNone();
-    CalculateIfMultiloginReconcileIsDone();
-    ScheduleStartReconcileIfChromeAccountsChanged();
-    return;
-  }
 
   std::vector<CoreAccountId> chrome_accounts =
       LoadValidAccountsFromTokenService();
@@ -659,7 +652,7 @@ AccountReconcilor::LoadValidAccountsFromTokenService() const {
 void AccountReconcilor::OnReceivedManageAccountsResponse(
     signin::GAIAServiceType service_type) {
 #if !BUILDFLAG(IS_CHROMEOS)
-  // TODO(https://crbug.com/1224872): check if it's still required on Android
+  // TODO(crbug.com/40775484): check if it's still required on Android
   // and iOS.
   if (service_type == signin::GAIA_SERVICE_TYPE_ADDSESSION) {
     identity_manager_->GetAccountsCookieMutator()->TriggerCookieJarUpdate();

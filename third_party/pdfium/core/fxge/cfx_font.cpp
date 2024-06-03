@@ -14,9 +14,12 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_stream.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/unowned_ptr.h"
 #include "core/fxge/cfx_fontcache.h"
@@ -28,16 +31,14 @@
 #include "core/fxge/cfx_substfont.h"
 #include "core/fxge/fx_font.h"
 #include "core/fxge/scoped_font_transform.h"
-#include "third_party/base/check.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 namespace {
 
 FX_RECT FXRectFromFTPos(FT_Pos left, FT_Pos top, FT_Pos right, FT_Pos bottom) {
-  return FX_RECT(pdfium::base::checked_cast<int32_t>(left),
-                 pdfium::base::checked_cast<int32_t>(top),
-                 pdfium::base::checked_cast<int32_t>(right),
-                 pdfium::base::checked_cast<int32_t>(bottom));
+  return FX_RECT(pdfium::checked_cast<int32_t>(left),
+                 pdfium::checked_cast<int32_t>(top),
+                 pdfium::checked_cast<int32_t>(right),
+                 pdfium::checked_cast<int32_t>(bottom));
 }
 
 FX_RECT ScaledFXRectFromFTPos(FT_Pos left,
@@ -63,7 +64,12 @@ unsigned long FTStreamRead(FXFT_StreamRec* stream,
 
   IFX_SeekableReadStream* pFile =
       static_cast<IFX_SeekableReadStream*>(stream->descriptor.pointer);
-  return pFile && pFile->ReadBlockAtOffset({buffer, count}, offset) ? count : 0;
+
+  // SAFETY: caller ensures `buffer` points to at least `count` bytes.
+  return pFile && pFile->ReadBlockAtOffset(
+                      UNSAFE_BUFFERS(pdfium::make_span(buffer, count)), offset)
+             ? count
+             : 0;
 }
 
 void FTStreamClose(FXFT_StreamRec* stream) {}
@@ -169,7 +175,6 @@ int CFX_Font::GetSubstFontItalicAngle() const {
 #ifdef PDF_ENABLE_XFA
 bool CFX_Font::LoadFile(RetainPtr<IFX_SeekableReadStream> pFile,
                         int nFaceIndex) {
-  m_bEmbedded = false;
   m_ObjectTag = 0;
 
   auto pStreamRec = std::make_unique<FXFT_StreamRec>();
@@ -224,7 +229,6 @@ void CFX_Font::LoadSubst(const ByteString& face_name,
                          int italic_angle,
                          FX_CodePage code_page,
                          bool bVertical) {
-  m_bEmbedded = false;
   m_bVertical = bVertical;
   m_ObjectTag = 0;
   m_pSubstFont = std::make_unique<CFX_SubstFont>();
@@ -265,7 +269,6 @@ bool CFX_Font::LoadEmbedded(pdfium::span<const uint8_t> src_span,
   m_FontDataAllocation = DataVector<uint8_t>(src_span.begin(), src_span.end());
   m_Face = CFX_GEModule::Get()->GetFontMgr()->NewFixedFace(
       nullptr, m_FontDataAllocation, 0);
-  m_bEmbedded = true;
   m_FontData = m_FontDataAllocation;
   return !!m_Face;
 }

@@ -13,14 +13,17 @@
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
+#define CHECK_SKIPPED_UPDATE_ON_SCROLL() DCHECK_IS_ON()
+#if CHECK_SKIPPED_UPDATE_ON_SCROLL()
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#endif
+
 namespace blink {
 
 class Element;
 class LayoutBox;
 class LayoutObject;
 class Node;
-
-#define CHECK_SKIPPED_UPDATE_ON_SCROLL() DCHECK_IS_ON()
 
 // Computes the intersection between an ancestor (root) node and a
 // descendant (target) element, with overflow and CSS clipping applied.
@@ -48,12 +51,13 @@ class CORE_EXPORT IntersectionGeometry {
     // instead of BorderBoundingBox().
     kUseOverflowClipEdge = 1 << 5,
     kRespectFilters = 1 << 6,
+    kScrollAndVisibilityOnly = 1 << 7,
 
     // These flags will be computed
-    kShouldUseCachedRects = 1 << 7,
-    kRootIsImplicit = 1 << 8,
-    kDidComputeGeometry = 1 << 9,
-    kIsVisible = 1 << 10
+    kShouldUseCachedRects = 1 << 8,
+    kRootIsImplicit = 1 << 9,
+    kDidComputeGeometry = 1 << 10,
+    kIsVisible = 1 << 11,
   };
 
   struct RootGeometry {
@@ -100,6 +104,9 @@ class CORE_EXPORT IntersectionGeometry {
     gfx::Transform root_to_view_transform;
     int relationship = 0;
     bool root_scrolls_target = false;
+    String root_clip_tree;
+    String target_clip_tree;
+    String target_transform_tree;
 
     String ToString() const;
 #endif

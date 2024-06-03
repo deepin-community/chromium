@@ -30,8 +30,8 @@
 // │LQBranch 1││LQBranch 2││LQBranch 3│
 // └──────────┘└──────────┘└──────────┘
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_LIGHTWEIGHT_QUARANTINE_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_LIGHTWEIGHT_QUARANTINE_H_
+#ifndef PARTITION_ALLOC_LIGHTWEIGHT_QUARANTINE_H_
+#define PARTITION_ALLOC_LIGHTWEIGHT_QUARANTINE_H_
 
 #include <array>
 #include <atomic>
@@ -89,13 +89,11 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) LightweightQuarantineRoot {
  private:
   PartitionRoot& allocator_root_;
   std::atomic_size_t capacity_in_bytes_;
-
-  // Number of quarantined entries.
-  std::atomic_size_t count_ = 0;
   // Total size of quarantined entries, capped by `capacity_in_bytes`.
   std::atomic_size_t size_in_bytes_ = 0;
 
   // Stats.
+  std::atomic_size_t count_ = 0;  // Number of quarantined entries
   std::atomic_size_t cumulative_count_ = 0;
   std::atomic_size_t cumulative_size_in_bytes_ = 0;
   std::atomic_size_t quarantine_miss_count_ = 0;
@@ -188,4 +186,4 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) LightweightQuarantineBranch {
 
 }  // namespace partition_alloc
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_LIGHTWEIGHT_QUARANTINE_H_
+#endif  // PARTITION_ALLOC_LIGHTWEIGHT_QUARANTINE_H_

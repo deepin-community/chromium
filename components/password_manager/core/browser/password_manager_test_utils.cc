@@ -70,17 +70,26 @@ std::unique_ptr<PasswordForm> FillPasswordFormWithData(
   return form;
 }
 
-std::unique_ptr<PasswordForm> CreateEntry(const std::string& username,
-                                          const std::string& password,
-                                          const GURL& origin_url,
-                                          PasswordForm::MatchType match_type) {
-  auto form = std::make_unique<PasswordForm>();
-  form->username_value = base::ASCIIToUTF16(username);
-  form->password_value = base::ASCIIToUTF16(password);
-  form->url = origin_url;
-  form->signon_realm = origin_url.GetWithEmptyPath().spec();
-  form->match_type = match_type;
+PasswordForm CreateEntry(const std::string& username,
+                         const std::string& password,
+                         const GURL& origin_url,
+                         PasswordForm::MatchType match_type) {
+  PasswordForm form;
+  form.username_value = base::ASCIIToUTF16(username);
+  form.password_value = base::ASCIIToUTF16(password);
+  form.url = origin_url;
+  form.signon_realm = origin_url.GetWithEmptyPath().spec();
+  form.match_type = match_type;
   return form;
+}
+
+std::unique_ptr<PasswordForm> CreateUniquePtrEntry(
+    const std::string& username,
+    const std::string& password,
+    const GURL& origin_url,
+    PasswordForm::MatchType match_type) {
+  return std::make_unique<PasswordForm>(
+      CreateEntry(username, password, origin_url, match_type));
 }
 
 bool ContainsEqualPasswordFormsUnordered(
@@ -124,6 +133,22 @@ bool ContainsEqualPasswordFormsUnordered(
 MockPasswordStoreObserver::MockPasswordStoreObserver() = default;
 
 MockPasswordStoreObserver::~MockPasswordStoreObserver() = default;
+
+PasswordStoreWaiter::PasswordStoreWaiter(PasswordStoreInterface* store) {
+  password_store_observer_.Observe(store);
+}
+
+PasswordStoreWaiter::~PasswordStoreWaiter() = default;
+
+void PasswordStoreWaiter::WaitOrReturn() {
+  run_loop_.Run();
+}
+
+void PasswordStoreWaiter::OnLoginsChanged(
+    PasswordStoreInterface* store,
+    const PasswordStoreChangeList& changes) {
+  run_loop_.Quit();
+}
 
 MockPasswordReuseDetectorConsumer::MockPasswordReuseDetectorConsumer() =
     default;

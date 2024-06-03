@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/observer_list.h"
 #include "base/run_loop.h"
@@ -21,6 +22,7 @@
 #include "ui/aura/window_tree_host_observer.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/base/layout.h"
+#include "ui/base/view_prop.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
@@ -42,6 +44,14 @@
 #endif
 
 namespace aura {
+
+namespace {
+WindowTreeHostPlatform::PlatformWindowFactoryDelegateForTesting*
+    g_platform_window_factory_delegate_for_testing = nullptr;
+
+const char kWindowTreeHostPlatformForAcceleratedWidget[] =
+    "__AURA_WINDOW_TREE_HOST_PLATFORM_ACCELERATED_WIDGET__";
+}
 
 // static
 std::unique_ptr<WindowTreeHost> WindowTreeHost::Create(
@@ -66,20 +76,21 @@ WindowTreeHostPlatform::WindowTreeHostPlatform(std::unique_ptr<Window> window)
       widget_(gfx::kNullAcceleratedWidget),
       current_cursor_(ui::mojom::CursorType::kNull) {}
 
+// static
+WindowTreeHostPlatform* WindowTreeHostPlatform::GetHostForWindow(
+    aura::Window* window) {
+  return reinterpret_cast<WindowTreeHostPlatform*>(
+      ui::ViewProp::GetValue(window->GetHost()->GetAcceleratedWidget(),
+                             kWindowTreeHostPlatformForAcceleratedWidget));
+}
+
 void WindowTreeHostPlatform::CreateAndSetPlatformWindow(
     ui::PlatformWindowInitProperties properties) {
   // Cache initial size used to create |platform_window_| so that it does not
   // end up propagating unneeded bounds change event when it is first notified
   // through OnBoundsChanged, which may lead to unneeded re-layouts, etc.
   size_in_pixels_ = properties.bounds.size();
-#if BUILDFLAG(IS_OZONE)
-  platform_window_ = ui::OzonePlatform::GetInstance()->CreatePlatformWindow(
-      this, std::move(properties));
-#elif BUILDFLAG(IS_WIN)
-  platform_window_ = std::make_unique<ui::WinWindow>(this, properties.bounds);
-#else
-  NOTIMPLEMENTED();
-#endif
+  platform_window_ = CreatePlatformWindow(std::move(properties));
 }
 
 void WindowTreeHostPlatform::SetPlatformWindow(
@@ -201,6 +212,30 @@ void WindowTreeHostPlatform::LockMouse(Window* window) {
   WindowTreeHost::LockMouse(window);
 }
 
+std::unique_ptr<ui::PlatformWindow>
+WindowTreeHostPlatform::CreatePlatformWindow(
+    ui::PlatformWindowInitProperties properties) {
+  if (g_platform_window_factory_delegate_for_testing) {
+    return g_platform_window_factory_delegate_for_testing->Create(this);
+  }
+#if BUILDFLAG(IS_OZONE)
+  return ui::OzonePlatform::GetInstance()->CreatePlatformWindow(
+      this, std::move(properties));
+#elif BUILDFLAG(IS_WIN)
+  return std::make_unique<ui::WinWindow>(this, properties.bounds);
+#else
+  NOTIMPLEMENTED();
+  return nullptr;
+#endif
+}
+
+// static
+void WindowTreeHostPlatform::SetPlatformWindowFactoryDelegateForTesting(
+    PlatformWindowFactoryDelegateForTesting* delegate) {
+  CHECK_IS_TEST();
+  g_platform_window_factory_delegate_for_testing = delegate;
+}
+
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
 std::string WindowTreeHostPlatform::GetUniqueId() const {
   return platform_window()->GetWindowUniqueId();
@@ -268,6 +303,8 @@ void WindowTreeHostPlatform::OnLostCapture() {
 
 void WindowTreeHostPlatform::OnAcceleratedWidgetAvailable(
     gfx::AcceleratedWidget widget) {
+  prop_ = std::make_unique<ui::ViewProp>(
+      widget, kWindowTreeHostPlatformForAcceleratedWidget, this);
   widget_ = widget;
   // This may be called before the Compositor has been created.
   if (compositor())
@@ -365,9 +402,8 @@ void WindowTreeHostPlatform::SetFrameRateThrottleEnabled(bool enabled) {
     HostFrameRateThrottler::GetInstance().RemoveHost(this);
 }
 
-bool WindowTreeHostPlatform::IsNativeWindowOcclusionTrackingAlwaysEnabled() {
-  return NativeWindowOcclusionTracker::
-      IsNativeWindowOcclusionTrackingAlwaysEnabled(this);
+void WindowTreeHostPlatform::DisableNativeWindowOcclusion() {
+  SetNativeWindowOcclusionEnabled(false);
 }
 
 }  // namespace aura

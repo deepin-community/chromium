@@ -54,7 +54,8 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
     kNeedsRelayoutWithNoForcedTruncateAtLineClamp = 4,
     kDisableFragmentation = 5,
     kNeedsRelayoutWithNoChildScrollbarChanges = 6,
-    kAlgorithmSpecific1 = 7,  // Save bits by using the same value for mutually
+    kTextBoxTrimEndDidNotApply = 7,
+    kAlgorithmSpecific1 = 8,  // Save bits by using the same value for mutually
                               // exclusive results.
     kNeedsRelayoutWithRowCrossSizeChanges = kAlgorithmSpecific1,
     kNeedsRelayoutAsLastTableBox = kAlgorithmSpecific1,
@@ -110,6 +111,10 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
 
   int LinesUntilClamp() const {
     return rare_data_ ? rare_data_->lines_until_clamp : 0;
+  }
+
+  bool IsTextBoxTrimApplied() const {
+    return rare_data_ && rare_data_->text_box_trim_is_applied();
   }
 
   // Return true if this is an orthogonal writing-mode root that depends on the
@@ -172,19 +177,8 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
   // positioned nodes are set.
   void CopyMutableOutOfFlowData(const LayoutResult& previous_result) const;
 
-  // Returns if we can use the first-tier OOF-positioned cache.
-  bool CanUseOutOfFlowPositionedFirstTierCache() const {
-    DCHECK(physical_fragment_->IsOutOfFlowPositioned());
-    return bitfields_.can_use_out_of_flow_positioned_first_tier_cache;
-  }
-
-  std::optional<wtf_size_t> PositionFallbackIndex() const {
-    return rare_data_ ? rare_data_->PositionFallbackIndex() : std::nullopt;
-  }
-  const Vector<NonOverflowingScrollRange>*
-  PositionFallbackNonOverflowingRanges() const {
-    return rare_data_ ? rare_data_->PositionFallbackNonOverflowingRanges()
-                      : nullptr;
+  const Vector<NonOverflowingScrollRange>* NonOverflowingScrollRanges() const {
+    return rare_data_ ? rare_data_->NonOverflowingScrollRanges() : nullptr;
   }
 
   bool NeedsAnchorPositionScrollAdjustmentInX() const {
@@ -491,18 +485,13 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
    protected:
     friend class OutOfFlowLayoutPart;
 
-    void SetOutOfFlowInsetsForGetComputedStyle(
-        const BoxStrut& insets,
-        bool can_use_out_of_flow_positioned_first_tier_cache) {
+    void SetOutOfFlowInsetsForGetComputedStyle(const BoxStrut& insets) {
       // OOF-positioned nodes *must* always have an initial BFC-offset.
       DCHECK(layout_result_->physical_fragment_->IsOutOfFlowPositioned());
       DCHECK_EQ(layout_result_->BfcLineOffset(), LayoutUnit());
       DCHECK_EQ(layout_result_->BfcBlockOffset().value_or(LayoutUnit()),
                 LayoutUnit());
 
-      layout_result_->bitfields_
-          .can_use_out_of_flow_positioned_first_tier_cache =
-          can_use_out_of_flow_positioned_first_tier_cache;
       layout_result_->bitfields_.has_oof_insets_for_get_computed_style = true;
       layout_result_->oof_insets_for_get_computed_style_ = insets;
     }
@@ -535,11 +524,12 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
               needs_scroll_adjustment_in_y);
     }
 
-    void SetPositionFallbackResult(
-        std::optional<wtf_size_t> fallback_index,
+    void SetNonOverflowingScrollRanges(
         const Vector<NonOverflowingScrollRange>& non_overflowing_ranges) {
-      layout_result_->EnsureRareData()->SetPositionFallbackResult(
-          fallback_index, non_overflowing_ranges);
+      if (layout_result_->rare_data_ || !non_overflowing_ranges.empty()) {
+        layout_result_->EnsureRareData()->SetNonOverflowingScrollRanges(
+            non_overflowing_ranges);
+      }
     }
 
    private:
@@ -627,18 +617,18 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
       kTableData,
     };
 
-    using BitField = WTF::ConcurrentlyReadBitField<uint8_t>;
+    using BitField = WTF::ConcurrentlyReadBitField<uint16_t>;
     using LineBoxBfcBlockOffsetIsSetFlag = BitField::DefineFirstValue<bool, 1>;
-    using PositionFallbackResultIsSetFlag =
-        LineBoxBfcBlockOffsetIsSetFlag::DefineNextValue<bool, 1>;
     using OutOfFlowPositionedOffsetIsSetFlag =
-        PositionFallbackResultIsSetFlag::DefineNextValue<bool, 1>;
+        LineBoxBfcBlockOffsetIsSetFlag::DefineNextValue<bool, 1>;
     using NeedsAnchorPositionScrollAdjustmentInXFlag =
         OutOfFlowPositionedOffsetIsSetFlag::DefineNextValue<bool, 1>;
     using NeedsAnchorPositionScrollAdjustmentInYFlag =
         NeedsAnchorPositionScrollAdjustmentInXFlag::DefineNextValue<bool, 1>;
     using DataUnionTypeValue =
         NeedsAnchorPositionScrollAdjustmentInYFlag::DefineNextValue<uint8_t, 3>;
+    using TextBoxTrimIsAppliedFlag =
+        DataUnionTypeValue::DefineNextValue<bool, 1>;
 
     struct BlockData {
       GC_PLUGIN_IGNORE("crbug.com/1146383")
@@ -687,14 +677,6 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
       return bit_field.set<LineBoxBfcBlockOffsetIsSetFlag>(flag);
     }
 
-    bool position_fallback_result_is_set() const {
-      return bit_field.get<PositionFallbackResultIsSetFlag>();
-    }
-
-    void set_position_fallback_result_is_set(bool flag) {
-      return bit_field.set<PositionFallbackResultIsSetFlag>(flag);
-    }
-
     bool oof_positioned_offset_is_set() const {
       return bit_field.get<OutOfFlowPositionedOffsetIsSetFlag>();
     }
@@ -726,6 +708,14 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
 
     void set_data_union_type(DataUnionType data_type) {
       return bit_field.set<DataUnionTypeValue>(static_cast<uint8_t>(data_type));
+    }
+
+    bool text_box_trim_is_applied() const {
+      return bit_field.get<TextBoxTrimIsAppliedFlag>();
+    }
+
+    void set_text_box_trim_is_applied() {
+      bit_field.set<TextBoxTrimIsAppliedFlag>(true);
     }
 
     template <typename DataType>
@@ -796,9 +786,8 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
           block_end_annotation_space(rare_data.block_end_annotation_space),
           lines_until_clamp(rare_data.lines_until_clamp),
           line_box_bfc_block_offset(rare_data.line_box_bfc_block_offset),
-          position_fallback_index(rare_data.position_fallback_index),
-          position_fallback_non_overflowing_ranges(
-              rare_data.position_fallback_non_overflowing_ranges),
+          non_overflowing_scroll_ranges(
+              rare_data.non_overflowing_scroll_ranges),
           oof_positioned_offset(rare_data.oof_positioned_offset),
           bit_field(rare_data.bit_field) {
       switch (data_union_type()) {
@@ -864,22 +853,16 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
       return line_box_bfc_block_offset;
     }
 
-    void SetPositionFallbackResult(
-        std::optional<wtf_size_t> fallback_index,
+    void SetNonOverflowingScrollRanges(
         const Vector<NonOverflowingScrollRange>& non_overflowing_ranges) {
-      position_fallback_index = fallback_index;
-      position_fallback_non_overflowing_ranges = non_overflowing_ranges;
-      set_position_fallback_result_is_set(true);
+      non_overflowing_scroll_ranges = non_overflowing_ranges;
     }
-    std::optional<wtf_size_t> PositionFallbackIndex() const {
-      return position_fallback_index;
-    }
-    const Vector<NonOverflowingScrollRange>*
-    PositionFallbackNonOverflowingRanges() const {
-      if (!position_fallback_result_is_set()) {
+    const Vector<NonOverflowingScrollRange>* NonOverflowingScrollRanges()
+        const {
+      if (non_overflowing_scroll_ranges.empty()) {
         return nullptr;
       }
-      return &position_fallback_non_overflowing_ranges;
+      return &non_overflowing_scroll_ranges;
     }
 
     void SetOutOfFlowPositionedOffset(const LogicalOffset& offset) {
@@ -920,10 +903,7 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
     // Only valid if line_box_bfc_block_offset_is_set
     LayoutUnit line_box_bfc_block_offset;
 
-    std::optional<wtf_size_t> position_fallback_index;
-
-    // Only valid if position_fallback_result_is_set
-    Vector<NonOverflowingScrollRange> position_fallback_non_overflowing_ranges;
+    Vector<NonOverflowingScrollRange> non_overflowing_scroll_ranges;
 
     // Only valid if oof_positioned_offset_is_set
     LogicalOffset oof_positioned_offset;
@@ -964,7 +944,6 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
               bool subtree_modified_margin_strut)
         : has_rare_data_exclusion_space(false),
           has_oof_insets_for_get_computed_style(false),
-          can_use_out_of_flow_positioned_first_tier_cache(false),
           is_bfc_block_offset_nullopt(false),
           has_forced_break(false),
           break_appeal(kBreakAppealPerfect),
@@ -986,7 +965,6 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
 
     unsigned has_rare_data_exclusion_space : 1;
     unsigned has_oof_insets_for_get_computed_style : 1;
-    unsigned can_use_out_of_flow_positioned_first_tier_cache : 1;
     unsigned is_bfc_block_offset_nullopt : 1;
 
     unsigned has_forced_break : 1;
@@ -1007,7 +985,7 @@ class CORE_EXPORT LayoutResult final : public GarbageCollected<LayoutResult> {
     unsigned initial_break_before : 4;  // EBreakBetween
     unsigned final_break_after : 4;     // EBreakBetween
 
-    unsigned status : 3;  // EStatus
+    unsigned status : 4;  // EStatus
     unsigned is_truncated_by_fragmentation_line : 1;
     unsigned has_orthogonal_fallback_size_descendant : 1;
   };

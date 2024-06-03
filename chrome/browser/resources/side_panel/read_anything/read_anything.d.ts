@@ -64,9 +64,8 @@ declare namespace chrome {
     // Whether the Read Aloud feature flag is enabled.
     let isReadAloudEnabled: boolean;
 
-    // Indicates if select-to-distill works on the web page. Used to
-    // determine which empty state to display.
-    let isSelectable: boolean;
+    // Indicates if this page is a Google doc.
+    let isGoogleDocs: boolean;
 
     // Fonts supported by the browser's preferred language.
     let supportedFonts: string[];
@@ -115,9 +114,6 @@ declare namespace chrome {
 
     // Returns true if the element is a leaf node.
     function isLeafNode(nodeId: number): boolean;
-
-    // Returns true if the webpage corresponds to a Google Doc.
-    function isGoogleDocs(): boolean;
 
     // Connects to the browser process. Called by ts when the read anything
     // element is added to the document.
@@ -215,12 +211,12 @@ declare namespace chrome {
         foregroundColor: number, backgroundColor: number, lineSpacing: number,
         letterSpacing: number): void;
 
-    // Sets the default language. Used by tests only.
+    // Sets the page language. Used by tests only.
     function setLanguageForTesting(code: string): void;
 
     // Called when the side panel has finished loading and it's safe to call
     // SidePanelWebUIView::ShowUI
-    function shouldShowUI(): boolean;
+    function shouldShowUi(): boolean;
 
     ////////////////////////////////////////////////////////////////
     // Implemented in read_anything/app.ts and called by native c++.
@@ -257,7 +253,7 @@ declare namespace chrome {
     // Inits the AXPosition instance in ReadAnythingAppController with the
     // starting node. Currently needed to orient the AXPosition to the correct
     // position, but we should be able to remove this in the future.
-    function initAXPositionWithNode(startingNodeId: number): void;
+    function initAxPositionWithNode(startingNodeId: number): void;
 
     // Gets the starting text index for the current Read Aloud text segment
     // for the given node. nodeId should be a node returned by getCurrentText.
@@ -298,5 +294,12 @@ declare namespace chrome {
 
     // Gets the stored image data url from the AXNode.
     function getImageDataUrl(nodeId: number): string;
+
+    // Gets the readable name for a locale code
+    function getDisplayNameForLocale(locale: string, displayLocale: string):
+        string;
+
+    // Log UmaHistogramLong
+    function logMetric(time: number, metricName: string): void;
   }
 }

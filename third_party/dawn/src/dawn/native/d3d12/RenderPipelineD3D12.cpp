@@ -35,6 +35,7 @@
 #include "dawn/common/Assert.h"
 #include "dawn/common/Log.h"
 #include "dawn/native/CreatePipelineAsyncTask.h"
+#include "dawn/native/Instance.h"
 #include "dawn/native/d3d/BlobD3D.h"
 #include "dawn/native/d3d/D3DError.h"
 #include "dawn/native/d3d12/DeviceD3D12.h"
@@ -356,10 +357,6 @@ MaybeError RenderPipeline::InitializeImpl() {
     // Tint does matrix multiplication expecting row major matrices
     compileFlags |= D3DCOMPILE_PACK_MATRIX_ROW_MAJOR;
 
-    if (!device->IsToggleEnabled(Toggle::D3DDisableIEEEStrictness)) {
-        compileFlags |= D3DCOMPILE_IEEE_STRICTNESS;
-    }
-
     D3D12_GRAPHICS_PIPELINE_STATE_DESC descriptorD3D12 = {};
 
     PerStage<D3D12_SHADER_BYTECODE*> shaders;
@@ -380,10 +377,16 @@ MaybeError RenderPipeline::InitializeImpl() {
 
     for (auto stage : IterateStages(GetStageMask())) {
         const ProgrammableStage& programmableStage = GetStage(stage);
-        DAWN_TRY_ASSIGN(compiledShader[stage],
-                        ToBackend(programmableStage.module)
-                            ->Compile(programmableStage, stage, ToBackend(GetLayout()),
-                                      compileFlags, usedInterstageVariables));
+        uint32_t additionalCompileFlags = 0;
+        if (programmableStage.module->GetStrictMath().value_or(
+                !device->IsToggleEnabled(Toggle::D3DDisableIEEEStrictness))) {
+            additionalCompileFlags |= D3DCOMPILE_IEEE_STRICTNESS;
+        }
+        DAWN_TRY_ASSIGN(
+            compiledShader[stage],
+            ToBackend(programmableStage.module)
+                ->Compile(programmableStage, stage, ToBackend(GetLayout()),
+                          compileFlags | additionalCompileFlags, usedInterstageVariables));
         *shaders[stage] = {compiledShader[stage].shaderBlob.Data(),
                            compiledShader[stage].shaderBlob.Size()};
     }
@@ -480,9 +483,11 @@ MaybeError RenderPipeline::InitializeImpl() {
         // Cache misses, need to get pipeline cached blob and store.
         cacheTimer.RecordMicroseconds("D3D12.CreateGraphicsPipelineState.CacheMiss");
         ComPtr<ID3DBlob> d3dBlob;
-        DAWN_TRY(CheckHRESULT(GetPipelineState()->GetCachedBlob(&d3dBlob),
-                              "D3D12 render pipeline state get cached blob"));
-        device->StoreCachedBlob(GetCacheKey(), CreateBlob(std::move(d3dBlob)));
+        if (!device->GetInstance()->ConsumedError(
+                CheckHRESULT(GetPipelineState()->GetCachedBlob(&d3dBlob),
+                             "D3D12 render pipeline state get cached blob"))) {
+            device->StoreCachedBlob(GetCacheKey(), CreateBlob(std::move(d3dBlob)));
+        }
     } else {
         cacheTimer.RecordMicroseconds("D3D12.CreateGraphicsPipelineState.CacheHit");
     }

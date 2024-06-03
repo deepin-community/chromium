@@ -5,11 +5,6 @@
 #include "base/allocator/partition_alloc_features.h"
 
 #include "base/allocator/miracle_parameter.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/time/time.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_root.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_dispatch_to_noop_on_free.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/thread_cache.h"
 #include "base/base_export.h"
 #include "base/feature_list.h"
 #include "base/features.h"
@@ -18,6 +13,11 @@
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
 #include "build/chromeos_buildflags.h"
+#include "partition_alloc/partition_alloc_base/time/time.h"
+#include "partition_alloc/partition_alloc_buildflags.h"
+#include "partition_alloc/partition_root.h"
+#include "partition_alloc/shim/allocator_shim_dispatch_to_noop_on_free.h"
+#include "partition_alloc/thread_cache.h"
 
 namespace base {
 namespace features {
@@ -36,15 +36,13 @@ const base::FeatureParam<UnretainedDanglingPtrMode>
     kUnretainedDanglingPtrModeParam = {
         &kPartitionAllocUnretainedDanglingPtr,
         "mode",
-        UnretainedDanglingPtrMode::kDumpWithoutCrashing,
+        UnretainedDanglingPtrMode::kCrash,
         &kUnretainedDanglingPtrModeOption,
 };
 
 BASE_FEATURE(kPartitionAllocDanglingPtr,
              "PartitionAllocDanglingPtr",
-#if BUILDFLAG(ENABLE_DANGLING_RAW_PTR_FEATURE_FLAG) ||                   \
-    (BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS) && BUILDFLAG(IS_LINUX) && \
-     !defined(OFFICIAL_BUILD) && (!defined(NDEBUG) || DCHECK_IS_ON()))
+#if BUILDFLAG(ENABLE_DANGLING_RAW_PTR_FEATURE_FLAG)
              FEATURE_ENABLED_BY_DEFAULT
 #else
              FEATURE_DISABLED_BY_DEFAULT
@@ -151,31 +149,15 @@ const base::FeatureParam<BackupRefPtrEnabledProcesses>
         BackupRefPtrEnabledProcesses::kNonRenderer,
         &kBackupRefPtrEnabledProcessesOptions};
 
-// Map *-with-memory-reclaimer modes onto their counterpars without the suffix.
-// They are the same, as memory reclaimer is now controlled independently.
-//
-// Similarly, map disabled-but-*-way-split onto plain disabled, as we are done
-// experimenting with partition split.
-//
-// We need to keep those option strings, as there is a long tail of clients that
-// may have an old field trial config, which used these modes.
-//
-// DO NOT USE *-with-memory-reclaimer and disabled-but-*-way-split modes in new
-// configs!
 constexpr FeatureParam<BackupRefPtrMode>::Option kBackupRefPtrModeOptions[] = {
     {BackupRefPtrMode::kDisabled, "disabled"},
     {BackupRefPtrMode::kEnabled, "enabled"},
-    {BackupRefPtrMode::kEnabled, "enabled-with-memory-reclaimer"},
-    {BackupRefPtrMode::kEnabledInSameSlotMode, "enabled-in-same-slot-mode"},
-    {BackupRefPtrMode::kDisabled, "disabled-but-2-way-split"},
-    {BackupRefPtrMode::kDisabled,
-     "disabled-but-2-way-split-with-memory-reclaimer"},
-    {BackupRefPtrMode::kDisabled, "disabled-but-3-way-split"},
+    {BackupRefPtrMode::kEnabled, "enabled-in-same-slot-mode"},
 };
 
 const base::FeatureParam<BackupRefPtrMode> kBackupRefPtrModeParam{
-    &kPartitionAllocBackupRefPtr, "brp-mode",
-    BackupRefPtrMode::kEnabledInSameSlotMode, &kBackupRefPtrModeOptions};
+    &kPartitionAllocBackupRefPtr, "brp-mode", BackupRefPtrMode::kEnabled,
+    &kBackupRefPtrModeOptions};
 
 BASE_FEATURE(kPartitionAllocMemoryTagging,
              "PartitionAllocMemoryTagging",
@@ -300,11 +282,11 @@ BASE_FEATURE(kPartitionAllocPCScanEagerClearing,
 // In addition to heap, scan also the stack of the current mutator.
 BASE_FEATURE(kPartitionAllocPCScanStackScanning,
              "PartitionAllocPCScanStackScanning",
-#if BUILDFLAG(PCSCAN_STACK_SUPPORTED)
+#if BUILDFLAG(STACK_SCAN_SUPPORTED)
              FEATURE_ENABLED_BY_DEFAULT
 #else
              FEATURE_DISABLED_BY_DEFAULT
-#endif  // BUILDFLAG(PCSCAN_STACK_SUPPORTED)
+#endif  // BUILDFLAG(STACK_SCAN_SUPPORTED)
 );
 
 BASE_FEATURE(kPartitionAllocDCScan,
@@ -498,6 +480,10 @@ void MakeFreeNoOp(WhenFreeBecomesNoOp callsite) {
   }
 #endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
 }
+
+BASE_FEATURE(kPartitionAllocAdjustSizeWhenInForeground,
+             "PartitionAllocAdjustSizeWhenInForeground",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features
 }  // namespace base

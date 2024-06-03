@@ -235,9 +235,6 @@ const char kDisableRemoteFonts[]            = "disable-remote-fonts";
 // Disables the RemotePlayback API.
 const char kDisableRemotePlaybackAPI[]      = "disable-remote-playback-api";
 
-// Turns off the accessibility in the renderer.
-const char kDisableRendererAccessibility[]  = "disable-renderer-accessibility";
-
 // Prevent renderer process backgrounding when set.
 const char kDisableRendererBackgrounding[]  = "disable-renderer-backgrounding";
 
@@ -319,7 +316,6 @@ const char kEnableCaretBrowsing[] = "enable-caret-browsing";
 //   net::features::kSameSiteDefaultChecksMethodRigorously
 //   net::features::kSchemefulSameSite
 //   net::features::kCookieSameSiteConsidersRedirectChain
-//   net::features::kPartitionedCookies
 const char kEnableExperimentalCookieFeatures[] =
     "enable-experimental-cookie-features";
 
@@ -466,16 +462,6 @@ const char kFileUrlPathAlias[] = "file-url-path-alias";
 // Spec: https://www.w3.org/TR/presentation-api/#interface-presentationreceiver
 const char kForcePresentationReceiverForTesting[] =
     "force-presentation-receiver-for-testing";
-
-// Force renderer accessibility to be on instead of enabling it on demand when
-// a screen reader is detected. The disable-renderer-accessibility switch
-// overrides this if present.
-// This switch has an optional parameter that forces an AXMode bundle. The three
-// available bundle settings are: 'basic', 'form-controls', and 'complete'. If
-// the bundle argument is invalid, then the forced AXMode will default to
-// 'complete'. If the bundle argument is missing, then the initial AXMode will
-// default to complete but allow changes to the AXMode during execution.
-const char kForceRendererAccessibility[]    = "force-renderer-accessibility";
 
 // Extra command line options for launching the GPU process (normally used
 // for debugging). Use like renderer-cmd-prefix.
@@ -808,6 +794,10 @@ const char kTimeTicksAtUnixEpoch[] = "time-ticks-at-unix-epoch";
 const char kUseFakeCodecForPeerConnection[] =
     "use-fake-codec-for-peer-connection";
 
+// Bypass the digital-identity-credential OS call. Simulate the user
+// accepting the OS-presented dialog.
+const char kUseFakeUIForDigitalIdentity[] = "use-fake-ui-for-digital-identity";
+
 // Bypass the FedCM account selection dialog. If a value is provided for
 // this switch, that account ID is selected, otherwise the first account
 // is chosen.
@@ -897,12 +887,6 @@ const char kWebOtpBackendAuto[] = "web-otp-backend-auto";
 // Disables encryption of RTP Media for WebRTC. When Chrome embeds Content, it
 // ignores this switch on its stable and beta channels.
 const char kDisableWebRtcEncryption[]      = "disable-webrtc-encryption";
-
-// Disables HW decode acceleration for WebRTC.
-const char kDisableWebRtcHWDecoding[]       = "disable-webrtc-hw-decoding";
-
-// Disables HW encode acceleration for WebRTC.
-const char kDisableWebRtcHWEncoding[] = "disable-webrtc-hw-encoding";
 
 // Enables negotiation of encrypted header extensions from RFC 6904 for SRTP
 // in WebRTC.

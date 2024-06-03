@@ -46,16 +46,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> FourColors(
   return std::tie(yellow, red, blue, green);
 }
 
-std::tuple<uint8_t, uint8_t, uint8_t, uint8_t> RGBToYUV(uint32_t argb) {
-  // We're not trying to test the quality of Y, U, V, A conversion, just that
-  // it happened. So use the same internal method to convert ARGB to YUV values.
-  uint8_t y, u, v, a;
-  libyuv::ARGBToI444(reinterpret_cast<const uint8_t*>(&argb), 1, &y, 1, &u, 1,
-                     &v, 1, 1, 1);
-  a = argb >> 24;
-  return std::tie(y, u, v, a);
-}
-
 void I4xxxRect(VideoFrame* dest_frame,
                int x,
                int y,
@@ -750,14 +740,13 @@ scoped_refptr<DecoderBuffer> CreateClearBuffer() {
 bool VerifyFakeVideoBufferForTest(const DecoderBuffer& buffer,
                                   const VideoDecoderConfig& config) {
   // Check if the input |buffer| matches the |config|.
-  base::PickleIterator pickle(
-      base::Pickle(reinterpret_cast<const char*>(buffer.data()),
-                   static_cast<int>(buffer.data_size())));
+  base::Pickle pickle = base::Pickle::WithUnownedBuffer(buffer);
+  base::PickleIterator iterator(pickle);
   std::string header;
   int width = 0;
   int height = 0;
-  bool success = pickle.ReadString(&header) && pickle.ReadInt(&width) &&
-                 pickle.ReadInt(&height);
+  bool success = iterator.ReadString(&header) && iterator.ReadInt(&width) &&
+                 iterator.ReadInt(&height);
   return (success && header == kFakeVideoBufferHeader &&
           width == config.coded_size().width() &&
           height == config.coded_size().height());
@@ -793,6 +782,16 @@ void FillFourColors(VideoFrame& dest_frame, std::optional<uint32_t> xor_mask) {
   } else {
     FillFourColorsFrameYUV(dest_frame, xor_mask);
   }
+}
+
+std::tuple<uint8_t, uint8_t, uint8_t, uint8_t> RGBToYUV(uint32_t argb) {
+  // We're not trying to test the quality of Y, U, V, A conversion, just that
+  // it happened. So use the same internal method to convert ARGB to YUV values.
+  uint8_t y, u, v, a;
+  libyuv::ARGBToI444(reinterpret_cast<const uint8_t*>(&argb), 1, &y, 1, &u, 1,
+                     &v, 1, 1, 1);
+  a = argb >> 24;
+  return std::tie(y, u, v, a);
 }
 
 }  // namespace media

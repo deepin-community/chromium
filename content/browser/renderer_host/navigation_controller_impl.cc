@@ -46,7 +46,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -1425,6 +1424,9 @@ bool NavigationControllerImpl::RendererDidNavigate(
     // be blocked by RenderFrameHostImpl::ValidateDidCommitParams() before
     // reaching here.
     CHECK(!is_same_document_navigation);
+
+    // TODO(crbug.com/340606786): Add a check to ensure `pending_entry_` isn't
+    // pointing to `entry_replaced_by_post_commit_error_`.
 
     // Any commit while a post-commit error page is showing should put the
     // original entry back, replacing the error page's entry.  This includes
@@ -4010,7 +4012,9 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
           /*origin_agent_cluster_left_as_default=*/true,
           /*enabled_client_hints=*/
           std::vector<network::mojom::WebClientHintsType>(),
-          /*is_cross_browsing_instance=*/false, /*old_page_info=*/nullptr,
+          /*is_cross_site_cross_browsing_context_group=*/false,
+          /*should_have_sticky_user_activation=*/false,
+          /*old_page_info=*/nullptr,
           /*http_response_code=*/-1,
           blink::mojom::NavigationApiHistoryEntryArrays::New(),
           /*early_hints_preloaded_resources=*/std::vector<GURL>(),
@@ -4030,7 +4034,8 @@ NavigationControllerImpl::CreateNavigationRequestFromLoadParams(
           /*load_with_storage_access=*/false,
           /*browsing_context_group_info=*/std::nullopt,
           /*lcpp_hint=*/nullptr, blink::CreateDefaultRendererContentSettings(),
-          /*cookie_deprecation_label=*/std::nullopt);
+          /*cookie_deprecation_label=*/std::nullopt,
+          /*visited_link_salt=*/std::nullopt);
 #if BUILDFLAG(IS_ANDROID)
   if (ValidateDataURLAsString(params.data_url_as_string)) {
     commit_params->data_url_as_string = params.data_url_as_string->data();
@@ -4220,9 +4225,24 @@ void NavigationControllerImpl::LoadIfNecessary() {
                             needs_reload_type_);
 
   // Calling Reload() results in ignoring state, and not loading.
-  // Explicitly use NavigateToPendingEntry so that the renderer uses the
+  // Explicitly use NavigateToExistingPendingEntry so that the renderer uses the
   // cached state.
-  if (pending_entry_) {
+  if (entry_replaced_by_post_commit_error_) {
+    // If the current entry is a post commit error, we reload the entry it
+    // replaced instead. We leave the error entry in place until a commit
+    // replaces it, but the pending entry points to the original entry in the
+    // meantime. Note that NavigateToExistingPendingEntry is able to handle the
+    // case that pending_entry_ != entries_[pending_entry_index_].
+    // Note that this handling is similar to
+    // `NavigationControllerImpl::Reload()`.
+    pending_entry_ = entry_replaced_by_post_commit_error_.get();
+    pending_entry_index_ = GetCurrentEntryIndex();
+    NavigateToExistingPendingEntry(
+        ReloadType::NONE,
+        /*initiator_rfh=*/nullptr,
+        /*soft_navigation_heuristics_task_id=*/std::nullopt,
+        /*navigation_api_key=*/nullptr);
+  } else if (pending_entry_) {
     NavigateToExistingPendingEntry(
         ReloadType::NONE,
         /*initiator_rfh=*/nullptr,

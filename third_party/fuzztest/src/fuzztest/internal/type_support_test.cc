@@ -24,8 +24,8 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <ostream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -42,11 +42,15 @@
 #include "absl/strings/strip.h"
 #include "absl/time/time.h"
 #include "./fuzztest/domain.h"
+#include "./fuzztest/internal/meta.h"
+#include "./fuzztest/internal/printer.h"
 #include "./fuzztest/internal/test_protobuf.pb.h"
 
 namespace fuzztest::internal {
 namespace {
 
+using ::fuzztest::domain_implementor::PrintMode;
+using ::fuzztest::domain_implementor::PrintValue;
 using ::testing::AllOf;
 using ::testing::Contains;
 using ::testing::Each;
@@ -312,11 +316,16 @@ TEST(VariantTest, Printer) {
 TEST(OptionalTest, Printer) {
   auto optional_int_domain = OptionalOf(Arbitrary<int>());
   EXPECT_THAT(TestPrintValue({}, optional_int_domain), Each("std::nullopt"));
-  EXPECT_THAT(TestPrintValue(1, optional_int_domain), ElementsAre("(1)", "1"));
+  EXPECT_THAT(
+      TestPrintValue(Domain<int>::corpus_type(std::in_place_type<int>, 1),
+                     optional_int_domain),
+      ElementsAre("(1)", "1"));
 
   auto optional_string_domain = OptionalOf(Arbitrary<std::string>());
   EXPECT_THAT(TestPrintValue({}, optional_string_domain), Each("std::nullopt"));
-  EXPECT_THAT(TestPrintValue("ABC", optional_string_domain),
+  EXPECT_THAT(TestPrintValue(Domain<std::string>::corpus_type(
+                                 std::in_place_type<std::string>, "ABC"),
+                             optional_string_domain),
               ElementsAre("(\"ABC\")", "\"ABC\""));
 }
 

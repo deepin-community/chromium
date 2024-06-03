@@ -16,8 +16,8 @@
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
 #include "chrome/browser/ash/file_manager/volume_manager_observer.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/wallpaper_handlers/wallpaper_handlers.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/core/session_manager_observer.h"
@@ -37,7 +37,8 @@ class WallpaperFetcherDelegate;
 class WallpaperControllerClientImpl
     : public ash::WallpaperControllerClient,
       public file_manager::VolumeManagerObserver,
-      public session_manager::SessionManagerObserver {
+      public session_manager::SessionManagerObserver,
+      public user_manager::UserManager::Observer {
  public:
   explicit WallpaperControllerClientImpl(
       std::unique_ptr<wallpaper_handlers::WallpaperFetcherDelegate>
@@ -93,6 +94,9 @@ class WallpaperControllerClientImpl
 
   // session_manager::SessionManagerObserver implementation.
   void OnUserProfileLoaded(const AccountId& account_id) override;
+
+  // user_manager::UserManager::Observer:
+  void OnUserLoggedIn(const user_manager::User& user) override;
 
   // Wrappers around the ash::WallpaperController interface.
   void SetPolicyWallpaper(const AccountId& account_id,
@@ -180,6 +184,10 @@ class WallpaperControllerClientImpl
   base::ScopedObservation<session_manager::SessionManager,
                           session_manager::SessionManagerObserver>
       session_observation_{this};
+
+  base::ScopedObservation<user_manager::UserManager,
+                          user_manager::UserManager::Observer>
+      user_manager_observation_{this};
 
   base::WeakPtrFactory<WallpaperControllerClientImpl> weak_factory_{this};
 };

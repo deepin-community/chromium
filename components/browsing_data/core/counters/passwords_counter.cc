@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/scoped_observation.h"
@@ -22,6 +23,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
+#include "base/android/build_info.h"
 #include "components/password_manager/core/browser/password_store/split_stores_and_local_upm.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -33,18 +35,27 @@ namespace {
 // counted separately.
 bool IsProfilePasswordSyncEnabled(PrefService* pref_service,
                                   const syncer::SyncService* sync_service) {
+  // TODO(crbug.com/40067058): Clean this up once Sync-the-feature is gone on
+  // all platforms.
+  bool is_pwd_sync_enabled =
+      password_manager::sync_util::IsSyncFeatureEnabledIncludingPasswords(
+          sync_service);
 #if BUILDFLAG(IS_ANDROID)
   // If UsesSplitStoresAndUPMForLocal() is true, the profile store is never
   // synced, only the account store is.
   if (password_manager::UsesSplitStoresAndUPMForLocal(pref_service)) {
     return false;
   }
+
+  std::string gms_version_str =
+      base::android::BuildInfo::GetInstance()->gms_version_code();
+  if (password_manager::IsGmsCoreUpdateRequired(
+          pref_service, is_pwd_sync_enabled, gms_version_str)) {
+    return false;
+  }
 #endif  // BUILDFLAG(IS_ANDROID)
 
-  // TODO(crbug.com/1464264): Migrate away from `ConsentLevel::kSync` on desktop
-  // platforms, including APIs that depend on sync-the-feature.
-  return password_manager::sync_util::IsSyncFeatureActiveIncludingPasswords(
-      sync_service);
+  return is_pwd_sync_enabled;
 }
 
 }  // namespace
@@ -141,7 +152,7 @@ void PasswordStoreFetcher::OnGetPasswordStoreResults(
     std::vector<std::unique_ptr<password_manager::PasswordForm>> results) {
   domain_examples_.clear();
 
-  base::EraseIf(
+  std::erase_if(
       results,
       [this](const std::unique_ptr<password_manager::PasswordForm>& form) {
         return (form->date_created < start_ || form->date_created >= end_);

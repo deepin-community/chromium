@@ -26,6 +26,7 @@
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/affiliation.h"
 #include "chrome/browser/ash/policy/core/policy_oauth2_token_fetcher.h"
+#include "chrome/browser/ash/policy/local_user_files/local_files_cleanup.h"
 #include "chrome/browser/ash/policy/login/wildcard_login_checker.h"
 #include "chrome/browser/ash/policy/remote_commands/user_commands_factory_ash.h"
 #include "chrome/browser/ash/policy/reporting/arc_app_install_event_log_uploader.h"
@@ -248,6 +249,8 @@ void UserCloudPolicyManagerAsh::ConnectManagementService(
 
   app_install_event_log_uploader_ =
       std::make_unique<ArcAppInstallEventLogUploader>(client(), profile_);
+  local_files_cleanup_ =
+      std::make_unique<local_user_files::LocalFilesCleanup>();
 }
 
 void UserCloudPolicyManagerAsh::OnAccessTokenAvailable(
@@ -321,6 +324,7 @@ UserCloudPolicyManagerAsh::GetAppInstallEventLogUploader() {
 
 void UserCloudPolicyManagerAsh::Shutdown() {
   observed_profile_.Reset();
+  local_files_cleanup_.reset();
   app_install_event_log_uploader_.reset();
   report_scheduler_.reset();
   if (client())
@@ -717,7 +721,7 @@ void UserCloudPolicyManagerAsh::StartReportSchedulerIfReady(
     return;
   }
 
-  // TODO(crbug.com/1102047): Split up Chrome OS reporting code into its own
+  // TODO(crbug.com/40703888): Split up Chrome OS reporting code into its own
   // delegates, then use the Chrome OS delegate factory here.
   enterprise_reporting::ReportingDelegateFactoryDesktop delegate_factory;
   enterprise_reporting::ReportScheduler::CreateParams params;

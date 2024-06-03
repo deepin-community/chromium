@@ -986,6 +986,7 @@ _BANNED_CPP_FUNCTIONS : Sequence[BanRule] = (
         # Test base::span<> compatibility against std::span<>.
         r'base/containers/span_unittest.cc',
         # Needed to use QUICHE API.
+        r'net/third_party/quiche/overrides/quiche_platform_impl/quiche_stack_trace_impl\.*',
         r'services/network/web_transport\.cc',
         r'chrome/browser/ip_protection/.*',
         # Not an error in third_party folders.
@@ -1306,6 +1307,18 @@ _BANNED_CPP_FUNCTIONS : Sequence[BanRule] = (
       ),
       True,
       [_THIRD_PARTY_EXCEPT_BLINK],  # Don't warn in third_party folders.
+    ),
+    BanRule(
+      r'/\bstd::to_address\b',
+      (
+        'std::to_address is banned because it is not guaranteed to be',
+        'SFINAE-compatible. Use base::to_address instead.',
+      ),
+      True,
+      [
+        # Needed in base::to_address implementation.
+        r'base/types/to_address.h',
+        _THIRD_PARTY_EXCEPT_BLINK],  # Not an error in third_party folders.
     ),
     BanRule(
       r'/#include <syncstream>',
@@ -1800,21 +1813,75 @@ _BANNED_CPP_FUNCTIONS : Sequence[BanRule] = (
       treat_as_error = True,
       excluded_paths = _TEST_CODE_EXCLUDED_PATHS + (
         '^chrome/browser/about_flags.cc',
-        '^chrome/browser/chrome_content_browser_client.cc',
+        '^chrome/browser/web_applications/isolated_web_apps/chrome_content_browser_client_isolated_web_apps_part.cc',
         '^chrome/browser/ui/startup/bad_flags_prompt.cc',
         '^content/shell/browser/shell_content_browser_client.cc'
       )
     ),
     BanRule(
+      pattern = r'features::kIsolatedWebAppDevMode',
+      explanation = (
+        'Do not use `features::kIsolatedWebAppDevMode` directly to guard code ',
+        'related to Isolated Web App Developer Mode. ',
+        'Use `web_app::IsIwaDevModeEnabled()` instead.',
+      ),
+      treat_as_error = True,
+      excluded_paths = _TEST_CODE_EXCLUDED_PATHS + (
+        '^chrome/browser/about_flags.cc',
+        '^chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.cc',
+        '^chrome/browser/ui/startup/bad_flags_prompt.cc',
+      )
+    ),
+    BanRule(
+      pattern = r'features::kIsolatedWebAppUnmanagedInstall',
+      explanation = (
+        'Do not use `features::kIsolatedWebAppUnmanagedInstall` directly to ',
+        'guard code related to unmanaged install flow for Isolated Web Apps. ',
+        'Use `web_app::IsIwaUnmanagedInstallEnabled()` instead.',
+      ),
+      treat_as_error = True,
+      excluded_paths = _TEST_CODE_EXCLUDED_PATHS + (
+        '^chrome/browser/about_flags.cc',
+        '^chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.cc',
+      )
+    ),
+    BanRule(
       pattern = r'/\babsl::(optional|nullopt|make_optional|in_place|in_place_t)\b',
       explanation = (
-         'Don\'t use `absl::optional`. Use `std::optional`.',
+       'Don\'t use `absl::optional`. Use `std::optional`.',
       ),
       # TODO(b/40288126): Enforce after completing the rewrite.
       treat_as_error = False,
       excluded_paths = [
         _THIRD_PARTY_EXCEPT_BLINK,
       ]
+    ),
+    BanRule(
+      pattern = r'(base::)?\bStringPiece\b',
+      explanation = (
+          'Don\'t use `base::StringPiece`. Use `std::string_view`.',
+      ),
+      treat_as_error = False,
+    ),
+    BanRule(
+      pattern = r'(base::)?\bStringPiece16\b',
+      explanation = (
+          'Don\'t use `base::StringPiece16`. Use `std::u16string_view`.',
+      ),
+      treat_as_error = False,
+    ),
+    BanRule(
+      pattern =  '/(CUIAutomation|AccessibleObjectFromWindow)',
+      explanation = (
+          'Direct usage of UIAutomation or IAccessible2 in client code is '
+          'discouraged in Chromium, as it is not an assistive technology and '
+          'should not rely on accessibility APIs directly. These APIs can '
+          'introduce significant performance overhead. However, if you believe '
+          'your use case warrants an exception, please discuss it with an '
+          'accessibility owner before proceeding. For more information on the '
+          'performance implications, see https://docs.google.com/document/d/1jN4itpCe_bDXF0BhFaYwv4xVLsCWkL9eULdzjmLzkuk/edit#heading=h.pwth3nbwdub0.',
+      ),
+      treat_as_error = False,
     ),
 )
 
@@ -1883,7 +1950,6 @@ _GENERIC_PYDEPS_FILES = [
     'build/android/devil_chromium.pydeps',
     'build/android/gyp/aar.pydeps',
     'build/android/gyp/aidl.pydeps',
-    'build/android/gyp/allot_native_libraries.pydeps',
     'build/android/gyp/apkbuilder.pydeps',
     'build/android/gyp/assert_static_initializers.pydeps',
     'build/android/gyp/binary_baseline_profile.pydeps',
@@ -1975,7 +2041,7 @@ _ALL_PYDEPS_FILES = _ANDROID_SPECIFIC_PYDEPS_FILES + _GENERIC_PYDEPS_FILES
 
 # Bypass the AUTHORS check for these accounts.
 _KNOWN_ROBOTS = set(
-  ) | set('%s@appspot.gserviceaccount.com' % s for s in ('findit-for-me',)
+  ) | set('%s@appspot.gserviceaccount.com' % s for s in ('findit-for-me', 'luci-bisection')
   ) | set('%s@developer.gserviceaccount.com' % s for s in ('3su6n15k.default',)
   ) | set('%s@chops-service-accounts.iam.gserviceaccount.com' % s
           for s in ('bling-autoroll-builder', 'v8-ci-autoroll-builder',
@@ -1989,6 +2055,8 @@ _KNOWN_ROBOTS = set(
           for s in ('chromium-autoroll', 'chromium-release-autoroll')
   ) | set('%s@skia-corp.google.com.iam.gserviceaccount.com' % s
           for s in ('chromium-internal-autoroll',)
+  ) | set('%s@system.gserviceaccount.com' % s
+          for s in ('chrome-screen-ai-releaser',)
   ) | set('%s@owners-cleanup-prod.google.com.iam.gserviceaccount.com' % s
           for s in ('swarming-tasks',)
   ) | set('%s@fuchsia-infra.iam.gserviceaccount.com' % s
@@ -3266,6 +3334,8 @@ def CheckSpamLogging(input_api, output_api):
             r"^remoting/base/logging\.h$",
             r"^remoting/host/.*",
             r"^sandbox/linux/.*",
+            r"^services/webnn/tflite/graph_impl\.cc$",
+            r"^services/webnn/coreml/graph_impl\.mm$",
             r"^storage/browser/file_system/dump_file_system\.cc$",
             r"^tools/",
             r"^ui/base/resource/data_pack\.cc$",
@@ -5294,12 +5364,12 @@ _ACCESSIBILITY_PATHS = (
     r"^chrome/browser/extensions/api/automation.*/",
     r"^chrome/renderer/extensions/accessibility_.*",
     r"^chrome/tests/data/accessibility/",
-    r"^components/services/screen_ai/",
     r"^content/browser/accessibility/",
     r"^content/renderer/accessibility/",
     r"^content/tests/data/accessibility/",
     r"^extensions/renderer/api/automation/",
     r"^services/accessibility/",
+    r"^services/screen_ai/",
     r"^ui/accessibility/",
     r"^ui/views/accessibility/",
 )
@@ -5831,14 +5901,19 @@ def CheckForIncludeGuards(input_api, output_api):
 
     def is_chromium_header_file(f):
         # We only check header files under the control of the Chromium
-        # project. That is, those outside third_party apart from
-        # third_party/blink.
-        # We also exclude *_message_generator.h headers as they use
-        # include guards in a special, non-typical way.
+        # project. This excludes:
+        # - third_party/*, except blink.
+        # - base/allocator/partition_allocator/: PartitionAlloc is a standalone
+        #   library used outside of Chrome. Includes are referenced from its
+        #   own base directory. It has its own `CheckForIncludeGuards`
+        #   PRESUBMIT.py check.
+        # - *_message_generator.h: They use include guards in a special,
+        #   non-typical way.
         file_with_path = input_api.os_path.normpath(f.LocalPath())
         return (file_with_path.endswith('.h')
                 and not file_with_path.endswith('_message_generator.h')
                 and not file_with_path.endswith('com_imported_mstscax.h')
+                and not file_with_path.startswith('base/allocator/partition_allocator')
                 and (not file_with_path.startswith('third_party')
                      or file_with_path.startswith(
                          input_api.os_path.join('third_party', 'blink'))))

@@ -59,13 +59,6 @@ class BrowserFeaturePromoController
       user_education::ProductMessagingController* messaging_controller);
   ~BrowserFeaturePromoController() override;
 
-  // Creates (or doesn't create) a FeaturePromoController for the specified
-  // `browser_view`. Not all browser windows can do promos; specifically,
-  // headless, kiosk, guest, incognito, and other off-the-record browsers do
-  // _not_ show IPH.
-  static std::unique_ptr<BrowserFeaturePromoController>
-  MaybeCreateForBrowserView(BrowserView* browser_view);
-
   // Get the appropriate instance for |view|. This finds the BrowserView
   // that contains |view| and returns its instance. May return nullptr,
   // but if |view| is in a BrowserView's hierarchy it shouldn't.
@@ -100,7 +93,6 @@ class BrowserFeaturePromoController
   std::u16string GetBodyIconAltText() const override;
   const base::Feature* GetScreenReaderPromptPromoFeature() const override;
   const char* GetScreenReaderPromptPromoEventName() const override;
-  std::string GetAppId() const override;
 
  private:
   // The browser window this instance is responsible for.

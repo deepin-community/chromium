@@ -71,7 +71,6 @@ OneDriveUploadHandler::OneDriveUploadHandler(
       notification_manager_(
           base::MakeRefCounted<CloudUploadNotificationManager>(
               profile,
-              source_url.path().BaseName().value(),
               l10n_util::GetStringUTF8(IDS_OFFICE_CLOUD_PROVIDER_ONEDRIVE),
               l10n_util::GetStringUTF8(IDS_OFFICE_FILE_HANDLER_APP_MICROSOFT),
               // TODO(b/242685536) Update when support for multi-files is added.
@@ -121,16 +120,6 @@ void OneDriveUploadHandler::Run(UploadCallback callback) {
 }
 
 void OneDriveUploadHandler::GetODFSMetadataAndStartIOTask() {
-  FileSystemURL destination_folder_url = GetDestinationFolderUrl();
-  if (!destination_folder_url.is_valid()) {
-    LOG(ERROR) << "Unable to generate destination folder ODFS URL";
-    // TODO(b/293363474): Remove when the underlying cause is diagnosed.
-    base::debug::DumpWithoutCrashing(FROM_HERE);
-    OnFailedUpload(OfficeFilesUploadResult::kDestinationUrlError);
-    return;
-  }
-
-  // First check that ODFS is not in the "ReauthenticationRequired" state.
   file_system_provider::ProvidedFileSystemInterface* file_system =
       GetODFS(profile_);
   if (!file_system) {
@@ -140,6 +129,18 @@ void OneDriveUploadHandler::GetODFSMetadataAndStartIOTask() {
     OnFailedUpload(OfficeFilesUploadResult::kFileSystemNotFound);
     return;
   }
+
+  FileSystemURL destination_folder_url =
+      GetDestinationFolderUrl(file_system->GetFileSystemInfo());
+  if (!destination_folder_url.is_valid()) {
+    LOG(ERROR) << "Unable to generate destination folder ODFS URL";
+    // TODO(b/293363474): Remove when the underlying cause is diagnosed.
+    base::debug::DumpWithoutCrashing(FROM_HERE);
+    OnFailedUpload(OfficeFilesUploadResult::kDestinationUrlError);
+    return;
+  }
+
+  // First check that ODFS is not in the "ReauthenticationRequired" state.
   GetODFSMetadata(
       file_system,
       base::BindOnce(
@@ -157,7 +158,7 @@ bool OneDriveUploadHandler::FileAlreadyBeingUploaded() {
     }
 
     // Check upload to ODFS tasks.
-    if (!UrlIsOnODFS(profile_, status.get().GetDestinationFolder())) {
+    if (!UrlIsOnODFS(status.get().GetDestinationFolder())) {
       continue;
     }
 
@@ -228,17 +229,9 @@ void OneDriveUploadHandler::OnMountResponse(base::File::Error result) {
   GetODFSMetadataAndStartIOTask();
 }
 
-FileSystemURL OneDriveUploadHandler::GetDestinationFolderUrl() {
-  auto odfs_info = GetODFSInfo(profile_);
-  if (!odfs_info) {
-    LOG(ERROR) << "ODFS not found";
-    // TODO(b/293363474): Remove when the underlying cause is diagnosed.
-    base::debug::DumpWithoutCrashing(FROM_HERE);
-    OnFailedUpload(OfficeFilesUploadResult::kFileSystemNotFound);
-    return FileSystemURL();
-  }
-
-  destination_folder_path_ = odfs_info->mount_path();
+FileSystemURL OneDriveUploadHandler::GetDestinationFolderUrl(
+    file_system_provider::ProvidedFileSystemInfo odfs_info) {
+  destination_folder_path_ = odfs_info.mount_path();
   return FilePathToFileSystemURL(profile_, file_system_context_,
                                  destination_folder_path_);
 }
@@ -407,6 +400,15 @@ void OneDriveUploadHandler::ShowIOTaskError(
       error_message = l10n_util::GetStringUTF8(
           copy ? IDS_OFFICE_UPLOAD_ERROR_FILE_NOT_EXIST_TO_COPY
                : IDS_OFFICE_UPLOAD_ERROR_FILE_NOT_EXIST_TO_MOVE);
+      break;
+    case base::File::FILE_ERROR_INVALID_URL:
+      if (copy) {
+        upload_result = OfficeFilesUploadResult::kCopyOperationError;
+      } else {
+        upload_result = OfficeFilesUploadResult::kMoveOperationError;
+      }
+      error_message =
+          l10n_util::GetStringUTF8(IDS_OFFICE_UPLOAD_ERROR_REJECTED);
       break;
     default:
       if (copy) {

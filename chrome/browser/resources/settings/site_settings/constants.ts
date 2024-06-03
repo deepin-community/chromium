@@ -18,10 +18,12 @@ export enum ContentSettingsTypes {
   AR = 'ar',
   AUTO_PICTURE_IN_PICTURE = 'auto-picture-in-picture',
   AUTOMATIC_DOWNLOADS = 'multiple-automatic-downloads',
+  AUTOMATIC_FULLSCREEN = 'automatic-fullscreen',
   BACKGROUND_SYNC = 'background-sync',
   BLUETOOTH_DEVICES = 'bluetooth-devices',
   BLUETOOTH_SCANNING = 'bluetooth-scanning',
   CAMERA = 'media-stream-camera',
+  CAPTURED_SURFACE_CONTROL = 'captured-surface-control',
   CLIPBOARD = 'clipboard',
   COOKIES = 'cookies',
   FEDERATED_IDENTITY_API = 'federated-identity-api',
@@ -32,6 +34,7 @@ export enum ContentSettingsTypes {
   IMAGES = 'images',
   JAVASCRIPT = 'javascript',
   JAVASCRIPT_JIT = 'javascript-jit',
+  KEYBOARD_LOCK = 'keyboard-lock',
   LOCAL_FONTS = 'local-fonts',
   MIC = 'media-stream-mic',  // AKA Microphone.
   MIDI_DEVICES = 'midi-sysex',
@@ -39,6 +42,7 @@ export enum ContentSettingsTypes {
   NOTIFICATIONS = 'notifications',
   PAYMENT_HANDLER = 'payment-handler',
   PERFORMANCE = 'performance',
+  POINTER_LOCK = 'pointer-lock',
   POPUPS = 'popups',
   PRIVATE_NETWORK_DEVICES = 'private-network-devices',
   PROTECTED_CONTENT = 'protected-content',
@@ -57,6 +61,7 @@ export enum ContentSettingsTypes {
   // are used everywhere where ContentSettingsTypes is used in JS.
   PDF_DOCUMENTS = 'pdfDocuments',
   SITE_DATA = 'site-data',
+  OFFER_WRITING_HELP = 'offer-writing-help',
 }
 
 /**

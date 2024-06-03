@@ -11,8 +11,10 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "build/buildflag.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
 #include "components/password_manager/core/browser/password_store/smart_bubble_stats_store.h"
+#include "components/prefs/pref_service.h"
 #include "components/sync/model/wipe_model_upon_sync_disabled_behavior.h"
 
 namespace base {
@@ -40,6 +42,7 @@ class PasswordStoreBuiltInBackend : public PasswordStoreBackend,
       std::unique_ptr<LoginDatabase> login_db,
       syncer::WipeModelUponSyncDisabledBehavior
           wipe_model_upon_sync_disabled_behavior,
+      PrefService* prefs,
       std::unique_ptr<UnsyncedCredentialsDeletionNotifier> notifier = nullptr);
 
   ~PasswordStoreBuiltInBackend() override;
@@ -84,11 +87,15 @@ class PasswordStoreBuiltInBackend : public PasswordStoreBackend,
       const base::RepeatingCallback<bool(const GURL&)>& origin_filter,
       base::OnceClosure completion) override;
   SmartBubbleStatsStore* GetSmartBubbleStatsStore() override;
-  std::unique_ptr<syncer::ProxyModelTypeControllerDelegate>
+  std::unique_ptr<syncer::ModelTypeControllerDelegate>
   CreateSyncControllerDelegate() override;
   void OnSyncServiceInitialized(syncer::SyncService* sync_service) override;
   void RecordAddLoginAsyncCalledFromTheStore() override;
   void RecordUpdateLoginAsyncCalledFromTheStore() override;
+#if !BUILDFLAG(IS_ANDROID)
+  void GetUnsyncedCredentials(
+      base::OnceCallback<void(std::vector<PasswordForm>)> callback) override;
+#endif  // !BUILDFLAG(IS_ANDROID)
   base::WeakPtr<PasswordStoreBackend> AsWeakPtr() override;
 
   // SmartBubbleStatsStore:
@@ -130,6 +137,9 @@ class PasswordStoreBuiltInBackend : public PasswordStoreBackend,
       GUARDED_BY_CONTEXT(sequence_checker_);
 
   bool is_database_initialized_successfully_ = false;
+
+  // Used to get information if there are any passwords saved to the login db.
+  raw_ptr<PrefService> pref_service_;
 
   base::WeakPtrFactory<PasswordStoreBuiltInBackend> weak_ptr_factory_{this};
 };

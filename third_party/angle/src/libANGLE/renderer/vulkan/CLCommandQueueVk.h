@@ -9,7 +9,16 @@
 #ifndef LIBANGLE_RENDERER_VULKAN_CLCOMMANDQUEUEVK_H_
 #define LIBANGLE_RENDERER_VULKAN_CLCOMMANDQUEUEVK_H_
 
+#include <vector>
+
+#include "libANGLE/renderer/vulkan/CLContextVk.h"
+#include "libANGLE/renderer/vulkan/DisplayVk.h"
 #include "libANGLE/renderer/vulkan/cl_types.h"
+#include "libANGLE/renderer/vulkan/vk_command_buffer_utils.h"
+#include "libANGLE/renderer/vulkan/vk_helpers.h"
+#include "libANGLE/renderer/vulkan/vk_resource.h"
+#include "libANGLE/renderer/vulkan/vk_utils.h"
+#include "libANGLE/renderer/vulkan/vk_wrapper.h"
 
 #include "libANGLE/renderer/CLCommandQueueImpl.h"
 
@@ -21,6 +30,8 @@ class CLCommandQueueVk : public CLCommandQueueImpl
   public:
     CLCommandQueueVk(const cl::CommandQueue &commandQueue);
     ~CLCommandQueueVk() override;
+
+    angle::Result init();
 
     angle::Result setProperty(cl::CommandQueueProperties properties, cl_bool enable) override;
 
@@ -176,10 +187,7 @@ class CLCommandQueueVk : public CLCommandQueueImpl
                                            CLEventImpl::CreateFunc *eventCreateFunc) override;
 
     angle::Result enqueueNDRangeKernel(const cl::Kernel &kernel,
-                                       cl_uint workDim,
-                                       const size_t *globalWorkOffset,
-                                       const size_t *globalWorkSize,
-                                       const size_t *localWorkSize,
+                                       const cl::NDRange &ndrange,
                                        const cl::EventPtrs &waitEvents,
                                        CLEventImpl::CreateFunc *eventCreateFunc) override;
 
@@ -210,6 +218,20 @@ class CLCommandQueueVk : public CLCommandQueueImpl
     angle::Result flush() override;
 
     angle::Result finish() override;
+
+    CLPlatformVk *getPlatform() { return mContext->getPlatform(); }
+
+  private:
+    vk::ProtectionType getProtectionType() const { return vk::ProtectionType::Unprotected; }
+
+    CLContextVk *mContext;
+    const CLDeviceVk *mDevice;
+
+    vk::SecondaryCommandPools mCommandPool;
+    vk::OutsideRenderPassCommandBufferHelper *mComputePassCommands;
+    vk::SecondaryCommandMemoryAllocator mOutsideRenderPassCommandsAllocator;
+
+    std::vector<std::string> mCommandBufferDiagnostics;
 };
 
 }  // namespace rx

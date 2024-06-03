@@ -10,11 +10,11 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 import static org.chromium.base.test.transit.ViewElement.scopedViewElement;
 
 import org.chromium.base.test.transit.Condition;
+import org.chromium.base.test.transit.ConditionStatus;
 import org.chromium.base.test.transit.Elements;
 import org.chromium.base.test.transit.Trip;
 import org.chromium.base.test.transit.UiThreadCondition;
 import org.chromium.base.test.transit.ViewElement;
-import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
 import org.chromium.chrome.test.R;
 
@@ -32,14 +32,13 @@ public class RegularTabSwitcherStation extends TabSwitcherStation {
     public void declareElements(Elements.Builder elements) {
         super.declareElements(elements);
 
-        TabModelSelector tabModelSelector =
-                mChromeTabbedActivityTestRule.getActivity().getTabModelSelector();
-
         Condition noRegularTabsExist =
                 new UiThreadCondition() {
                     @Override
-                    public boolean check() {
-                        return tabModelSelector.getModel(false).getCount() == 0;
+                    public ConditionStatus check() {
+                        int regularTabCount =
+                                mChromeTabbedActivityTestRule.tabsCount(/* incognito= */ false);
+                        return whether(regularTabCount == 0, "regular tabs: %d", regularTabCount);
                     }
 
                     @Override
@@ -52,8 +51,11 @@ public class RegularTabSwitcherStation extends TabSwitcherStation {
         Condition incognitoTabsExist =
                 new UiThreadCondition() {
                     @Override
-                    public boolean check() {
-                        return tabModelSelector.getModel(true).getCount() > 0;
+                    public ConditionStatus check() {
+                        int incognitoTabCount =
+                                mChromeTabbedActivityTestRule.tabsCount(/* incognito= */ true);
+                        return whether(
+                                incognitoTabCount > 0, "incognito tabs: %d", incognitoTabCount);
                     }
 
                     @Override
@@ -70,6 +72,6 @@ public class RegularTabSwitcherStation extends TabSwitcherStation {
         IncognitoTabSwitcherStation tabSwitcher =
                 new IncognitoTabSwitcherStation(mChromeTabbedActivityTestRule);
         return Trip.travelSync(
-                this, tabSwitcher, (t) -> INCOGNITO_TOGGLE_TAB_BUTTON.perform(click()));
+                this, tabSwitcher, () -> INCOGNITO_TOGGLE_TAB_BUTTON.perform(click()));
     }
 }

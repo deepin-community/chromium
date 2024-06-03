@@ -65,6 +65,8 @@ tint_add_target(tint_lang_wgsl_ast_transform lib
   lang/wgsl/ast/transform/expand_compound_assignment.h
   lang/wgsl/ast/transform/first_index_offset.cc
   lang/wgsl/ast/transform/first_index_offset.h
+  lang/wgsl/ast/transform/fold_constants.cc
+  lang/wgsl/ast/transform/fold_constants.h
   lang/wgsl/ast/transform/get_insertion_point.cc
   lang/wgsl/ast/transform/get_insertion_point.h
   lang/wgsl/ast/transform/hoist_to_decl_before.cc
@@ -83,6 +85,8 @@ tint_add_target(tint_lang_wgsl_ast_transform lib
   lang/wgsl/ast/transform/promote_side_effects_to_decl.h
   lang/wgsl/ast/transform/push_constant_helper.cc
   lang/wgsl/ast/transform/push_constant_helper.h
+  lang/wgsl/ast/transform/remove_continue_in_switch.cc
+  lang/wgsl/ast/transform/remove_continue_in_switch.h
   lang/wgsl/ast/transform/remove_phonies.cc
   lang/wgsl/ast/transform/remove_phonies.h
   lang/wgsl/ast/transform/remove_unreachable_statements.cc
@@ -158,6 +162,7 @@ tint_add_target(tint_lang_wgsl_ast_transform_test test
   lang/wgsl/ast/transform/disable_uniformity_analysis_test.cc
   lang/wgsl/ast/transform/expand_compound_assignment_test.cc
   lang/wgsl/ast/transform/first_index_offset_test.cc
+  lang/wgsl/ast/transform/fold_constants_test.cc
   lang/wgsl/ast/transform/get_insertion_point_test.cc
   lang/wgsl/ast/transform/helper_test.h
   lang/wgsl/ast/transform/hoist_to_decl_before_test.cc
@@ -168,6 +173,7 @@ tint_add_target(tint_lang_wgsl_ast_transform_test test
   lang/wgsl/ast/transform/promote_initializers_to_let_test.cc
   lang/wgsl/ast/transform/promote_side_effects_to_decl_test.cc
   lang/wgsl/ast/transform/push_constant_helper_test.cc
+  lang/wgsl/ast/transform/remove_continue_in_switch_test.cc
   lang/wgsl/ast/transform/remove_phonies_test.cc
   lang/wgsl/ast/transform/remove_unreachable_statements_test.cc
   lang/wgsl/ast/transform/renamer_test.cc

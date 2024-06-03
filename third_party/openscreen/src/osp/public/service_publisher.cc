@@ -6,12 +6,6 @@
 
 namespace openscreen::osp {
 
-ServicePublisher::Metrics::Metrics() = default;
-ServicePublisher::Metrics::~Metrics() = default;
-
-ServicePublisher::Config::Config() = default;
-ServicePublisher::Config::~Config() = default;
-
 bool ServicePublisher::Config::IsValid() const {
   return !friendly_name.empty() && !service_instance_name.empty() &&
          connection_server_port > 0 && !network_interfaces.empty();
@@ -23,7 +17,6 @@ void ServicePublisher::SetConfig(const Config& config) {
   config_ = config;
 }
 
-ServicePublisher::ServicePublisher(Observer* observer)
-    : state_(State::kStopped), observer_(observer) {}
+ServicePublisher::ServicePublisher() : state_(State::kStopped) {}
 
 }  // namespace openscreen::osp

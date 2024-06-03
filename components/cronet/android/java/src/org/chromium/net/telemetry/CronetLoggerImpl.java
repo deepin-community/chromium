@@ -55,15 +55,22 @@ public class CronetLoggerImpl extends CronetLogger {
                 info.apiVersion.getMinorVersion(),
                 info.apiVersion.getBuildVersion(),
                 info.apiVersion.getPatchVersion(),
-                info.implVersion.getMajorVersion(),
-                info.implVersion.getMinorVersion(),
-                info.implVersion.getBuildVersion(),
-                info.implVersion.getPatchVersion(),
+                // These null checks actually matter. See b/329601514.
+                info.implVersion == null ? -1 : info.implVersion.getMajorVersion(),
+                info.implVersion == null ? -1 : info.implVersion.getMinorVersion(),
+                info.implVersion == null ? -1 : info.implVersion.getBuildVersion(),
+                info.implVersion == null ? -1 : info.implVersion.getPatchVersion(),
                 info.uid);
     }
 
     @Override
     public void logCronetInitializedInfo(CronetInitializedInfo info) {
+        // This atom uses arrays, which are only supported by StatsLog starting from Android T. If
+        // we are running Android <T we simply drop the atom, which is fine-ish because it doesn't
+        // carry critical information, nor does it carry information that other atoms may want to
+        // join against.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+
         CronetStatsLog.write(
                 CronetStatsLog.CRONET_INITIALIZED,
                 info.cronetInitializationRef,
@@ -185,8 +192,7 @@ public class CronetLoggerImpl extends CronetLogger {
                     trafficInfo.wasConnectionMigrationAttempted(),
                     trafficInfo.didConnectionMigrationSucceed(),
                     samplesRateLimitedCount,
-                    /* terminal_state= */ CronetStatsLog
-                            .CRONET_TRAFFIC_REPORTED__TERMINAL_STATE__STATE_UNKNOWN,
+                    convertToProtoCronetRequestTerminalState(trafficInfo.getTerminalState()),
                     /* user_callback_exception_count= */ -1,
                     /* total_idle_time_millis= */ -1,
                     /* total_user_executor_execute_latency_millis= */ -1,
@@ -214,6 +220,20 @@ public class CronetLoggerImpl extends CronetLogger {
                 return CronetStatsLog.CRONET_ENGINE_BUILDER_INITIALIZED__AUTHOR__AUTHOR_IMPL;
         }
         return CronetStatsLog.CRONET_ENGINE_BUILDER_INITIALIZED__AUTHOR__AUTHOR_UNSPECIFIED;
+    }
+
+    private static int convertToProtoCronetRequestTerminalState(
+            CronetTrafficInfo.RequestTerminalState requestTerminalState) {
+        switch (requestTerminalState) {
+            case SUCCEEDED:
+                return CronetStatsLog.CRONET_TRAFFIC_REPORTED__TERMINAL_STATE__STATE_SUCCEEDED;
+            case ERROR:
+                return CronetStatsLog.CRONET_TRAFFIC_REPORTED__TERMINAL_STATE__STATE_ERROR;
+            case CANCELLED:
+                return CronetStatsLog.CRONET_TRAFFIC_REPORTED__TERMINAL_STATE__STATE_CANCELLED;
+            default:
+                return CronetStatsLog.CRONET_TRAFFIC_REPORTED__TERMINAL_STATE__STATE_UNKNOWN;
+        }
     }
 
     private static int convertToProtoCronetSource(CronetSource source) {

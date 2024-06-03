@@ -13,8 +13,11 @@
 #include <utility>
 
 #include "build/build_config.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_2d_size.h"
 #include "core/fxcrt/fx_safe_types.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/unowned_ptr_exclusion.h"
 #include "core/fxge/cfx_cliprgn.h"
@@ -24,9 +27,6 @@
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/dib/cfx_imagerenderer.h"
 #include "core/fxge/dib/cfx_imagestretcher.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/notreached.h"
 
 // Ignore fallthrough warnings in agg23 headers.
 #if defined(__clang__)
@@ -1055,9 +1055,12 @@ void CFX_AggDeviceDriver::SetClipMask(agg::rasterizer_scanline_aa& rasterizer) {
   FX_RECT path_rect(rasterizer.min_x(), rasterizer.min_y(),
                     rasterizer.max_x() + 1, rasterizer.max_y() + 1);
   path_rect.Intersect(m_pClipRgn->GetBox());
+  if (path_rect.IsEmpty()) {
+    return;
+  }
   auto pThisLayer = pdfium::MakeRetain<CFX_DIBitmap>();
-  pThisLayer->Create(path_rect.Width(), path_rect.Height(),
-                     FXDIB_Format::k8bppMask);
+  CHECK(pThisLayer->Create(path_rect.Width(), path_rect.Height(),
+                           FXDIB_Format::k8bppMask));
   agg::rendering_buffer raw_buf(pThisLayer->GetWritableBuffer().data(),
                                 pThisLayer->GetWidth(), pThisLayer->GetHeight(),
                                 pThisLayer->GetPitch());
@@ -1268,14 +1271,13 @@ bool CFX_AggDeviceDriver::GetClipBox(FX_RECT* pRect) {
   return true;
 }
 
-bool CFX_AggDeviceDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
+bool CFX_AggDeviceDriver::GetDIBits(RetainPtr<CFX_DIBitmap> bitmap,
                                     int left,
                                     int top) {
   if (m_pBitmap->GetBuffer().empty())
     return true;
 
-  FX_RECT rect(left, top, left + pBitmap->GetWidth(),
-               top + pBitmap->GetHeight());
+  FX_RECT rect(left, top, left + bitmap->GetWidth(), top + bitmap->GetHeight());
   RetainPtr<CFX_DIBitmap> pBack;
   if (m_pBackdropBitmap) {
     pBack = m_pBackdropBitmap->ClipTo(rect);
@@ -1293,12 +1295,12 @@ bool CFX_AggDeviceDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
   left = std::min(left, 0);
   top = std::min(top, 0);
   if (m_bRgbByteOrder) {
-    RgbByteOrderTransferBitmap(std::move(pBitmap), rect.Width(), rect.Height(),
+    RgbByteOrderTransferBitmap(std::move(bitmap), rect.Width(), rect.Height(),
                                std::move(pBack), left, top);
     return true;
   }
-  return pBitmap->TransferBitmap(0, 0, rect.Width(), rect.Height(),
-                                 std::move(pBack), left, top);
+  return bitmap->TransferBitmap(0, 0, rect.Width(), rect.Height(),
+                                std::move(pBack), left, top);
 }
 
 RetainPtr<CFX_DIBitmap> CFX_AggDeviceDriver::GetBackDrop() {

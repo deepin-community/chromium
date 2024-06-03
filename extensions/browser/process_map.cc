@@ -19,6 +19,12 @@
 #include "extensions/common/extension_id.h"
 #include "extensions/common/features/feature.h"
 #include "extensions/common/mojom/context_type.mojom.h"
+#include "pdf/buildflags.h"
+
+#if BUILDFLAG(ENABLE_PDF)
+#include "extensions/common/constants.h"
+#include "pdf/pdf_features.h"
+#endif
 
 namespace extensions {
 
@@ -132,14 +138,14 @@ bool ProcessMap::CanProcessHostContextType(
              ScriptInjectionTracker::DidProcessRunUserScriptFromExtension(
                  process, extension->id());
     case mojom::ContextType::kLockscreenExtension:
-      // Lock screen contexts are essentially blessed contexts that run on the
-      // lock screen profile. We don't run component hosted apps there, so no
-      // need to allow those.
+      // Lock screen contexts are essentially privileged contexts that run on
+      // the lock screen profile. We don't run component hosted apps there, so
+      // no need to allow those.
       return is_lock_screen_context_ && extension &&
              !extension->is_hosted_app() &&
              Contains(extension->id(), process_id);
     case mojom::ContextType::kPrivilegedWebPage:
-      // A blessed web page is a (non-component) hosted app process.
+      // A privileged web page is a (non-component) hosted app process.
       return extension && extension->is_hosted_app() &&
              extension->location() != mojom::ManifestLocation::kComponent &&
              Contains(extension->id(), process_id);
@@ -184,14 +190,25 @@ mojom::ContextType ProcessMap::GetMostLikelyContextType(
     return mojom::ContextType::kWebPage;
   }
 
-  if (!Contains(extension->id(), process_id)) {
+  const ExtensionId& extension_id = extension->id();
+  if (!Contains(extension_id, process_id)) {
     // If the process map doesn't contain the process, it might be an extension
     // frame in a webview.
     // We (deliberately) don't add webview-hosted frames to the process map and
-    // don't classify them as BLESSED_EXTENSION_CONTEXTs.
+    // don't classify them as kPrivilegedExtension contexts.
     if (url && extension->origin().IsSameOriginWith(*url) &&
         IsWebViewProcessForExtension(process_id, extension->id())) {
       // Yep, it's an extension frame in a webview.
+#if BUILDFLAG(ENABLE_PDF)
+      // The PDF Viewer extension is an exception, since webviews need to be
+      // able to load the PDF Viewer. The PDF extension needs a
+      // kPrivilegedExtension context to load, so the PDF extension frame is
+      // added to the process map and shouldn't reach here.
+      if (base::FeatureList::IsEnabled(chrome_pdf::features::kPdfOopif)) {
+        CHECK_NE(extension_id, extension_misc::kPdfExtensionId);
+      }
+#endif  // BUILDFLAG(ENABLE_PDF)
+
       return mojom::ContextType::kUnprivilegedExtension;
     }
 
@@ -206,7 +223,7 @@ mojom::ContextType ProcessMap::GetMostLikelyContextType(
   }
 
   // TODO(https://crbug.com/1339382): Currently, offscreen document contexts
-  // are misclassified as BLESSED_EXTENSION_CONTEXTs. This is not ideal
+  // are misclassified as kPrivilegedExtension contexts. This is not ideal
   // because there is a mismatch between the browser and the renderer), but it's
   // not a security issue because, while offscreen documents have fewer
   // capabilities, this is an API distinction, and not a security enforcement.
@@ -215,7 +232,7 @@ mojom::ContextType ProcessMap::GetMostLikelyContextType(
   // access all the same features.
   // Even so, we should fix this to properly classify offscreen documents (and
   // this would be a problem if offscreen documents ever have access to APIs
-  // that BLESSED_EXTENSION_CONTEXTs don't).
+  // that kPrivilegedExtension contexts don't).
 
   return is_lock_screen_context_ ? mojom::ContextType::kLockscreenExtension
                                  : mojom::ContextType::kPrivilegedExtension;

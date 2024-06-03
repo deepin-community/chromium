@@ -204,6 +204,10 @@ BASE_FEATURE(kProductSpecificationsRegionLaunched,
              "ProductSpecificationsRegionLaunched",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kProductSpecificationsSync,
+             "ProductSpecificationsSync",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kShoppingIconColorVariant,
              "ShoppingIconColorVariant",
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -261,6 +265,16 @@ BASE_FEATURE(kShoppingPDPMetrics,
 BASE_FEATURE(kShoppingPDPMetricsRegionLaunched,
              "ShoppingPDPMetricsRegionLaunched",
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kTrackByDefaultOnMobile,
+             "TrackByDefaultOnMobile",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_IOS)
+BASE_FEATURE(kPriceInsightsIos,
+             "PriceInsightsIos",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
 
 BASE_FEATURE(kShoppingPageTypes,
              "ShoppingPageTypes",

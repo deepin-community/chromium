@@ -656,6 +656,15 @@ inline constexpr char kPlatformKeys[] = "platform_keys";
 inline constexpr char kKeyPermissionsOneTimeMigrationDone[] =
     "key_permissions_one_time_migration_done";
 
+// A boolean preference that is registered in user prefs to tracks that at least
+// one PKCS#12 certificate+key pair was dual written into NSS software-backed
+// slot and Chaps. This is a part of the experiment to import PKCS#12 files into
+// Chaps user slot instead of NSS and if the copy from Chaps will not work this
+// preference will be used to decide when a clean up is needed to delete
+// non-working certificates+keys.
+inline constexpr char kNssChapsDualWrittenCertsExist[] =
+    "nss_chaps_dual_written_certs_exist";
+
 // A boolean pref. If set to true, the Unified Desktop feature is made
 // available and turned on by default, which allows applications to span
 // multiple screens. Users may turn the feature off and on in the settings
@@ -746,26 +755,6 @@ inline constexpr char kHatsOnboardingSurveyCycleEndTs[] =
 // Experience survey
 inline constexpr char kHatsOnboardingDeviceIsSelected[] =
     "hats_onboarding_device_is_selected";
-
-// An int64 pref. This is the timestamp, microseconds after epoch, that
-// indicates the end of the most recent Unlock Experience survey cycle.
-inline constexpr char kHatsUnlockSurveyCycleEndTs[] =
-    "hats_unlock_cycle_end_timestamp";
-
-// A boolean pref. Indicates if the device is selected for the HaTS Unlock
-// Experience survey
-inline constexpr char kHatsUnlockDeviceIsSelected[] =
-    "hats_unlock_device_is_selected";
-
-// An int64 pref. This is the timestamp, microseconds after epoch, that
-// indicates the end of the most recent Smart Lock Experience survey cycle.
-inline constexpr char kHatsSmartLockSurveyCycleEndTs[] =
-    "hats_smartlock_cycle_end_timestamp";
-
-// A boolean pref. Indicates if the device is selected for the HaTS Smart Lock
-// Experience survey
-inline constexpr char kHatsSmartLockDeviceIsSelected[] =
-    "hats_smartlock_device_is_selected";
 
 // An int64 pref. This is the timestamp, microseconds after epoch, that
 // indicates the end of the most recent ARC Games survey cycle.
@@ -1043,11 +1032,6 @@ inline constexpr char kHelpAppNotificationLastShownMilestone[] =
 inline constexpr char kReleaseNotesSuggestionChipTimesLeftToShow[] =
     "times_left_to_show_release_notes_suggestion_chip";
 
-// Amount of times the discover tab suggestion chip should be shown before it
-// disappears.
-inline constexpr char kDiscoverTabSuggestionChipTimesLeftToShow[] =
-    "times_left_to_show_discover_tab_suggestion_chip";
-
 // Boolean pref indicating whether the NTLM authentication protocol should be
 // enabled when mounting an SMB share with a user credential by the Network File
 // Shares for Chrome OS feature.
@@ -1240,6 +1224,13 @@ const char kHasEverRevokedMetricsConsent[] =
 // no user was present at the device. This boolean enables the device to display
 // a notification to the local user when the session was terminated.
 inline constexpr char kRemoteAdminWasPresent[] = "remote_admin_was_present";
+
+// Pref that contains the value of the default location/volume that the user
+// should see in the Files App. Normally this is MyFiles. If
+// LocalUserFilesAllowed is False, this might be Google Drive or OneDrive,
+// depending on the value of the DownloadDirectory policy.
+inline constexpr char kFilesAppDefaultLocation[] =
+    "filebrowser.default_location";
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1284,6 +1275,10 @@ inline constexpr char kUsedPolicyCertificates[] =
 // A boolean pref set to true if a Home button to open the Home pages should be
 // visible on the toolbar.
 inline constexpr char kShowHomeButton[] = "browser.show_home_button";
+
+// A boolean pref set to true if the Forward button should be visible on the
+// toolbar.
+inline constexpr char kShowForwardButton[] = "browser.show_forward_button";
 
 // Boolean pref to define the default setting for "block offensive words".
 // The old key value is kept to avoid unnecessary migration code.
@@ -1350,20 +1345,29 @@ inline constexpr char kPluginsAlwaysOpenPdfExternally[] =
 // infobar was last dismissed by the user.
 inline constexpr char kDefaultBrowserLastDeclined[] =
     "browser.default_browser_infobar_last_declined";
-// Boolean that indicates whether the kDefaultBrowserLastDeclined preference
-// should be reset on start-up.
-inline constexpr char kResetCheckDefaultBrowser[] =
-    "browser.should_reset_check_default_browser";
+
+// base::Time containing time at which the default browser infobar was last
+// dismissed by the user.
+inline constexpr char kDefaultBrowserLastDeclinedTime[] =
+    "browser.default_browser_infobar_last_declined_time";
+
+// Int representing the number of times the user has dismissed the infobar.
+inline constexpr char kDefaultBrowserDeclinedCount[] =
+    "browser.default_browser_infobar_declined_count";
+
+// base::Time containing first time the default browser app menu chip was shown.
+inline constexpr char kDefaultBrowserFirstShownTime[] =
+    "browser.default_browser_app_menu_first_shown_time";
 
 // Policy setting whether default browser check should be disabled and default
 // browser registration should take place.
 inline constexpr char kDefaultBrowserSettingEnabled[] =
     "browser.default_browser_setting_enabled";
 
-// Boolean that indicates whether chrome://accessibility should show the
-// internal accessibility tree.
-inline constexpr char kShowInternalAccessibilityTree[] =
-    "accessibility.show_internal_accessibility_tree";
+// String that indicates which API chrome://accessibility should show on the
+// accessibility tree viewer.
+inline constexpr char kShownAccessibilityApiType[] =
+    "accessibility.shown_api_type";
 
 // Whether the "Get Image Descriptions from Google" feature is enabled.
 // Only shown to screen reader users.
@@ -1422,6 +1426,10 @@ inline constexpr char kIsDefaultPageColorsOnHighContrast[] =
     "settings.a11y.is_default_page_colors_on_high_contrast";
 #endif  // BUILDFLAG(IS_WIN)
 
+// List pref containing site urls where forced colors should not be applied.
+inline constexpr char kPageColorsBlockList[] =
+    "settings.a11y.page_colors_block_list";
+
 // Boolean that indicates whether a user prefers to have default scrollbar
 // styles.
 inline constexpr char kPrefersDefaultScrollbarStyles[] =
@@ -1479,6 +1487,10 @@ inline constexpr char kEnableReferrers[] = "enable_referrers";
 // non-webkit-prefixed string.
 inline constexpr char kEnableEncryptedMedia[] =
     "webkit.webprefs.encrypted_media_enabled";
+
+// Whether the deprecated PrefixedFullscreenVideo API is enabled or not.
+inline constexpr char kPrefixedVideoFullscreenApiAvailability[] =
+    "media.prefixed_fullscreen_video_api_availability";
 
 // Boolean that specifies whether to import the form data for autofill from the
 // default browser on first run.
@@ -1872,7 +1884,21 @@ inline constexpr char kManagedPrivateNetworkAccessRestrictionsEnabled[] =
 // Boolean indicating whether or not the Compose FRE has been completed.
 inline constexpr char kPrefHasCompletedComposeFRE[] =
     "compose_has_completed_fre";
+
+// Boolean that is true when the writing help proactive nudge UI is globally
+// enabled. When false, the UI will never be shown.
+inline constexpr char kEnableProactiveNudge[] =
+    "compose.proactive_nudge_enabled";
 #endif
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
+// Integer value controlling the data region to store covered data from Chrome.
+// By default, no preference is selected.
+// - 0: No preference
+// - 1: United States
+// - 2: Europe
+inline constexpr char kChromeDataRegionSetting[] = "chrome_data_region_setting";
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
 
 // *************** LOCAL STATE ***************
 // These are attached to the machine/installation
@@ -1959,6 +1985,11 @@ inline constexpr char kStabilitySystemUncleanShutdownCount[] =
 // user about setting Chrome as the default browser.
 inline constexpr char kBrowserSuppressDefaultBrowserPrompt[] =
     "browser.suppress_default_browser_prompt_for_version";
+
+// String that refers to the study group in which this install was enrolled.
+// Used to implement the sticky experiment tracking.
+inline constexpr char kDefaultBrowserPromptRefreshStudyGroup[] =
+    "browser.default_browser_prompt_refresh_study_group";
 
 // A collection of position, size, and other data relating to the browser
 // window to restore on startup.
@@ -2096,6 +2127,13 @@ inline constexpr char kOfficeFileMovedToOneDrive[] =
 // The timestamp of the latest office file automatically moved to Google Drive.
 inline constexpr char kOfficeFileMovedToGoogleDrive[] =
     "filebrowser.office.file_moved_google_drive";
+
+// Pref that contains the value of the LocalUserFilesAllowed policy.
+inline constexpr char kLocalUserFilesAllowed[] =
+    "filebrowser.local_user_files_allowed";
+
+// Whether the user can remove OneDrive.
+inline constexpr char kAllowUserToRemoveODFS[] = "allow_user_to_remove_odfs";
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -2317,6 +2355,8 @@ inline constexpr char kDevToolsSyncedPreferencesSyncEnabled[] =
 inline constexpr char kDevToolsSyncedPreferencesSyncDisabled[] =
     "devtools.synced_preferences_sync_disabled";
 
+inline constexpr char kDevToolsGenAiSettings[] = "devtools.gen_ai_settings";
+
 #if !BUILDFLAG(IS_ANDROID)
 // Tracks the number of times the dice signin promo has been shown in the user
 // menu.
@@ -2381,11 +2421,6 @@ inline constexpr char kWebAppsAppAgnosticMlState[] =
 inline constexpr char kWebAppsAppAgnosticIPHLinkCapturingState[] =
     "web_apps.app_agnostic_iph_link_capturing_state";
 
-// A boolean value that stores information about whether error loaded policy
-// apps have been migrated for this profile.
-inline constexpr char kErrorLoadedPolicyAppMigrationCompleted[] =
-    "web_apps.error_loaded_policy_apps_migrated";
-
 // A string representing the last version of Chrome preinstalled web apps were
 // synchronised for.
 inline constexpr char kWebAppsLastPreinstallSynchronizeVersion[] =
@@ -2407,13 +2442,13 @@ inline constexpr char kWebAppsPreferences[] = "web_apps.web_app_ids";
 // The default audio capture device used by the Media content setting.
 // TODO(crbug.com/311205211): Remove this once users have been migrated to
 // `kAudioInputUserPreferenceRanking`.
-inline constexpr char kDefaultAudioCaptureDevice[] =
+inline constexpr char kDefaultAudioCaptureDeviceDeprecated[] =
     "media.default_audio_capture_device";
 
 // The default video capture device used by the Media content setting.
 // TODO(crbug.com/311205211): Remove this once users have been migrated to
 // `kVideoInputUserPreferenceRanking`.
-inline constexpr char kDefaultVideoCaptureDevice[] =
+inline constexpr char kDefaultVideoCaptureDeviceDeprecated[] =
     "media.default_video_capture_Device";
 
 // The salt used for creating Storage IDs. The Storage ID is used by encrypted
@@ -2594,16 +2629,6 @@ inline constexpr char kPostQuantumKeyAgreementEnabled[] =
 // If false, disable Encrypted ClientHello (ECH) in TLS connections.
 inline constexpr char kEncryptedClientHelloEnabled[] = "ssl.ech_enabled";
 
-// If false, disallow insecure hashes for use in  TLS Handshakes.
-inline constexpr char kInsecureHashesInTLSHandshakesEnabled[] =
-    "ssl.insecure_hash_enabled";
-
-// If true, checks the X.509 keyUsage extension in TLS 1.2 for RSA
-// certificates that chain to a local trust anchor. If false, the checks are
-// disabled.
-inline constexpr char kRSAKeyUsageForLocalAnchorsEnabled[] =
-    "ssl.rsa_key_usage_for_local_anchors_enabled";
-
 // Boolean that specifies whether the built-in asynchronous DNS client is used.
 inline constexpr char kBuiltInDnsClientEnabled[] = "async_dns.enabled";
 
@@ -2618,23 +2643,33 @@ inline constexpr char kDnsOverHttpsMode[] = "dns_over_https.mode";
 inline constexpr char kDnsOverHttpsTemplates[] = "dns_over_https.templates";
 
 #if BUILDFLAG(IS_CHROMEOS)
-// String containing a space-separated list of DNS over HTTPS templates to use
-// in secure mode or automatic mode. If no templates are specified in automatic
-// mode, we will attempt discovery of DoH servers associated with the configured
-// insecure resolvers.
-// This is very similar to kDnsOverHttpsTemplates except that on ChromeOS it
-// supports additional variables which are used to transport identity
-// information to the DNS provider. This is ignored on all other platforms than
-// ChromeOS. On ChromeOS if it exists it will override kDnsOverHttpsTemplates,
-// otherwise kDnsOverHttpsTemplates will be used. This pref is only evaluated if
-// kDnsOverHttpsSalt is set.
+// String containing a space-separated list of DNS over HTTPS URI templates,
+// with placeholders for user and device identifiers, to use in secure mode or
+// automatic mode. If no templates are specified in automatic mode, we will
+// attempt discovery of DoH servers associated with the configured insecure
+// resolvers. This is very similar to kDnsOverHttpsTemplates except that on
+// ChromeOS it supports additional placeholder variables which are used to
+// transport identity information to the DNS provider. This is ignored on all
+// other platforms than ChromeOS. On ChromeOS if it exists it will override
+// kDnsOverHttpsTemplates, otherwise kDnsOverHttpsTemplates will be used. This
+// pref is controlled by an enterprise policy.
 inline constexpr char kDnsOverHttpsTemplatesWithIdentifiers[] =
     "dns_over_https.templates_with_identifiers";
 // String containing a salt value. This is used together with
 // kDnsOverHttpsTemplatesWithIdentifiers, only. The value will be used as a salt
 // to a hash applied to the various identity variables to prevent dictionary
-// attacks.
+// attacks. This pref is controlled by an enterprise policy.
 inline constexpr char kDnsOverHttpsSalt[] = "dns_over_https.salt";
+// String containing a space-separated list of effective DNS over HTTPS URI
+// templates. If `kDnsOverHttpsTemplatesWithIdentifiers` is set, this string is
+// the result of evaluating `kDnsOverHttpsTemplatesWithIdentifiers` against real
+// user and device data; the identity placeholders are replaced with the
+// hex-encoded hashed value of the user and device identifier. When
+// `kDnsOverHttpsTemplatesWithIdentifiers` is empty or not set,
+// `kDnsOverHttpsEffectiveTemplates` is equal to `kDnsOverHttpsTemplates`.
+// This pref is set at runtime by ash::SecureDnsManager.
+inline constexpr char kDnsOverHttpsEffectiveTemplatesChromeOS[] =
+    "dns_over_https.effective_templates_with_identifiers";
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Boolean that specifies whether additional DNS query types (e.g. HTTPS) may be
@@ -2899,10 +2934,6 @@ inline constexpr char
 // set for child users only, and kept on the known user storage.
 inline constexpr char kKnownUserParentAccessCodeConfig[] =
     "child_user.parent_access_code.config";
-
-// Pref that contains the value of the LocalUserFilesAllowed policy.
-inline constexpr char kLocalUserFilesAllowed[] =
-    "filebrowser.local_user_files_allowed";
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 // String which specifies where to store the disk cache.
@@ -3035,6 +3066,11 @@ inline constexpr char kDeviceWeeklyScheduledSuspend[] =
 inline constexpr char kChromeForTestingAllowed[] = "chrome_for_testing.allowed";
 #endif
 
+#if BUILDFLAG(IS_WIN)
+inline constexpr char kUiAutomationProviderEnabled[] =
+    "accessibility.ui_automation_provider_enabled";
+#endif
+
 // *************** SERVICE PREFS ***************
 // These are attached to the service process.
 
@@ -3126,6 +3162,10 @@ inline constexpr char kShelfDefaultPinLayoutRolls[] =
 // Same as kShelfDefaultPinLayoutRolls, but for tablet form factor devices.
 inline constexpr char kShelfDefaultPinLayoutRollsForTabletFormFactor[] =
     "shelf_default_pin_layout_rolls_for_tablet_form_factor";
+// Keeps track of whether a container app was pinned to shelf as a default app,
+// to prevent applying the default pin twice (after the user unpins the app).
+inline constexpr char kShelfContainerAppPinRolls[] =
+    "shelf_container_app_pin_layout_rolls";
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if BUILDFLAG(IS_WIN)
@@ -3445,6 +3485,12 @@ inline constexpr char kRendererAppContainerEnabled[] =
 // ProcessExtensionPointDisablePolicy enabled.
 inline constexpr char kBlockBrowserLegacyExtensionPoints[] =
     "block_browser_legacy_extension_points";
+
+// A boolean that controls whether the Browser process has Application Bound
+// (App-Bound) Encryption enabled.
+inline constexpr char kApplicationBoundEncryptionEnabled[] =
+    "application_bound_encryption_enabled";
+
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -3921,27 +3967,12 @@ inline constexpr char
     kAccessControlAllowMethodsInCORSPreflightSpecConformant[] =
         "access_control_allow_methods_in_cors_preflight_spec_conformant";
 
-// A time preference keeping track of the last time the DIPS service performed
-// DIPS-related repeated actions (logging metrics, clearing state, etc).
-inline constexpr char kDIPSTimerLastUpdate[] = "dips_timer_last_update";
-
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 // A dictionary that keeps client_ids assigned by Authorization Servers indexed
 // by URLs of these servers. It does not contain empty strings.
 inline constexpr char kPrintingOAuth2AuthorizationServers[] =
     "printing.oauth2_authorization_servers";
 #endif
-
-// If true, the feature ThrottleDisplayNoneAndVisibilityHiddenCrossOriginIframes
-// will be allowed, otherwise attempts to enable the feature will be
-// disallowed.
-inline constexpr char kThrottleNonVisibleCrossOriginIframesAllowed[] =
-    "throttle_non_visible_cross_origin_iframes_allowed";
-
-// If true, the feature NewBaseUrlInheritanceBehavior will be allowed, otherwise
-// attempts to enable the feature will be disallowed.
-inline constexpr char kNewBaseUrlInheritanceBehaviorAllowed[] =
-    "new_base_url_inheritance_behavior_allowed";
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
 // If this exists and is true, Chrome may run system DNS resolution out of the
@@ -4022,6 +4053,13 @@ inline constexpr char kReadAloudSyntheticTrials[] =
 // Only specifiable as an enterprise policy.
 inline constexpr char kCACertificates[] = "certificates.ca_certificates";
 
+// A list of objects. Each object contains a base64 encoded certificates that
+// are to be trusted as root certs, but with constraints specified outside of
+// the certificate in the object.
+// Only specifiable as an enterprise policy.
+inline constexpr char kCACertificatesWithConstraints[] =
+    "certificates.ca_certificates_with_constraints";
+
 // A list of base64 encoded certificates containing SPKIs that are not to be
 // trusted.
 // Only specifiable as an enterprise policy.
@@ -4039,6 +4077,15 @@ inline constexpr char kCAPlatformIntegrationEnabled[] =
     "certificates.ca_platform_integration_enabled";
 #endif  // BUILDFLAG(CHROME_CERTIFICATE_POLICIES_SUPPORTED)
 
+// Integer value controlling whether to show any enterprise badging on a managed
+// profile.
+// - 0: Hide all badging
+// - 1: Show badging for managed profiles on unmanaged devices
+// - 2: Show badging for managed profiles on all devices
+// - 3: Show badging for managed profiles on managed devices
+inline constexpr char kEnterpriseBadgingTemporarySetting[] =
+    "temporary_setting.enterpise_badging";
+
 // Integer value controlling whether to show Work/School label next to the
 // avatar. This is used on the local state so that the management label is
 // always shown for managed profiles on unmanaged devices.
@@ -4046,6 +4093,25 @@ inline constexpr char kCAPlatformIntegrationEnabled[] =
 // - 1: Show the label for 30s
 inline constexpr char kToolbarAvatarLabelSettings[] =
     "toolbar_avatar.label.settings";
+
+// Url to an image representing the enterprise logo.
+inline constexpr char kEnterpriseLogoUrl[] = "enterprise_logo.url";
+
+// String value of the custom label of a managed profile.
+inline constexpr char kCustomProfileLabel[] = "profile.label.custom_value";
+
+// IntegerValue of the custom label preset of a managed profile.
+inline constexpr char kProfileLabelPreset[] = "profile.label.preset";
+
+#if BUILDFLAG(IS_ANDROID)
+// An integer count of how many account-level breached credentials were detected
+// by GMSCore.
+inline constexpr char kBreachedCredentialsCount[] =
+    "profile.safety_hub_breached_credentials_count";
+#endif  // BUILDFLAG(IS_ANDROID)
+
+inline constexpr char kTabGroupSavesUIUpdateMigrated[] =
+    "tab_group_saves_ui_update_migrated";
 
 }  // namespace prefs
 

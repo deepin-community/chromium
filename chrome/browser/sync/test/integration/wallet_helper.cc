@@ -13,7 +13,7 @@
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "components/autofill/core/browser/autofill_data_util.h"
 #include "components/autofill/core/browser/data_model/autofill_metadata.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
@@ -335,14 +335,6 @@ sync_pb::ModelTypeState GetWalletModelTypeState(syncer::ModelType model_type,
                                 base::Unretained(wds.get()), &result));
   WaitForCurrentTasksToComplete(wds->GetDBTaskRunner());
   return result;
-}
-
-void UnmaskServerCard(int profile,
-                      const CreditCard& credit_card,
-                      const std::u16string& full_number) {
-  scoped_refptr<AutofillWebDataService> wds = GetProfileWebDataService(profile);
-  wds->UnmaskServerCreditCard(credit_card, full_number);
-  WaitForCurrentTasksToComplete(wds->GetDBTaskRunner());
 }
 
 sync_pb::SyncEntity CreateDefaultSyncWalletCard() {

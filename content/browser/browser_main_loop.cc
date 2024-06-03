@@ -149,8 +149,8 @@
 #include "services/network/public/cpp/network_switches.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/transitional_url_loader_factory_owner.h"
-#include "services/video_capture/public/cpp/features.h"
 #include "skia/ext/event_tracer_impl.h"
+#include "skia/ext/legacy_display_globals.h"
 #include "skia/ext/skia_memory_dump_provider.h"
 #include "sql/sql_memory_dump_provider.h"
 #include "ui/base/clipboard/clipboard.h"
@@ -191,9 +191,10 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 #include <commctrl.h>
 #include <shellapi.h>
-#include <windows.h>
 
 #include "base/threading/platform_thread_win.h"
 #include "net/base/winsock_init.h"
@@ -215,8 +216,6 @@
 #include "sandbox/win/src/process_mitigations.h"
 #elif (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(USE_UDEV)
 #include "media/device_monitors/device_monitor_udev.h"
-#elif BUILDFLAG(IS_MAC)
-#include "media/device_monitors/device_monitor_mac.h"
 #endif
 
 #if BUILDFLAG(IS_FUCHSIA)
@@ -993,6 +992,14 @@ int BrowserMainLoop::PostCreateThreads() {
 int BrowserMainLoop::PreMainMessageLoopRun() {
   TRACE_EVENT0("startup", "BrowserMainLoop::PreMainMessageLoopRun");
 
+  auto font_render_params =
+      gfx::GetFontRenderParams(gfx::FontRenderParamsQuery(), nullptr);
+  skia::LegacyDisplayGlobals::SetCachedParams(
+      gfx::FontRenderParams::SubpixelRenderingToSkiaPixelGeometry(
+          font_render_params.subpixel_rendering),
+      font_render_params.text_contrast, font_render_params.text_gamma);
+  viz::GpuHostImpl::InitFontRenderParams(font_render_params);
+
 #if BUILDFLAG(IS_ANDROID)
   bool use_display_wide_color_gamut =
       GetContentClient()->browser()->GetWideColorGamutHeuristic() ==
@@ -1206,13 +1213,11 @@ void BrowserMainLoop::ShutdownThreadsAndCleanUp() {
 
 // The device monitors are using |system_monitor_| as dependency, so delete
 // them before |system_monitor_| goes away.
-// On Mac and windows, the monitor needs to be destroyed on the same thread
+// On windows, the monitor needs to be destroyed on the same thread
 // as they were created. On Linux, the monitor will be deleted when IO thread
 // goes away.
 #if BUILDFLAG(IS_WIN)
   system_message_window_.reset();
-#elif BUILDFLAG(IS_MAC)
-  device_monitor_mac_.reset();
 #endif
 
   if (BrowserGpuChannelHostFactory::instance())
@@ -1329,11 +1334,6 @@ void BrowserMainLoop::PostCreateThreadsImpl() {
   // GpuDiskCacheFactory.
   InitGpuDiskCacheFactorySingleton();
 
-  // Initialize the FontRenderParams. This needs to be initialized before gpu
-  // process initialization below.
-  viz::GpuHostImpl::InitFontRenderParams(
-      gfx::GetFontRenderParams(gfx::FontRenderParamsQuery(), nullptr));
-
   bool always_uses_gpu = true;
   bool established_gpu_channel = false;
 #if BUILDFLAG(IS_ANDROID)
@@ -1395,15 +1395,6 @@ void BrowserMainLoop::PostCreateThreadsImpl() {
   system_message_window_ = std::make_unique<media::SystemMessageWindowWin>();
 #elif (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(USE_UDEV)
   device_monitor_linux_ = std::make_unique<media::DeviceMonitorLinux>();
-#elif BUILDFLAG(IS_MAC)
-  // TODO(crbug.com/1448798): Clean up |device_monitor_mac_| in BrowserMainLoop
-  // once |kCameraMonitoringInVideoCaptureService| is fully launched.
-  if (!base::FeatureList::IsEnabled(
-          video_capture::features::kCameraMonitoringInVideoCaptureService)) {
-    device_monitor_mac_ = std::make_unique<media::DeviceMonitorMac>(
-        base::ThreadPool::CreateSingleThreadTaskRunner(
-            {base::TaskPriority::USER_VISIBLE}));
-  }
 #endif
 
   // Instantiated once using CreateSingletonInstance(), and accessed only using

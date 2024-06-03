@@ -761,26 +761,6 @@ Affects:
     libavutil/tx.c
 
 ------------------------------------------------------------------
-commit 346d30b3f6631f2d47fa310f7dfeb78215706fc3
-Author: Frank Liberato <liberato@chromium.org>
-Date:   Tue Feb 14 00:04:02 2023 +0000
-
-    FFmpeg roll with new ios configs
-
-    As part of this, undeprecate `reordered_opaque` with a patch on
-    the chromium side, due to unrelated upstream changes.
-
-    Bug: 1414135
-    Change-Id: Ia2a3f25f7672452ae5a0b15ca0450f67c119eee1
-    Reviewed-on: https://chromium-review.googlesource.com/c/chromium/third_party/ffmpeg/+/4246712
-    Reviewed-by: Dale Curtis <dalecurtis@chromium.org>
-
-Affects:
-    libavcodec/avcodec.h
-    libavcodec/libx264.c
-    libavutil/frame.h
-
-------------------------------------------------------------------
 commit 125536d78f103ff44efeb26c4d7c98413a5a618f
 Merge: 0d75f366d5 9240035c0e
 Author: John Rummell <jrummell@chromium.org>
@@ -806,3 +786,95 @@ Date:   Wed Oct 4 10:36:29 2023 -0700
 Affects:
     libavformat/matroskadec.c
 
+------------------------------------------------------------------
+commit 1958aa856574b93b4565695e4dece9e3f6e3aa1c
+Author: Dan Sanders <sandersd@chromium.org>
+Date:   Fri Jan 12 19:08:20 2024 +0000
+
+    Use saturated timestamp subtraction in mov_get_skip_samples()
+
+    Bug: 1512551
+    Change-Id: I1caa7166b51376ac0b643d25d5e842c0a688f38b
+    Reviewed-on: https://chromium-review.googlesource.com/c/chromium/third_party/ffmpeg/+/5193387
+    Reviewed-by: Dale Curtis <dalecurtis@chromium.org>
+
+Affects:
+    libavformat/mov.c
+
+------------------------------------------------------------------
+commit a6fd62c6a9a1c26be133de0dfdc0a34a61260f36
+Author: Eugene Zemtsov <eugene@chromium.org>
+Date:   Tue Feb 27 13:48:38 2024 -0800
+
+    Make Immersive Audio Model optional for MOV demuxing
+
+Affects:
+    libavformat/mov.c
+
+------------------------------------------------------------------
+commit 84c486596980cfe307c863b9595ea699fb032e46
+Author: Eugene Zemtsov <eugene@chromium.org>
+Date:   Tue Feb 27 15:25:30 2024 -0800
+
+    Disable Immersive Audio Model be default in MOV demuxing
+
+Affects:
+    configure
+
+------------------------------------------------------------------
+commit c061281207072075c3f8c4b16895be3b6567e581
+Author: Ted Meyer <tmathmeyer@chromium.org>
+Date:   Tue Apr 2 14:26:12 2024 -0700
+
+    Add AAC_xHE case to aacdec_template.c for demuxing
+
+    The parser needs to be able to be created when demuxing, otherwise the
+    channel count and layout can't be successfully generated.
+
+    Bug: 330573128
+    Change-Id: Ib1404541e7cde321131efa6fcd2f991e398fe7b9
+    Reviewed-on: https://chromium-review.googlesource.com/c/chromium/third_party/ffmpeg/+/5406620
+    Reviewed-by: Frank Liberato <liberato@chromium.org>
+
+Affects:
+    libavcodec/aacdec_template.c
+
+------------------------------------------------------------------
+commit 9bcf1788828ebfa0e071bfee5951780f01260cd4
+Author: Ted Meyer <tmathmeyer@chromium.org>
+Date:   Tue Apr 2 18:38:29 2024 -0700
+
+    Set max size of single packet
+
+    Upstream switched this to autodetect the packet size, but this breaks
+    our use of `avformat_find_stream_info`, causing
+    FFmpegDemuxer::OnOpenContextDone to never post a callback to
+    FFmpegDemuxer::OnFindStreamInfoDone, breaking the pipeline
+    initialization step.
+
+    Bug: 330573128
+
+Affects:
+    libavformat/wavdec.c
+
+------------------------------------------------------------------
+commit 3d0dcb0a6cab8cf2841903dfc8e8c88b9da1b9ae
+Author: Dale Curtis <dalecurtis@chromium.org>
+Date:   Mon Apr 1 23:03:18 2024 +0000
+
+    Revert "avutil/tx_template: extend to 2M" and asm changes.
+
+    This causes unnecessary startup memory regressions on Windows
+    since Windows counts BSS as private memory even if it's never
+    used. We only use the MDCT parts of the TX float for AAC.
+
+    This reverts commit 8f48a62151f4a299574959df9a48813303ef4edb.
+    This reverts commit bd3e71b21ec3786ec6fc00ef260af0150f31b71b.
+
+    R=tmathmeyer
+
+    Bug: 40936872
+
+Affects:
+    libavutil/tx_template.c
+    libavutil/x86/tx_float.asm

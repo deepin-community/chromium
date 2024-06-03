@@ -11,6 +11,7 @@
 #include <atomic>
 #include <climits>
 #include <numeric>
+#include <string_view>
 #include <utility>
 
 #include "base/bits.h"
@@ -18,7 +19,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/process/memory.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/lock.h"
 #include "build/build_config.h"
@@ -375,10 +375,8 @@ scoped_refptr<VideoFrame> VideoFrame::CreateZeroInitializedFrame(
 }
 
 // static
-scoped_refptr<VideoFrame> VideoFrame::WrapNativeTextures(
+scoped_refptr<VideoFrame> VideoFrame::CreateFrameForNativeTexturesInternal(
     VideoPixelFormat format,
-    const gpu::MailboxHolder (&mailbox_holders)[kMaxPlanes],
-    ReleaseMailboxCB mailbox_holder_release_cb,
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size,
@@ -410,12 +408,90 @@ scoped_refptr<VideoFrame> VideoFrame::WrapNativeTextures(
 
   scoped_refptr<VideoFrame> frame =
       new VideoFrame(*layout, storage, visible_rect, natural_size, timestamp);
-  memcpy(&frame->mailbox_holders_, mailbox_holders,
-         sizeof(frame->mailbox_holders_));
+
+  return frame;
+}
+
+// static
+scoped_refptr<VideoFrame> VideoFrame::WrapLegacyMailbox(
+    VideoPixelFormat format,
+    const gpu::MailboxHolder mailbox_holder,
+    ReleaseMailboxCB mailbox_holder_release_cb,
+    const gfx::Size& coded_size,
+    const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
+    base::TimeDelta timestamp) {
+  scoped_refptr<VideoFrame> frame = CreateFrameForNativeTexturesInternal(
+      format, coded_size, visible_rect, natural_size, timestamp);
+  if (!frame) {
+    return nullptr;
+  }
+
+  frame->mailbox_holders_[0] = mailbox_holder;
+  frame->mailbox_holders_and_gmb_release_cb_ =
+      WrapReleaseMailboxCB(std::move(mailbox_holder_release_cb));
+
+  DCHECK(frame->HasTextures());
+  DCHECK_EQ(frame->NumTextures(), 1u);
+
+  return frame;
+}
+
+// static
+scoped_refptr<VideoFrame> VideoFrame::WrapNativeTextures(
+    VideoPixelFormat format,
+    const gpu::MailboxHolder (&mailbox_holders)[kMaxPlanes],
+    ReleaseMailboxCB mailbox_holder_release_cb,
+    const gfx::Size& coded_size,
+    const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
+    base::TimeDelta timestamp) {
+  scoped_refptr<VideoFrame> frame = CreateFrameForNativeTexturesInternal(
+      format, coded_size, visible_rect, natural_size, timestamp);
+  if (!frame) {
+    return nullptr;
+  }
+
+  for (int i = 0; i < kMaxPlanes; ++i) {
+    frame->mailbox_holders_[i] = mailbox_holders[i];
+  }
   frame->mailbox_holders_and_gmb_release_cb_ =
       WrapReleaseMailboxCB(std::move(mailbox_holder_release_cb));
 
   // Wrapping native textures should... have textures. https://crbug.com/864145.
+  DCHECK(frame->HasTextures());
+  DCHECK_GT(frame->NumTextures(), 0u);
+
+  return frame;
+}
+
+// static
+scoped_refptr<VideoFrame> VideoFrame::WrapSharedImages(
+    VideoPixelFormat format,
+    scoped_refptr<gpu::ClientSharedImage> shared_images[kMaxPlanes],
+    gpu::SyncToken sync_token,
+    uint32_t texture_target,
+    ReleaseMailboxCB mailbox_holder_release_cb,
+    const gfx::Size& coded_size,
+    const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
+    base::TimeDelta timestamp) {
+  scoped_refptr<VideoFrame> frame = CreateFrameForNativeTexturesInternal(
+      format, coded_size, visible_rect, natural_size, timestamp);
+  if (!frame) {
+    return nullptr;
+  }
+
+  for (int i = 0; i < kMaxPlanes; ++i) {
+    if (shared_images[i]) {
+      frame->mailbox_holders_[i] = gpu::MailboxHolder(
+          shared_images[i]->mailbox(), sync_token, texture_target);
+      frame->shared_images_[i] = shared_images[i]->MakeUnowned();
+    }
+  }
+  frame->mailbox_holders_and_gmb_release_cb_ =
+      WrapReleaseMailboxCB(std::move(mailbox_holder_release_cb));
+
   DCHECK(frame->HasTextures());
   DCHECK_GT(frame->NumTextures(), 0u);
 
@@ -1147,10 +1223,10 @@ void VideoFrame::HashFrameForTesting(base::MD5Context* context,
   DCHECK(context);
   for (size_t plane = 0; plane < NumPlanes(frame.format()); ++plane) {
     for (int row = 0; row < frame.rows(plane); ++row) {
-      base::MD5Update(context, base::StringPiece(reinterpret_cast<const char*>(
-                                                     frame.data(plane) +
-                                                     frame.stride(plane) * row),
-                                                 frame.row_bytes(plane)));
+      base::MD5Update(context,
+                      base::span<const uint8_t>(
+                          frame.data(plane) + frame.stride(plane) * row,
+                          static_cast<size_t>(frame.row_bytes(plane))));
     }
   }
 }
@@ -1208,6 +1284,11 @@ size_t VideoFrame::NumTextures() const {
   return i;
 }
 
+bool VideoFrame::HasSharedImages() const {
+  return wrapped_frame_ ? wrapped_frame_->HasSharedImages()
+                        : shared_images_[0] != nullptr;
+}
+
 bool VideoFrame::HasGpuMemoryBuffer() const {
   return wrapped_frame_ ? wrapped_frame_->HasGpuMemoryBuffer()
                         : !!gpu_memory_buffer_;
@@ -1231,6 +1312,39 @@ bool VideoFrame::IsSameAllocation(VideoPixelFormat format,
 
 gfx::ColorSpace VideoFrame::ColorSpace() const {
   return color_space_;
+}
+
+gfx::ColorSpace VideoFrame::CompatRGBColorSpace() const {
+  const auto rgb_color_space = ColorSpace().GetAsFullRangeRGB();
+  if (!rgb_color_space.IsValid()) {
+    return gfx::ColorSpace::CreateSRGB();
+  }
+
+  auto primary_id = rgb_color_space.GetPrimaryID();
+  switch (primary_id) {
+    case gfx::ColorSpace::PrimaryID::CUSTOM:
+      return rgb_color_space;
+    case gfx::ColorSpace::PrimaryID::SMPTE170M:
+    case gfx::ColorSpace::PrimaryID::SMPTE240M:
+      primary_id = gfx::ColorSpace::PrimaryID::BT709;
+      break;
+    default:
+      break;
+  }
+  auto transfer_id = rgb_color_space.GetTransferID();
+  switch (transfer_id) {
+    case gfx::ColorSpace::TransferID::CUSTOM:
+    case gfx::ColorSpace::TransferID::CUSTOM_HDR:
+      return rgb_color_space;
+    case gfx::ColorSpace::TransferID::BT709_APPLE:
+    case gfx::ColorSpace::TransferID::SMPTE170M:
+    case gfx::ColorSpace::TransferID::SMPTE240M:
+      transfer_id = gfx::ColorSpace::TransferID::SRGB;
+      break;
+    default:
+      break;
+  }
+  return gfx::ColorSpace(primary_id, transfer_id);
 }
 
 bool VideoFrame::RequiresExternalSampler() const {
@@ -1310,6 +1424,15 @@ const gpu::MailboxHolder& VideoFrame::mailbox_holder(
   DCHECK(IsValidPlane(format(), texture_index));
   return wrapped_frame_ ? wrapped_frame_->mailbox_holder(texture_index)
                         : mailbox_holders_[texture_index];
+}
+
+scoped_refptr<gpu::ClientSharedImage> VideoFrame::shared_image(
+    size_t texture_index) const {
+  DCHECK(HasTextures());
+  DCHECK(IsValidPlane(format(), texture_index));
+  DCHECK(HasSharedImages());
+  return wrapped_frame_ ? wrapped_frame_->shared_image(texture_index)
+                        : shared_images_[texture_index];
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)

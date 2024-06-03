@@ -81,6 +81,10 @@ BASE_FEATURE(kUseHostResolverCache,
              "UseHostResolverCache",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kUseServiceEndpointRequest,
+             "UseServiceEndpointRequest",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 const base::FeatureParam<int> kAlternativePortForGloballyReachableCheck{
     &kUseAlternativePortForGloballyReachableCheck,
     "AlternativePortForGloballyReachableCheck", 443};
@@ -96,10 +100,6 @@ BASE_FEATURE(kEnableIPv6ReachabilityOverride,
 BASE_FEATURE(kEnableTLS13EarlyData,
              "EnableTLS13EarlyData",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kRSAKeyUsageForLocalAnchors,
-             "RSAKeyUsageForLocalAnchors",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kNetworkQualityEstimator,
              "NetworkQualityEstimator",
@@ -157,7 +157,11 @@ BASE_FEATURE(kPermuteTLSExtensions,
 
 BASE_FEATURE(kPostQuantumKyber,
              "PostQuantumKyber",
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
              base::FEATURE_DISABLED_BY_DEFAULT);
+#else
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
 
 BASE_FEATURE(kNetUnusedIdleSocketTimeout,
              "NetUnusedIdleSocketTimeout",
@@ -170,17 +174,6 @@ BASE_FEATURE(kShortLaxAllowUnsafeThreshold,
 BASE_FEATURE(kSameSiteDefaultChecksMethodRigorously,
              "SameSiteDefaultChecksMethodRigorously",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-#if BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
-BASE_FEATURE(kChromeRootStoreUsed,
-             "ChromeRootStoreUsed",
-#if BUILDFLAG(IS_ANDROID)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
-#endif  // BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(USE_NSS_CERTS) || BUILDFLAG(IS_WIN)
 BASE_FEATURE(kTrustStoreTrustedLeafSupport,
@@ -256,9 +249,9 @@ extern const base::FeatureParam<base::TimeDelta>
         "kWaitForFirstPartySetsInitNavigationThrottleTimeout",
         base::Seconds(0)};
 
-BASE_FEATURE(kPartitionedCookies,
-             "PartitionedCookies",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kAncestorChainBitEnabledInPartitionedCookies,
+             "AncestorChainBitEnabledInPartitionedCookies",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kBlockTruncatedCookies,
              "BlockTruncatedCookies",
@@ -296,6 +289,10 @@ BASE_FEATURE(kTopLevelTpcdTrialSettings,
 BASE_FEATURE(kTpcdMetadataGrants,
              "TpcdMetadataGrants",
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kTpcdMetadataStagedRollback,
+             "TpcdMetadataStageControl",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kAlpsParsing, "AlpsParsing", base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -435,6 +432,31 @@ const base::FeatureParam<base::TimeDelta> kIpPrivacyExpirationFuzz{
     &kEnableIpProtectionProxy, /*name=*/"IpPrivacyExpirationFuzz",
     /*default_value=*/base::Minutes(15)};
 
+const base::FeatureParam<bool> kIpPrivacyRestrictTopLevelSiteSchemes{
+    &kEnableIpProtectionProxy,
+    /*name=*/"IpPrivacyRestrictTopLevelSiteSchemes",
+    /*default_value=*/true};
+
+const base::FeatureParam<bool> kIpPrivacyUseQuicProxies{
+    &kEnableIpProtectionProxy,
+    /*name=*/"IpPrivacyUseQuicProxies",
+    /*default_value=*/false};
+
+const base::FeatureParam<bool> kIpPrivacyUseQuicProxiesOnly{
+    &kEnableIpProtectionProxy,
+    /*name=*/"IpPrivacyUseQuicProxiesOnly",
+    /*default_value=*/false};
+
+const base::FeatureParam<bool> kIpPrivacyUseSingleProxy{
+    &kEnableIpProtectionProxy,
+    /*name=*/"IpPrivacyUseSingleProxy",
+    /*default_value=*/false};
+
+const base::FeatureParam<std::string> kIpPrivacyAlwaysProxy{
+    &kEnableIpProtectionProxy,
+    /*name=*/"IpPrivacyAlwaysProxy",
+    /*default_value=*/""};
+
 // Network-change migration requires NetworkHandle support, which are currently
 // only supported on Android (see
 // NetworkChangeNotifier::AreNetworkHandlesSupported).
@@ -504,19 +526,13 @@ BASE_FEATURE(kThirdPartyPartitionedStorageAllowedByDefault,
 
 BASE_FEATURE(kPriorityHeader,
              "PriorityHeader",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSpdyHeadersToHttpResponseUseBuilder,
              "SpdyHeadersToHttpResponseUseBuilder",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kReceiveEcn, "ReceiveEcn", base::FEATURE_DISABLED_BY_DEFAULT);
-
-// TODO(crbug.com/634470): Remove this feature flag in January 2024 if the new
-// limit sticks.
-BASE_FEATURE(kNewCertPathBuilderIterationLimit,
-             "NewCertPathBuilderIterationLimit",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUseNewAlpsCodepointHttp2,
              "UseNewAlpsCodepointHttp2",
@@ -533,5 +549,15 @@ BASE_FEATURE(kTreatHTTPExpiresHeaderValueZeroAsExpired,
 BASE_FEATURE(kTruncateBodyToContentLength,
              "TruncateBodyToContentLength",
              base::FEATURE_ENABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_MAC)
+BASE_FEATURE(kReduceIPAddressChangeNotification,
+             "ReduceIPAddressChangeNotification",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_MAC)
+
+BASE_FEATURE(kDeviceBoundSessions,
+             "DeviceBoundSessions",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace net::features

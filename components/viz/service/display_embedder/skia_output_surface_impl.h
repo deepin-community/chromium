@@ -31,6 +31,7 @@
 #include "media/gpu/buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/skia/include/core/SkOverdrawCanvas.h"
+#include "third_party/skia/include/gpu/graphite/GraphiteTypes.h"
 #include "third_party/skia/include/private/chromium/GrDeferredDisplayListRecorder.h"
 #include "third_party/skia/include/private/chromium/GrSurfaceCharacterization.h"
 #include "ui/gfx/presentation_feedback.h"
@@ -91,8 +92,6 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   // OutputSurface implementation:
   gpu::SurfaceHandle GetSurfaceHandle() const override;
   void BindToClient(OutputSurfaceClient* client) override;
-  void SetDrawRectangle(const gfx::Rect& draw_rectangle) override;
-  void SetEnableDCLayers(bool enable) override;
   void EnsureBackbuffer() override;
   void DiscardBackbuffer() override;
   void Reshape(const ReshapeParams& params) override;
@@ -213,6 +212,8 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
                      const gfx::RectF& display_rect,
                      const gfx::RectF& crop_rect,
                      gfx::OverlayTransform transform) override;
+
+  void CleanupImageProcessor() override;
 #endif
 
  private:
@@ -434,9 +435,8 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   raw_ptr<skgpu::graphite::Recorder> graphite_recorder_ = nullptr;
   scoped_refptr<gpu::raster::GraphiteCacheController>
       graphite_cache_controller_;
-
-  bool has_set_draw_rectangle_for_frame_ = false;
-  std::optional<gfx::Rect> draw_rectangle_;
+  skgpu::graphite::Volatile graphite_use_volatile_promise_images_ =
+      skgpu::graphite::Volatile::kYes;
 
   bool should_measure_next_post_task_ = false;
 

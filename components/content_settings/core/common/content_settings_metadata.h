@@ -9,6 +9,10 @@
 #include "components/content_settings/core/common/content_settings_constraints.h"
 #include "components/content_settings/core/common/content_settings_enums.mojom.h"
 
+namespace base {
+class Clock;
+}
+
 namespace mojo {
 template <typename DataViewType, typename T>
 struct StructTraits;
@@ -39,8 +43,8 @@ class RuleMetaData {
 
   base::Time expiration() const { return expiration_; }
 
-  SessionModel session_model() const { return session_model_; }
-  void set_session_model(SessionModel session_model) {
+  mojom::SessionModel session_model() const { return session_model_; }
+  void set_session_model(mojom::SessionModel session_model) {
     session_model_ = session_model;
   }
 
@@ -50,6 +54,13 @@ class RuleMetaData {
   void set_tpcd_metadata_rule_source(
       mojom::TpcdMetadataRuleSource const rule_source) {
     tpcd_metadata_rule_source_ = rule_source;
+  }
+
+  mojom::TpcdMetadataCohort tpcd_metadata_cohort() const {
+    return tpcd_metadata_cohort_;
+  }
+  void set_tpcd_metadata_cohort(const mojom::TpcdMetadataCohort cohort) {
+    tpcd_metadata_cohort_ = cohort;
   }
 
   base::TimeDelta lifetime() const { return lifetime_; }
@@ -66,7 +77,7 @@ class RuleMetaData {
   // Returns whether the Rule is expired. Expiration is handled by
   // HostContentSettingsMap automatically, clients do not have to check this
   // attribute manually.
-  bool IsExpired() const;
+  bool IsExpired(base::Clock* clock) const;
 
   // Computes the setting's lifetime, based on the lifetime and expiration that
   // were read from persistent storage.
@@ -92,7 +103,7 @@ class RuleMetaData {
   // zero.
   base::Time expiration_;
   // SessionModel as defined through a ContentSettingsConstraint.
-  SessionModel session_model_ = SessionModel::Durable;
+  mojom::SessionModel session_model_ = mojom::SessionModel::DURABLE;
   // The lifetime of the setting. This may be zero iff `expiration_` is zero.
   base::TimeDelta lifetime_;
   // TPCD Metadata Source (go/measure3pcddtdeployment).
@@ -101,6 +112,8 @@ class RuleMetaData {
   // cleanup.
   mojom::TpcdMetadataRuleSource tpcd_metadata_rule_source_ =
       mojom::TpcdMetadataRuleSource::SOURCE_UNSPECIFIED;
+  mojom::TpcdMetadataCohort tpcd_metadata_cohort_ =
+      mojom::TpcdMetadataCohort::DEFAULT;
 };
 
 }  // namespace content_settings

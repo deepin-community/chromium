@@ -27,6 +27,14 @@
 #include <xnnpack/quantization.h>
 
 
+static int8_t sign_extend_int4(int8_t value) {
+  int8_t mask = 0x08;
+  if (value & mask) {
+    value = value | 0xF0;
+  }
+  return value;
+}
+
 class FullyConnectedOperatorTester {
  public:
   enum class WeightsType {
@@ -243,15 +251,18 @@ class FullyConnectedOperatorTester {
       std::fill(output.begin(), output.end(), UINT16_C(0xDEAD));
 
       // Compute reference results, without renormalization.
-      std::fill(output_ref.begin(), output_ref.end(), 0);
+      std::fill(output_ref.begin(), output_ref.end(), 0.0f);
 
       if (transpose_weights()) {
         for (size_t mi = 0; mi < batch_size(); mi++) {
           for (size_t ni = 0; ni < output_channels(); ni++) {
             for (size_t ki = 0; ki < input_channels(); ki++) {
               const size_t kernel_index = ki * kernel_stride + (ni / 2);
-              const int8_t kernel_value =
+              int8_t kernel_value =
                 int8_t((ni % 2 == 0) ? (kernel[kernel_index] & 15) : (kernel[kernel_index] >> 4)) - kernel_zero_point();
+              if (kernel_zero_point() == 0) {
+                kernel_value = sign_extend_int4(kernel_value);
+              }
               output_ref[mi * output_channels() + ni] +=
                   (int32_t(input[mi * input_stride() + ki]) - quantization_params[mi].zero_point) *
                   static_cast<float>(static_cast<int32_t>(kernel_value));
@@ -268,8 +279,11 @@ class FullyConnectedOperatorTester {
           for (size_t ni = 0; ni < output_channels(); ni++) {
             for (size_t ki = 0; ki < input_channels(); ki++) {
               const size_t kernel_index = ni * kernel_stride + (ki / 2);
-              const int8_t kernel_value =
+              int8_t kernel_value =
                 int8_t((ki % 2 == 0) ? (kernel[kernel_index] & 15) : (kernel[kernel_index] >> 4)) - kernel_zero_point();
+              if (kernel_zero_point() == 0) {
+                kernel_value = sign_extend_int4(kernel_value);
+              }
               output_ref[mi * output_channels() + ni] +=
                   (int32_t(input[mi * input_stride() + ki]) - quantization_params[mi].zero_point) *
                   static_cast<float>(static_cast<int32_t>(kernel_value));
@@ -442,8 +456,11 @@ class FullyConnectedOperatorTester {
           for (size_t ni = 0; ni < output_channels(); ni++) {
             for (size_t ki = 0; ki < input_channels(); ki++) {
               const size_t kernel_index = ki * kernel_stride + (ni / 2);
-              const int8_t kernel_value =
+              int8_t kernel_value =
                 int8_t((ni % 2 == 0) ? (kernel[kernel_index] & 15) : (kernel[kernel_index] >> 4)) - kernel_zero_point();
+              if (kernel_zero_point() == 0) {
+                kernel_value = sign_extend_int4(kernel_value);
+              }
               output_ref[mi * output_channels() + ni] +=
                   (int32_t(input[mi * input_stride() + ki]) - quantization_params[mi].zero_point) *
                   static_cast<float>(static_cast<int32_t>(kernel_value));
@@ -454,14 +471,16 @@ class FullyConnectedOperatorTester {
             }
           }
         }
-
       } else {
         for (size_t mi = 0; mi < batch_size(); mi++) {
           for (size_t ni = 0; ni < output_channels(); ni++) {
             for (size_t ki = 0; ki < input_channels(); ki++) {
               const size_t kernel_index = ni * kernel_stride + (ki / 2);
-              const int8_t kernel_value =
+              int8_t kernel_value =
                 int8_t((ki % 2 == 0) ? (kernel[kernel_index] & 15) : (kernel[kernel_index] >> 4)) - kernel_zero_point();
+              if (kernel_zero_point() == 0) {
+                kernel_value = sign_extend_int4(kernel_value);
+              }
               output_ref[mi * output_channels() + ni] +=
                   (int32_t(input[mi * input_stride() + ki]) - quantization_params[mi].zero_point) *
                   static_cast<float>(static_cast<int32_t>(kernel_value));

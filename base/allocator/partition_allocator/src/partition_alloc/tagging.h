@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_TAGGING_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_TAGGING_H_
+#ifndef PARTITION_ALLOC_TAGGING_H_
+#define PARTITION_ALLOC_TAGGING_H_
 
 // This file contains method definitions to support Armv8.5-A's memory tagging
 // extension.
@@ -52,8 +52,11 @@ constexpr uint64_t kPtrUntagMask = ~kPtrTagMask;
 
 #if BUILDFLAG(IS_ANDROID)
 // Changes the memory tagging mode for all threads in the current process.
+// Returns true on success. Most likely reason for failure is because heap
+// tagging may not be re-enabled after being disabled.
+// https://android.googlesource.com/platform/bionic/+/446b4dde724ee64a336a78188c3c9a15aebca87c/libc/include/malloc.h#235
 PA_COMPONENT_EXPORT(PARTITION_ALLOC)
-void ChangeMemoryTaggingModeForAllThreadsPerProcess(TagViolationReportingMode);
+bool ChangeMemoryTaggingModeForAllThreadsPerProcess(TagViolationReportingMode);
 #endif
 
 // Gets the memory tagging mode for the calling thread. Returns kUndefined if
@@ -148,4 +151,4 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC) PermissiveMte {
 
 }  // namespace partition_alloc
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_TAGGING_H_
+#endif  // PARTITION_ALLOC_TAGGING_H_

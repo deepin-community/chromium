@@ -7,7 +7,7 @@
       }
 
       #clearBrowsingDataDialog {
-        --border-top-color: var(--paper-grey-300);
+        --border-top-color: var(--google-grey-300);
         --cr-dialog-top-container-min-height: 42px;
         --cr-dialog-body-border-top: 1px solid var(--border-top-color);
       }
@@ -36,7 +36,7 @@
       }
 
       #clearBrowsingDataDialog [slot=footer] {
-        background: var(--paper-grey-50);
+        background: var(--google-grey-50);
         border-top: none;
         padding: 0;
       }
@@ -79,6 +79,15 @@
       .time-range-select {
         margin-inline-start: 12px;
       }
+
+      .dropdown-error::part(select) {
+        border-color: var(--settings-error-color);
+        color: var(--settings-error-color);
+      }
+
+      .dropdown-error::part(select):focus {
+        outline-color: var(--settings-error-color);
+    }
 
       [slot=title] .secondary {
         font-size: calc(13 / 15 * 100%);
@@ -145,12 +154,13 @@
         <div>$i18n{clearBrowsingData}</div>
       </div>
       <div slot="header">
-        <cr-tabs tab-names="[[tabsNames_]]" selected="{{selectedTabIndex_}}"
+        <cr-tabs id="tabs" tab-names="[[tabsNames_]]"
+            selected="{{selectedTabIndex_}}"
             on-selected-changed="recordTabChange_">
         </cr-tabs>
       </div>
       <div slot="body">
-        <iron-pages id="tabs" selected="[[selectedTabIndex_]]"
+        <iron-pages id="pages" selected="[[selectedTabIndex_]]"
             on-selected-item-changed="updateClearButtonState_">
           <div id="basic-tab">
             <div class="row time-range-row">
@@ -158,7 +168,7 @@
                 $i18n{clearTimeRange}
               </span>
               <template is="dom-if" if="[[!enableCbdTimeframeRequired_]]">
-                <settings-dropdown-menu id="clearFromBasic" no-set-pref
+                <settings-dropdown-menu id="clearFromBasic"
                     class="time-range-select"
                     label="$i18n{clearTimeRange}"
                     pref="{{prefs.browser.clear_data.time_period_basic}}"
@@ -166,11 +176,12 @@
                 </settings-dropdown-menu>
               </template>
               <template is="dom-if" if="[[enableCbdTimeframeRequired_]]">
-                <settings-dropdown-menu id="clearFromBasic" no-set-pref
+                <settings-dropdown-menu id="clearFromBasic" required
                     class="time-range-select"
                     label="$i18n{clearTimeRange}"
                     pref="{{prefs.browser.clear_data.time_period_v2_basic}}"
-                    menu-options="[[clearFromOptionsV2_]]">
+                    menu-options="[[clearFromOptionsV2_]]"
+                    on-settings-control-change="onTimeRangeChange_">
                 </settings-dropdown-menu>
               </template>
             </div>
@@ -236,7 +247,7 @@
                 $i18n{clearTimeRange}
               </span>
               <template is="dom-if" if="[[!enableCbdTimeframeRequired_]]">
-                <settings-dropdown-menu id="clearFrom" no-set-pref
+                <settings-dropdown-menu id="clearFrom"
                     class="time-range-select"
                     label="$i18n{clearTimeRange}"
                     pref="{{prefs.browser.clear_data.time_period}}"
@@ -244,11 +255,12 @@
                 </settings-dropdown-menu>
               </template>
               <template is="dom-if" if="[[enableCbdTimeframeRequired_]]">
-                <settings-dropdown-menu id="clearFrom" no-set-pref
+                <settings-dropdown-menu id="clearFrom" required
                     class="time-range-select"
                     label="$i18n{clearTimeRange}"
                     pref="{{prefs.browser.clear_data.time_period_v2}}"
-                    menu-options="[[clearFromOptionsV2_]]">
+                    menu-options="[[clearFromOptionsV2_]]"
+                    on-settings-control-change="onTimeRangeChange_">
                 </settings-dropdown-menu>
               </template>
             </div>

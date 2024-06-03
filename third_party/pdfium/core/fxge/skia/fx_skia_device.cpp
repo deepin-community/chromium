@@ -26,11 +26,16 @@
 #include "core/fpdfapi/parser/cpdf_stream.h"
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
 #include "core/fxcrt/cfx_bitstream.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_2d_size.h"
 #include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/fx_memory.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
+#include "core/fxcrt/ptr_util.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxge/cfx_defaultrenderdevice.h"
@@ -46,11 +51,6 @@
 #include "core/fxge/dib/cstretchengine.h"
 #include "core/fxge/dib/fx_dib.h"
 #include "core/fxge/text_char_pos.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/memory/ptr_util.h"
-#include "third_party/base/notreached.h"
-#include "third_party/base/numerics/safe_conversions.h"
 #include "third_party/skia/include/core/SkBlendMode.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkClipOp.h"
@@ -282,7 +282,7 @@ SkBlendMode GetSkiaBlendMode(BlendMode blend_type) {
 bool AddColors(const CPDF_ExpIntFunc* func,
                DataVector<SkColor>& colors,
                bool is_encode_reversed) {
-  if (func->CountInputs() != 1) {
+  if (func->InputCount() != 1) {
     return false;
   }
   if (func->GetExponent() != 1) {
@@ -316,10 +316,10 @@ uint8_t FloatToByte(float f) {
 bool AddSamples(const CPDF_SampledFunc* func,
                 DataVector<SkColor>& colors,
                 DataVector<SkScalar>& pos) {
-  if (func->CountInputs() != 1) {
+  if (func->InputCount() != 1) {
     return false;
   }
-  if (func->CountOutputs() != 3) {  // expect rgb
+  if (func->OutputCount() != 3) {  // expect rgb
     return false;
   }
   if (func->GetEncodeInfo().empty()) {
@@ -555,7 +555,7 @@ void PaintStroke(SkPaint* spaint,
       intervals[i * 2 + 1] = off;
     }
     spaint->setPathEffect(SkDashPathEffect::Make(
-        intervals.data(), pdfium::base::checked_cast<int>(intervals.size()),
+        intervals.data(), pdfium::checked_cast<int>(intervals.size()),
         graph_state->m_DashPhase));
   }
   spaint->setStyle(SkPaint::kStroke_Style);
@@ -1329,12 +1329,10 @@ bool CFX_SkiaDeviceDriver::DrawShading(const CPDF_ShadingPattern* pPattern,
         cubics[i].fY = point.y;
       }
       for (size_t i = start_color; i < std::size(colors); ++i) {
-        float r;
-        float g;
-        float b;
-        std::tie(r, g, b) = stream.ReadColor();
-        colors[i] = SkColorSetARGB(0xFF, (U8CPU)(r * 255), (U8CPU)(g * 255),
-                                   (U8CPU)(b * 255));
+        FX_RGB<float> rgb = stream.ReadColor();
+        colors[i] =
+            SkColorSetARGB(0xFF, (U8CPU)(rgb.red * 255),
+                           (U8CPU)(rgb.green * 255), (U8CPU)(rgb.blue * 255));
       }
       m_pCanvas->drawPatch(cubics, colors, /*texCoords=*/nullptr,
                            SkBlendMode::kDst, paint);
@@ -1358,7 +1356,7 @@ bool CFX_SkiaDeviceDriver::GetClipBox(FX_RECT* pRect) {
   return true;
 }
 
-bool CFX_SkiaDeviceDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
+bool CFX_SkiaDeviceDriver::GetDIBits(RetainPtr<CFX_DIBitmap> bitmap,
                                      int left,
                                      int top) {
   const uint8_t* input_buffer = m_pBitmap->GetBuffer().data();
@@ -1366,7 +1364,7 @@ bool CFX_SkiaDeviceDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
     return true;
   }
 
-  uint8_t* output_buffer = pBitmap->GetWritableBuffer().data();
+  uint8_t* output_buffer = bitmap->GetWritableBuffer().data();
   DCHECK(output_buffer);
 
   SkImageInfo input_info =
@@ -1377,10 +1375,10 @@ bool CFX_SkiaDeviceDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
       /*rasterReleaseProc=*/nullptr, /*releaseContext=*/nullptr);
 
   SkImageInfo output_info = SkImageInfo::Make(
-      pBitmap->GetWidth(), pBitmap->GetHeight(),
+      bitmap->GetWidth(), bitmap->GetHeight(),
       Get32BitSkColorType(m_bRgbByteOrder), kPremul_SkAlphaType);
   sk_sp<SkSurface> output =
-      SkSurfaces::WrapPixels(output_info, output_buffer, pBitmap->GetPitch());
+      SkSurfaces::WrapPixels(output_info, output_buffer, bitmap->GetPitch());
 
   output->getCanvas()->drawImage(input, left, top, SkSamplingOptions());
   return true;
@@ -1603,8 +1601,8 @@ bool CFX_SkiaDeviceDriver::StartDIBitsSkia(RetainPtr<const CFX_DIBBase> bitmap,
     if (!use_interpolate_bilinear) {
       float dest_width = ceilf(matrix.GetXUnit());
       float dest_height = ceilf(matrix.GetYUnit());
-      if (pdfium::base::IsValueInRangeForNumericType<int>(dest_width) &&
-          pdfium::base::IsValueInRangeForNumericType<int>(dest_height)) {
+      if (pdfium::IsValueInRangeForNumericType<int>(dest_width) &&
+          pdfium::IsValueInRangeForNumericType<int>(dest_height)) {
         use_interpolate_bilinear = CStretchEngine::UseInterpolateBilinear(
             options, static_cast<int>(dest_width),
             static_cast<int>(dest_height), width, height);

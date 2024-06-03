@@ -151,6 +151,7 @@ UtilityProcessHost::UtilityProcessHost(std::unique_ptr<Client> client)
       name_(u"utility process"),
       file_data_(std::make_unique<ChildProcessLauncherFileData>()),
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH)
+      allowed_gpu_(false),
       gpu_client_(nullptr, base::OnTaskRunnerDeleter(nullptr)),
 #endif
       client_(std::move(client)) {
@@ -187,28 +188,6 @@ bool UtilityProcessHost::Start() {
   return StartProcess();
 }
 
-// TODO(crbug.com/1328879): Remove this method when fixing the bug.
-#if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)
-void UtilityProcessHost::RunServiceDeprecated(
-    const std::string& service_name,
-    mojo::ScopedMessagePipeHandle service_pipe,
-    RunServiceDeprecatedCallback callback) {
-  if (launch_state_ == LaunchState::kLaunchFailed) {
-    std::move(callback).Run(std::nullopt);
-    return;
-  }
-
-  process_->GetHost()->RunServiceDeprecated(service_name,
-                                            std::move(service_pipe));
-  if (launch_state_ == LaunchState::kLaunchComplete) {
-    std::move(callback).Run(process_->GetProcess().Pid());
-  } else {
-    DCHECK_EQ(launch_state_, LaunchState::kLaunchInProgress);
-    pending_run_service_callbacks_.push_back(std::move(callback));
-  }
-}
-#endif
-
 void UtilityProcessHost::SetMetricsName(const std::string& metrics_name) {
   metrics_name_ = metrics_name;
 }
@@ -227,10 +206,13 @@ void UtilityProcessHost::SetPreloadLibraries(
     const std::vector<base::FilePath>& preloads) {
   preload_libraries_ = preloads;
 }
-void UtilityProcessHost::SetPinUser32() {
-  pin_user32_ = true;
-}
 #endif  // BUILDFLAG(IS_WIN)
+
+void UtilityProcessHost::SetAllowGpuClient() {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH)
+  allowed_gpu_ = true;
+#endif
+}
 
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
 void UtilityProcessHost::AddFileToPreload(
@@ -343,11 +325,9 @@ bool UtilityProcessHost::StartProcess() {
 #endif
       switches::kEnableBackgroundThreadPool,
       switches::kEnableExperimentalCookieFeatures,
-      switches::kEnableLogging,
       switches::kForceTextDirection,
       switches::kForceUIDirection,
       switches::kIgnoreCertificateErrors,
-      switches::kLoggingLevel,
       switches::kOverrideUseSoftwareGLForTests,
       switches::kOverrideEnabledCdmInterfaceVersion,
       switches::kProxyServer,
@@ -361,8 +341,6 @@ bool UtilityProcessHost::StartProcess() {
       switches::kUtilityStartupDialog,
       switches::kUseANGLE,
       switches::kUseGL,
-      switches::kV,
-      switches::kVModule,
       switches::kEnableExperimentalWebPlatformFeatures,
       // These flags are used by the audio service:
       switches::kAudioBufferSize,
@@ -468,9 +446,6 @@ bool UtilityProcessHost::StartProcess() {
     if (!preload_libraries_.empty()) {
       delegate->SetPreloadLibraries(preload_libraries_);
     }
-    if (pin_user32_) {
-      delegate->SetPinUser32();
-    }
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(USE_ZYGOTE)
@@ -488,24 +463,12 @@ bool UtilityProcessHost::StartProcess() {
 
 void UtilityProcessHost::OnProcessLaunched() {
   launch_state_ = LaunchState::kLaunchComplete;
-// TODO(crbug.com/1328879): Remove this when fixing the bug.
-#if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)
-  for (auto& callback : pending_run_service_callbacks_)
-    std::move(callback).Run(process_->GetProcess().Pid());
-  pending_run_service_callbacks_.clear();
-#endif
   if (client_)
     client_->OnProcessLaunched(process_->GetProcess());
 }
 
 void UtilityProcessHost::OnProcessLaunchFailed(int error_code) {
   launch_state_ = LaunchState::kLaunchFailed;
-// TODO(crbug.com/1328879): Remove this when fixing the bug.
-#if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)
-  for (auto& callback : pending_run_service_callbacks_)
-    std::move(callback).Run(std::nullopt);
-  pending_run_service_callbacks_.clear();
-#endif
 }
 
 void UtilityProcessHost::OnProcessCrashed(int exit_code) {

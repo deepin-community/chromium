@@ -1009,6 +1009,13 @@ class _AvdInstance:
           self.GetSnapshotName(),
       ]
 
+      avd_type = self._avd_name.split('_')[1]
+      logging.info('Emulator Type: %s', avd_type)
+
+      if avd_type == 'car':
+        logging.info('Auto emulator will start slow')
+        is_slow_start = True
+
       if wipe_data:
         emulator_cmd.append('-wipe-data')
       if disk_size:
@@ -1032,7 +1039,7 @@ class _AvdInstance:
         # Always print timestamp when debug tags are set.
         self._debug_tags.add('time')
         emulator_cmd.extend(['-debug', ','.join(self._debug_tags)])
-        if 'kernel' in self._debug_tags:
+        if 'kernel' in self._debug_tags or 'all' in self._debug_tags:
           # TODO(crbug.com/1404176): newer API levels need "-virtio-console"
           # as well to print kernel log.
           emulator_cmd.append('-show-kernel')

@@ -15,7 +15,7 @@ namespace autofill {
 class VirtualCardEnrollBubbleControllerImplTestApi {
  public:
   explicit VirtualCardEnrollBubbleControllerImplTestApi(
-      VirtualCardEnrollBubbleControllerImpl* controller)
+      VirtualCardEnrollBubbleControllerImpl& controller)
       : controller_(controller) {}
 
   ~VirtualCardEnrollBubbleControllerImplTestApi() = default;
@@ -26,13 +26,13 @@ class VirtualCardEnrollBubbleControllerImplTestApi {
         bubble_shown_closure_for_testing;
   }
 
+  void SetFields(const VirtualCardEnrollmentFields& fields) {
+    controller_->ui_model_.enrollment_fields = fields;
+  }
+
 #if BUILDFLAG(IS_ANDROID)
   bool DidShowBottomSheet() {
     return !!controller_->autofill_vcn_enroll_bottom_sheet_bridge_;
-  }
-
-  void SetFields(const VirtualCardEnrollmentFields& fields) {
-    controller_->ui_model_.enrollment_fields = fields;
   }
 #else
   VirtualCardEnrollBubbleControllerImpl::EnrollmentStatus
@@ -42,11 +42,11 @@ class VirtualCardEnrollBubbleControllerImplTestApi {
 #endif  // IS_ANDROID
 
  private:
-  raw_ptr<VirtualCardEnrollBubbleControllerImpl> controller_;
+  raw_ref<VirtualCardEnrollBubbleControllerImpl> controller_;
 };
 
 inline VirtualCardEnrollBubbleControllerImplTestApi test_api(
-    VirtualCardEnrollBubbleControllerImpl* controller) {
+    VirtualCardEnrollBubbleControllerImpl& controller) {
   return VirtualCardEnrollBubbleControllerImplTestApi(controller);
 }
 

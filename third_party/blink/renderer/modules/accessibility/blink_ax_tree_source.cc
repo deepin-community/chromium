@@ -103,9 +103,9 @@ void BlinkAXTreeSource::Selection(
   if (!ax_selection)
     return;
 
-  const AXPosition base = ax_selection.Base();
+  const AXPosition base = ax_selection.Anchor();
   *anchor_object = const_cast<AXObject*>(base.ContainerObject());
-  const AXPosition extent = ax_selection.Extent();
+  const AXPosition extent = ax_selection.Focus();
   *focus_object = const_cast<AXObject*>(extent.ContainerObject());
 
   is_selection_backward = base > extent;
@@ -178,17 +178,18 @@ bool BlinkAXTreeSource::GetTreeData(ui::AXTreeData* tree_data) const {
     if (HTMLHeadElement* head = ax_object_cache_->GetDocument().head()) {
       for (Node* child = head->firstChild(); child;
            child = child->nextSibling()) {
-        if (!child->IsElementNode())
+        const Element* elem = DynamicTo<Element>(*child);
+        if (!elem) {
           continue;
-        Element* elem = To<Element>(child);
-        if (elem->IsHTMLWithTagName("SCRIPT")) {
+        }
+        if (IsA<HTMLScriptElement>(*elem)) {
           if (elem->getAttribute(html_names::kTypeAttr) !=
               "application/ld+json") {
             continue;
           }
-        } else if (!elem->IsHTMLWithTagName("LINK") &&
-                   !elem->IsHTMLWithTagName("TITLE") &&
-                   !elem->IsHTMLWithTagName("META")) {
+        } else if (!IsA<HTMLLinkElement>(*elem) &&
+                   !IsA<HTMLTitleElement>(*elem) &&
+                   !IsA<HTMLMetaElement>(*elem)) {
           continue;
         }
         // TODO(chrishtr): replace the below with elem->outerHTML().
@@ -269,17 +270,18 @@ AXObject* BlinkAXTreeSource::ChildAt(AXObject* node, size_t index) const {
   // The child may be invalid due to issues in blink accessibility code.
   CHECK(child);
   if (child->IsDetached()) {
-    DCHECK(false) << "Should not try to serialize an invalid child:"
-                  << "\nParent: " << node->ToString(true).Utf8()
-                  << "\nChild: " << child->ToString(true).Utf8();
+    NOTREACHED(base::NotFatalUntil::M127)
+        << "Should not try to serialize an invalid child:" << "\nParent: "
+        << node->ToString(true).Utf8()
+        << "\nChild: " << child->ToString(true).Utf8();
     return nullptr;
   }
 
   if (!child->AccessibilityIsIncludedInTree()) {
-    // TODO(https://crbug.com/1407396) resolve and restore to NOTREACHED().
-    DCHECK(false) << "Should not receive unincluded child."
-                  << "\nChild: " << child->ToString(true).Utf8()
-                  << "\nParent: " << node->ToString(true).Utf8();
+    NOTREACHED(base::NotFatalUntil::M127)
+        << "Should not receive unincluded child."
+        << "\nChild: " << child->ToString(true).Utf8()
+        << "\nParent: " << node->ToString(true).Utf8();
     return nullptr;
   }
 
@@ -346,61 +348,7 @@ void BlinkAXTreeSource::SerializeNode(AXObject* src,
     return;
   }
 
-  dst->id = src->AXObjectID();
-  dst->role = src->RoleValue();
-
-  // TODO(crbug.com/1068668): AX onion soup - finish migrating the rest of
-  // this function inside of AXObject::Serialize and removing
-  // unneeded AXObject interfaces.
   src->Serialize(dst, ax_object_cache_->GetAXMode());
-
-  if (dst->id == ax_object_cache_->image_data_node_id()) {
-    // In general, string attributes should be truncated using
-    // TruncateAndAddStringAttribute, but ImageDataUrl contains a data url
-    // representing an image, so add it directly using AddStringAttribute.
-    dst->AddStringAttribute(ax::mojom::blink::StringAttribute::kImageDataUrl,
-                            src->ImageDataUrl(max_image_data_size_).Utf8());
-  }
-
-  WTF::Vector<TextChangedOperation>* offsets =
-      ax_object_cache_->GetFromTextOperationInNodeIdMap(src->AXObjectID());
-  if (src->IsEditable() && offsets) {
-    std::vector<int> start_offsets;
-    std::vector<int> end_offsets;
-    std::vector<int> start_anchor_ids;
-    std::vector<int> end_anchor_ids;
-    std::vector<int> operations_ints;
-
-    start_offsets.reserve(offsets->size());
-    end_offsets.reserve(offsets->size());
-    start_anchor_ids.reserve(offsets->size());
-    end_anchor_ids.reserve(offsets->size());
-    operations_ints.reserve(offsets->size());
-
-    for (auto operation : *offsets) {
-      start_offsets.push_back(operation.start);
-      end_offsets.push_back(operation.end);
-      start_anchor_ids.push_back(operation.start_anchor_id);
-      end_anchor_ids.push_back(operation.end_anchor_id);
-      operations_ints.push_back(static_cast<int>(operation.op));
-    }
-
-    dst->AddIntListAttribute(
-        ax::mojom::blink::IntListAttribute::kTextOperationStartOffsets,
-        start_offsets);
-    dst->AddIntListAttribute(
-        ax::mojom::blink::IntListAttribute::kTextOperationEndOffsets,
-        end_offsets);
-    dst->AddIntListAttribute(
-        ax::mojom::blink::IntListAttribute::kTextOperationStartAnchorIds,
-        start_anchor_ids);
-    dst->AddIntListAttribute(
-        ax::mojom::blink::IntListAttribute::kTextOperationEndAnchorIds,
-        end_anchor_ids);
-    dst->AddIntListAttribute(
-        ax::mojom::blink::IntListAttribute::kTextOperations, operations_ints);
-    ax_object_cache_->ClearTextOperationInNodeIdMap();
-  }
 }
 
 void BlinkAXTreeSource::Trace(Visitor* visitor) const {

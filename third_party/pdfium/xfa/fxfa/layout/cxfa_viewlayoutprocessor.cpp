@@ -8,11 +8,11 @@
 
 #include <utility>
 
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/stl_util.h"
 #include "fxjs/gc/container_trace.h"
 #include "fxjs/xfa/cfxjse_engine.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/check.h"
 #include "xfa/fxfa/cxfa_ffnotify.h"
 #include "xfa/fxfa/cxfa_ffpageview.h"
 #include "xfa/fxfa/layout/cxfa_contentlayoutitem.h"
@@ -171,7 +171,7 @@ CXFA_Node* ResolveBreakTarget(CXFA_Node* pPageSetRoot,
   if (pTargetAll->IsEmpty())
     return nullptr;
 
-  pTargetAll->Trim();
+  pTargetAll->TrimWhitespace();
   size_t iSplitIndex = 0;
   bool bTargetAllFind = true;
   while (true) {
@@ -732,7 +732,7 @@ int32_t CXFA_ViewLayoutProcessor::GetPageIndex(
     const CXFA_ViewLayoutItem* pPage) const {
   auto it = std::find(m_PageArray.begin(), m_PageArray.end(), pPage);
   return it != m_PageArray.end()
-             ? pdfium::base::checked_cast<int32_t>(it - m_PageArray.begin())
+             ? pdfium::checked_cast<int32_t>(it - m_PageArray.begin())
              : -1;
 }
 

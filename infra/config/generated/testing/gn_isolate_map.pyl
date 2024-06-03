@@ -195,10 +195,6 @@
     "label": "//third_party/blink/renderer/controller:blink_unittests",
     "type": "console_test_launcher",
   },
-  "blink_unittests_v2": {
-    "label": "//third_party/blink/renderer/controller:blink_unittests_v2",
-    "type": "console_test_launcher",
-  },
   "blink_web_tests": {
     "label": "//:blink_web_tests",
     "type": "generated_script",
@@ -657,6 +653,13 @@
     "label": "//courgette:courgette_unittests",
     "type": "console_test_launcher",
   },
+  "cq_medium_tast_tests": {
+    "label": "//chromeos:cq_medium_tast_tests",
+    "type": "generated_script",
+    "args": [
+      "--logs-dir=${ISOLATED_OUTDIR}",
+    ],
+  },
   "crashpad_tests": {
     "label": "//third_party/crashpad/crashpad:crashpad_tests",
     "type": "console_test_launcher",
@@ -666,7 +669,7 @@
     "type": "additional_compile_target",
   },
   "cronet_package_ci": {
-    "label": "//components/cronet:cronet_package_ci",
+    "label": "//components/cronet/android:cronet_package_ci",
     "type": "additional_compile_target",
   },
   "cronet_perf_test_apk": {
@@ -1013,6 +1016,10 @@
     "label": "//ipc:ipc_tests",
     "type": "console_test_launcher",
   },
+  "jni_zero_sample_apk_test": {
+    "label": "//third_party/jni_zero/sample:jni_zero_sample_apk_test",
+    "type": "console_test_launcher",
+  },
   "junit_unit_tests": {
     "label": "//testing/android/junit:junit_unit_tests",
     "type": "generated_script",
@@ -1248,6 +1255,10 @@
   "ondevice_model_example": {
     "label": "//components/optimization_guide/internal:ondevice_model_example",
     "type": "additional_compile_target",
+  },
+  "ondevice_quality_tests": {
+    "label": "//components/optimization_guide/internal/testing:ondevice_quality_tests",
+    "type": "generated_script",
   },
   "ondevice_stability_tests": {
     "label": "//components/optimization_guide/internal/testing:ondevice_stability_tests",
@@ -1952,10 +1963,13 @@
     "args": [
       "--cts-gcs-path",
       "../../android_webview/tools/cts_config/webview_cts_hostside_gcs_path.json",
+      "--skip-expected-failures",
       "--additional-apk",
       "apks/TrichromeLibrary64.apk",
       "--use-webview-provider",
       "apks/TrichromeWebView64.apk",
+      "--module-apk",
+      "CtsHostsideWebViewTests.apk",
     ],
   },
   "webview_trichrome_64_cts_tests": {

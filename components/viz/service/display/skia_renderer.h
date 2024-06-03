@@ -24,6 +24,7 @@
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/gfx/color_conversion_sk_filter_cache.h"
 #include "ui/gfx/geometry/mask_filter_info.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/latency/latency_info.h"
 
 class SkColorFilter;
@@ -92,6 +93,13 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
       const AggregatedRenderPassId& render_pass_id) const override;
   gfx::Size GetRenderPassBackingPixelSize(
       const AggregatedRenderPassId& render_pass_id) override;
+
+  void SetRenderPassBackingDrawnRect(
+      const AggregatedRenderPassId& render_pass_id,
+      const gfx::Rect& drawn_rect) override;
+
+  gfx::Rect GetRenderPassBackingDrawnRect(
+      const AggregatedRenderPassId& render_pass_id) override;
   void BindFramebufferToOutputSurface() override;
   void BindFramebufferToTexture(
       const AggregatedRenderPassId render_pass_id) override;
@@ -108,7 +116,6 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
   void CopyDrawnRenderPass(const copy_output::RenderPassGeometry& geometry,
                            std::unique_ptr<CopyOutputRequest> request) override;
   void DidChangeVisibility() override;
-  void GenerateMipmap() override;
   void SetDelegatedInkPointRendererSkiaForTest(
       std::unique_ptr<DelegatedInkPointRendererSkia> renderer) override;
   bool SupportsBGRA() const override;
@@ -257,25 +264,17 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
   const DrawQuad* CanPassBeDrawnDirectly(
       const AggregatedRenderPass* pass) override;
 
-  const DrawQuad* CanPassBeDrawnDirectlyInternal(
-      const AggregatedRenderPass* pass,
-      bool* is_directly_drawable_with_single_rpdq);
-
   void DrawDelegatedInkTrail() override;
 
   // Get a color filter that converts from |src| color space to |dst| color
   // space using a shader constructed from gfx::ColorTransform.  The color
-  // filters are cached in |color_filter_cache_|.  Resource offset and
-  // multiplier are used to adjust the RGB output of the shader for YUV video
-  // quads. The default values perform no adjustment.
+  // filters are cached in |color_filter_cache_|.
   sk_sp<SkColorFilter> GetColorSpaceConversionFilter(
       const gfx::ColorSpace& src,
       std::optional<uint32_t> src_bit_depth,
       std::optional<gfx::HDRMetadata> src_hdr_metadata,
       const gfx::ColorSpace& dst,
-      bool is_video_frame,
-      float resource_offset = 0.0f,
-      float resource_multiplier = 1.0f);
+      bool is_video_frame);
   // Returns the color filter that should be applied to the current canvas.
   sk_sp<SkColorFilter> GetContentColorFilter();
 
@@ -284,6 +283,19 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
   void FlushOutputSurface();
 
   struct RenderPassBacking {
+    RenderPassBacking();
+    RenderPassBacking(gfx::Size size,
+                      bool generate_mipmap,
+                      gfx::ColorSpace color_space,
+                      RenderPassAlphaType alpha_type,
+                      SharedImageFormat format,
+                      gpu::Mailbox mailbox,
+                      bool is_root,
+                      bool is_scanout,
+                      bool scanout_dcomp_surface);
+    RenderPassBacking(const RenderPassBacking&);
+    RenderPassBacking& operator=(const RenderPassBacking&);
+
     gfx::Size size;
     bool generate_mipmap = false;
     gfx::ColorSpace color_space;
@@ -293,6 +305,9 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
     bool is_root = false;
     bool is_scanout = false;
     bool scanout_dcomp_surface = false;
+    // This is the rect that has been drawn to this backing. It starts out as
+    // empty and is expanded as drawing operations are made to this backing.
+    gfx::Rect drawn_rect;
   };
 
 #if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_OZONE)
@@ -324,22 +339,10 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
   }
 
 #if BUILDFLAG(IS_OZONE)
-  // Gets a cached or new mailbox for a 1x1 shared image of the specified color.
-  // There will only be one allocated image for a given color at any time which
-  // can be reused for same-colored quads in the same frame or across frames.
-  const gpu::Mailbox GetImageMailboxForColor(const SkColor4f& color);
-
   // Append a viewport sized transparent solid color overlay to overlay_list if
   // capabilities().needs_background_image = true.
   void MaybeScheduleBackgroundImage(
       OverlayProcessorInterface::CandidateList& candidate_list);
-
-  // Given locks that have either been swapped or skipped, if any correspond to
-  // solid color mailboxes, decrement their use_count in |solid_color_buffers_|.
-  // If capabilities().supports_non_backed_solid_color_overlays = true, there is
-  // nothing to be done.
-  void MaybeDecrementSolidColorBuffers(
-      std::vector<OverlayLock>& finished_locks);
 #endif
 
   // A map from RenderPass id to the texture used to draw the RenderPass from.
@@ -460,10 +463,6 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
     OverlayLock(SkiaRenderer* renderer, const gpu::Mailbox& mailbox);
 #endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_OZONE)
 
-#if BUILDFLAG(IS_OZONE)
-    explicit OverlayLock(const gpu::Mailbox& solid_color_buffer_mailbox);
-#endif  // BUILDFLAG(IS_OZONE)
-
     ~OverlayLock();
 
     OverlayLock(OverlayLock&& other);
@@ -478,12 +477,6 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
         return render_pass_lock->mailbox();
       }
 #endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_OZONE)
-
-#if BUILDFLAG(IS_OZONE)
-      if (solid_color_buffer.has_value()) {
-        return solid_color_buffer.value();
-      }
-#endif  // BUILDFLAG(IS_OZONE)
 
       DCHECK(resource_lock.has_value());
       return resource_lock->mailbox();
@@ -515,10 +508,6 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
 #if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_OZONE)
     std::optional<ScopedInFlightRenderPassOverlayBackingRef> render_pass_lock;
 #endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_OZONE)
-
-#if BUILDFLAG(IS_OZONE)
-    std::optional<gpu::Mailbox> solid_color_buffer;
-#endif  // BUILDFLAG(IS_OZONE)
   };
 
   // Locks for overlays that are pending for SwapBuffers().
@@ -555,20 +544,6 @@ class VIZ_SERVICE_EXPORT SkiaRenderer : public DirectRenderer {
   // Used to get mailboxes for the root render pass when
   // capabilities().renderer_allocates_images = true.
   std::unique_ptr<BufferQueue> buffer_queue_;
-
-#if BUILDFLAG(IS_OZONE)
-  struct SolidColorBuffer {
-    gpu::Mailbox mailbox;
-    int use_count;
-  };
-
-  // Solid color buffers allocated on necessary platforms. The same image
-  // can be reused for multiple same-color quads, and use count is tracked.
-  // Entries will be erased and their SharedImages destroyed in the next
-  // SwapBuffers() if their use_count reaches 0.
-  // TODO(crbug.com/1342015): Move this to SkColor4f.
-  base::flat_map<SkColor, SolidColorBuffer> solid_color_buffers_;
-#endif
 
 #if BUILDFLAG(ENABLE_VULKAN) && BUILDFLAG(IS_CHROMEOS) && \
     BUILDFLAG(USE_V4L2_CODEC)

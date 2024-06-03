@@ -234,6 +234,54 @@ extern const char kIOSTabGridAdjacentTabTapped[];
 // The user has swipped the toolbar to go to an adjacent tab.
 extern const char kIOSSwipeToolbarToChangeTabUsed[];
 
+// The user has opened the Overflow Menu customization screen.
+extern const char kIOSOverflowMenuCustomizationUsed[];
+
+// The user has used ann Overflow Menu item where customizing the menu could
+// have helped.
+extern const char kIOSOverflowMenuOffscreenItemUsed[];
+
+// The Default Browser FRE promo was shown to the user.
+extern const char kIOSDefaultBrowserFREShown[];
+
+// The user has met all the conditions to be eligible for generic default
+// browser promo.
+extern const char kGenericDefaultBrowserPromoConditionsMet[];
+
+// The user has met all the conditions to be eligible for All Tabs default
+// browser promo.
+extern const char kAllTabsPromoConditionsMet[];
+
+// The user has met all the conditions to be eligible for Made for iOS default
+// browser promo.
+extern const char kMadeForIOSPromoConditionsMet[];
+
+// The user has met all the conditions to be eligible for Stay Safe default
+// browser promo.
+extern const char kStaySafePromoConditionsMet[];
+
+// The user has met a condition that makes the Enhanced Safe Browsing
+// inline promos eligible to be displayed.
+extern const char kEnhancedSafeBrowsingPromoCriterionMet[];
+
+// The user taps the 'x' button on the Enhanced Safe Browsing inline promo.
+extern const char kInlineEnhancedSafeBrowsingPromoClosed[];
+
+// The generic default browser promo was triggered.
+extern const char kGenericDefaultBrowserPromoTrigger[];
+
+// The all tabs default browser promo was triggered.
+extern const char kAllTabsPromoTrigger[];
+
+// The made for iOS default browser promo was triggered.
+extern const char kMadeForIOSPromoTrigger[];
+
+// The stay safe default browser promo was triggered.
+extern const char kStaySafePromoTrigger[];
+
+// The tailored default browser promo group was triggered.
+extern const char kTailoredDefaultBrowserPromosGroupTrigger[];
+
 #endif  // BUILDFLAG(IS_IOS)
 
 // Android.

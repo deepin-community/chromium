@@ -13,6 +13,7 @@
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "ash/webui/settings/public/constants/setting.mojom-shared.h"
 #include "base/check_is_test.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
@@ -20,7 +21,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/ash/child_accounts/parent_access_code/parent_access_service.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
-#include "chrome/browser/ash/login/hats_unlock_survey_trigger.h"
 #include "chrome/browser/ash/login/help_app_launcher.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
 #include "chrome/browser/ash/login/login_auth_recorder.h"
@@ -30,7 +30,6 @@
 #include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/ui/login_display_host_webui.h"
 #include "chrome/browser/ash/login/ui/user_adding_screen.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/ui/ash/wallpaper_controller_client_impl.h"
@@ -38,6 +37,7 @@
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_reauth_dialogs.h"
 #include "chrome/browser/ui/webui/ash/login/l10n_util.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_names.h"
@@ -55,8 +55,7 @@ LoginScreenClientImpl::Delegate::~Delegate() = default;
 LoginScreenClientImpl::ParentAccessDelegate::~ParentAccessDelegate() = default;
 
 LoginScreenClientImpl::LoginScreenClientImpl()
-    : auth_recorder_(std::make_unique<ash::LoginAuthRecorder>()),
-      unlock_survey_trigger_(std::make_unique<ash::HatsUnlockSurveyTrigger>()) {
+    : auth_recorder_(std::make_unique<ash::LoginAuthRecorder>()) {
   // Register this object as the client interface implementation.
   ash::LoginScreen::Get()->SetClient(this);
 
@@ -132,7 +131,6 @@ void LoginScreenClientImpl::AuthenticateUserWithPasswordOrPin(
                            ? ash::LoginAuthRecorder::AuthMethod::kPin
                            : ash::LoginAuthRecorder::AuthMethod::kPassword;
     auth_recorder_->RecordAuthMethod(auth_method);
-    unlock_survey_trigger_->ShowSurveyIfSelected(account_id, auth_method);
   } else {
     LOG(ERROR) << "Failed AuthenticateUserWithPasswordOrPin; no delegate";
     std::move(callback).Run(false);
@@ -145,8 +143,6 @@ void LoginScreenClientImpl::AuthenticateUserWithEasyUnlock(
     delegate_->HandleAuthenticateUserWithEasyUnlock(account_id);
     auth_recorder_->RecordAuthMethod(
         ash::LoginAuthRecorder::AuthMethod::kSmartlock);
-    unlock_survey_trigger_->ShowSurveyIfSelected(
-        account_id, ash::LoginAuthRecorder::AuthMethod::kSmartlock);
   }
 }
 
@@ -158,8 +154,6 @@ void LoginScreenClientImpl::AuthenticateUserWithChallengeResponse(
                                                            std::move(callback));
     auth_recorder_->RecordAuthMethod(
         ash::LoginAuthRecorder::AuthMethod::kChallengeResponse);
-    unlock_survey_trigger_->ShowSurveyIfSelected(
-        account_id, ash::LoginAuthRecorder::AuthMethod::kChallengeResponse);
   }
 }
 
@@ -172,8 +166,9 @@ ash::ParentCodeValidationResult LoginScreenClientImpl::ValidateParentAccessCode(
 }
 
 void LoginScreenClientImpl::OnFocusPod(const AccountId& account_id) {
-  if (delegate_)
+  if (delegate_) {
     delegate_->HandleOnFocusPod(account_id);
+  }
 }
 
 void LoginScreenClientImpl::FocusLockScreenApps(bool reverse) {
@@ -187,8 +182,9 @@ void LoginScreenClientImpl::FocusLockScreenApps(bool reverse) {
 }
 
 void LoginScreenClientImpl::FocusOobeDialog() {
-  if (delegate_)
+  if (delegate_) {
     delegate_->HandleFocusOobeDialog();
+  }
 }
 
 void LoginScreenClientImpl::ShowGaiaSignin(const AccountId& prefilled_account) {
@@ -210,8 +206,9 @@ void LoginScreenClientImpl::StartUserRecovery(
 void LoginScreenClientImpl::MakePreAuthenticationChecks(
     const AccountId& account_id,
     base::OnceClosure continuation) {
-  if (time_show_gaia_signin_initiated_.is_null())
+  if (time_show_gaia_signin_initiated_.is_null()) {
     time_show_gaia_signin_initiated_ = base::TimeTicks::Now();
+  }
   // Check trusted status as a workaround to ensure that device owner id is
   // ready. Device owner ID is necessary for IsApprovalRequired checks.
   auto continuation_split = base::SplitOnceCallback(std::move(continuation));
@@ -276,16 +273,18 @@ void LoginScreenClientImpl::RemoveUser(const AccountId& account_id) {
       ProfileMetrics::DELETE_PROFILE_USER_MANAGER);
   user_manager::UserManager::Get()->RemoveUser(
       account_id, user_manager::UserRemovalReason::LOCAL_USER_INITIATED);
-  if (ash::LoginDisplayHost::default_host())
+  if (ash::LoginDisplayHost::default_host()) {
     ash::LoginDisplayHost::default_host()->UpdateAddUserButtonStatus();
+  }
 }
 
 void LoginScreenClientImpl::LaunchPublicSession(
     const AccountId& account_id,
     const std::string& locale,
     const std::string& input_method) {
-  if (delegate_)
+  if (delegate_) {
     delegate_->HandleLaunchPublicSession(account_id, locale, input_method);
+  }
 }
 
 void LoginScreenClientImpl::RequestPublicSessionKeyboardLayouts(
@@ -299,8 +298,9 @@ void LoginScreenClientImpl::RequestPublicSessionKeyboardLayouts(
 
 void LoginScreenClientImpl::HandleAccelerator(
     ash::LoginAcceleratorAction action) {
-  if (ash::LoginDisplayHost::default_host())
+  if (ash::LoginDisplayHost::default_host()) {
     ash::LoginDisplayHost::default_host()->HandleAccelerator(action);
+  }
 }
 
 void LoginScreenClientImpl::ShowAccountAccessHelpApp(
@@ -326,18 +326,21 @@ void LoginScreenClientImpl::ShowLockScreenNotificationSettings() {
 }
 
 void LoginScreenClientImpl::OnFocusLeavingSystemTray(bool reverse) {
-  for (ash::SystemTrayObserver& observer : system_tray_observers_)
+  for (ash::SystemTrayObserver& observer : system_tray_observers_) {
     observer.OnFocusLeavingSystemTray(reverse);
+  }
 }
 
 void LoginScreenClientImpl::OnSystemTrayBubbleShown() {
-  for (ash::SystemTrayObserver& observer : system_tray_observers_)
+  for (ash::SystemTrayObserver& observer : system_tray_observers_) {
     observer.OnSystemTrayBubbleShown();
+  }
 }
 
 void LoginScreenClientImpl::OnLoginScreenShown() {
-  for (LoginScreenShownObserver& observer : login_screen_shown_observers_)
+  for (LoginScreenShownObserver& observer : login_screen_shown_observers_) {
     observer.OnLoginScreenShown();
+  }
 }
 
 void LoginScreenClientImpl::CancelAddUser() {
@@ -379,18 +382,21 @@ void LoginScreenClientImpl::SetPublicSessionKeyboardLayout(
   std::vector<ash::InputMethodItem> result;
 
   for (const auto& i : keyboard_layouts) {
-    if (!i.is_dict())
+    if (!i.is_dict()) {
       continue;
+    }
     const base::Value::Dict& dict = i.GetDict();
 
     ash::InputMethodItem input_method_item;
     const std::string* ime_id = dict.FindString("value");
-    if (ime_id)
+    if (ime_id) {
       input_method_item.ime_id = *ime_id;
+    }
 
     const std::string* title = dict.FindString("title");
-    if (title)
+    if (title) {
       input_method_item.title = *title;
+    }
 
     input_method_item.selected = dict.FindBool("selected").value_or(false);
     result.push_back(std::move(input_method_item));
@@ -421,12 +427,21 @@ void LoginScreenClientImpl::OnParentAccessValidation(
 
 void LoginScreenClientImpl::ShowGaiaSigninInternal(
     const AccountId& prefilled_account) {
+  // It is possible that the call will come during the session start and after
+  // the LoginDisplayHost destruction. Ignore such calls.
   if (ash::LoginDisplayHost::default_host()) {
-    // Login screen case.
     ash::LoginDisplayHost::default_host()->ShowGaiaDialog(prefilled_account);
-  } else {
-    // Lock screen case.
+  } else if (session_manager::SessionManager::Get()->session_state() ==
+             session_manager::SessionState::LOCKED) {
     ash::LockScreenStartReauthDialog::Show();
+  } else {
+    // TODO(b/332715260): In general this shouldn't happen, however there might
+    // be transition states when pending calls still arrive. It should be safe
+    // to remove the DumpWithoutCrashing if the number of reports will be low.
+    base::debug::DumpWithoutCrashing();
+    LOG(WARNING) << __func__ << ": ignoring the call, session state: "
+                 << static_cast<int>(session_manager::SessionManager::Get()
+                                         ->session_state());
   }
 }
 

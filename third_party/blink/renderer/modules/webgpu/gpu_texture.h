@@ -27,11 +27,12 @@ class GPUTexture : public DawnObject<WGPUTexture> {
   static GPUTexture* CreateError(GPUDevice* device,
                                  const WGPUTextureDescriptor* desc);
 
-  GPUTexture(GPUDevice* device, WGPUTexture texture);
+  GPUTexture(GPUDevice* device, WGPUTexture texture, const String& label);
   GPUTexture(GPUDevice* device,
              WGPUTextureFormat format,
              WGPUTextureUsage usage,
-             scoped_refptr<WebGPUMailboxTexture> mailbox_texture);
+             scoped_refptr<WebGPUMailboxTexture> mailbox_texture,
+             const String& label);
 
   ~GPUTexture() override;
 
@@ -57,6 +58,10 @@ class GPUTexture : public DawnObject<WGPUTexture> {
   bool Destroyed() { return destroyed_; }
 
   void DissociateMailbox();
+
+  // Returns a shared pointer to the mailbox texture. The mailbox texture
+  // remains associated to the GPUTexture.
+  scoped_refptr<WebGPUMailboxTexture> GetMailboxTexture();
 
   // Sets a callback which is called if destroy is called manually, before the
   // WebGPU handle is actually destroyed.

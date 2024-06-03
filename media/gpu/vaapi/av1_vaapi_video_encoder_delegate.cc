@@ -380,8 +380,7 @@ bool AV1VaapiVideoEncoderDelegate::Initialize(
                 base::bits::AlignUpDeprecatedDoNotUse(
                     visible_size_.height(), kAV1AlignmentSize.height()));
 
-  current_params_.framerate = config.initial_framerate.value_or(
-      VideoEncodeAccelerator::kDefaultFramerate);
+  current_params_.framerate = config.framerate;
   current_params_.drop_frame_thresh = config.drop_frame_thresh_percentage;
   current_params_.bitrate_allocation.SetBitrate(0, 0,
                                                 config.bitrate.target_bps());
@@ -482,9 +481,11 @@ std::vector<gfx::Size> AV1VaapiVideoEncoderDelegate::GetSVCLayerResolutions() {
 BitstreamBufferMetadata AV1VaapiVideoEncoderDelegate::GetMetadata(
     const EncodeJob& encode_job,
     size_t payload_size) {
-  auto metadata =
-      VaapiVideoEncoderDelegate::GetMetadata(encode_job, payload_size);
-  CHECK(metadata.end_of_picture);
+  CHECK(!encode_job.IsFrameDropped());
+  CHECK_NE(payload_size, 0u);
+  BitstreamBufferMetadata metadata(
+      payload_size, encode_job.IsKeyframeRequested(), encode_job.timestamp());
+  CHECK(metadata.end_of_picture());
   auto picture = GetAV1Picture(encode_job);
   // Revisit populating metadata.av1 if we need SVC.
   metadata.qp =
@@ -549,6 +550,7 @@ AV1VaapiVideoEncoderDelegate::PrepareEncodeJob(EncodeJob& encode_job) {
 void AV1VaapiVideoEncoderDelegate::BitrateControlUpdate(
     const BitstreamBufferMetadata& metadata) {
   DVLOGF(4) << "encoded chunk size=" << metadata.payload_size_bytes;
+  CHECK_NE(metadata.payload_size_bytes, 0u);
   rate_ctrl_->PostEncodeUpdate(metadata.payload_size_bytes);
 }
 

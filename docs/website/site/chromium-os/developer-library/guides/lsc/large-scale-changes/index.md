@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/guides
-  - Chromium OS > Developer Library > Guides
+  - ChromiumOS > Developer Library > Guides
 page_name: large-scale-changes
 title: ChromeOS Platform Large Scale Changes (LSC)
 ---
@@ -220,7 +220,7 @@ for details) or Presubmit.
 
 ### Docs for Domain Reviewers
 
-*   [The ChromeOS LSC Workflow](lsc_workflow.md)
+*   [The ChromeOS LSC Workflow](/chromium-os/developer-library/guides/lsc/lsc-workflow/)
 
 ### FAQ for Domain Reviewers
 
@@ -306,6 +306,6 @@ willing and capable of doing reviews, you probably shouldn't be an OWNER.
 
 [Chrome LSC process]: https://chromium.googlesource.com/chromium/src/+/HEAD/docs/process/lsc/large_scale_changes.md
 [ChromeOS Platform LSC Template]: https://docs.google.com/document/d/1iLGbamQyUEgfsYXX8a4p2oop9MDzxi3S6-NeXG6bJqE/preview
-[ChromeOS LSC Workflow]: lsc_workflow.md
+[ChromeOS LSC Workflow]: /chromium-os/developer-library/guides/lsc/lsc-workflow/
 [chromeos-lsc-review]: https://groups.google.com/a/chromium.org/g/chromeos-lsc-review
 [Google LSC process]: https://goto.google.com/lsc

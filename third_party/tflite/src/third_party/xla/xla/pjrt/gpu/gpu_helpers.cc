@@ -27,14 +27,14 @@ limitations under the License.
 #include "xla/statusor.h"
 #include "xla/stream_executor/integrations/device_host_allocator.h"
 #include "xla/stream_executor/integrations/device_mem_allocator.h"
+#include "xla/tsl/util/env_var.h"
 #include "xla/util.h"
 #include "tsl/framework/device_id.h"
-#include "tsl/util/env_var.h"
 
 namespace xla {
 
 // Builds an xla::LocalClient for the GPU platform.
-StatusOr<LocalClient*> GetGpuXlaClient(
+absl::StatusOr<LocalClient*> GetGpuXlaClient(
     const std::optional<std::string>& platform_name,
     const std::optional<std::set<int>>& allowed_devices) {
   TF_ASSIGN_OR_RETURN(
@@ -71,7 +71,7 @@ void EnablePeerAccess(absl::Span<se::StreamExecutor* const> executors) {
 }
 
 // Builds a BFCAllocator for all local GPUs.
-StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
+absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
     se::StreamExecutor* executor, double memory_fraction, bool preallocate) {
   bool enable_unified_memory;
   Status status = tsl::ReadBoolFromEnvVar("TF_FORCE_UNIFIED_MEMORY", false,
@@ -119,7 +119,7 @@ StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateBFCAllocator(
 }
 
 // Builds a BFCAllocator for all local GPUs that uses collective memory.
-StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
+absl::StatusOr<std::unique_ptr<tsl::BFCAllocator>> CreateCollectiveBFCAllocator(
     se::StreamExecutor* executor, double memory_fraction,
     size_t collective_memory_size) {
   int device_ordinal = executor->device_ordinal();
@@ -164,8 +164,18 @@ std::unique_ptr<tsl::BFCAllocator> GetGpuHostAllocator(
       new se::DeviceHostAllocator(executor, /*numa_node=*/0,
                                   /*alloc_visitors=*/{},
                                   /*free_visitors=*/{}));
-  // TODO(phawkins): allow the user to tune this.
-  const int64_t kGpuHostMemoryLimitBytes = 64 * (1LL << 30);
+
+  int64_t xla_pjrt_gpu_host_memory_limit_gb;
+  Status status =
+      tsl::ReadInt64FromEnvVar("XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB", 64,
+                               &xla_pjrt_gpu_host_memory_limit_gb);
+  if (!status.ok()) {
+    LOG(ERROR) << "Unable to read XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB: "
+               << status.message();
+  }
+
+  const int64_t kGpuHostMemoryLimitBytes =
+      xla_pjrt_gpu_host_memory_limit_gb * (1LL << 30);
 
   tsl::BFCAllocator::Options opts;
   opts.allow_growth = true;

@@ -19,13 +19,13 @@ import org.junit.runners.model.Statement;
 import org.chromium.base.ContextUtils;
 import org.chromium.chrome.R;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
-import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.base.AccountCapabilities;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountId;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.identitymanager.AccountInfoServiceProvider;
 import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.signin.test.util.AccountCapabilitiesBuilder;
 import org.chromium.components.signin.test.util.FakeAccountInfoService;
 import org.chromium.components.signin.test.util.FakeAccountManagerFacade;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
@@ -41,9 +41,30 @@ import java.util.HashMap;
  * The rule will not invoke any native code, therefore it is safe to use it in Robolectric tests.
  */
 public class AccountManagerTestRule implements TestRule {
-    public static final String TEST_ACCOUNT_EMAIL = "test@gmail.com";
+    // TODO(crbug.com/40234741): Add TEST_ACCOUNT_2 and migrate tests that don't need to create
+    // their own accounts to these constants.
+    public static final AccountInfo TEST_ACCOUNT_1 =
+            new AccountInfo.Builder(
+                            "test@gmail.com", FakeAccountManagerFacade.toGaiaId("test@gmail.com"))
+                    .fullName("Test1 Full")
+                    .givenName("Test1 Given")
+                    .accountImage(createAvatar())
+                    .build();
 
-    public static final String CHILD_ACCOUNT_EMAIL = generateChildEmail(TEST_ACCOUNT_EMAIL);
+    // TODO(crbug.com/40890215): Use TEST_ACCOUNT_1 instead.
+    @Deprecated public static final String TEST_ACCOUNT_EMAIL = "test@gmail.com";
+
+    public static final AccountInfo TEST_CHILD_ACCOUNT =
+            new AccountInfo.Builder(
+                            generateChildEmail("test@gmail.com"),
+                            FakeAccountManagerFacade.toGaiaId("test-gaia-id"))
+                    .fullName("ChildTest Full")
+                    .givenName("ChildTest Given")
+                    .accountCapabilities(
+                            new AccountCapabilitiesBuilder()
+                                    .setIsSubjectToParentalControls(true)
+                                    .build())
+                    .build();
 
     private final @NonNull FakeAccountManagerFacade mFakeAccountManagerFacade;
     // TODO(https://crbug.com/1352119): Revise this test rule and make this non-nullable.
@@ -104,20 +125,23 @@ public class AccountManagerTestRule implements TestRule {
         identityManager.addObserver(mFakeAccountInfoService);
     }
 
-    // TODO(https://crbug.com/1411335): Use the builder pattern here instead of all these
-    // `addAccount` methods.
+    // TODO(https://crbug.com/1411335): Remove deprecated `addAccount` overloads.
     /**
      * Adds an account of the given accountName to the fake AccountManagerFacade.
+     *
      * @return The CoreAccountInfo for the account added.
      */
+    @Deprecated
     public AccountInfo addAccount(String accountName) {
         return addAccount(accountName, new AccountCapabilities(new HashMap<>()));
     }
 
     /**
      * Adds an account of the given accountName and capabilities to the fake AccountManagerFacade.
+     *
      * @return The CoreAccountInfo for the account added.
      */
+    @Deprecated
     public AccountInfo addAccount(String accountName, @NonNull AccountCapabilities capabilities) {
         final String baseName = accountName.split("@", 2)[0];
         return addAccount(
@@ -126,8 +150,10 @@ public class AccountManagerTestRule implements TestRule {
 
     /**
      * Adds an account of the given email and name to the fake AccountManagerFacade.
+     *
      * @return The CoreAccountInfo for the account added.
      */
+    @Deprecated
     public AccountInfo addAccount(String email, String baseName) {
         return addAccount(
                 email,
@@ -139,8 +165,10 @@ public class AccountManagerTestRule implements TestRule {
 
     /**
      * Adds an account of the given accountName and capabilities to the fake AccountManagerFacade.
+     *
      * @return The CoreAccountInfo for the account added.
      */
+    @Deprecated
     public AccountInfo addAccount(
             String accountName, String baseName, @NonNull AccountCapabilities capabilities) {
         return addAccount(
@@ -148,9 +176,10 @@ public class AccountManagerTestRule implements TestRule {
     }
 
     /**
-     * Adds an account to the fake AccountManagerFacade and {@link AccountInfo} to
-     * {@link FakeAccountInfoService}.
+     * Adds an account to the fake AccountManagerFacade and {@link AccountInfo} to {@link
+     * FakeAccountInfoService}.
      */
+    @Deprecated
     public AccountInfo addAccount(
             String email, String fullName, String givenName, @Nullable Bitmap avatar) {
         return addAccount(
@@ -158,9 +187,10 @@ public class AccountManagerTestRule implements TestRule {
     }
 
     /**
-     * Adds an account to the fake AccountManagerFacade and {@link AccountInfo} to
-     * {@link FakeAccountInfoService}.
+     * Adds an account to the fake AccountManagerFacade and {@link AccountInfo} to {@link
+     * FakeAccountInfoService}.
      */
+    @Deprecated
     public AccountInfo addAccount(
             String email,
             String fullName,
@@ -177,10 +207,18 @@ public class AccountManagerTestRule implements TestRule {
                         givenName,
                         avatar,
                         capabilities);
-        mFakeAccountManagerFacade.addAccountWithAccountInfo(accountInfo);
+        addAccount(accountInfo);
+        return accountInfo;
+    }
+
+    /**
+     * Adds an account to the fake AccountManagerFacade and {@link AccountInfo} to {@link
+     * FakeAccountInfoService}.
+     */
+    public void addAccount(AccountInfo accountInfo) {
+        mFakeAccountManagerFacade.addAccount(accountInfo);
         // TODO(https://crbug.com/1352119): Revise this test rule and remove the condition here.
         if (mFakeAccountInfoService != null) mFakeAccountInfoService.addAccountInfo(accountInfo);
-        return accountInfo;
     }
 
     /**
@@ -192,9 +230,19 @@ public class AccountManagerTestRule implements TestRule {
         mFakeAccountManagerFacade.setResultForNextAddAccountFlow(result, newAccountName);
     }
 
-    /** Removes an account with the given account email. */
-    public void removeAccount(String accountEmail) {
-        mFakeAccountManagerFacade.removeAccount(AccountUtils.createAccountFromName(accountEmail));
+    /** Removes an account with the given {@link CoreAccountId}. */
+    public void removeAccount(CoreAccountId accountId) {
+        mFakeAccountManagerFacade.removeAccount(accountId);
+    }
+
+    /** See {@link FakeAccountManagerFacade#blockGetCoreAccountInfos(boolean)}. */
+    public void blockGetCoreAccountInfosUpdate(boolean populateCache) {
+        mFakeAccountManagerFacade.blockGetCoreAccountInfos(populateCache);
+    }
+
+    /** See {@link FakeAccountManagerFacade#unblockGetCoreAccountInfos()}. */
+    public void unblockGetCoreAccountInfos() {
+        mFakeAccountManagerFacade.unblockGetCoreAccountInfos();
     }
 
     /** Converts an account email to its corresponding CoreAccountInfo object. */
@@ -227,5 +275,13 @@ public class AccountManagerTestRule implements TestRule {
         drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
         drawable.draw(canvas);
         return bitmap;
+    }
+
+    /**
+     * Replaces any capabilities that have been previously set with the given accountCapabilities.
+     */
+    public void setAccountCapabilities(
+            CoreAccountId accountId, AccountCapabilities accountCapabilities) {
+        mFakeAccountManagerFacade.setAccountCapabilities(accountId, accountCapabilities);
     }
 }

@@ -375,6 +375,16 @@ class Program final : public LabeledObject, public angle::Subject
         ASSERT(!mLinkingState);
         return mLinked;
     }
+    bool isBinaryReady(const Context *context);
+    ANGLE_INLINE void cacheProgramBinaryIfNotAlready(const Context *context)
+    {
+        // This function helps ensure the program binary is cached, even if the backend waits for
+        // post-link tasks without the knowledge of the front-end.
+        if (!mIsBinaryCached && mState.mExecutable->mPostLinkSubTasks.empty())
+        {
+            cacheProgramBinary(context);
+        }
+    }
 
     angle::Result setBinary(const Context *context,
                             GLenum binaryFormat,
@@ -411,15 +421,10 @@ class Program final : public LabeledObject, public angle::Subject
                                       GLenum bufferMode);
     GLenum getTransformFeedbackBufferMode() const { return mState.mTransformFeedbackBufferMode; }
 
-    ANGLE_INLINE void addRef()
-    {
-        ASSERT(!mLinkingState);
-        mRefCount++;
-    }
+    ANGLE_INLINE void addRef() { mRefCount++; }
 
     ANGLE_INLINE void release(const Context *context)
     {
-        ASSERT(!mLinkingState);
         mRefCount--;
 
         if (mRefCount == 0 && mDeleteStatus)
@@ -451,9 +456,6 @@ class Program final : public LabeledObject, public angle::Subject
     {
         return mState.getFragmentOutputIndexes();
     }
-
-    bool needsSync() { return !mOptionalLinkTasks.empty(); }
-    angle::Result syncState(const Context *context);
 
     // Try to resolve linking. Inlined to make sure its overhead is as low as possible.
     void resolveLink(const Context *context)
@@ -520,17 +522,12 @@ class Program final : public LabeledObject, public angle::Subject
     void updateLinkedShaderStages();
 
     // Block until linking is finished and resolve it.
-    void resolveLinkImpl(const gl::Context *context);
-    // Block until optional link tasks are finished.
-    void waitForOptionalLinkTasks(const gl::Context *context);
-    void onLinkInputChange(const gl::Context *context)
-    {
-        // The link tasks work on link input.  If link input changes, they must be finished first.
-        waitForOptionalLinkTasks(context);
-    }
+    void resolveLinkImpl(const Context *context);
+    // Block until post-link tasks are finished.
+    void waitForPostLinkTasks(const Context *context);
 
-    void postResolveLink(const gl::Context *context);
-    void cacheProgramBinary(const gl::Context *context);
+    void postResolveLink(const Context *context);
+    void cacheProgramBinary(const Context *context);
 
     void dumpProgramInfo(const Context *context) const;
 
@@ -539,18 +536,19 @@ class Program final : public LabeledObject, public angle::Subject
     rx::ProgramImpl *mProgram;
 
     bool mValidated;
-    bool mDeleteStatus;  // Flag to indicate that the program can be deleted when no longer in use
+    // Flag to indicate that the program can be deleted when no longer in use
+    bool mDeleteStatus;
+    // Whether the program binary is implicitly cached yet.  This is usually done in
+    // |resolveLinkImpl|, but may be deferred in the presence of post-link tasks.  In that case,
+    // |waitForPostLinkTasks| would cache the binary.  However, if the wait on the tasks is done by
+    // the backend itself, this caching will not be done.  This flag is used to make sure the binary
+    // is eventually cached at some point in the future.
+    bool mIsBinaryCached;
 
     bool mLinked;
     std::unique_ptr<LinkingState> mLinkingState;
 
     egl::BlobCache::Key mProgramHash;
-
-    // Optional link tasks that may still be running after a link has succeeded.  These tasks are
-    // not waited on in |resolveLink| as they are optimization passes.  Instead, they are waited on
-    // when the program is first used.
-    std::vector<std::shared_ptr<rx::LinkSubTask>> mOptionalLinkTasks;
-    std::vector<std::shared_ptr<angle::WaitableEvent>> mOptionalLinkTaskWaitableEvents;
 
     unsigned int mRefCount;
 

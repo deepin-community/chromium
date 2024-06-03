@@ -21,6 +21,7 @@
 #include "components/crash/content/browser/error_reporting/mock_crash_endpoint.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/switches.h"
@@ -316,7 +317,7 @@ using CrashReportPrivateCalledFromSwaTest = ash::SystemWebAppIntegrationTest;
 IN_PROC_BROWSER_TEST_P(CrashReportPrivateCalledFromSwaTest,
                        CalledFromWebContentsInWebAppWindow) {
   if (web_app::IsWebAppsCrosapiEnabled()) {
-    // TODO(crbug.com/1234938): Support Crosapi (web apps running in Lacros).
+    // TODO(crbug.com/40781751): Support Crosapi (web apps running in Lacros).
     return;
   }
   WaitForTestSystemAppInstall();

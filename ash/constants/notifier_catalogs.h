@@ -191,7 +191,11 @@ enum class NotificationCatalogName {
   kNetworkCarrierUnlock = 176,
   kCoralFeature = 177,
   kInputDeviceSettings = 178,
-  kMaxValue = kInputDeviceSettings
+  kDocumentScanning = 179,
+  kGrowthFramework = 180,
+  kAudioSelection = 181,
+  kExtendedUpdatesAvailable = 182,
+  kMaxValue = kExtendedUpdatesAvailable
 };
 
 // A living catalog that registers system nudges.
@@ -231,12 +235,17 @@ enum class NudgeCatalogName {
   // [Deprecated] kWebsiteTelemetryReportingNudge = 26,
   kStandaloneWindowMigrationUx = 27,
   kFocusModeEndingMomentNudge = 28,
-  kMaxValue = kFocusModeEndingMomentNudge
+  kPineEducationNudge = 29,
+  kGrowthCampaignNudge = 30,
+  kSearchTopRowKeyPressed = 31,
+  kSixPackRemappingPressed = 32,
+  kCapsLockShortcutPressed = 33,
+  kMaxValue = kCapsLockShortcutPressed
 };
 
 // A living catalog that registers toasts.
 // Current values should not be renumbered or removed. Please keep in sync with
-// "ToastCatalogName" in tools/metrics/histograms/enums.xml.
+// "ToastCatalogName" in tools/metrics/histograms/metadata/ash/enums.xml
 // To deprecate comment out the entry.
 enum class ToastCatalogName {
   kVirtualDesksLimitMax = 0,
@@ -276,7 +285,7 @@ enum class ToastCatalogName {
   kUndoCloseAll = 34,
   kEcheAppToast = 35,
   // [Deprecated] kDeprecateAssistantStylus = 36,
-  kEcheTrayCopyPasteNotImplemented = 37,
+  // [Deprecated] kEcheTrayCopyPasteNotImplemented = 37,
   kEcheTrayTabletModeNotSupported = 38,
   kNotificationCenterTrayNoNotifications = 39,
   // [Deprecated] kCopyToClipboardAction = 40,
@@ -289,7 +298,9 @@ enum class ToastCatalogName {
   kDictationMicMuted = 47,
   kVideoConferenceTraySpeakOnMuteOptInConfirmation = 48,
   kAppNotClosable = 49,
-  kMaxValue = kAppNotClosable
+  kGameDashboardEnterTablet = 50,
+  kPineOnboarding = 51,
+  kMaxValue = kPineOnboarding
 };
 
 }  // namespace ash

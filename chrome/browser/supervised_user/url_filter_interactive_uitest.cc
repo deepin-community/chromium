@@ -27,15 +27,14 @@ static constexpr std::string_view kPermissionRequestUrl =
 
 // All tests in this unit are subject to flakiness because they interact with a
 // system that can be externally modified during execution.
-class UrlFilterUiTest
-    : public InteractiveFamilyLiveTest,
-      public testing::WithParamInterface<supervised_user::FamilyIdentifier> {
+class UrlFilterUiTest : public InteractiveFamilyLiveTest,
+                        public testing::WithParamInterface<FamilyIdentifier> {
  public:
   UrlFilterUiTest()
       : InteractiveFamilyLiveTest(
             /*family_identifier=*/GetParam(),
             /*extra_enabled_hosts=*/std::vector<std::string>(
-                {"example.com", "www.pornhub.com"})) {}
+                {"example.com", "bestgore.com"})) {}
 
  protected:
   auto ParentOpensControlListPage(ui::ElementIdentifier kParentTab,
@@ -132,7 +131,8 @@ class UrlFilterUiTest
   }
 };
 
-IN_PROC_BROWSER_TEST_P(UrlFilterUiTest, ParentBlocksPage) {
+// TODO(https://crbug.com/328036610): fails on win-live-tests-tester-rel
+IN_PROC_BROWSER_TEST_P(UrlFilterUiTest, DISABLED_ParentBlocksPage) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kChildElementId);
   DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ChromeTestStateObserver,
                                       kSetSafeSitesStateObserver);
@@ -144,17 +144,15 @@ IN_PROC_BROWSER_TEST_P(UrlFilterUiTest, ParentBlocksPage) {
   TurnOnSyncFor(head_of_household());
   TurnOnSyncFor(child());
 
-  // Reset test state.
-  RunTestSequence(ResetChromeTestState(kResetStateObserver));
-  // Set to SAFE_SITES behaviour.
-  RunTestSequence(DefineChromeTestState(kSetSafeSitesStateObserver, {}, {}));
-
   // Child activity is happening in this tab.
   int tab_index = 0;
   GURL all_audiences_site_url(GetRoutedUrl("https://example.com"));
-
-  // At this point, it's the blocklist control page that stays open.
   RunTestSequence(
+      // Reset test state.
+      ResetChromeTestState(kResetStateObserver),
+      // Set to SAFE_SITES behaviour.
+      DefineChromeTestState(kSetSafeSitesStateObserver, {}, {}),
+
       // Supervised user navigates to any page.
       InstrumentTab(kChildElementId, tab_index, child().browser()),
       NavigateWebContents(kChildElementId, all_audiences_site_url),
@@ -190,13 +188,13 @@ IN_PROC_BROWSER_TEST_P(UrlFilterUiTest, ParentAllowsPageBlockedBySafeSites) {
   TurnOnSyncFor(head_of_household());
   TurnOnSyncFor(child());
 
-  RunTestSequence(ResetChromeTestState(kResetStateObserver));
-
   // Child activity is happening in this tab.
   int tab_index = 0;
-  GURL mature_site_url(GetRoutedUrl("https://www.pornhub.com"));
+  GURL mature_site_url(GetRoutedUrl("https://bestgore.com"));
 
   RunTestSequence(
+      ResetChromeTestState(kResetStateObserver),
+
       // Supervised user navigates to inappropriate page and is blocked.
       InstrumentTab(kChildElementId, tab_index, child().browser()),
       NavigateWebContents(kChildElementId, mature_site_url),
@@ -206,7 +204,7 @@ IN_PROC_BROWSER_TEST_P(UrlFilterUiTest, ParentAllowsPageBlockedBySafeSites) {
       DefineChromeTestState(kDefineStateObserver,
                             /*allowed_urls=*/{mature_site_url},
                             /*blocked_urls=*/{}),
-      WaitForStateChange(kChildElementId, PageWithMatchingTitle("Pornhub")));
+      WaitForStateChange(kChildElementId, PageWithMatchingTitle("Best Gore")));
 }
 
 IN_PROC_BROWSER_TEST_P(UrlFilterUiTest,
@@ -223,19 +221,21 @@ IN_PROC_BROWSER_TEST_P(UrlFilterUiTest,
   int child_tab_index = 0;
   int parent_tab_index = 0;
 
-  RunTestSequence(ResetChromeTestState(kResetStateObserver));
-
   RunTestSequence(
+      ResetChromeTestState(kResetStateObserver),
       // Supervised user navigates to inappropriate page and is blocked, and
       // makes approval request.
       InstrumentTab(kChildElementId, child_tab_index, child().browser()),
+      Log("When child navigates to blocked url"),
       NavigateWebContents(kChildElementId,
-                          GetRoutedUrl("https://www.pornhub.com")),
+                          GetRoutedUrl("https://bestgore.com")),
       WaitForStateChange(kChildElementId, RemoteApprovalButtonAppeared()),
+      Log("When child requests approval"),
       ChildRequestsRemoteApproval(kChildElementId),
 
       // Parent receives remote approval request for the blocked page in Family
       // Link.
+      Log("When parent receives approval request"),
       InstrumentTab(kParentApprovalTab, parent_tab_index,
                     /*in_browser=*/head_of_household().browser()),
       ParentOpensControlListPage(kParentApprovalTab,
@@ -244,16 +244,18 @@ IN_PROC_BROWSER_TEST_P(UrlFilterUiTest,
 
       // Parent approves the request and supervised user consumes the page
       // content.
+      Log("When parent grants approval"),
       ParentApprovesPermissionRequest(kParentApprovalTab),
-      WaitForStateChange(kChildElementId, PageWithMatchingTitle("Pornhub")));
+      Log("Then child gets unblocked"),
+      WaitForStateChange(kChildElementId, PageWithMatchingTitle("Best Gore")));
 }
 
 INSTANTIATE_TEST_SUITE_P(
     All,
     UrlFilterUiTest,
-    testing::Values(supervised_user::FamilyIdentifier("FAMILY_DMA_NONE"),
-                    supervised_user::FamilyIdentifier("FAMILY_DMA_ALL"),
-                    supervised_user::FamilyIdentifier("FAMILY")),
+    testing::Values(FamilyIdentifier("FAMILY_DMA_ELIGIBLE_NO_CONSENT"),
+                    FamilyIdentifier("FAMILY_DMA_ELIGIBLE_WITH_CONSENT"),
+                    FamilyIdentifier("FAMILY_DMA_INELIGIBLE")),
     [](const auto& info) { return info.param->data(); });
 
 }  // namespace

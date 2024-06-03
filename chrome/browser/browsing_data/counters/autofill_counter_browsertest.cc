@@ -17,7 +17,7 @@
 #include "base/uuid.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/autofill_type.h"
@@ -60,8 +60,8 @@ class AutofillCounterTest : public InProcessBrowserTest {
   void AddAutocompleteSuggestion(const std::string& name,
                                  const std::string& value) {
     autofill::FormFieldData field;
-    field.name = base::ASCIIToUTF16(name);
-    field.value = base::ASCIIToUTF16(value);
+    field.set_name(base::ASCIIToUTF16(name));
+    field.set_value(base::ASCIIToUTF16(value));
 
     std::vector<autofill::FormFieldData> form_fields;
     form_fields.push_back(field);

@@ -12,6 +12,7 @@
 #include "ash/wm/window_util.h"
 #include "base/auto_reset.h"
 #include "base/barrier_closure.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
@@ -345,9 +346,11 @@ void Seat::OnFilenamesRead(
     base::OnceClosure callback,
     const std::string& mime_type,
     const std::vector<uint8_t>& data) {
-  std::vector<ui::FileInfo> filenames =
-      data_exchange_delegate_->GetFilenames(source, data);
-  writer->WriteFilenames(ui::FileInfosToURIList(filenames));
+  if (selection_source_) {
+    std::vector<ui::FileInfo> filenames =
+        selection_source_->get()->GetFilenames(source, data);
+    writer->WriteFilenames(ui::FileInfosToURIList(filenames));
+  }
   std::move(callback).Run();
 }
 
@@ -356,7 +359,7 @@ void Seat::OnWebCustomDataRead(
     base::OnceClosure callback,
     const std::string& mime_type,
     const std::vector<uint8_t>& data) {
-  base::Pickle pickle(reinterpret_cast<const char*>(data.data()), data.size());
+  base::Pickle pickle = base::Pickle::WithUnownedBuffer(data);
   writer->WritePickledData(pickle,
                            ui::ClipboardFormatType::WebCustomDataType());
   std::move(callback).Run();

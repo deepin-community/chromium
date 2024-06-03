@@ -31,6 +31,7 @@
 #include <functional>
 #include <memory>
 
+#include "dawn/common/FutureUtils.h"
 #include "dawn/common/NonCopyable.h"
 #include "partition_alloc/pointers/raw_ptr.h"
 
@@ -38,6 +39,7 @@
 #include "dawn/native/Forward.h"
 #include "dawn/native/IntegerTypes.h"
 #include "dawn/native/ObjectBase.h"
+#include "dawn/native/SharedBufferMemory.h"
 #include "dawn/native/UsageValidationMode.h"
 
 #include "dawn/native/dawn_platform.h"
@@ -67,7 +69,7 @@ static constexpr wgpu::BufferUsage kShaderBufferUsages =
 static constexpr wgpu::BufferUsage kReadOnlyShaderBufferUsages =
     kShaderBufferUsages & kReadOnlyBufferUsages;
 
-class BufferBase : public ApiObjectBase {
+class BufferBase : public SharedResource {
   public:
     enum class BufferState {
         Unmapped,
@@ -75,6 +77,7 @@ class BufferBase : public ApiObjectBase {
         Mapped,
         MappedAtCreation,
         HostMappedPersistent,
+        SharedMemoryNoAccess,
         Destroyed,
     };
     static Ref<BufferBase> MakeError(DeviceBase* device, const BufferDescriptor* descriptor);
@@ -83,6 +86,7 @@ class BufferBase : public ApiObjectBase {
 
     uint64_t GetSize() const;
     uint64_t GetAllocatedSize() const;
+    ExecutionSerial GetLastUsageSerial() const;
 
     // |GetUsageExternalOnly| returns the usage with which the buffer was created using the
     // base WebGPU API. Additional usages may be added for internal state tracking. |GetUsage|
@@ -97,9 +101,14 @@ class BufferBase : public ApiObjectBase {
 
     bool IsFullBufferRange(uint64_t offset, uint64_t size) const;
     bool NeedsInitialization() const;
-    bool IsDataInitialized() const;
-    void SetIsDataInitialized();
     void MarkUsedInPendingCommands();
+
+    // SharedResource impl.
+    void SetHasAccess(bool hasAccess) override;
+    bool HasAccess() const override;
+    bool IsDestroyed() const override;
+    void SetInitialized(bool initialized) override;
+    bool IsInitialized() const override;
 
     virtual void* GetMappedPointer() = 0;
     void* GetMappedRange(size_t offset, size_t size, bool writable = true);
@@ -156,8 +165,8 @@ class BufferBase : public ApiObjectBase {
     bool CanGetMappedRange(bool writable, size_t offset, size_t size) const;
     void UnmapInternal(WGPUBufferMapAsyncStatus callbackStatus);
 
-    uint64_t mSize = 0;
-    wgpu::BufferUsage mUsage = wgpu::BufferUsage::None;
+    const uint64_t mSize = 0;
+    const wgpu::BufferUsage mUsage = wgpu::BufferUsage::None;
     BufferState mState;
     bool mIsDataInitialized = false;
 
@@ -170,8 +179,7 @@ class BufferBase : public ApiObjectBase {
     Ref<BufferBase> mStagingBuffer;
 
     WGPUBufferMapCallback mMapCallback = nullptr;
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<void, DanglingUntriaged> mMapUserdata = nullptr;
+    raw_ptr<void> mMapUserdata = nullptr;
     MapRequestID mLastMapID = MapRequestID(0);
     wgpu::MapMode mMapMode = wgpu::MapMode::None;
     size_t mMapOffset = 0;

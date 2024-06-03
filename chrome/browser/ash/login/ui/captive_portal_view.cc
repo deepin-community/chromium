@@ -13,14 +13,20 @@
 #include "components/captive_portal/core/captive_portal_detector.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
 
 namespace ash {
 namespace {
 
-const char* CaptivePortalStartURL() {
-  return captive_portal::CaptivePortalDetector::kDefaultURL;
+GURL CaptivePortalStartURL() {
+  const NetworkState* default_network =
+      NetworkHandler::Get()->network_state_handler()->DefaultNetwork();
+  if (!default_network || default_network->probe_url().is_empty()) {
+    return GURL(captive_portal::CaptivePortalDetector::kDefaultURL);
+  }
+  return default_network->probe_url();
 }
 
 }  // namespace
@@ -35,7 +41,8 @@ CaptivePortalView::CaptivePortalView(Profile* profile,
 CaptivePortalView::~CaptivePortalView() = default;
 
 void CaptivePortalView::StartLoad() {
-  SimpleWebViewDialog::StartLoad(GURL(CaptivePortalStartURL()));
+  start_url_ = CaptivePortalStartURL();
+  SimpleWebViewDialog::StartLoad(start_url_);
 }
 
 void CaptivePortalView::NavigationStateChanged(
@@ -47,7 +54,7 @@ void CaptivePortalView::NavigationStateChanged(
   // detection will be done on the Chrome side.
   GURL url = source->GetLastCommittedURL();
   // Note, `url` will be empty for "client3.google.com/generate_204" page.
-  if (!redirected_ && url != GURL() && url != GURL(CaptivePortalStartURL())) {
+  if (!redirected_ && url != GURL() && url != start_url_) {
     redirected_ = true;
     proxy_->OnRedirected(network_name_);
   }
@@ -73,5 +80,8 @@ std::unique_ptr<views::WidgetDelegate> CaptivePortalView::MakeWidgetDelegate() {
                                  base::ASCIIToUTF16(network_name_)));
   return delegate;
 }
+
+BEGIN_METADATA(CaptivePortalView)
+END_METADATA
 
 }  // namespace ash

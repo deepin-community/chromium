@@ -35,9 +35,10 @@ namespace {
 // The version of this client supporting tailored warnings.
 // Please update the description of TailoredInfo field in csd.proto when
 // changing this value.
-// Note: The name of this variable is checked by PRESUBMIT. Please update the
-// PRESUBMIT script before renaming this variable.
+// LINT.IfChange
 constexpr int kTailoredWarningVersion = 3;
+constexpr int kTailoredWarningVersionDownloadReportWithoutUserDecision = 4;
+// LINT.ThenChange(/components/safe_browsing/core/common/proto/csd.proto)
 
 DownloadRequestMaker::TabUrls TabUrlsFromWebContents(
     content::WebContents* web_contents) {
@@ -299,7 +300,11 @@ void DownloadRequestMaker::OnGotTabRedirects(
 
 void DownloadRequestMaker::PopulateTailoredInfo() {
   ClientDownloadRequest::TailoredInfo tailored_info;
-  tailored_info.set_version(kTailoredWarningVersion);
+  int version = base::FeatureList::IsEnabled(
+                    safe_browsing::kDownloadReportWithoutUserDecision)
+                    ? kTailoredWarningVersionDownloadReportWithoutUserDecision
+                    : kTailoredWarningVersion;
+  tailored_info.set_version(version);
   *request_->mutable_tailored_info() = tailored_info;
 }
 

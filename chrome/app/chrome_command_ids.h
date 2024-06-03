@@ -8,7 +8,7 @@
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "components/services/screen_ai/buildflags/buildflags.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 #include "ui/base/command_id_constants.h"
 
 // This file lists all the command IDs understood by e.g. the browser.
@@ -136,6 +136,7 @@
 #define IDC_SHOW_PAYMENT_METHODS        35042
 #define IDC_SHOW_ADDRESSES              35043
 #define IDC_ORGANIZE_TABS               35044
+#define IDC_CREATE_NEW_TAB_GROUP        35045
 
 // Page-manipulation commands that target a specified tab, which may not be the
 // active one.
@@ -438,6 +439,7 @@
 #define IDC_BOOKMARK_BAR_UNTRACK_PRICE_FOR_SHOPPING_BOOKMARK 51018
 #define IDC_BOOKMARK_BAR_ADD_TO_BOOKMARKS_BAR 51019
 #define IDC_BOOKMARK_BAR_REMOVE_FROM_BOOKMARKS_BAR 51020
+#define IDC_BOOKMARK_BAR_TOGGLE_SHOW_TAB_GROUPS 51021
 
 // Context menu items for Sharing
 #define IDC_CONTENT_CONTEXT_SHARING_CLICK_TO_CALL_SINGLE_DEVICE 51030
@@ -525,6 +527,7 @@
 // Autofill feedback.
 #define IDC_CONTENT_CONTEXT_AUTOFILL_FEEDBACK 52990
 // Autofill context menu commands
+#define IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PLUS_ADDRESS 52994
 #define IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_ADDRESS 52995
 #define IDC_CONTENT_CONTEXT_AUTOFILL_FALLBACK_PAYMENTS 52996
 
@@ -534,6 +537,9 @@
 // Device API system tray icon
 #define IDC_DEVICE_SYSTEM_TRAY_ICON_FIRST 53260
 #define IDC_DEVICE_SYSTEM_TRAY_ICON_LAST 53299
+
+// Default browser prompt
+#define IDC_SET_BROWSER_AS_DEFAULT 53300
 
 // NOTE: The last valid command value is 57343 (0xDFFF)
 // See http://msdn.microsoft.com/en-us/library/t2zechd4(VS.71).aspx

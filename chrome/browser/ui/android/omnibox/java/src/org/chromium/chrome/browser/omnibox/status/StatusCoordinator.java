@@ -6,6 +6,8 @@ package org.chromium.chrome.browser.omnibox.status;
 
 import android.animation.Animator;
 import android.content.res.Resources;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 
 import androidx.annotation.DrawableRes;
@@ -19,13 +21,13 @@ import org.chromium.base.supplier.Supplier;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
 import org.chromium.chrome.browser.merchant_viewer.MerchantTrustSignalsCoordinator;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
-import org.chromium.chrome.browser.omnibox.OmniboxFeatures;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.UrlBarEditingTextStateProvider;
 import org.chromium.chrome.browser.page_info.ChromePageInfoHighlight;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.components.permissions.PermissionDialogController;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.ui.base.WindowAndroid;
@@ -98,7 +100,10 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
 
         PageInfoIPHController pageInfoIPHController =
                 new PageInfoIPHController(
-                        ContextUtils.activityFromContext(mStatusView.getContext()),
+                        new UserEducationHelper(
+                                ContextUtils.activityFromContext(mStatusView.getContext()),
+                                profileSupplier,
+                                new Handler(Looper.getMainLooper())),
                         getSecurityIconView());
 
         mMediator =
@@ -120,11 +125,7 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
         mMediator.setUrlMinWidth(
                 res.getDimensionPixelSize(R.dimen.location_bar_min_url_width)
                         + res.getDimensionPixelSize(R.dimen.location_bar_status_icon_bg_size)
-                        + res.getDimensionPixelSize(
-                                OmniboxFeatures.shouldShowModernizeVisualUpdate(
-                                                mStatusView.getContext())
-                                        ? R.dimen.location_bar_start_padding_modern
-                                        : R.dimen.location_bar_start_padding)
+                        + res.getDimensionPixelSize(R.dimen.location_bar_start_padding)
                         + res.getDimensionPixelSize(R.dimen.location_bar_end_padding));
 
         mMediator.setSeparatorFieldMinWidth(
@@ -319,7 +320,7 @@ public class StatusCoordinator implements View.OnClickListener, LocationBarDataP
 
         // If isInOverviewAndShowingOmnibox is true, getTab isn't correct for PageInfo; if it's not
         // null, it reflects a web page that the user isn't currently looking at.
-        // TODO(https://crbug.com/1150289): Add a particular page icon for start surface.
+        // TODO(crbug.com/40732353): Add a particular page icon for start surface.
         if (!mLocationBarDataProvider.hasTab()
                 || mLocationBarDataProvider.getTab().getWebContents() == null
                 || mLocationBarDataProvider.isInOverviewAndShowingOmnibox()) {

@@ -356,10 +356,9 @@ bool AddDescriptorsByTemplate(
 
       property_array->set(field_index, value);
       field_index++;
-      descriptors->Set(i, name, MaybeObject::FromObject(FieldType::Any()),
-                       details);
+      descriptors->Set(i, name, FieldType::Any(), details);
     } else {
-      descriptors->Set(i, name, MaybeObject::FromObject(value), details);
+      descriptors->Set(i, name, value, details);
     }
   }
 
@@ -492,6 +491,7 @@ bool InitClassPrototype(Isolate* isolate,
   map = Map::CopyDropDescriptors(isolate, map);
   map->set_is_prototype_map(true);
   Map::SetPrototype(isolate, map, prototype_parent);
+  isolate->UpdateProtectorsOnSetPrototype(prototype, prototype_parent);
   constructor->set_prototype_or_initial_map(*prototype, kReleaseStore);
   map->SetConstructor(*constructor);
   Handle<FixedArray> computed_properties(

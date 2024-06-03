@@ -15,9 +15,11 @@
 #ifndef THIRD_PARTY_NEARBY_PRESENCE_PRESENCE_DEVICE_PROVIDER_H_
 #define THIRD_PARTY_NEARBY_PRESENCE_PRESENCE_DEVICE_PROVIDER_H_
 
+#include <memory>
 #include <string>
 
 #include "absl/strings/string_view.h"
+#include "internal/interop/authentication_status.h"
 #include "internal/interop/authentication_transport.h"
 #include "internal/interop/device.h"
 #include "internal/interop/device_provider.h"
@@ -34,7 +36,9 @@ class ServiceController;
 
 class PresenceDeviceProvider : public NearbyDeviceProvider {
  public:
-  explicit PresenceDeviceProvider(ServiceController* service_controller);
+  PresenceDeviceProvider(
+      ServiceController* service_controller,
+      const ConnectionAuthenticator* connection_authenticator);
 
   const NearbyDevice* GetLocalDevice() override { return &device_; }
 
@@ -70,15 +74,18 @@ class PresenceDeviceProvider : public NearbyDeviceProvider {
 
  private:
   bool WriteToRemoteDevice(
-      const NearbyDevice* remote_device, absl::string_view shared_secret,
+      const NearbyDevice& remote_device, absl::string_view shared_secret,
       const AuthenticationTransport& authentication_transport,
       const internal::LocalCredential& local_credential,
       Future<AuthenticationStatus>& response) const;
+  bool ReadAndVerifyRemoteDeviceData(
+      const NearbyDevice& remote_device, absl::string_view shared_secret,
+      const AuthenticationTransport& authentication_transport) const;
 
   ServiceController& service_controller_;
   PresenceDevice device_;
   std::string manager_app_id_;
-  ConnectionAuthenticator connection_authenticator_;
+  const ConnectionAuthenticator& connection_authenticator_;
 };
 
 }  // namespace presence

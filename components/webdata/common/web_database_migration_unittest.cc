@@ -23,6 +23,7 @@
 #include "components/autofill/core/browser/webdata/autofill_sync_metadata_table.h"
 #include "components/autofill/core/browser/webdata/payments/payments_autofill_table.h"
 #include "components/autofill/core/common/autofill_constants.h"
+#include "components/plus_addresses/webdata/plus_address_table.h"
 #include "components/search_engines/keyword_table.h"
 #include "components/signin/public/webdata/token_service_table.h"
 #include "components/webdata/common/web_database.h"
@@ -78,6 +79,7 @@ class WebDatabaseMigrationTest : public testing::Test {
     autofill::AutofillSyncMetadataTable autofill_sync_metadata_table;
     autofill::PaymentsAutofillTable payments_autofill_table;
     KeywordTable keyword_table;
+    plus_addresses::PlusAddressTable plus_address_table;
     TokenServiceTable token_service_table;
 
     WebDatabase db;
@@ -86,6 +88,7 @@ class WebDatabaseMigrationTest : public testing::Test {
     db.AddTable(&autofill_sync_metadata_table);
     db.AddTable(&payments_autofill_table);
     db.AddTable(&keyword_table);
+    db.AddTable(&plus_address_table);
     db.AddTable(&token_service_table);
 
     // This causes the migration to occur.
@@ -142,7 +145,7 @@ class WebDatabaseMigrationTest : public testing::Test {
   base::ScopedTempDir temp_dir_;
 };
 
-const int WebDatabaseMigrationTest::kCurrentTestedVersionNumber = 125;
+const int WebDatabaseMigrationTest::kCurrentTestedVersionNumber = 128;
 
 void WebDatabaseMigrationTest::LoadDatabase(
     const base::FilePath::StringType& file) {
@@ -1320,5 +1323,71 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion124ToCurrent) {
     EXPECT_EQ(kCurrentTestedVersionNumber, VersionFromConnection(&connection));
 
     EXPECT_FALSE(connection.DoesTableExist("unmasked_credit_cards"));
+  }
+}
+
+TEST_F(WebDatabaseMigrationTest, MigrateVersion125ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_125.sql")));
+  {
+    sql::Database connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(125, VersionFromConnection(&connection));
+    EXPECT_FALSE(connection.DoesTableExist("plus_addresses"));
+  }
+  DoMigration();
+  {
+    sql::Database connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(kCurrentTestedVersionNumber, VersionFromConnection(&connection));
+    EXPECT_TRUE(connection.DoesTableExist("plus_addresses"));
+  }
+}
+
+TEST_F(WebDatabaseMigrationTest, MigrateVersion126ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_126.sql")));
+  {
+    sql::Database connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(126, VersionFromConnection(&connection));
+    EXPECT_FALSE(connection.DoesColumnExist("plus_addresses", "profile_id"));
+    EXPECT_FALSE(
+        connection.DoesTableExist("plus_address_sync_model_type_state"));
+    EXPECT_FALSE(
+        connection.DoesTableExist("plus_address_sync_entity_metadata"));
+  }
+  DoMigration();
+  {
+    sql::Database connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(kCurrentTestedVersionNumber, VersionFromConnection(&connection));
+    EXPECT_TRUE(connection.DoesColumnExist("plus_addresses", "profile_id"));
+    EXPECT_TRUE(
+        connection.DoesTableExist("plus_address_sync_model_type_state"));
+    EXPECT_TRUE(connection.DoesTableExist("plus_address_sync_entity_metadata"));
+  }
+}
+
+// Expect that version 128 altered the type plus_addresses' primary key column
+// from INTEGER to VARCHAR.
+TEST_F(WebDatabaseMigrationTest, MigrateVersion127ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(LoadDatabase(FILE_PATH_LITERAL("version_127.sql")));
+  {
+    sql::Database connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(127, VersionFromConnection(&connection));
+    EXPECT_NE(
+        connection.GetSchema().find(
+            "CREATE TABLE plus_addresses (profile_id INTEGER PRIMARY KEY"),
+        std::string::npos);
+  }
+  DoMigration();
+  {
+    sql::Database connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    EXPECT_EQ(kCurrentTestedVersionNumber, VersionFromConnection(&connection));
+    EXPECT_NE(
+        connection.GetSchema().find(
+            "CREATE TABLE plus_addresses (profile_id VARCHAR PRIMARY KEY"),
+        std::string::npos);
   }
 }

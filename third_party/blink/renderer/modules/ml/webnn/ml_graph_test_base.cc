@@ -8,9 +8,11 @@
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_tester.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
 #include "third_party/blink/renderer/modules/ml/ml.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph_builder.h"
+#include "v8-exception.h"
 
 namespace blink {
 
@@ -19,35 +21,38 @@ MLGraph* ToMLGraph(V8TestingScope* scope, ScriptValue value) {
       scope->GetIsolate(), value.V8Value(), scope->GetExceptionState());
 }
 
-std::string TestVarietyToString(
-    const ::testing::TestParamInfo<TestVariety>& info) {
-  BackendType backend_type = info.param.backend_type;
-  std::string name;
-
-  switch (backend_type) {
+std::string TestParamInfoToString(
+    const ::testing::TestParamInfo<BackendType>& info) {
+  switch (info.param) {
     case BackendType::kFake:
-      // The name of Fake backend from test parameter doesn't output avoid
-      // duplicating with the fixture name |FakeMLGraphTest|.
-      name += "";
-      break;
+      return "FakeBackend";
     case BackendType::kXnnpack:
-      name += "Xnnpack_";
-      break;
-    case BackendType::kModelLoader:
-      name += "ModelLoader_";
-      break;
+      return "Xnnpack";
     case BackendType::kWebNNService:
-      name += "WebNNService_";
-      break;
+      return "WebNNService";
   }
-
-  // TODO: crbug.com/40283536 - Remove this.
-  name += "Async";
-  return name;
 }
 
-BackendType MLGraphTestBase::GetBackendType() {
-  return GetParam().backend_type;
+std::pair<String, String> GetErrorNameAndMessage(V8TestingScope* scope,
+                                                 ScriptValue value) {
+  v8::Local<v8::Object> object;
+  if (!value.V8Value()
+           ->ToObject(scope->GetScriptState()->GetContext())
+           .ToLocal(&object)) {
+    return {"undefined", "undefined"};
+  }
+  const auto& Get = [&scope, object](const String& key) -> String {
+    v8::Local<v8::Value> prop_value;
+    if (!object
+             ->Get(scope->GetScriptState()->GetContext(),
+                   V8AtomicString(scope->GetScriptState()->GetIsolate(), key))
+             .ToLocal(&prop_value)) {
+      return "undefined";
+    }
+    return ToCoreStringWithUndefinedOrNullCheck(
+        scope->GetScriptState()->GetIsolate(), prop_value);
+  };
+  return {Get("name"), Get("message")};
 }
 
 MLGraphTestBase::BuildResult MLGraphTestBase::BuildGraph(
@@ -60,12 +65,10 @@ MLGraphTestBase::BuildResult MLGraphTestBase::BuildGraph(
                      scope.GetExceptionState()));
   tester.WaitUntilSettled();
   if (tester.IsFulfilled()) {
-    return BuildResult{.graph = ToMLGraph(&scope, tester.Value()),
-                       .exception = nullptr};
+    return BuildResult{.graph = ToMLGraph(&scope, tester.Value())};
   } else {
-    return BuildResult{.graph = nullptr,
-                       .exception = V8DOMException::ToWrappable(
-                           scope.GetIsolate(), tester.Value().V8Value())};
+    auto [name, message] = GetErrorNameAndMessage(&scope, tester.Value());
+    return BuildResult{.error_name = name, .error_message = message};
   }
 }
 
@@ -74,12 +77,13 @@ MLComputeResult* ToMLComputeResult(V8TestingScope* scope, ScriptValue value) {
       scope->GetIsolate(), value.V8Value(), scope->GetExceptionState());
 }
 
-DOMException* MLGraphTestBase::ComputeGraph(V8TestingScope& scope,
-                                            MLGraph* graph,
-                                            MLNamedArrayBufferViews& inputs,
-                                            MLNamedArrayBufferViews& outputs) {
-  auto* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(scope.GetScriptState());
+std::pair<String, String> MLGraphTestBase::ComputeGraph(
+    V8TestingScope& scope,
+    MLGraph* graph,
+    MLNamedArrayBufferViews& inputs,
+    MLNamedArrayBufferViews& outputs) {
+  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<MLComputeResult>>(
+      scope.GetScriptState());
   ScriptPromiseTester tester(scope.GetScriptState(), resolver->Promise());
   graph->Compute(ScopedMLTrace("Compute"), inputs, outputs, resolver,
                  scope.GetExceptionState());
@@ -91,15 +95,14 @@ DOMException* MLGraphTestBase::ComputeGraph(V8TestingScope& scope,
     auto* results = ToMLComputeResult(&scope, tester.Value());
     inputs = results->inputs();
     outputs = results->outputs();
-    return nullptr;
+    return {};
   } else {
-    return V8DOMException::ToWrappable(scope.GetIsolate(),
-                                       tester.Value().V8Value());
+    return GetErrorNameAndMessage(&scope, tester.Value());
   }
 }
 
-ScriptPromise MLGraphTestBase::CreateContext(V8TestingScope& scope,
-                                             MLContextOptions* options) {
+ScriptPromiseUntyped MLGraphTestBase::CreateContext(V8TestingScope& scope,
+                                                    MLContextOptions* options) {
   auto* ml = MakeGarbageCollected<ML>(scope.GetExecutionContext());
   return ml->createContext(scope.GetScriptState(), options,
                            scope.GetExceptionState());

@@ -58,9 +58,11 @@ gfx::BufferUsage GetBufferUsage(uint32_t usage) {
 
 constexpr uint32_t kSupportedUsage =
     SHARED_IMAGE_USAGE_GLES2_READ | SHARED_IMAGE_USAGE_GLES2_WRITE |
+    SHARED_IMAGE_USAGE_GLES2_FOR_RASTER_ONLY |
     SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT |
     SHARED_IMAGE_USAGE_DISPLAY_WRITE | SHARED_IMAGE_USAGE_DISPLAY_READ |
     SHARED_IMAGE_USAGE_RASTER_READ | SHARED_IMAGE_USAGE_RASTER_WRITE |
+    SHARED_IMAGE_USAGE_RASTER_OVER_GLES2_ONLY |
     SHARED_IMAGE_USAGE_OOP_RASTERIZATION | SHARED_IMAGE_USAGE_SCANOUT |
     SHARED_IMAGE_USAGE_WEBGPU_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE |
     SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE | SHARED_IMAGE_USAGE_VIDEO_DECODE |
@@ -72,10 +74,10 @@ constexpr uint32_t kSupportedUsage =
 }  // namespace
 
 OzoneImageBackingFactory::OzoneImageBackingFactory(
-    SharedContextState* shared_context_state,
+    scoped_refptr<SharedContextState> shared_context_state,
     const GpuDriverBugWorkarounds& workarounds)
     : SharedImageBackingFactory(kSupportedUsage),
-      shared_context_state_(shared_context_state),
+      shared_context_state_(std::move(shared_context_state)),
       workarounds_(workarounds) {}
 
 OzoneImageBackingFactory::~OzoneImageBackingFactory() = default;
@@ -122,7 +124,7 @@ OzoneImageBackingFactory::CreateSharedImageInternal(
   return std::make_unique<OzoneImageBacking>(
       mailbox, format, gfx::BufferPlane::DEFAULT, size, color_space,
       surface_origin, alpha_type, usage, std::move(debug_label),
-      shared_context_state_.get(), std::move(pixmap), workarounds_,
+      shared_context_state_, std::move(pixmap), workarounds_,
       std::move(buffer_usage));
 }
 
@@ -137,7 +139,7 @@ std::unique_ptr<SharedImageBacking> OzoneImageBackingFactory::CreateSharedImage(
     uint32_t usage,
     std::string debug_label,
     bool is_thread_safe) {
-  DCHECK(!is_thread_safe);
+  CHECK(!is_thread_safe);
   return CreateSharedImageInternal(mailbox, format, surface_handle, size,
                                    color_space, surface_origin, alpha_type,
                                    usage, std::move(debug_label));
@@ -152,7 +154,9 @@ std::unique_ptr<SharedImageBacking> OzoneImageBackingFactory::CreateSharedImage(
     SkAlphaType alpha_type,
     uint32_t usage,
     std::string debug_label,
+    bool is_thread_safe,
     base::span<const uint8_t> pixel_data) {
+  CHECK(!is_thread_safe);
   SurfaceHandle surface_handle = SurfaceHandle();
   auto backing = CreateSharedImageInternal(
       mailbox, format, surface_handle, size, color_space, surface_origin,
@@ -205,7 +209,7 @@ std::unique_ptr<SharedImageBacking> OzoneImageBackingFactory::CreateSharedImage(
       GetPlaneBufferFormat(plane, buffer_format));
   auto backing = std::make_unique<OzoneImageBacking>(
       mailbox, plane_format, plane, plane_size, color_space, surface_origin,
-      alpha_type, usage, std::move(debug_label), shared_context_state_.get(),
+      alpha_type, usage, std::move(debug_label), shared_context_state_,
       std::move(pixmap), workarounds_);
   backing->SetCleared();
 
@@ -237,7 +241,7 @@ std::unique_ptr<SharedImageBacking> OzoneImageBackingFactory::CreateSharedImage(
   auto backing = std::make_unique<OzoneImageBacking>(
       mailbox, format, gfx::BufferPlane::DEFAULT, size, color_space,
       surface_origin, alpha_type, usage, std::move(debug_label),
-      shared_context_state_.get(), std::move(pixmap), workarounds_);
+      shared_context_state_, std::move(pixmap), workarounds_);
   backing->SetCleared();
 
   return backing;
@@ -301,7 +305,8 @@ bool OzoneImageBackingFactory::IsSupported(
   }
 
   ui::GLOzone* gl_ozone = factory->GetCurrentGLOzone();
-  if (used_by_gl && (!gl_ozone || !gl_ozone->CanImportNativePixmap())) {
+  if (used_by_gl &&
+      (!gl_ozone || !gl_ozone->CanImportNativePixmap(ToBufferFormat(format)))) {
     return false;
   }
 
@@ -421,6 +426,10 @@ bool OzoneImageBackingFactory::CanWebGPUSynchronizeGpuFence() {
   // TODO: somehow check if Dawn is using sync files.
   return false;
 #endif
+}
+
+SharedImageBackingType OzoneImageBackingFactory::GetBackingType() {
+  return SharedImageBackingType::kOzone;
 }
 
 }  // namespace gpu

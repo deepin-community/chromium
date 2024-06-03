@@ -14,11 +14,13 @@
 #include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "components/viz/common/vertical_scroll_direction.h"
+#include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
 #include "content/common/content_export.h"
 #include "content/public/common/drop_data.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/drag_operation.h"
+#include "third_party/blink/public/mojom/device_posture/device_posture_provider.mojom.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-shared.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
@@ -42,7 +44,6 @@ namespace content {
 class BrowserAccessibilityManager;
 class RenderFrameProxyHost;
 class RenderWidgetHostImpl;
-class DevicePostureProviderImpl;
 class RenderWidgetHostInputEventRouter;
 class RenderViewHostDelegateView;
 class TextInputManager;
@@ -117,6 +118,7 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
                                     const blink::WebInputEvent& event) {}
 
   // Asks whether the page is in a state of ignoring input events.
+  virtual bool ShouldIgnoreWebInputEvents(const blink::WebInputEvent& event);
   virtual bool ShouldIgnoreInputEvents();
 
   // Callback to give the browser a chance to handle the specified gesture
@@ -213,7 +215,7 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
   virtual ui::WindowShowState GetWindowShowState();
 
   // Returns the device posture provider tracking the device posture.
-  virtual DevicePostureProviderImpl* GetDevicePostureProvider();
+  virtual blink::mojom::DevicePostureProvider* GetDevicePostureProvider();
 
   // Returns whether the window can be resized or not. Defaults to true for
   // desktopOSs and false for mobileOSs.
@@ -330,6 +332,18 @@ class CONTENT_EXPORT RenderWidgetHostDelegate {
   // keyboard or 0 if the virtual keyboard is hidden or in a mode that doesn't
   // resize the view.
   virtual int GetVirtualKeyboardResizeHeight();
+
+  // Returns false if it's a private window, and text entered into this page
+  // shouldn't be used to improve typing suggestions for the user.
+  virtual bool ShouldDoLearning();
+
+  // Zoom level is normally inherited from the parent. The delegate can override
+  // this behavior by returning a value.
+  // This is used in <webview>, which permits zoom level to be set
+  // programmatically by script:
+  // https://developer.chrome.com/docs/apps/reference/webviewTag#method-setZoom
+  virtual std::optional<double> AdjustedChildZoom(
+      const RenderWidgetHostViewChildFrame* render_widget);
 
  protected:
   virtual ~RenderWidgetHostDelegate() {}

@@ -27,10 +27,7 @@ constexpr base::TimeDelta kBigLocalChangeNudgeDelay = base::Milliseconds(2000);
 constexpr base::TimeDelta kVeryBigLocalChangeNudgeDelay = kDefaultPollInterval;
 
 constexpr base::TimeDelta kDefaultLocalChangeNudgeDelayForSessions =
-    base::Seconds(11);
-
-constexpr base::TimeDelta kDefaultLocalChangeNudgeDelayForSegmentations =
-    base::Seconds(11);
+    base::Seconds(15);
 
 // Nudge delay for remote invalidations. Common to all data types.
 constexpr base::TimeDelta kRemoteInvalidationDelay = base::Milliseconds(250);
@@ -58,13 +55,9 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(ModelType model_type) {
       return kDefaultLocalChangeNudgeDelayForSessions;
     case SAVED_TAB_GROUP:
       return syncer::kTabGroupsSaveCustomNudgeDelay.Get();
-    case SEGMENTATION:
-      // There are multiple segmentations computed during start-up within
-      // seconds. Applies a custom nudge delay, so that they are batched into
-      // one commit.
-      return kDefaultLocalChangeNudgeDelayForSegmentations;
     case BOOKMARKS:
     case PREFERENCES:
+    case COMPARE:
       // Types with sometimes automatic changes get longer delays to allow more
       // coalescing.
       return kBigLocalChangeNudgeDelay;
@@ -79,6 +72,7 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(ModelType model_type) {
     case AUTOFILL_WALLET_METADATA:
     case AUTOFILL_WALLET_OFFER:
     case AUTOFILL_WALLET_USAGE:
+    case COLLABORATION_GROUP:
     case CONTACT_INFO:
     case THEMES:
     case EXTENSIONS:
@@ -110,6 +104,7 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(ModelType model_type) {
     case NIGORI:
     case POWER_BOOKMARK:
     case WEBAUTHN_CREDENTIAL:
+    case PLUS_ADDRESS:
       return kMediumLocalChangeNudgeDelay;
     case UNSPECIFIED:
       NOTREACHED();
@@ -158,7 +153,6 @@ bool CanGetCommitsFromExtensions(ModelType model_type) {
     case PRINTERS_AUTHORIZATION_SERVERS:
     case READING_LIST:
     case USER_CONSENTS:
-    case SEGMENTATION:
     case SEND_TAB_TO_SELF:
     case SECURITY_EVENTS:
     case WIFI_CONFIGURATIONS:
@@ -174,6 +168,9 @@ bool CanGetCommitsFromExtensions(ModelType model_type) {
     case INCOMING_PASSWORD_SHARING_INVITATION:
     case OUTGOING_PASSWORD_SHARING_INVITATION:
     case SHARED_TAB_GROUP_DATA:
+    case COLLABORATION_GROUP:
+    case PLUS_ADDRESS:
+    case COMPARE:
       return false;
     case UNSPECIFIED:
       NOTREACHED();

@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
@@ -170,7 +171,7 @@ class CONTENT_EXPORT AuthenticatorRequestClientDelegate
     : public device::FidoRequestHandlerBase::Observer {
  public:
   using AccountPreselectedCallback =
-      base::RepeatingCallback<void(device::PublicKeyCredentialDescriptor)>;
+      base::RepeatingCallback<void(device::DiscoverableCredentialMetadata)>;
 
   // Failure reasons that might be of interest to the user, so the embedder may
   // decide to inform the user.
@@ -369,7 +370,7 @@ class CONTENT_EXPORT AuthenticatorRequestClientDelegate
   void BluetoothAdapterPowerChanged(bool is_powered_on) override;
   void FidoAuthenticatorAdded(
       const device::FidoAuthenticator& authenticator) override;
-  void FidoAuthenticatorRemoved(base::StringPiece device_id) override;
+  void FidoAuthenticatorRemoved(std::string_view device_id) override;
   bool SupportsPIN() const override;
   void CollectPIN(
       CollectPINOptions options,

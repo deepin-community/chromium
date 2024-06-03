@@ -133,8 +133,15 @@ class WaylandInputController : public InputController {
   bool AreAnyKeysPressed() override { return false; }
   void BlockModifiersOnDevices(std::vector<int> device_ids) override {}
 
+  std::unique_ptr<ScopedDisableInputDevices> DisableInputDevices() override {
+    NOTIMPLEMENTED_LOG_ONCE();
+    return nullptr;
+  }
+
+  bool AreInputDevicesEnabled() const override { return true; }
+
  private:
-  const raw_ptr<WaylandConnection> connection_;
+  const raw_ptr<WaylandConnection, LeakedDanglingUntriaged> connection_;
 };
 
 }  // namespace

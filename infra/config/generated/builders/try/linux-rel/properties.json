@@ -14,7 +14,7 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "GPU Linux Builder",
-              "project": "chromium-m123"
+              "project": "chromium-m125"
             },
             "builder_spec": {
               "build_gs_bucket": "chromium-gpu-archive",
@@ -31,7 +31,8 @@
               },
               "legacy_gclient_config": {
                 "apply_configs": [
-                  "use_clang_coverage"
+                  "use_clang_coverage",
+                  "chromium_with_telemetry_dependencies"
                 ],
                 "config": "chromium"
               }
@@ -41,7 +42,7 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "Linux Builder",
-              "project": "chromium-m123"
+              "project": "chromium-m125"
             },
             "builder_spec": {
               "build_gs_bucket": "chromium-linux-archive",
@@ -58,7 +59,8 @@
               },
               "legacy_gclient_config": {
                 "apply_configs": [
-                  "use_clang_coverage"
+                  "use_clang_coverage",
+                  "chromium_with_telemetry_dependencies"
                 ],
                 "config": "chromium"
               }
@@ -68,7 +70,7 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "Linux Release (NVIDIA)",
-              "project": "chromium-m123"
+              "project": "chromium-m125"
             },
             "builder_spec": {
               "build_gs_bucket": "chromium-gpu-archive",
@@ -92,7 +94,7 @@
               "parent": {
                 "bucket": "ci",
                 "builder": "GPU Linux Builder",
-                "project": "chromium-m123"
+                "project": "chromium-m125"
               }
             }
           },
@@ -100,7 +102,7 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "Linux Tests",
-              "project": "chromium-m123"
+              "project": "chromium-m125"
             },
             "builder_spec": {
               "build_gs_bucket": "chromium-linux-archive",
@@ -124,7 +126,7 @@
               "parent": {
                 "bucket": "ci",
                 "builder": "Linux Builder",
-                "project": "chromium-m123"
+                "project": "chromium-m125"
               }
             }
           }
@@ -134,24 +136,24 @@
         {
           "bucket": "ci",
           "builder": "GPU Linux Builder",
-          "project": "chromium-m123"
+          "project": "chromium-m125"
         },
         {
           "bucket": "ci",
           "builder": "Linux Builder",
-          "project": "chromium-m123"
+          "project": "chromium-m125"
         }
       ],
       "builder_ids_in_scope_for_testing": [
         {
           "bucket": "ci",
           "builder": "Linux Release (NVIDIA)",
-          "project": "chromium-m123"
+          "project": "chromium-m125"
         },
         {
           "bucket": "ci",
           "builder": "Linux Tests",
-          "project": "chromium-m123"
+          "project": "chromium-m125"
         }
       ]
     }
@@ -166,6 +168,12 @@
   "$build/flakiness": {
     "check_for_flakiness": true,
     "check_for_flakiness_with_resultdb": true
+  },
+  "$build/reclient": {
+    "instance": "rbe-chromium-untrusted",
+    "jobs": 500,
+    "metrics_project": "chromium-reclient-metrics",
+    "scandeps_server": true
   },
   "$build/siso": {
     "configs": [

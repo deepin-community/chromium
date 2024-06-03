@@ -10,14 +10,22 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/public/cpp/test/in_process_data_decoder.h"
 #include "ash/public/cpp/wallpaper/online_wallpaper_params.h"
 #include "ash/public/cpp/wallpaper/online_wallpaper_variant.h"
 #include "ash/public/cpp/wallpaper/wallpaper_controller_client.h"
 #include "ash/public/cpp/wallpaper/wallpaper_info.h"
+#include "ash/wallpaper/sea_pen_wallpaper_manager.h"
+#include "ash/wallpaper/test_sea_pen_wallpaper_manager_session_delegate.h"
 #include "ash/wallpaper/wallpaper_constants.h"
 #include "ash/wallpaper/wallpaper_pref_manager.h"
+#include "ash/webui/common/mojom/sea_pen.mojom-forward.h"
+#include "ash/webui/common/mojom/sea_pen.mojom.h"
+#include "ash/webui/common/mojom/sea_pen_generated.mojom-shared.h"
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom.h"
+#include "base/containers/flat_map.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
@@ -28,6 +36,7 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/policy/external_data/handlers/device_wallpaper_image_external_data_handler.h"
+#include "chrome/browser/ash/settings/cros_settings_holder.h"
 #include "chrome/browser/ash/settings/device_settings_cache.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
@@ -42,8 +51,8 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/manta/proto/manta.pb.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -58,10 +67,10 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/codec/png_codec.h"
-#include "ui/gfx/image/image_skia_rep.h"
 
 namespace ash::personalization_app {
 
@@ -69,6 +78,16 @@ namespace {
 
 constexpr char kFakeTestEmail[] = "fakeemail@personalization";
 constexpr char kTestGaiaId[] = "1234567890";
+
+// Create fake Jpg image bytes.
+std::string CreateJpgBytes() {
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(1, 1);
+  bitmap.eraseARGB(255, 31, 63, 127);
+  std::vector<unsigned char> data;
+  gfx::JPEGCodec::Encode(bitmap, /*quality=*/100, &data);
+  return std::string(data.begin(), data.end());
+}
 
 TestingPrefServiceSimple* RegisterPrefs(TestingPrefServiceSimple* local_state) {
   ash::device_settings_cache::RegisterPrefs(local_state->registry());
@@ -109,6 +128,13 @@ std::unique_ptr<KeyedService> MakeMockPersonalizationAppManager(
 class TestWallpaperObserver
     : public ash::personalization_app::mojom::WallpaperObserver {
  public:
+  void WaitForAttributionChange() {
+    ASSERT_FALSE(on_attribution_changed_callback_);
+    base::RunLoop loop;
+    on_attribution_changed_callback_ = loop.QuitClosure();
+    loop.Run();
+  }
+
   // WallpaperObserver:
   void OnWallpaperPreviewEnded() override {}
 
@@ -121,6 +147,9 @@ class TestWallpaperObserver
       ash::personalization_app::mojom::CurrentAttributionPtr attribution)
       override {
     current_attribution_ = std::move(attribution);
+    if (on_attribution_changed_callback_) {
+      std::move(on_attribution_changed_callback_).Run();
+    }
   }
 
   mojo::PendingRemote<ash::personalization_app::mojom::WallpaperObserver>
@@ -156,6 +185,8 @@ class TestWallpaperObserver
 
   ash::personalization_app::mojom::CurrentAttributionPtr current_attribution_ =
       nullptr;
+
+  base::OnceClosure on_attribution_changed_callback_;
 };
 
 }  // namespace
@@ -175,6 +206,9 @@ class PersonalizationAppWallpaperProviderImplTest : public testing::Test {
  protected:
   // testing::Test:
   void SetUp() override {
+    sea_pen_wallpaper_manager()->SetSessionDelegateForTesting(
+        std::make_unique<TestSeaPenWallpaperManagerSessionDelegate>());
+
     wallpaper_controller_client_ = std::make_unique<
         WallpaperControllerClientImpl>(
         std::make_unique<wallpaper_handlers::TestWallpaperFetcherDelegate>());
@@ -218,6 +252,16 @@ class PersonalizationAppWallpaperProviderImplTest : public testing::Test {
         {image_info.unit_id, {image_info}});
   }
 
+  SeaPenWallpaperManager* sea_pen_wallpaper_manager() {
+    return &sea_pen_wallpaper_manager_;
+  }
+
+  TestSeaPenWallpaperManagerSessionDelegate*
+  sea_pen_wallpaper_manager_session_delegate() {
+    return static_cast<TestSeaPenWallpaperManagerSessionDelegate*>(
+        sea_pen_wallpaper_manager()->session_delegate_for_testing());
+  }
+
   TestWallpaperController* test_wallpaper_controller() {
     return &test_wallpaper_controller_;
   }
@@ -248,6 +292,10 @@ class PersonalizationAppWallpaperProviderImplTest : public testing::Test {
         test_wallpaper_observer_.pending_remote());
   }
 
+  TestWallpaperObserver* test_wallpaper_observer() {
+    return &test_wallpaper_observer_;
+  }
+
   ash::personalization_app::mojom::CurrentWallpaper* current_wallpaper() {
     wallpaper_provider_remote_.FlushForTesting();
     return test_wallpaper_observer_.current_wallpaper();
@@ -263,17 +311,19 @@ class PersonalizationAppWallpaperProviderImplTest : public testing::Test {
   // (see crbug.com/846380).
   base::test::ScopedFeatureList scoped_feature_list_;
   content::BrowserTaskEnvironment task_environment_;
+  InProcessDataDecoder in_process_data_decoder_;
   TestingPrefServiceSimple pref_service_;
-  // Required for |ScopedTestCrosSettings|.
+  // Required for CrosSettings.
   ash::ScopedStubInstallAttributes scoped_stub_install_attributes_;
-  // Required for |ScopedTestCrosSettings|.
+  // Required for CrosSettings.
   ash::ScopedTestDeviceSettingsService scoped_device_settings_;
   // Required for |WallpaperControllerClientImpl|.
-  ash::ScopedTestCrosSettings scoped_testing_cros_settings_{
-      RegisterPrefs(&pref_service_)};
+  ash::CrosSettingsHolder cros_settings_holder_{
+      ash::DeviceSettingsService::Get(), RegisterPrefs(&pref_service_)};
   user_manager::ScopedUserManager scoped_user_manager_;
   TestingProfileManager profile_manager_;
   raw_ptr<TestingProfile> profile_;
+  SeaPenWallpaperManager sea_pen_wallpaper_manager_;
   TestWallpaperController test_wallpaper_controller_;
   // |wallpaper_controller_client_| must be destructed before
   // |test_wallpaper_controller_|.
@@ -391,86 +441,62 @@ TEST_F(PersonalizationAppWallpaperProviderImplTest,
             current->layout);
 }
 
-TEST_F(PersonalizationAppWallpaperProviderImplTest, SendsSeaPenWallpaper) {
+TEST_F(PersonalizationAppWallpaperProviderImplTest, ValidSeaPenAttribution) {
+  {
+    // Save the image and metadata to disk.
+    mojom::SeaPenQueryPtr sea_pen_query_ptr =
+        mojom::SeaPenQuery::NewTemplateQuery(mojom::SeaPenTemplateQuery::New(
+            mojom::SeaPenTemplateId::kArt,
+            base::flat_map<mojom::SeaPenTemplateChip,
+                           mojom::SeaPenTemplateOption>(
+                {{mojom::SeaPenTemplateChip::kArtFeature,
+                  mojom::SeaPenTemplateOption::kArtFeatureBeach},
+                 {mojom::SeaPenTemplateChip::kArtMovement,
+                  mojom::SeaPenTemplateOption::kArtMovementAbstract}}),
+            mojom::SeaPenUserVisibleQuery::New("test template query text",
+                                               "test template query title")));
+
+    base::test::TestFuture<bool> save_sea_pen_image_future;
+    sea_pen_wallpaper_manager()->SaveSeaPenImage(
+        GetTestAccountId(), {CreateJpgBytes(), 111u}, sea_pen_query_ptr,
+        save_sea_pen_image_future.GetCallback());
+    ASSERT_TRUE(save_sea_pen_image_future.Get());
+  }
+
+  // Set the image as user wallpaper.
+  test_wallpaper_controller()->SetSeaPenWallpaper(GetTestAccountId(), 111u,
+                                                  base::DoNothing());
+
   SetWallpaperObserver();
-
-  test_wallpaper_controller()->SetSeaPenWallpaper(
-      GetTestAccountId(), {/*jpg_bytes=*/std::string(), /*id=*/111},
-      ash::personalization_app::mojom::SeaPenQuery::NewTextQuery(
-          "search_query"),
-      base::DoNothing());
-
-  ash::personalization_app::mojom::CurrentWallpaper* current =
-      current_wallpaper();
-  EXPECT_EQ(ash::WallpaperType::kSeaPen, current->type);
-  EXPECT_EQ(std::string(), current->description_content);
-  EXPECT_EQ(std::string(), current->description_title);
-}
-
-TEST_F(PersonalizationAppWallpaperProviderImplTest,
-       SendsSeaPenWallpaperFromFile) {
-  SetWallpaperObserver();
-
-  test_wallpaper_controller()->SetSeaPenWallpaperFromFile(
-      GetTestAccountId(), base::FilePath("/sea_pen/111.jpg"),
-      base::DoNothing());
-
-  ash::personalization_app::mojom::CurrentWallpaper* wallpaper =
-      current_wallpaper();
-  EXPECT_EQ(ash::WallpaperType::kSeaPen, wallpaper->type);
-  EXPECT_EQ(std::string(), wallpaper->description_content);
-  EXPECT_EQ(std::string(), wallpaper->description_title);
-}
-
-TEST_F(PersonalizationAppWallpaperProviderImplTest,
-       GetValidSeaPenMetadataNotifyAttribution) {
-  SetWallpaperObserver();
-  test_wallpaper_controller()->set_sea_pen_metadata(
-      R"({"creation_time":"13349580387513653",
-      "user_visible_query_text":"test template query",
-      "user_visible_query_template":"test template title",
-      "options":{"4":"55","5":"64"},"template_id":"2"})");
-
-  test_wallpaper_controller()->SetSeaPenWallpaperFromFile(
-      GetTestAccountId(), base::FilePath("/sea_pen/111.jpg"),
-      base::DoNothing());
+  test_wallpaper_observer()->WaitForAttributionChange();
 
   ash::personalization_app::mojom::CurrentAttribution* current_attr =
       current_attribution();
-  EXPECT_EQ("/sea_pen/111.jpg", current_attr->key);
-  std::vector<std::string> expected_attr{"test template query",
-                                         "test template title"};
+  EXPECT_EQ("111", current_attr->key);
+  std::vector<std::string> expected_attr{
+      "test template query text",
+      l10n_util::GetStringUTF8(IDS_SEA_PEN_POWERED_BY_GOOGLE_AI)};
   EXPECT_EQ(expected_attr, current_attr->attribution);
 }
 
-TEST_F(PersonalizationAppWallpaperProviderImplTest,
-       GetInvalidFormatSeaPenMetadataNotifyEmptyAttribution) {
-  SetWallpaperObserver();
-  test_wallpaper_controller()->set_sea_pen_metadata(
-      R"({"creation_time":"13349580387513653"})");
+TEST_F(PersonalizationAppWallpaperProviderImplTest, MissingSeaPenAttribution) {
+  // Write a jpg with no metadata.
+  const base::FilePath jpg_path = sea_pen_wallpaper_manager_session_delegate()
+                                      ->GetStorageDirectory(GetTestAccountId())
+                                      .Append("111")
+                                      .AddExtension(".jpg");
+  ASSERT_TRUE(base::CreateDirectory(jpg_path.DirName()));
+  ASSERT_TRUE(base::WriteFile(jpg_path, CreateJpgBytes()));
 
-  test_wallpaper_controller()->SetSeaPenWallpaperFromFile(
-      GetTestAccountId(), base::FilePath("/sea_pen/111.jpg"),
-      base::DoNothing());
+  test_wallpaper_controller()->SetSeaPenWallpaper(GetTestAccountId(), 111u,
+                                                  base::DoNothing());
+
+  SetWallpaperObserver();
+  test_wallpaper_observer()->WaitForAttributionChange();
 
   ash::personalization_app::mojom::CurrentAttribution* current_attr =
       current_attribution();
-  EXPECT_EQ("/sea_pen/111.jpg", current_attr->key);
-  EXPECT_EQ(std::vector<std::string>(), current_attr->attribution);
-}
-
-TEST_F(PersonalizationAppWallpaperProviderImplTest,
-       GetMissingFieldSeaPenMetadataNotifyEmptyAttribution) {
-  SetWallpaperObserver();
-  test_wallpaper_controller()->set_sea_pen_metadata("invalid format metadata");
-
-  test_wallpaper_controller()->SetSeaPenWallpaperFromFile(
-      GetTestAccountId(), base::FilePath("/sea_pen/111.jpg"),
-      base::DoNothing());
-
-  ash::personalization_app::mojom::CurrentAttribution* current_attr =
-      current_attribution();
-  EXPECT_EQ("/sea_pen/111.jpg", current_attr->key);
+  EXPECT_EQ("111", current_attr->key);
   EXPECT_EQ(std::vector<std::string>(), current_attr->attribution);
 }
 

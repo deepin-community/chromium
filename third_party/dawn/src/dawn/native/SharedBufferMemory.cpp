@@ -27,7 +27,12 @@
 
 #include "dawn/native/SharedBufferMemory.h"
 
+#include <utility>
+
+#include "dawn/native/Buffer.h"
+#include "dawn/native/ChainUtils.h"
 #include "dawn/native/Device.h"
+#include "dawn/native/Queue.h"
 
 namespace dawn::native {
 
@@ -37,6 +42,21 @@ class ErrorSharedBufferMemory : public SharedBufferMemoryBase {
   public:
     ErrorSharedBufferMemory(DeviceBase* device, const SharedBufferMemoryDescriptor* descriptor)
         : SharedBufferMemoryBase(device, descriptor, ObjectBase::kError) {}
+
+    Ref<SharedResourceMemoryContents> CreateContents() override { DAWN_UNREACHABLE(); }
+    ResultOrError<Ref<BufferBase>> CreateBufferImpl(
+        const UnpackedPtr<BufferDescriptor>& descriptor) override {
+        DAWN_UNREACHABLE();
+    }
+    MaybeError BeginAccessImpl(BufferBase* buffer,
+                               const UnpackedPtr<BeginAccessDescriptor>& descriptor) override {
+        DAWN_UNREACHABLE();
+    }
+    ResultOrError<FenceAndSignalValue> EndAccessImpl(BufferBase* buffer,
+                                                     UnpackedPtr<EndAccessState>& state) override {
+        DAWN_UNREACHABLE();
+    }
+    void DestroyImpl() override {}
 };
 
 }  // namespace
@@ -51,38 +71,80 @@ SharedBufferMemoryBase* SharedBufferMemoryBase::MakeError(
 SharedBufferMemoryBase::SharedBufferMemoryBase(DeviceBase* device,
                                                const SharedBufferMemoryDescriptor* descriptor,
                                                ObjectBase::ErrorTag tag)
-    : ApiObjectBase(device, tag, descriptor->label) {}
+    : SharedResourceMemory(device, tag, descriptor->label),
+      mProperties{nullptr, wgpu::BufferUsage::None, 0} {}
 
 SharedBufferMemoryBase::SharedBufferMemoryBase(DeviceBase* device,
                                                const char* label,
                                                const SharedBufferMemoryProperties& properties)
-    : ApiObjectBase(device, label), mProperties(properties) {}
+    : SharedResourceMemory(device, label), mProperties(properties) {
+    GetObjectTrackingList()->Track(this);
+}
 
 ObjectType SharedBufferMemoryBase::GetType() const {
     return ObjectType::SharedBufferMemory;
 }
 
-void SharedBufferMemoryBase::DestroyImpl() {}
-
 void SharedBufferMemoryBase::APIGetProperties(SharedBufferMemoryProperties* properties) const {
-    return;
+    properties->usage = mProperties.usage;
+    properties->size = mProperties.size;
+
+    UnpackedPtr<SharedBufferMemoryProperties> unpacked;
+    if (GetDevice()->ConsumedError(ValidateAndUnpack(properties), &unpacked,
+                                   "calling %s.GetProperties", this)) {
+        return;
+    }
 }
 
 BufferBase* SharedBufferMemoryBase::APICreateBuffer(const BufferDescriptor* descriptor) {
-    return nullptr;
+    Ref<BufferBase> result;
+
+    // Provide the defaults if no descriptor is provided.
+    BufferDescriptor defaultDescriptor;
+    if (descriptor == nullptr) {
+        defaultDescriptor = {};
+        defaultDescriptor.size = mProperties.size;
+        defaultDescriptor.usage = mProperties.usage;
+        descriptor = &defaultDescriptor;
+    }
+
+    if (GetDevice()->ConsumedError(CreateBuffer(descriptor), &result,
+                                   InternalErrorType::OutOfMemory, "calling %s.CreateBuffer(%s).",
+                                   this, descriptor)) {
+        result = BufferBase::MakeError(GetDevice(), descriptor);
+    }
+    return ReturnToAPI(std::move(result));
 }
 
-bool SharedBufferMemoryBase::APIBeginAccess(BufferBase* buffer,
-                                            const BeginAccessDescriptor* descriptor) {
-    return false;
-}
+ResultOrError<Ref<BufferBase>> SharedBufferMemoryBase::CreateBuffer(
+    const BufferDescriptor* rawDescriptor) {
+    DAWN_TRY(GetDevice()->ValidateIsAlive());
+    DAWN_TRY(GetDevice()->ValidateObject(this));
+    // Validate the buffer descriptor.
+    UnpackedPtr<BufferDescriptor> descriptor;
+    DAWN_TRY_ASSIGN(descriptor, ValidateBufferDescriptor(GetDevice(), rawDescriptor));
 
-bool SharedBufferMemoryBase::APIEndAccess(BufferBase* buffer, EndAccessState* state) {
-    return false;
-}
+    // Emit a specific error message if the user attempts to create a buffer with Uniform usage.
+    DAWN_INVALID_IF(descriptor->usage & wgpu::BufferUsage::Uniform,
+                    "The buffer usage (%s) contains (%s), which is not allowed on buffers created "
+                    "from SharedBufferMemory.",
+                    descriptor->usage, wgpu::BufferUsage::Uniform);
 
-bool SharedBufferMemoryBase::APIIsDeviceLost() {
-    return false;
+    // Ensure the buffer descriptor usage is a subset of the shared buffer memory's usage.
+    DAWN_INVALID_IF(!IsSubset(descriptor->usage, mProperties.usage),
+                    "The buffer usage (%s) is incompatible with the SharedBufferMemory usage (%s).",
+                    descriptor->usage, mProperties.usage);
+
+    // Validate that the buffer size exactly matches the shared buffer memory's size.
+    DAWN_INVALID_IF(descriptor->size != mProperties.size,
+                    "SharedBufferMemory size (%u) doesn't match descriptor size (%u).",
+                    mProperties.size, descriptor->size);
+
+    Ref<BufferBase> buffer;
+    DAWN_TRY_ASSIGN(buffer, CreateBufferImpl(descriptor));
+    // Access is not allowed until BeginAccess has been called.
+    buffer->SetHasAccess(false);
+    return buffer;
 }
 
 void APISharedBufferMemoryEndAccessStateFreeMembers(WGPUSharedBufferMemoryEndAccessState cState) {

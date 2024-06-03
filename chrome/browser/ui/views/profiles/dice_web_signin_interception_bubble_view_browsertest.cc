@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/signin/web_signin_interceptor.h"
 #include "chrome/browser/ui/views/profiles/dice_web_signin_interception_bubble_view.h"
+
+#include <optional>
 
 #include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -14,6 +15,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/signin/signin_features.h"
+#include "chrome/browser/signin/web_signin_interceptor.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -41,8 +43,6 @@
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
-
-#include <optional>
 
 namespace {
 
@@ -72,6 +72,13 @@ void SimulateEscapeKeyPress(content::WebContents* web_content) {
       ->GetRenderViewHost()
       ->GetWidget()
       ->ForwardKeyboardEvent(event);
+}
+
+bool IsExplicitBrowserSigninExperimentOnly() {
+  return switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
+             switches::ExplicitBrowserSigninPhase::kExperimental) &&
+         !switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
+             switches::ExplicitBrowserSigninPhase::kFull);
 }
 
 }  // namespace
@@ -496,7 +503,9 @@ IN_PROC_BROWSER_TEST_F(DiceWebSigninInterceptionBubbleBrowserTest,
   // Equivalent to `kInterceptionBubbleBaseHeight` default.
   bubble->SetHeightAndShowWidget(/*height=*/500);
   EXPECT_FALSE(callback_result_.has_value());
-  EXPECT_TRUE(GetAvatarButton()->IsButtonActionDisabled());
+  if (IsExplicitBrowserSigninExperimentOnly()) {
+    EXPECT_TRUE(GetAvatarButton()->IsButtonActionDisabled());
+  }
 
   // Take a handle on the bubble, to close it later.
   bubble_handle_ = bubble->GetHandle();
@@ -559,7 +568,9 @@ IN_PROC_BROWSER_TEST_F(DiceWebSigninInterceptionBubbleBrowserTest,
   // Equivalent to `kInterceptionBubbleBaseHeight` default.
   bubble->SetHeightAndShowWidget(/*height=*/500);
   EXPECT_FALSE(callback_result_.has_value());
-  EXPECT_TRUE(GetAvatarButton()->IsButtonActionDisabled());
+  if (IsExplicitBrowserSigninExperimentOnly()) {
+    EXPECT_TRUE(GetAvatarButton()->IsButtonActionDisabled());
+  }
 
   views::test::WidgetDestroyedWaiter closing_observer(widget);
   EXPECT_FALSE(bubble->GetAccepted());

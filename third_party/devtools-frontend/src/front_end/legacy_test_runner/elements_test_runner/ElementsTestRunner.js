@@ -510,7 +510,7 @@ async function printStyleSection(section, omitLonghands, includeSelectorGroupMar
 
   TestRunner.addResult(
       '[expanded] ' + ((section.propertiesTreeOutline.element.classList.contains('no-affect') ? '[no-affect] ' : '')));
-  const queries = section.titleElement.querySelectorAll('devtools-css-query');
+  const queries = section.element.querySelectorAll('devtools-css-query');
 
   for (const query of queries) {
     const queryElement = query.shadowRoot.querySelector('.query');
@@ -525,7 +525,7 @@ async function printStyleSection(section, omitLonghands, includeSelectorGroupMar
       section.titleElement.querySelector('.selector') || section.titleElement.querySelector('.keyframe-key');
   let selectorText = (includeSelectorGroupMarks ? buildMarkedSelectors(selector) : text(selector));
   selectorText += text(selector.nextSibling);
-  const anchor = section.titleElement.querySelector('.styles-section-subtitle');
+  const anchor = section.element.querySelector('.styles-section-subtitle');
 
   if (anchor) {
     const anchorText = await extractLinkText(anchor);

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "core/fxcrt/autorestorer.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxcrt/widetext_buffer.h"
@@ -22,7 +23,6 @@
 #include "fxjs/xfa/cfxjse_resolveprocessor.h"
 #include "fxjs/xfa/cfxjse_value.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/containers/contains.h"
 #include "v8/include/v8-function-callback.h"
 #include "v8/include/v8-function.h"
 #include "v8/include/v8-local-handle.h"
@@ -44,8 +44,7 @@ using pdfium::fxjse::kClassTag;
 const FXJSE_CLASS_DESCRIPTOR kGlobalClassDescriptor = {
     kClassTag,  // tag
     "Root",     // name
-    nullptr,    // methods
-    0,          // method count
+    {},         // methods
     CFXJSE_Engine::GlobalPropTypeGetter,
     CFXJSE_Engine::GlobalPropertyGetter,
     CFXJSE_Engine::GlobalPropertySetter,
@@ -55,8 +54,7 @@ const FXJSE_CLASS_DESCRIPTOR kGlobalClassDescriptor = {
 const FXJSE_CLASS_DESCRIPTOR kNormalClassDescriptor = {
     kClassTag,    // tag
     "XFAObject",  // name
-    nullptr,      // methods
-    0,            // method count
+    {},           // methods
     CFXJSE_Engine::NormalPropTypeGetter,
     CFXJSE_Engine::NormalPropertyGetter,
     CFXJSE_Engine::NormalPropertySetter,
@@ -66,8 +64,7 @@ const FXJSE_CLASS_DESCRIPTOR kNormalClassDescriptor = {
 const FXJSE_CLASS_DESCRIPTOR kVariablesClassDescriptor = {
     kClassTag,          // tag
     "XFAScriptObject",  // name
-    nullptr,            // methods
-    0,                  // method count
+    {},                 // methods
     CFXJSE_Engine::NormalPropTypeGetter,
     CFXJSE_Engine::GlobalPropertyGetter,
     CFXJSE_Engine::GlobalPropertySetter,
@@ -538,16 +535,16 @@ CJS_Result CFXJSE_Engine::NormalMethodCall(
     const v8::FunctionCallbackInfo<v8::Value>& info,
     const WideString& functionName) {
   CXFA_Object* pObject = ToObject(info);
-  if (!pObject)
-    return CJS_Result::Failure(L"no Holder() present.");
-
+  if (!pObject) {
+    return CJS_Result::Failure(WideString::FromASCII("no Holder() present."));
+  }
   CFXJSE_Engine* pScriptContext = pObject->GetDocument()->GetScriptContext();
   pObject = pScriptContext->GetVariablesThis(pObject);
 
   v8::LocalVector<v8::Value> parameters(info.GetIsolate());
-  for (int i = 0; i < info.Length(); i++)
+  for (int i = 0; i < info.Length(); i++) {
     parameters.push_back(info[i]);
-
+  }
   return pObject->JSObject()->RunMethod(pScriptContext, functionName,
                                         parameters);
 }
@@ -759,7 +756,7 @@ CFXJSE_Engine::ResolveObjectsWithBindNode(CXFA_Object* refObject,
     }
     if (bNextCreate) {
       int32_t checked_length =
-          pdfium::base::checked_cast<int32_t>(wsExpression.GetLength());
+          pdfium::checked_cast<int32_t>(wsExpression.GetLength());
       if (m_NodeHelper->CreateNode(rndFind.m_wsName, rndFind.m_wsCondition,
                                    nStart == checked_length, this)) {
         continue;
@@ -785,8 +782,7 @@ CFXJSE_Engine::ResolveObjectsWithBindNode(CXFA_Object* refObject,
 
       if (rndFind.m_Result.type == ResolveResult::Type::kAttribute &&
           rndFind.m_Result.script_attribute.callback &&
-          nStart <
-              pdfium::base::checked_cast<int32_t>(wsExpression.GetLength())) {
+          nStart < pdfium::checked_cast<int32_t>(wsExpression.GetLength())) {
         v8::Local<v8::Value> pValue;
         CJX_Object* jsObject = rndFind.m_Result.objects.front()->JSObject();
         (*rndFind.m_Result.script_attribute.callback)(
@@ -815,7 +811,7 @@ CFXJSE_Engine::ResolveObjectsWithBindNode(CXFA_Object* refObject,
           m_NodeHelper->m_iCreateCount = 1;
         }
         int32_t checked_length =
-            pdfium::base::checked_cast<int32_t>(wsExpression.GetLength());
+            pdfium::checked_cast<int32_t>(wsExpression.GetLength());
         if (m_NodeHelper->CreateNode(rndFind.m_wsName, rndFind.m_wsCondition,
                                      nStart == checked_length, this)) {
           continue;

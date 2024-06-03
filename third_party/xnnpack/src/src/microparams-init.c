@@ -8,13 +8,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
-#include <fp16/fp16.h>
-
+#include <xnnpack/common.h>
 #include <xnnpack/math.h>
+#include <xnnpack/microparams.h>
 #include <xnnpack/microparams-init.h>
 #include <xnnpack/unaligned.h>
 
+#include <fp16/fp16.h>
 
 size_t xnn_init_qs8_qc8w_conv_minmax_fp32_scalar_fmagic_params(
   union xnn_qs8_qc8w_conv_minmax_params params[XNN_MIN_ELEMENTS(1)],
@@ -1960,6 +1960,35 @@ size_t xnn_init_f16_minmax_fp16arith_params(
   return sizeof(params->fp16arith);
 }
 
+#if XNN_ARCH_X86 || XNN_ARCH_X86_64
+size_t xnn_init_f16_minmax_avx_params(
+  union xnn_f16_minmax_params params[XNN_MIN_ELEMENTS(1)],
+  uint16_t min,
+  uint16_t max)
+{
+  const float min_f32 = fp16_ieee_to_fp32_value(min);
+  const float max_f32 = fp16_ieee_to_fp32_value(max);
+  for (uint32_t i = 0; i < 8; i++) {
+    params->avx.min[i] = min_f32;
+    params->avx.max[i] = max_f32;
+  }
+  return sizeof(params->avx);
+}
+
+size_t xnn_init_f16_minmax_avxvnni_params(
+  union xnn_f16_minmax_params params[XNN_MIN_ELEMENTS(1)],
+  uint16_t min,
+  uint16_t max)
+{
+  const float min_f32 = fp16_ieee_to_fp32_value(min);
+  const float max_f32 = fp16_ieee_to_fp32_value(max);
+  params->avxvnni.min = min_f32;
+  params->avxvnni.max = max_f32;
+  params->avxvnni.sign_mask = 0x80;
+  return sizeof(params->avxvnni);
+}
+#endif  // XNN_ARCH_X86 || XNN_ARCH_X86_64
+
 #if XNN_ARCH_ARM || XNN_ARCH_ARM64
 size_t xnn_init_f16_qc4w_minmax_scalar_params(
   union xnn_f16_qc4w_minmax_params params[XNN_MIN_ELEMENTS(1)],
@@ -1976,22 +2005,42 @@ size_t xnn_init_f16_qc4w_minmax_scalar_params(
 #endif  // XNN_ARCH_ARM || XNN_ARCH_ARM64
 
 #if XNN_ARCH_X86 || XNN_ARCH_X86_64
-size_t xnn_init_f16_minmax_avx_params(
-  union xnn_f16_minmax_params params[XNN_MIN_ELEMENTS(1)],
-  uint16_t min,
-  uint16_t max)
+size_t xnn_init_f16_qc4w_minmax_avx_params(
+  union xnn_f16_qc4w_minmax_params params[XNN_MIN_ELEMENTS(1)],
+  uint16_t output_min,
+  uint16_t output_max,
+  uint8_t kernel_zero_point)
 {
-  const float min_f32 = fp16_ieee_to_fp32_value(min);
-  const float max_f32 = fp16_ieee_to_fp32_value(max);
+  assert(kernel_zero_point <= 15);
+  const float min_f32 = fp16_ieee_to_fp32_value(output_min);
+  const float max_f32 = fp16_ieee_to_fp32_value(output_max);
   for (uint32_t i = 0; i < 8; i++) {
     params->avx.min[i] = min_f32;
     params->avx.max[i] = max_f32;
   }
+  for (uint32_t i = 0; i < 16; i++) {
+    params->avx.mask[i] = 0xF0;
+  }
   return sizeof(params->avx);
 }
-#endif  // XNN_ARCH_X86 || XNN_ARCH_X86_64
 
-#if XNN_ARCH_X86 || XNN_ARCH_X86_64
+size_t xnn_init_f16_qc4w_minmax_avxvnni_params(
+  union xnn_f16_qc4w_minmax_params params[XNN_MIN_ELEMENTS(1)],
+  uint16_t output_min,
+  uint16_t output_max,
+  uint8_t kernel_zero_point)
+{
+  assert(kernel_zero_point <= 15);
+  const float min_f32 = fp16_ieee_to_fp32_value(output_min);
+  const float max_f32 = fp16_ieee_to_fp32_value(output_max);
+  params->avxvnni.min = min_f32;
+  params->avxvnni.max = max_f32;
+  params->avxvnni.sign_mask = 0x80;
+  params->avxvnni.mask = 0xF0;
+  params->avxvnni.gfni_shl4 = INT64_C(0x01020408);
+  return sizeof(params->avxvnni);
+}
+
 size_t xnn_init_f32_default_avx_params(
   union xnn_f32_default_params params[XNN_MIN_ELEMENTS(1)])
 {
@@ -2101,47 +2150,6 @@ size_t xnn_init_f32_qc4w_minmax_sse_params(
     params->sse.mask[i] = 0xF0;
   }
   return sizeof(params->sse);
-}
-
-size_t xnn_init_f32_qc4w_minmax_xop_params(
-  union xnn_f32_qc4w_minmax_params params[XNN_MIN_ELEMENTS(1)],
-  float output_min,
-  float output_max,
-  uint8_t kernel_zero_point)
-{
-  assert(kernel_zero_point <= 15);
-  for (uint32_t i = 0; i < 4; i++) {
-    params->xop.min[i] = output_min;
-    params->xop.max[i] = output_max;
-    params->xop.magic_bias_c0[i] = 0x4B0000F0;
-    params->xop.magic_bias_c1[i] = 0x4900000F;
-    params->xop.magic_bias_plus_kernel_zero_point_c0[i] = 0x1.0001E0p+23f + (float) kernel_zero_point;
-    params->xop.magic_bias_plus_kernel_zero_point_c1[i] = 0x1.00001Ep+19f + (float) kernel_zero_point;
-  }
-  for (uint32_t i = 0; i < 16; i++) {
-    params->xop.mask[i] = 0xF0;
-    params->xop.shift[i] = 4;
-  }
-  return sizeof(params->xop);
-}
-
-size_t xnn_init_f16_qc4w_minmax_avx_params(
-  union xnn_f16_qc4w_minmax_params params[XNN_MIN_ELEMENTS(1)],
-  uint16_t output_min,
-  uint16_t output_max,
-  uint8_t kernel_zero_point)
-{
-  assert(kernel_zero_point <= 15);
-  const float min_f32 = fp16_ieee_to_fp32_value(output_min);
-  const float max_f32 = fp16_ieee_to_fp32_value(output_max);
-  for (uint32_t i = 0; i < 8; i++) {
-    params->avx.min[i] = min_f32;
-    params->avx.max[i] = max_f32;
-  }
-  for (uint32_t i = 0; i < 16; i++) {
-    params->avx.mask[i] = 0xF0;
-  }
-  return sizeof(params->avx);
 }
 
 size_t xnn_init_f32_qc4w_minmax_avx_params(
@@ -3382,6 +3390,17 @@ size_t xnn_init_f32_tanh_neon_expm1minus_rr1_p6h5_params(
   params->neon_expm1minus_rr1_p6h5.c3 = -0x1.5554B0p+0f;
   params->neon_expm1minus_rr1_p6h5.c2 = 0x1.FFFFFEp+0f;
   return sizeof(params->neon_expm1minus_rr1_p6h5);
+}
+#endif  // XNN_ARCH_ARM || XNN_ARCH_ARM64
+
+#if XNN_ARCH_ARM || XNN_ARCH_ARM64
+size_t xnn_init_bf16_abs_neon_params(
+  union xnn_bf16_abs_params params[XNN_MIN_ELEMENTS(1)])
+{
+  for (uint32_t i = 0; i < 8; i++) {
+    params->neon.nonsign_mask[i] = UINT16_C(0x7FFF);
+  }
+  return sizeof(params->neon);
 }
 #endif  // XNN_ARCH_ARM || XNN_ARCH_ARM64
 
@@ -4910,6 +4929,57 @@ size_t xnn_init_f32_sqrt_avx512_params(
   union xnn_f32_sqrt_params params[XNN_MIN_ELEMENTS(1)])
 {
   params->avx512.half = 0.5f;
+  return sizeof(params->avx512);
+}
+#endif  // XNN_ARCH_X86 || XNN_ARCH_X86_64
+
+#if XNN_ARCH_X86 || XNN_ARCH_X86_64
+size_t xnn_init_f32_rsqrt_sse_params(
+    union xnn_f32_rsqrt_params params[XNN_MIN_ELEMENTS(1)]) {
+  for (uint32_t i = 0; i < 4; i++) {
+    params->sse.three[i] = 3.0f;
+  }
+  for (uint32_t i = 0; i < 4; i++) {
+    params->sse.half[i] = 0.5f;
+  }
+  return sizeof(params->sse);
+}
+size_t xnn_init_f32_rsqrt_avx_params(
+    union xnn_f32_rsqrt_params params[XNN_MIN_ELEMENTS(1)]) {
+  for (uint32_t i = 0; i < 8; i++) {
+    params->avx.three[i] = 3.0f;
+  }
+  for (uint32_t i = 0; i < 8; i++) {
+    params->avx.half[i] = 0.5f;
+  }
+  for (uint32_t i = 0; i < 7; i++) {
+    params->avx.mask_table[i] = -1;
+  }
+  for (uint32_t i = 7; i < 14; i++) {
+    params->avx.mask_table[i] = 0;
+  }
+  return sizeof(params->avx);
+}
+size_t xnn_init_f32_rsqrt_fma3_params(
+    union xnn_f32_rsqrt_params params[XNN_MIN_ELEMENTS(1)]) {
+  for (uint32_t i = 0; i < 8; i++) {
+    params->fma3.three[i] = 3.0f;
+  }
+  for (uint32_t i = 0; i < 8; i++) {
+    params->fma3.neg_half[i] = -0.5f;
+  }
+  for (uint32_t i = 0; i < 7; i++) {
+    params->fma3.mask_table[i] = -1;
+  }
+  for (uint32_t i = 7; i < 14; i++) {
+    params->fma3.mask_table[i] = 0;
+  }
+  return sizeof(params->avx);
+}
+size_t xnn_init_f32_rsqrt_avx512_params(
+    union xnn_f32_rsqrt_params params[XNN_MIN_ELEMENTS(1)]) {
+  params->avx512.three = 3.0f;
+  params->avx512.neg_half = -0.5f;
   return sizeof(params->avx512);
 }
 #endif  // XNN_ARCH_X86 || XNN_ARCH_X86_64

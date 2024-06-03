@@ -11,8 +11,10 @@
 #include <ostream>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "base/memory/ref_counted.h"
 #include "base/types/cxx23_to_underlying.h"
 #include "build/build_config.h"
 #include "chrome/updater/tag.h"
@@ -108,9 +110,8 @@ std::optional<base::FilePath> GetCrashDatabasePath(UpdaterScope scope);
 // Returns the path to the crashpad database, creating it if it does not exist.
 std::optional<base::FilePath> EnsureCrashDatabasePath(UpdaterScope scope);
 
-// Return the parsed values from --tag command line argument. The functions
-// return {} if there was no tag at all. An error is set if the tag fails to
-// parse.
+// Contains the parsed values from the tag. The tag is provided as a command
+// line argument to the `--install` or the `--handoff` switch.
 struct TagParsingResult {
   TagParsingResult();
   TagParsingResult(std::optional<tagging::TagArgs> tag_args,
@@ -122,6 +123,8 @@ struct TagParsingResult {
   tagging::ErrorCode error = tagging::ErrorCode::kSuccess;
 };
 
+// These functions return {} if there was no tag at all. An error is set if the
+// tag fails to parse.
 TagParsingResult GetTagArgsForCommandLine(
     const base::CommandLine& command_line);
 TagParsingResult GetTagArgs();
@@ -208,6 +211,10 @@ void InitializeThreadPool(const char* name);
 // owned by non-root accounts, or avoiding the installation of a user level
 // updater as root.
 bool WrongUser(UpdaterScope scope);
+
+// Returns whether a user has previously accepted a EULA / ToS for at least one
+// of the listed apps.
+bool EulaAccepted(const std::vector<std::string>& app_ids);
 
 // Imports metadata from legacy updaters.
 bool MigrateLegacyUpdaters(

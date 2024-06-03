@@ -33,6 +33,8 @@
 #include "dawn/native/Error.h"
 #include "dawn/native/Forward.h"
 #include "dawn/native/ObjectBase.h"
+#include "dawn/native/SharedFence.h"
+#include "dawn/native/SharedResourceMemory.h"
 #include "dawn/native/dawn_platform.h"
 
 namespace dawn::native {
@@ -43,26 +45,15 @@ struct SharedBufferMemoryEndAccessState;
 struct SharedBufferMemoryProperties;
 struct BufferDescriptor;
 
-class SharedBufferMemoryBase : public ApiObjectBase, public WeakRefSupport<SharedBufferMemoryBase> {
+class SharedBufferMemoryBase : public SharedResourceMemory {
   public:
     using BeginAccessDescriptor = SharedBufferMemoryBeginAccessDescriptor;
     using EndAccessState = SharedBufferMemoryEndAccessState;
-
     static SharedBufferMemoryBase* MakeError(DeviceBase* device,
                                              const SharedBufferMemoryDescriptor* descriptor);
 
     void APIGetProperties(SharedBufferMemoryProperties* properties) const;
     BufferBase* APICreateBuffer(const BufferDescriptor* descriptor);
-    // Returns true if access was acquired. If it returns true, then APIEndAccess must
-    // be called to release access. Other errors may occur even if `true` is returned.
-    // Use an error scope to catch them.
-    bool APIBeginAccess(BufferBase* buffer, const BeginAccessDescriptor* descriptor);
-    // Returns true if access was released.
-    bool APIEndAccess(BufferBase* buffer, EndAccessState* state);
-    // Returns true iff the device passed to this object on creation is now lost.
-    // TODO(crbug.com/1506468): Eliminate this API once Chromium has been
-    // transitioned away from using it in favor of observing device lost events.
-    bool APIIsDeviceLost();
 
     ObjectType GetType() const override;
 
@@ -74,7 +65,11 @@ class SharedBufferMemoryBase : public ApiObjectBase, public WeakRefSupport<Share
                            const SharedBufferMemoryDescriptor* descriptor,
                            ObjectBase::ErrorTag tag);
 
-    void DestroyImpl() override;
+  private:
+    ResultOrError<Ref<BufferBase>> CreateBuffer(const BufferDescriptor* rawDescriptor);
+
+    virtual ResultOrError<Ref<BufferBase>> CreateBufferImpl(
+        const UnpackedPtr<BufferDescriptor>& descriptor) = 0;
 
     SharedBufferMemoryProperties mProperties;
 };

@@ -1,3 +1,2 @@
-// File automatically generated. See crbug.com/495833.
-// Last modified 2024-01-25.
+// Automatically generated on Fri Mar 22 14:19:28 2024. See crbug.com/495833.
 #include "h264qpel_neon.S"

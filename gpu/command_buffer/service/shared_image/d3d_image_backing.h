@@ -5,9 +5,10 @@
 #ifndef GPU_COMMAND_BUFFER_SERVICE_SHARED_IMAGE_D3D_IMAGE_BACKING_H_
 #define GPU_COMMAND_BUFFER_SERVICE_SHARED_IMAGE_D3D_IMAGE_BACKING_H_
 
+#include <windows.h>
+
 #include <d3d11.h>
 #include <dxgi1_2.h>
-#include <windows.h>
 #include <wrl/client.h>
 
 #include <array>
@@ -235,6 +236,13 @@ class GPU_GLES2_EXPORT D3DImageBacking final
                   size_t plane_index = 0u,
                   Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_chain = nullptr,
                   bool is_back_buffer = false);
+
+  bool use_fence_synchronization() const {
+    // Fences are needed if we're sharing between devices and there's no keyed
+    // mutex for synchroniztaion.
+    return dxgi_shared_handle_state_ &&
+           !dxgi_shared_handle_state_->has_keyed_mutex();
+  }
 
   // Helper to retrieve internal EGLImage for WebGPU GLES compat backend.
   void* GetEGLImage() const;

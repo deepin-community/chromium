@@ -275,6 +275,10 @@ list(APPEND AOM_AV1_COMMON_INTRIN_SSSE3
             "${AOM_ROOT}/av1/common/x86/jnt_convolve_ssse3.c"
             "${AOM_ROOT}/av1/common/x86/resize_ssse3.c")
 
+# Fallbacks to support Valgrind on 32-bit x86
+list(APPEND AOM_AV1_COMMON_INTRIN_SSSE3_X86
+            "${AOM_ROOT}/av1/common/x86/cdef_block_ssse3.c")
+
 list(APPEND AOM_AV1_COMMON_INTRIN_SSE4_1
             "${AOM_ROOT}/av1/common/x86/av1_convolve_horiz_rs_sse4.c"
             "${AOM_ROOT}/av1/common/x86/av1_convolve_scale_sse4.c"
@@ -371,6 +375,7 @@ list(APPEND AOM_AV1_ENCODER_INTRIN_NEON_DOTPROD
 
 list(APPEND AOM_AV1_ENCODER_INTRIN_SVE
             "${AOM_ROOT}/av1/encoder/arm/neon/av1_error_sve.c"
+            "${AOM_ROOT}/av1/encoder/arm/neon/pickrst_sve.c"
             "${AOM_ROOT}/av1/encoder/arm/neon/wedge_utils_sve.c")
 
 list(APPEND AOM_AV1_ENCODER_INTRIN_ARM_CRC32
@@ -475,6 +480,10 @@ if(CONFIG_AV1_HIGHBITDEPTH)
               "${AOM_ROOT}/av1/common/arm/highbd_reconintra_neon.c"
               "${AOM_ROOT}/av1/common/arm/highbd_warp_plane_neon.c"
               "${AOM_ROOT}/av1/common/arm/highbd_wiener_convolve_neon.c")
+
+  list(APPEND AOM_AV1_COMMON_INTRIN_SVE2
+              "${AOM_ROOT}/av1/common/arm/highbd_compound_convolve_sve2.c"
+              "${AOM_ROOT}/av1/common/arm/highbd_convolve_sve2.c")
 
   list(APPEND AOM_AV1_ENCODER_INTRIN_SSE2
               "${AOM_ROOT}/av1/encoder/x86/highbd_block_error_intrin_sse2.c"
@@ -604,6 +613,10 @@ function(setup_av1_targets)
     require_compiler_flag_nomsvc("-mssse3" NO)
     add_intrinsics_object_library("-mssse3" "ssse3" "aom_av1_common"
                                   "AOM_AV1_COMMON_INTRIN_SSSE3")
+    if(AOM_ARCH_X86)
+      add_intrinsics_object_library("-mssse3" "ssse3_x86" "aom_av1_common"
+                                    "AOM_AV1_COMMON_INTRIN_SSSE3_X86")
+    endif()
 
     if(CONFIG_AV1_DECODER)
       if(AOM_AV1_DECODER_INTRIN_SSSE3)
@@ -700,6 +713,11 @@ function(setup_av1_targets)
       add_intrinsics_object_library("${AOM_SVE_FLAG}" "sve" "aom_av1_encoder"
                                     "AOM_AV1_ENCODER_INTRIN_SVE")
     endif()
+  endif()
+
+  if(HAVE_SVE2)
+    add_intrinsics_object_library("${AOM_SVE2_FLAG}" "sve2" "aom_av1_common"
+                                  "AOM_AV1_COMMON_INTRIN_SVE2")
   endif()
 
   if(HAVE_VSX)

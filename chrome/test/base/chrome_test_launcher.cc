@@ -31,6 +31,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
 #include "chrome/install_static/test/scoped_install_details.h"
+#include "chrome/installer/util/taskbar_util.h"
 #include "chrome/test/base/chrome_test_suite.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/utility/chrome_content_utility_client.h"
@@ -71,6 +72,33 @@
 #include "chrome/browser/upgrade_detector/installed_version_poller.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #endif
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/ash/crosapi/crosapi_ash.h"
+#include "chrome/browser/ash/crosapi/crosapi_manager.h"
+#include "chrome/browser/ash/crosapi/test_controller_ash.h"
+#include "chrome/browser/chrome_browser_main.h"
+#include "chrome/browser/chrome_browser_main_extra_parts.h"
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+namespace {
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+class TestControllerSetupMainExtraParts : public ChromeBrowserMainExtraParts {
+ public:
+  TestControllerSetupMainExtraParts() = default;
+
+  void PostBrowserStart() override {
+    crosapi::CrosapiManager::Get()->crosapi_ash()->SetTestControllerForTesting(
+        std::make_unique<crosapi::TestControllerAsh>());
+  }
+
+  void PostMainMessageLoopRun() override {
+    crosapi::CrosapiManager::Get()->crosapi_ash()->SetTestControllerForTesting(
+        nullptr);
+  }
+};
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+}  // namespace
 
 // static
 int ChromeTestSuiteRunner::RunTestSuiteInternal(ChromeTestSuite* test_suite) {
@@ -220,6 +248,14 @@ ChromeTestLauncherDelegate::CreateContentMainDelegate() {
 }
 #endif
 
+void ChromeTestLauncherDelegate::CreatedBrowserMainParts(
+    content::BrowserMainParts* browser_main_parts) {
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  static_cast<ChromeBrowserMainParts*>(browser_main_parts)
+      ->AddParts(std::make_unique<TestControllerSetupMainExtraParts>());
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+}
+
 void ChromeTestLauncherDelegate::PreSharding() {
 #if BUILDFLAG(IS_WIN)
   // Pre-test cleanup for registry state keyed off the profile dir (which can
@@ -326,6 +362,16 @@ int LaunchChromeTests(size_t parallel_jobs,
         return false;
       }));
 #endif
+
+#if BUILDFLAG(IS_WIN)
+  SetCanPinToTaskbarDelegate(([]() {
+    ADD_FAILURE()
+        << "Attempting to pint shortcut to taskbar in test."
+        << " Use web_app::OsIntegrationManager::ScopedSuppressForTesting or "
+        << "other mechanism to not pin to taskbar.";
+    return false;
+  }));
+#endif  // BUILDFLAG(IS_WIN)
 
   return content::LaunchTests(delegate, parallel_jobs, argc, argv);
 }

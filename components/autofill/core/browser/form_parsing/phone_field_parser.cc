@@ -6,10 +6,12 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
@@ -69,6 +71,14 @@ PhoneFieldParser::~PhoneFieldParser() = default;
 const std::vector<PhoneFieldParser::PhoneGrammar>&
 PhoneFieldParser::GetPhoneGrammars() {
   static const base::NoDestructor<std::vector<PhoneGrammar>> grammars({
+      // TODO(crbug.com/40233246): Check whether this first rule generates any
+      // traffic. If not, we may want to drop it and rewrite the
+      // FormFillerTest.FillPhoneNumber unittest.
+      // Country code: <cc> Area Code: <ac> Prefix: <phone> Suffix: <suffix>
+      {{REGEX_COUNTRY, FIELD_COUNTRY_CODE},
+       {REGEX_AREA, FIELD_AREA_CODE},
+       {REGEX_PREFIX, FIELD_PHONE},
+       {REGEX_SUFFIX, FIELD_SUFFIX}},
       // Country code: <cc> Area Code: <ac> Phone: <phone>
       {{REGEX_COUNTRY, FIELD_COUNTRY_CODE},
        {REGEX_AREA, FIELD_AREA_CODE},
@@ -91,6 +101,14 @@ PhoneFieldParser::GetPhoneGrammars() {
        {REGEX_PHONE, FIELD_AREA_CODE, 3},
        {REGEX_PHONE, FIELD_PHONE, 3},
        {REGEX_PHONE, FIELD_SUFFIX, 4}},
+      // Area Code: <ac> Phone: <phone> - <suffix>
+      {{REGEX_AREA, FIELD_AREA_CODE},
+       {REGEX_PHONE, FIELD_PHONE},
+       {REGEX_SUFFIX_SEPARATOR, FIELD_SUFFIX}},
+      // Area Code: <ac> Phone: <phone> Suffix <suffix>
+      {{REGEX_AREA, FIELD_AREA_CODE},
+       {REGEX_PHONE, FIELD_PHONE},
+       {REGEX_SUFFIX, FIELD_SUFFIX}},
       // Area Code: <ac> Phone: <phone>
       {{REGEX_AREA, FIELD_AREA_CODE}, {REGEX_PHONE, FIELD_PHONE}},
       // Phone: <ac> <phone>:3 <suffix>:4
@@ -132,6 +150,8 @@ PhoneFieldParser::GetPhoneGrammars() {
        {REGEX_SUFFIX_SEPARATOR, FIELD_PHONE}},
       // Phone: <cc>:3 - <phone>
       {{REGEX_PHONE, FIELD_COUNTRY_CODE, 3}, {REGEX_PHONE, FIELD_PHONE}},
+      // Phone: <ac> - <phone>
+      {{REGEX_PHONE, FIELD_AREA_CODE}, {REGEX_PREFIX_SEPARATOR, FIELD_PHONE}},
       // Phone: <phone>
       {{REGEX_PHONE, FIELD_PHONE}},
   });
@@ -146,7 +166,7 @@ bool PhoneFieldParser::LikelyAugmentedPhoneCountryCode(
 
   // Return false if the field is not a selection box.
   if (!MatchesFormControlType(
-          field->form_control_type,
+          field->form_control_type(),
           {FormControlType::kSelectOne, FormControlType::kSelectList})) {
     return false;
   }
@@ -235,6 +255,7 @@ std::unique_ptr<FormFieldParser> PhoneFieldParser::Parse(
 
   // Find the first matching grammar.
   bool found_matching_grammar = false;
+  int grammar_id = 0;
   for (const PhoneGrammar& grammar : GetPhoneGrammars()) {
     base::ranges::fill(parsed_fields, nullptr);
     if (ParseGrammar(context, grammar, parsed_fields, scanner)) {
@@ -242,23 +263,19 @@ std::unique_ptr<FormFieldParser> PhoneFieldParser::Parse(
       break;
     }
     scanner->RewindTo(start_cursor);
+    grammar_id++;
   }
   if (!found_matching_grammar)
     return nullptr;
   // No grammar without FIELD_PHONE should be defined.
   DCHECK(parsed_fields[FIELD_PHONE] != nullptr);
 
-  // Look for a suffix field using two different regex.
-  // TODO(crbug.com/1348137): Revise or remove.
-  if (!parsed_fields[FIELD_SUFFIX]) {
-    ParsePhoneField(context, scanner, kPhoneSuffixRe,
-                    &parsed_fields[FIELD_SUFFIX], "kPhoneSuffixRe",
-                    /*is_country_code_field=*/false, "PHONE_SUFFIX") ||
-        ParsePhoneField(context, scanner, kPhoneSuffixSeparatorRe,
-                        &parsed_fields[FIELD_SUFFIX], "kPhoneSuffixSeparatorRe",
-                        /*is_country_code_field=*/false,
-                        "PHONE_SUFFIX_SEPARATOR");
-  }
+  // If this CHECK fails, the number of grammar rules has changed and you need
+  // to increment the version counter in the histogram name and its enum.
+  CHECK_EQ(GetPhoneGrammars().size(), 15u);
+  base::UmaHistogramExactLinear(
+      "Autofill.FieldPrediction.PhoneNumberGrammarUsage2", grammar_id,
+      /*exclusive_max=*/GetPhoneGrammars().size());
 
   // Now look for an extension.
   // The extension is unused, but it is parsed to prevent other parsers from
@@ -426,7 +443,7 @@ std::string PhoneFieldParser::GetJSONFieldType(RegexType phonetype_id) {
 // static
 bool PhoneFieldParser::ParsePhoneField(ParsingContext& context,
                                        AutofillScanner* scanner,
-                                       base::StringPiece16 regex,
+                                       std::u16string_view regex,
                                        raw_ptr<AutofillField>* field,
                                        const char* regex_name,
                                        const bool is_country_code_field,

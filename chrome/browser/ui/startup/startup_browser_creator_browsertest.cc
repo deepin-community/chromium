@@ -220,9 +220,13 @@ Browser* OpenNewBrowser(Profile* profile) {
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl creator(base::FilePath(), dummy,
                                     chrome::startup::IsFirstRun::kYes);
+  ui_test_utils::BrowserChangeObserver new_browser_observer(
+      nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
   creator.Launch(profile, chrome::startup::IsProcessStartup::kNo, nullptr,
                  /*restore_tabbed_browser=*/true);
-  return chrome::FindBrowserWithProfile(profile);
+  Browser* new_browser = new_browser_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(new_browser);
+  return new_browser;
 }
 
 Browser* CloseBrowserAndOpenNew(Browser* browser, Profile* profile) {
@@ -1538,7 +1542,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 // shutting down, and then launching with kNoStartupWindow doesn't restore
 // the previously opened profiles.
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(https://crbug.com/1196684): enable this test on Lacros.
+// TODO(crbug.com/40176564): enable this test on Lacros.
 #define MAYBE_RestoreWithNoStartupWindow DISABLED_RestoreWithNoStartupWindow
 #else
 #define MAYBE_RestoreWithNoStartupWindow RestoreWithNoStartupWindow
@@ -2277,8 +2281,14 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
   CloseBrowserAsynchronously(browser());
 }
 
+// TODO(crbug.com/327256043): Flaky on win
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_LastUsedProfilesWithWebApp DISABLED_LastUsedProfilesWithWebApp
+#else
+#define MAYBE_LastUsedProfilesWithWebApp LastUsedProfilesWithWebApp
+#endif
 IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
-                       LastUsedProfilesWithWebApp) {
+                       MAYBE_LastUsedProfilesWithWebApp) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
 
   base::FilePath dest_path = profile_manager->user_data_dir();
@@ -4225,7 +4235,7 @@ INSTANTIATE_TEST_SUITE_P(
       return name;
     });
 
-// TODO(crbug.com/1439821): Mocking the logger appears to not work correctly on
+// TODO(crbug.com/40265712): Mocking the logger appears to not work correctly on
 // Windows. Investigate why it is not working and enable the test on Windows.
 #if !BUILDFLAG(IS_WIN)
 class StartupBrowserCreatorIwaCommandLineInstallProfilePickerErrorTest

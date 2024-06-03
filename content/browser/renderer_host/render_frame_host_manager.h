@@ -352,10 +352,7 @@ class CONTENT_EXPORT RenderFrameHostManager {
   // delayed, and batched created later when
   // `BatchedProxyIPCSender::CreateAllProxies()` is called. The only
   // case where `batched_proxy_ipc_sender` is not null is when called by
-  // `FrameTree::CreateProxiesForSiteInstance()` in addition to
-  // `kConsolidatedIPCForProxyCreation` being enabled.
-  // TODO(peilinwang): consider refactoring this into 2 code paths if
-  // experiment shows promising results (https://crbug.com/1393697).
+  // `FrameTree::CreateProxiesForSiteInstance()`.
   void CreateRenderFrameProxy(
       SiteInstanceImpl* instance,
       const scoped_refptr<BrowsingContextState>& browsing_context_state,
@@ -812,7 +809,8 @@ class CONTENT_EXPORT RenderFrameHostManager {
       SiteInstanceImpl* current_instance,
       SiteInstanceImpl* dest_instance,
       NavigationRequest::ErrorPageProcess error_page_process,
-      const BrowsingContextGroupSwap& browsing_context_group_swap);
+      const BrowsingContextGroupSwap& browsing_context_group_swap,
+      bool was_server_redirect);
 
   // Returns true if a navigation to |dest_url| that uses the specified
   // PageTransition in the current frame is allowed to swap BrowsingInstances.

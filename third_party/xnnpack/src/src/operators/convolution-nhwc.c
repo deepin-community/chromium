@@ -1898,19 +1898,24 @@ static enum xnn_status reshape_gemm(
   #endif  // XNN_PLATFORM_JIT
   struct xnn_hmp_gemm_ukernel gemm_ukernel = gemm_cases[mr - 1];
 
-  convolution_op->context.gemm = (struct gemm_context) {
+  convolution_op->context.gemm = (struct gemm_context){
       .k_scaled = group_input_channels << log2_input_element_size,
       .a_stride = convolution_op->input_pixel_stride << log2_input_element_size,
       .ga_stride = group_input_channels << log2_input_element_size,
       .packed_w = packed_weights(convolution_op),
       .w_stride = w_stride,
       .gw_stride = w_stride * round_up(group_output_channels, nr),
-      .cm_stride = convolution_op->output_pixel_stride << log2_output_element_size,
+      .cm_stride = convolution_op->output_pixel_stride
+                   << log2_output_element_size,
       .cn_stride = nr << log2_output_element_size,
       .gc_stride = group_output_channels << log2_output_element_size,
       .log2_csize = log2_output_element_size,
+      .num_batch_dims = 1,
       .ukernel = gemm_ukernel,
   };
+  convolution_op->context.gemm.batch_dims_a[0] = groups;
+  convolution_op->context.gemm.batch_dims_b[0] = groups;
+  convolution_op->context.gemm.batch_strides_c[0] = 1;
   memcpy(&convolution_op->context.gemm.params, &convolution_op->params, sizeof(convolution_op->context.gemm.params));
   if (convolution_op->num_post_operation_params == 0) {
     convolution_op->context.gemm.fused_params = &convolution_op->context.gemm.params;
@@ -2495,7 +2500,7 @@ static enum xnn_status reshape_convolution2d_nhwc(
   pthreadpool_t threadpool)
 {
   if (convolution_op->type != expected_operator_type) {
-    xnn_log_error("failed to setup operator: operator type mismatch (expected %s, got %s)",
+    xnn_log_error("failed to reshape operator: operator type mismatch (expected %s, got %s)",
       xnn_operator_type_to_string(expected_operator_type),
       xnn_operator_type_to_string(convolution_op->type));
     return xnn_status_invalid_parameter;
@@ -2503,14 +2508,14 @@ static enum xnn_status reshape_convolution2d_nhwc(
   convolution_op->state = xnn_run_state_invalid;
 
   if ((xnn_params.init_flags & XNN_INIT_FLAG_XNNPACK) == 0) {
-    xnn_log_error("failed to setup %s operator: XNNPACK is not initialized",
+    xnn_log_error("failed to reshape %s operator: XNNPACK is not initialized",
       xnn_operator_type_to_string(convolution_op->type));
     return xnn_status_uninitialized;
   }
 
   if (input_width == 0 || input_height == 0) {
     xnn_log_error(
-      "failed to setup %s operator with %zux%zu input: input dimensions must be non-zero",
+      "failed to reshape %s operator with %zux%zu input: input dimensions must be non-zero",
       xnn_operator_type_to_string(convolution_op->type), input_width, input_height);
     return xnn_status_invalid_parameter;
   }
@@ -2518,12 +2523,6 @@ static enum xnn_status reshape_convolution2d_nhwc(
   if (batch_size == 0) {
     convolution_op->state = xnn_run_state_skip;
     return xnn_status_success;
-  }
-
-  if (convolution_op->weights_cache != NULL && !xnn_weights_cache_is_finalized(convolution_op->weights_cache)) {
-    xnn_log_error("failed to setup %s operator: weights cache is not finalized",
-      xnn_operator_type_to_string(convolution_op->type));
-    return xnn_status_invalid_state;
   }
 
   convolution_op->batch_size = batch_size;
@@ -2919,6 +2918,12 @@ static enum xnn_status setup_convolution2d_nhwc(
     case xnn_run_state_ready:
       // Operator has been reshaped, and we are setting up with different pointers.
       break;
+  }
+
+  if (convolution_op->weights_cache != NULL && !xnn_weights_cache_is_finalized(convolution_op->weights_cache)) {
+    xnn_log_error("failed to setup %s operator: weights cache is not finalized",
+      xnn_operator_type_to_string(expected_operator_type));
+    return xnn_status_invalid_state;
   }
 
   convolution_op->input = input;

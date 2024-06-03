@@ -6,11 +6,17 @@
 
 #include <optional>
 
+#include "ash/constants/ash_features.h"
+#include "ash/display/display_performance_mode_controller.h"
 #include "ash/display/display_prefs.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/shell.h"
+#include "ash/system/brightness_control_delegate.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/device/display_settings/display_settings_provider.mojom.h"
+#include "chromeos/dbus/power_manager/backlight.pb.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/manager/display_manager_observer.h"
 #include "ui/display/util/display_util.h"
@@ -25,6 +31,10 @@ constexpr int kMaxTimeInHourOfUserOverrideDisplaySettings = 8;
 
 // The histogram bucket count of user overriding display default settings.
 constexpr int kUserOverrideDisplaySettingsTimeDeltaBucketCount = 100;
+
+// The time threshold whether user override display settings metrics would be
+// fired or not.
+constexpr int kUserOverrideDisplaySettingsTimeThresholdInMinute = 60;
 
 // Get UMA histogram name that records the time elapsed between users changing
 // the display settings and the display is connected.
@@ -49,6 +59,17 @@ const std::string GetUserOverrideDefaultSettingsHistogramName(
 }  // namespace
 
 DisplaySettingsProvider::DisplaySettingsProvider() {
+  if (Shell::HasInstance()) {
+    shell_observation_.Observe(ash::Shell::Get());
+  }
+
+  if (Shell::HasInstance() && Shell::Get()->brightness_control_delegate()) {
+    brightness_control_delegate_ = Shell::Get()->brightness_control_delegate();
+  } else {
+    LOG(WARNING) << "DisplaySettingsProvider: Shell not available, did not "
+                    "save BrightnessControlDelegate.";
+  }
+
   if (TabletMode::Get()) {
     TabletMode::Get()->AddObserver(this);
   }
@@ -57,6 +78,13 @@ DisplaySettingsProvider::DisplaySettingsProvider() {
         static_cast<display::DisplayManagerObserver*>(this));
     Shell::Get()->display_manager()->AddObserver(
         static_cast<display::DisplayObserver*>(this));
+  }
+  if (features::IsBrightnessControlInSettingsEnabled()) {
+    chromeos::PowerManagerClient* power_manager_client =
+        chromeos::PowerManagerClient::Get();
+    if (power_manager_client) {
+      power_manager_client->AddObserver(this);
+    }
   }
 }
 
@@ -70,6 +98,21 @@ DisplaySettingsProvider::~DisplaySettingsProvider() {
     Shell::Get()->display_manager()->RemoveObserver(
         static_cast<display::DisplayObserver*>(this));
   }
+  if (features::IsBrightnessControlInSettingsEnabled()) {
+    chromeos::PowerManagerClient* power_manager_client =
+        chromeos::PowerManagerClient::Get();
+    if (power_manager_client) {
+      power_manager_client->RemoveObserver(this);
+    }
+  }
+}
+
+void DisplaySettingsProvider::OnShellDestroying() {
+  // Explicitly nullify the pointer to BrightnessControlDelegate before it's
+  // destroyed to avoid a dangling pointer.
+  brightness_control_delegate_ = nullptr;
+
+  shell_observation_.Reset();
 }
 
 void DisplaySettingsProvider::BindInterface(
@@ -100,6 +143,36 @@ void DisplaySettingsProvider::ObserveDisplayConfiguration(
   display_configuration_observers_.Add(std::move(observer));
 }
 
+void DisplaySettingsProvider::OnGetInitialBrightness(
+    ObserveDisplayBrightnessSettingsCallback callback,
+    std::optional<double> percent) {
+  if (!percent.has_value()) {
+    LOG(ERROR) << "GetBrightnessPercent returned nullopt.";
+    // In the rare case that GetInitialBrightness returns a nullopt, set the
+    // brightness slider to the middle.
+    std::move(callback).Run(50.0);
+    return;
+  }
+  std::move(callback).Run(percent.value());
+}
+
+void DisplaySettingsProvider::ObserveDisplayBrightnessSettings(
+    mojo::PendingRemote<mojom::DisplayBrightnessSettingsObserver> observer,
+    ObserveDisplayBrightnessSettingsCallback callback) {
+  if (!brightness_control_delegate_) {
+    LOG(ERROR) << "DisplaySettingsProvider: Expected BrightnessControlDelegate "
+                  "to be non-null when adding an observer.";
+    return;
+  }
+
+  display_brightness_settings_observers_.Add(std::move(observer));
+
+  // Get the current screen brightness and run the callback with that value.
+  brightness_control_delegate_->GetBrightnessPercent(
+      base::BindOnce(&DisplaySettingsProvider::OnGetInitialBrightness,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
 void DisplaySettingsProvider::OnDidProcessDisplayChanges(
     const DisplayConfigurationChange& configuration_change) {
   for (auto& observer : display_configuration_observers_) {
@@ -128,6 +201,12 @@ void DisplaySettingsProvider::OnDisplayAdded(
                                   display::IsInternalDisplayId(new_display.id())
                                       ? DisplayType::kInternalDisplay
                                       : DisplayType::kExternalDisplay);
+
+    base::UmaHistogramEnumeration(
+        new_display.IsInternal()
+            ? kUserOverrideInternalDisplayDefaultSettingsHistogram
+            : kUserOverrideExternalDisplayDefaultSettingsHistogram,
+        DisplayDefaultSettingsMeasurement::kNewDisplayConnected);
   }
 }
 
@@ -188,12 +267,96 @@ void DisplaySettingsProvider::RecordChangingDisplaySettings(
           base::Hours(kMaxTimeInHourOfUserOverrideDisplaySettings).InMinutes(),
           kUserOverrideDisplaySettingsTimeDeltaBucketCount);
 
+      if (time_delta <= kUserOverrideDisplaySettingsTimeThresholdInMinute) {
+        base::UmaHistogramEnumeration(
+            is_internal_display.value()
+                ? kUserOverrideInternalDisplayDefaultSettingsHistogram
+                : kUserOverrideExternalDisplayDefaultSettingsHistogram,
+            type == mojom::DisplaySettingsType::kResolution
+                ? DisplayDefaultSettingsMeasurement::kOverrideResolution
+                : DisplayDefaultSettingsMeasurement::kOverrideScaling);
+      }
+
       // Once user has overridden the settings, remove it from the map to
       // prevent further recording, in which case, the user does not override
       // system default settings, but override previous user settings.
       displays_connection_timestamp_map_.erase(id);
     }
   }
+}
+
+void DisplaySettingsProvider::SetShinyPerformance(bool enabled) {
+  // The provider could outlive the shell so check if it's still valid.
+  if (!Shell::HasInstance() ||
+      !Shell::Get()->display_performance_mode_controller()) {
+    return;
+  }
+
+  Shell::Get()
+      ->display_performance_mode_controller()
+      ->SetHighPerformanceModeByUser(enabled);
+}
+
+void DisplaySettingsProvider::ScreenBrightnessChanged(
+    const power_manager::BacklightBrightnessChange& change) {
+  for (auto& observer : display_brightness_settings_observers_) {
+    observer->OnDisplayBrightnessChanged(change.percent());
+  }
+}
+
+void DisplaySettingsProvider::SetInternalDisplayScreenBrightness(
+    double percent) {
+  if (!features::IsBrightnessControlInSettingsEnabled()) {
+    return;
+  }
+
+  if (!brightness_control_delegate_) {
+    LOG(ERROR) << "DisplaySettingsProvider: Expected BrightnessControlDelegate "
+                  "to be non-null when setting the internal display screen "
+                  "brightness.";
+    return;
+  }
+
+  brightness_control_delegate_->SetBrightnessPercent(percent, /*gradual=*/true);
+
+  // Record the brightness change event.
+  std::string histogram_name(base::StrCat(
+      {kDisplaySettingsHistogramName, ".Internal.BrightnessSliderAdjusted"}));
+  base::UmaHistogramPercentage(histogram_name, percent);
+}
+
+void DisplaySettingsProvider::SetInternalDisplayAmbientLightSensorEnabled(
+    bool enabled) {
+  if (!features::IsBrightnessControlInSettingsEnabled()) {
+    return;
+  }
+
+  brightness_control_delegate_->SetAmbientLightSensorEnabled(enabled);
+
+  // Record the auto-brightness toggle event.
+  std::string histogram_name(base::StrCat(
+      {kDisplaySettingsHistogramName, ".Internal.AutoBrightnessEnabled"}));
+  base::UmaHistogramBoolean(histogram_name, /*sample=*/enabled);
+}
+
+void DisplaySettingsProvider::HasAmbientLightSensor(
+    HasAmbientLightSensorCallback callback) {
+  brightness_control_delegate_->HasAmbientLightSensor(
+      base::BindOnce(&DisplaySettingsProvider::OnGetHasAmbientLightSensor,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void DisplaySettingsProvider::OnGetHasAmbientLightSensor(
+    HasAmbientLightSensorCallback callback,
+    std::optional<bool> has_ambient_light_sensor) {
+  if (!has_ambient_light_sensor.has_value()) {
+    LOG(ERROR) << "HasAmbientLightSensor returned nullopt.";
+    // In the rare case that HasAmbientLightSensor returns a nullopt, assume
+    // that the device does not have an ambient light sensor.
+    std::move(callback).Run(false);
+    return;
+  }
+  std::move(callback).Run(has_ambient_light_sensor.value());
 }
 
 }  // namespace ash::settings

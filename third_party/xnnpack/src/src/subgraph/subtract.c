@@ -131,6 +131,16 @@ static enum xnn_status reshape_subtract_operator(
   }
   opdata->outputs[0] = output_id;
 
+  // Handle scalars. Although the output shape is dimensionless, the reshape
+  // function must be passed a valid shape to prevent skipping the op.
+  if (opdata->shape1.num_dims == 0) {
+    opdata->shape1.num_dims = 1;
+    opdata->shape1.dim[0] = 1;
+  }
+  if (opdata->shape2.num_dims == 0) {
+    opdata->shape2.num_dims = 1;
+    opdata->shape2.dim[0] = 1;
+  }
   const size_t old_workspace_size = opdata->workspace_size;
   enum xnn_status status = xnn_status_invalid_state;
   switch (opdata->operator_objects[0]->type) {
@@ -262,6 +272,7 @@ enum xnn_status xnn_define_subtract(
   }
 
   switch (input1_value->datatype) {
+    case xnn_datatype_fp16:
     case xnn_datatype_fp32:
     case xnn_datatype_qint8:
     case xnn_datatype_quint8:
@@ -286,6 +297,7 @@ enum xnn_status xnn_define_subtract(
   }
 
   switch (input2_value->datatype) {
+    case xnn_datatype_fp16:
     case xnn_datatype_fp32:
     case xnn_datatype_qint8:
     case xnn_datatype_quint8:
@@ -311,6 +323,9 @@ enum xnn_status xnn_define_subtract(
 
   enum xnn_compute_type compute_type = xnn_compute_type_invalid;
   switch (output_value->datatype) {
+    case xnn_datatype_fp16:
+      compute_type = xnn_compute_type_fp16;
+      break;
     case xnn_datatype_fp32:
       compute_type = xnn_compute_type_fp32;
       break;

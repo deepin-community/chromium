@@ -24,6 +24,7 @@
 #include "components/trusted_vault/securebox.h"
 #include "components/trusted_vault/test/fake_trusted_vault_access_token_fetcher.h"
 #include "components/trusted_vault/trusted_vault_access_token_fetcher.h"
+#include "components/trusted_vault/trusted_vault_connection.h"
 #include "components/trusted_vault/trusted_vault_crypto.h"
 #include "components/trusted_vault/trusted_vault_histograms.h"
 #include "components/trusted_vault/trusted_vault_server_constants.h"
@@ -49,12 +50,6 @@ using testing::SizeIs;
 const char kAccessToken[] = "access_token";
 const char kEncodedPrivateKey[] =
     "49e052293c29b5a50b0013eec9d030ac2ad70a42fe093be084264647cb04e16f";
-
-MATCHER_P2(TrustedVaultKeyAndVersionEq, expected_key, expected_version, "") {
-  const TrustedVaultKeyAndVersion& key_and_version = arg;
-  return key_and_version.key == expected_key &&
-         key_and_version.version == expected_version;
-}
 
 std::unique_ptr<SecureBoxKeyPair> MakeTestKeyPair() {
   std::vector<uint8_t> private_key_bytes;
@@ -85,11 +80,16 @@ trusted_vault_pb::JoinSecurityDomainsResponse MakeJoinSecurityDomainsResponse(
   return response;
 }
 
+constexpr char kTestSerializedWrappedPIN[] = "wrapped PIN";
+constexpr char kTestMemberPublicKey[] = "public key";
+constexpr int kTestKeyVersion = 100;
+
 enum class Member {
   kPhysical,
   kOtherSecurityDomain,
   kUsableVirtual,
   kUnusableVirtual,
+  kGooglePasswordManagerPIN,
 };
 
 trusted_vault_pb::ListSecurityDomainMembersResponse MakeSecurityDomainMembers(
@@ -102,10 +102,16 @@ trusted_vault_pb::ListSecurityDomainMembersResponse MakeSecurityDomainMembers(
     trusted_vault_pb::SecurityDomainMember* member =
         response.add_security_domain_members();
     member->set_name("name");
+    member->set_public_key(kTestMemberPublicKey);
     member->add_memberships()->set_security_domain("other security domain");
+    auto* membership = member->add_memberships();
+    auto* key = membership->add_keys();
     if (member_type != Member::kOtherSecurityDomain) {
-      member->add_memberships()->set_security_domain(
+      membership->set_security_domain(
           GetSecurityDomainPath(security_domain_id));
+      key->set_epoch(kTestKeyVersion * 2);
+    } else {
+      key->set_epoch(kTestKeyVersion);
     }
 
     switch (member_type) {
@@ -115,6 +121,15 @@ trusted_vault_pb::ListSecurityDomainMembersResponse MakeSecurityDomainMembers(
         break;
       case Member::kUsableVirtual:
         member->mutable_member_metadata()->set_usable_for_retrieval(true);
+        break;
+      case Member::kGooglePasswordManagerPIN:
+        member->set_member_type(trusted_vault_pb::SecurityDomainMember::
+                                    MEMBER_TYPE_GOOGLE_PASSWORD_MANAGER_PIN);
+        member->mutable_member_metadata()->set_usable_for_retrieval(true);
+        member->mutable_member_metadata()
+            ->mutable_google_password_manager_pin_metadata()
+            ->set_encrypted_pin_hash(kTestSerializedWrappedPIN);
+        break;
     }
   }
   if (next_page_token) {
@@ -264,7 +279,7 @@ TEST_P(TrustedVaultConnectionImplTest,
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterDeviceWithoutKeys(
           /*account_info=*/CoreAccountInfo(), key_pair->public_key(),
-          TrustedVaultConnection::RegisterDeviceWithoutKeysCallback());
+          TrustedVaultConnection::RegisterAuthenticationFactorCallback());
   EXPECT_THAT(request, NotNull());
 
   const network::TestURLLoaderFactory::PendingRequest* pending_request =
@@ -324,10 +339,9 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          kLastKeyVersion, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt,
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys, kLastKeyVersion),
+          key_pair->public_key(), PhysicalDevice(),
           TrustedVaultConnection::RegisterAuthenticationFactorCallback());
   EXPECT_THAT(request, NotNull());
 
@@ -391,6 +405,39 @@ TEST_P(TrustedVaultConnectionImplTest,
 }
 
 TEST_P(TrustedVaultConnectionImplTest,
+       ShouldSendJoinSecurityDomainsRequestWithPrecomputedKeys) {
+  constexpr int kVersion = 123;
+  const std::vector<uint8_t> kWrappedKey{1, 2, 3};
+  const std::vector<uint8_t> kProof{4, 5, 6};
+  std::unique_ptr<SecureBoxKeyPair> key_pair = MakeTestKeyPair();
+  std::unique_ptr<TrustedVaultConnection::Request> request =
+      connection()->RegisterAuthenticationFactor(
+          /*account_info=*/CoreAccountInfo(),
+          PrecomputedMemberKeys(kVersion, kWrappedKey, kProof),
+          key_pair->public_key(), PhysicalDevice(),
+          TrustedVaultConnection::RegisterAuthenticationFactorCallback());
+
+  const network::TestURLLoaderFactory::PendingRequest* pending_request =
+      GetPendingHTTPRequest();
+  const network::ResourceRequest& resource_request = pending_request->request;
+  EXPECT_THAT(resource_request.method, Eq("POST"));
+  EXPECT_THAT(resource_request.url, Eq(GetFullJoinSecurityDomainsURLForTesting(
+                                        kTestURL, security_domain())));
+
+  trusted_vault_pb::JoinSecurityDomainsRequest deserialized_body;
+  EXPECT_TRUE(deserialized_body.ParseFromString(
+      network::GetUploadData(resource_request)));
+  ASSERT_THAT(deserialized_body.shared_member_key(), SizeIs(1));
+  const trusted_vault_pb::SharedMemberKey& shared_key_1 =
+      deserialized_body.shared_member_key(0);
+  EXPECT_THAT(shared_key_1.epoch(), Eq(kVersion));
+  EXPECT_THAT(shared_key_1.wrapped_key(),
+              Eq(std::string(kWrappedKey.begin(), kWrappedKey.end())));
+  EXPECT_THAT(shared_key_1.member_proof(),
+              Eq(std::string(kProof.begin(), kProof.end())));
+}
+
+TEST_P(TrustedVaultConnectionImplTest,
        ShouldSendJoinSecurityDomainsRequestTypeHint) {
   const int kTypeHint = 19;
   std::unique_ptr<SecureBoxKeyPair> key_pair = MakeTestKeyPair();
@@ -398,10 +445,11 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1234, key_pair->public_key(),
-          AuthenticationFactorType::kUnspecified,
-          /*authentication_factor_type_hint=*/kTypeHint,
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1234),
+          key_pair->public_key(),
+          UnspecifiedAuthenticationFactorType(kTypeHint),
           TrustedVaultConnection::RegisterAuthenticationFactorCallback());
   EXPECT_THAT(request, NotNull());
 
@@ -420,6 +468,75 @@ TEST_P(TrustedVaultConnectionImplTest,
 }
 
 TEST_P(TrustedVaultConnectionImplTest,
+       ShouldSendJoinSecurityDomainsRequestGpmPinMetadata) {
+  const std::string old_public_key = "old_public_key";
+  const std::string metadata = "metadata";
+  std::unique_ptr<SecureBoxKeyPair> key_pair = MakeTestKeyPair();
+  ASSERT_THAT(key_pair, NotNull());
+
+  std::unique_ptr<TrustedVaultConnection::Request> request =
+      connection()->RegisterAuthenticationFactor(
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1234),
+          key_pair->public_key(), GpmPinMetadata(old_public_key, metadata),
+          TrustedVaultConnection::RegisterAuthenticationFactorCallback());
+  EXPECT_THAT(request, NotNull());
+
+  const network::TestURLLoaderFactory::PendingRequest* pending_request =
+      GetPendingHTTPRequest();
+  ASSERT_THAT(pending_request, NotNull());
+  const network::ResourceRequest& resource_request = pending_request->request;
+  EXPECT_THAT(resource_request.method, Eq("POST"));
+  EXPECT_THAT(resource_request.url, Eq(GetFullJoinSecurityDomainsURLForTesting(
+                                        kTestURL, security_domain())));
+
+  trusted_vault_pb::JoinSecurityDomainsRequest deserialized_body;
+  ASSERT_TRUE(deserialized_body.ParseFromString(
+      network::GetUploadData(resource_request)));
+  EXPECT_THAT(deserialized_body.current_public_key_to_replace(),
+              Eq(old_public_key));
+  EXPECT_THAT(deserialized_body.security_domain_member().member_type(),
+              Eq(trusted_vault_pb::SecurityDomainMember::
+                     MEMBER_TYPE_GOOGLE_PASSWORD_MANAGER_PIN));
+  EXPECT_THAT(deserialized_body.security_domain_member()
+                  .member_metadata()
+                  .google_password_manager_pin_metadata()
+                  .encrypted_pin_hash(),
+              Eq(metadata));
+}
+
+TEST_P(TrustedVaultConnectionImplTest,
+       ShouldSendJoinSecurityDomainsRequestForLskf) {
+  std::unique_ptr<SecureBoxKeyPair> key_pair = MakeTestKeyPair();
+  ASSERT_THAT(key_pair, NotNull());
+
+  std::unique_ptr<TrustedVaultConnection::Request> request =
+      connection()->RegisterAuthenticationFactor(
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1234),
+          key_pair->public_key(), LockScreenKnowledgeFactor(),
+          TrustedVaultConnection::RegisterAuthenticationFactorCallback());
+  EXPECT_THAT(request, NotNull());
+
+  const network::TestURLLoaderFactory::PendingRequest* pending_request =
+      GetPendingHTTPRequest();
+  ASSERT_THAT(pending_request, NotNull());
+  const network::ResourceRequest& resource_request = pending_request->request;
+  EXPECT_THAT(resource_request.method, Eq("POST"));
+  EXPECT_THAT(resource_request.url, Eq(GetFullJoinSecurityDomainsURLForTesting(
+                                        kTestURL, security_domain())));
+
+  trusted_vault_pb::JoinSecurityDomainsRequest deserialized_body;
+  ASSERT_TRUE(deserialized_body.ParseFromString(
+      network::GetUploadData(resource_request)));
+  EXPECT_THAT(deserialized_body.security_domain_member().member_type(),
+              Eq(trusted_vault_pb::SecurityDomainMember::
+                     MEMBER_TYPE_LOCKSCREEN_KNOWLEDGE_FACTOR));
+}
+
+TEST_P(TrustedVaultConnectionImplTest,
        ShouldHandleSuccessfulJoinSecurityDomainsRequest) {
   std::unique_ptr<SecureBoxKeyPair> key_pair = MakeTestKeyPair();
   ASSERT_THAT(key_pair, NotNull());
@@ -430,13 +547,14 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
-  EXPECT_CALL(callback, Run(Eq(TrustedVaultRegistrationStatus::kSuccess)));
+  EXPECT_CALL(callback, Run(Eq(TrustedVaultRegistrationStatus::kSuccess),
+                            /*key_version=*/Eq(1)));
   EXPECT_TRUE(RespondToJoinSecurityDomainsRequest(
       net::HTTP_OK, MakeJoinSecurityDomainsResponse(security_domain(),
                                                     /*current_epoch=*/1)
@@ -463,7 +581,8 @@ TEST_P(TrustedVaultConnectionImplTest,
   std::unique_ptr<SecureBoxKeyPair> key_pair = MakeTestKeyPair();
   ASSERT_THAT(key_pair, NotNull());
 
-  base::MockCallback<TrustedVaultConnection::RegisterDeviceWithoutKeysCallback>
+  base::MockCallback<
+      TrustedVaultConnection::RegisterAuthenticationFactorCallback>
       callback;
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
@@ -473,10 +592,8 @@ TEST_P(TrustedVaultConnectionImplTest,
   ASSERT_THAT(request, NotNull());
 
   const int kServerConstantKeyVersion = 100;
-  EXPECT_CALL(callback,
-              Run(Eq(TrustedVaultRegistrationStatus::kSuccess),
-                  TrustedVaultKeyAndVersionEq(GetConstantTrustedVaultKey(),
-                                              kServerConstantKeyVersion)));
+  EXPECT_CALL(callback, Run(Eq(TrustedVaultRegistrationStatus::kSuccess),
+                            Eq(kServerConstantKeyVersion)));
   EXPECT_TRUE(RespondToJoinSecurityDomainsRequest(
       net::HTTP_OK, MakeJoinSecurityDomainsResponse(
                         security_domain(),
@@ -489,7 +606,8 @@ TEST_P(TrustedVaultConnectionImplTest,
   std::unique_ptr<SecureBoxKeyPair> key_pair = MakeTestKeyPair();
   ASSERT_THAT(key_pair, NotNull());
 
-  base::MockCallback<TrustedVaultConnection::RegisterDeviceWithoutKeysCallback>
+  base::MockCallback<
+      TrustedVaultConnection::RegisterAuthenticationFactorCallback>
       callback;
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
@@ -501,8 +619,7 @@ TEST_P(TrustedVaultConnectionImplTest,
   const int kServerConstantKeyVersion = 100;
   EXPECT_CALL(callback,
               Run(Eq(TrustedVaultRegistrationStatus::kAlreadyRegistered),
-                  TrustedVaultKeyAndVersionEq(GetConstantTrustedVaultKey(),
-                                              kServerConstantKeyVersion)));
+                  Eq(kServerConstantKeyVersion)));
 
   trusted_vault_pb::JoinSecurityDomainsErrorDetail error_detail;
   *error_detail.mutable_already_exists_response() =
@@ -530,13 +647,14 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/0, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/0),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
-  EXPECT_CALL(callback, Run(Eq(TrustedVaultRegistrationStatus::kOtherError)));
+  EXPECT_CALL(callback,
+              Run(Eq(TrustedVaultRegistrationStatus::kOtherError), Eq(0)));
   EXPECT_TRUE(
       RespondToJoinSecurityDomainsRequest(net::HTTP_OK,
                                           /*response_content=*/std::string()));
@@ -553,13 +671,14 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/0, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/0),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
-  EXPECT_CALL(callback, Run(Eq(TrustedVaultRegistrationStatus::kOtherError)));
+  EXPECT_CALL(callback,
+              Run(Eq(TrustedVaultRegistrationStatus::kOtherError), Eq(0)));
   EXPECT_TRUE(RespondToJoinSecurityDomainsRequest(
       net::HTTP_OK,
       /*response_content=*/"corrupted_proto"));
@@ -576,13 +695,14 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
-  EXPECT_CALL(callback, Run(Eq(TrustedVaultRegistrationStatus::kOtherError)));
+  EXPECT_CALL(callback,
+              Run(Eq(TrustedVaultRegistrationStatus::kOtherError), Eq(0)));
   EXPECT_TRUE(
       RespondToJoinSecurityDomainsRequest(net::HTTP_INTERNAL_SERVER_ERROR,
                                           /*response_content=*/std::string()));
@@ -599,16 +719,17 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
   // Advance time to bypass retry logic.
   task_environment().FastForwardBy(
       TrustedVaultConnectionImpl::kMaxJoinSecurityDomainRetryDuration);
-  EXPECT_CALL(callback, Run(Eq(TrustedVaultRegistrationStatus::kNetworkError)));
+  EXPECT_CALL(callback,
+              Run(Eq(TrustedVaultRegistrationStatus::kNetworkError), Eq(0)));
   EXPECT_TRUE(RespondToJoinSecurityDomainsRequestWithNetworkError());
 }
 
@@ -623,15 +744,16 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
   // In particular, HTTP_NOT_FOUND indicates that security domain was removed.
-  EXPECT_CALL(callback,
-              Run(Eq(TrustedVaultRegistrationStatus::kLocalDataObsolete)));
+  EXPECT_CALL(
+      callback,
+      Run(Eq(TrustedVaultRegistrationStatus::kLocalDataObsolete), Eq(0)));
   EXPECT_TRUE(
       RespondToJoinSecurityDomainsRequest(net::HTTP_NOT_FOUND,
                                           /*response_content=*/std::string()));
@@ -648,17 +770,18 @@ TEST_P(TrustedVaultConnectionImplTest,
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
   // In particular, HTTP_BAD_REQUEST indicates that
   // |last_trusted_vault_key_and_version| is not actually the last on the server
   // side.
-  EXPECT_CALL(callback,
-              Run(Eq(TrustedVaultRegistrationStatus::kLocalDataObsolete)));
+  EXPECT_CALL(
+      callback,
+      Run(Eq(TrustedVaultRegistrationStatus::kLocalDataObsolete), Eq(0)));
   EXPECT_TRUE(
       RespondToJoinSecurityDomainsRequest(net::HTTP_BAD_REQUEST,
                                           /*response_content=*/std::string()));
@@ -682,14 +805,14 @@ TEST_P(
   // because there is no access token.
   EXPECT_CALL(
       callback,
-      Run(Eq(
-          TrustedVaultRegistrationStatus::kPersistentAccessTokenFetchError)));
+      Run(Eq(TrustedVaultRegistrationStatus::kPersistentAccessTokenFetchError),
+          Eq(0)));
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
   // No requests should be sent to the network.
@@ -706,10 +829,10 @@ TEST_P(TrustedVaultConnectionImplTest, ShouldCancelJoinSecurityDomainsRequest) {
 
   std::unique_ptr<TrustedVaultConnection::Request> request =
       connection()->RegisterAuthenticationFactor(
-          /*account_info=*/CoreAccountInfo(), kTrustedVaultKeys,
-          /*last_trusted_vault_key_version=*/1, key_pair->public_key(),
-          AuthenticationFactorType::kPhysicalDevice,
-          /*authentication_factor_type_hint=*/std::nullopt, callback.Get());
+          /*account_info=*/CoreAccountInfo(),
+          GetTrustedVaultKeysWithVersions(kTrustedVaultKeys,
+                                          /*last_key_version=*/1),
+          key_pair->public_key(), PhysicalDevice(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
   EXPECT_CALL(callback, Run).Times(0);
@@ -929,6 +1052,24 @@ TEST_P(TrustedVaultConnectionImplTest,
           .SerializeAsString());
 }
 
+MATCHER_P(HasRecoveryState,
+          state,
+          "DownloadAuthenticationFactorsRegistrationStateResult::State") {
+  return arg.state == state;
+}
+
+MATCHER_P2(
+    HasGpmPinMetadata,
+    public_key,
+    wrapped_pin,
+    "DownloadAuthenticationFactorsRegistrationStateResult::GpmPinMetadata") {
+  if (!arg.gpm_pin_metadata) {
+    return false;
+  }
+  return testing::ExplainMatchResult(*arg.gpm_pin_metadata,
+                                     GpmPinMetadata(public_key, wrapped_pin));
+}
+
 TEST_P(TrustedVaultConnectionImplTest,
        DownloadAuthenticationFactorsRegistrationState_Basic) {
   base::MockCallback<TrustedVaultConnection::
@@ -940,9 +1081,10 @@ TEST_P(TrustedVaultConnectionImplTest,
           /*account_info=*/CoreAccountInfo(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
-  EXPECT_CALL(
-      callback,
-      Run(DownloadAuthenticationFactorsRegistrationStateResult::kRecoverable));
+  EXPECT_CALL(callback,
+              Run(HasRecoveryState(
+                  DownloadAuthenticationFactorsRegistrationStateResult::State::
+                      kRecoverable)));
 
   ASSERT_TRUE(RespondToDownloadAuthenticationFactorsRegistrationStateRequest(
       /*next_page_token=*/std::nullopt, net::HTTP_OK,
@@ -957,65 +1099,89 @@ TEST_P(TrustedVaultConnectionImplTest,
 
 TEST_P(TrustedVaultConnectionImplTest,
        DownloadAuthenticationFactorsRegistrationState_Cases) {
+  using State = DownloadAuthenticationFactorsRegistrationStateResult::State;
+  const GpmPinMetadata gpm_pin_metadata(kTestMemberPublicKey,
+                                        kTestSerializedWrappedPIN);
   const struct TestCase {
     // responses contains the set of security domain members included in each
     // page of results from the "server".
     std::vector<std::vector<Member>> responses;
-    DownloadAuthenticationFactorsRegistrationStateResult expected_result;
-    // The enumeration can finish before downloading all the pages of results
-    // if it has seen enough to determine the result. This value specifies the
-    // number of pages that should be downloaded.
-    int expected_num_pages_downloaded;
+    State expected_result;
+    std::optional<int> expected_key_version;
+    std::optional<GpmPinMetadata> expected_gpm_pin_metadata;
   } kTestCases[] = {
       {
           {{}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kEmpty,
-          1,
+          State::kEmpty,
+          /*expected_key_version=*/std::nullopt,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{}, {}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kEmpty,
-          2,
+          State::kEmpty,
+          /*expected_key_version=*/std::nullopt,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kOtherSecurityDomain}, {Member::kOtherSecurityDomain}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kEmpty,
-          2,
+          State::kEmpty,
+          /*expected_key_version=*/std::nullopt,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kPhysical}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kIrrecoverable,
-          1,
+          State::kIrrecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kPhysical, Member::kUsableVirtual}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kRecoverable,
-          1,
+          State::kRecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kPhysical, Member::kUnusableVirtual}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kIrrecoverable,
-          1,
+          State::kIrrecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kPhysical}, {}, {Member::kUsableVirtual}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kRecoverable,
-          3,
+          State::kRecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kUsableVirtual}, {}, {Member::kPhysical}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kRecoverable,
-          1,
+          State::kRecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kPhysical}, {}, {Member::kUnusableVirtual}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kIrrecoverable,
-          3,
+          State::kIrrecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
       },
       {
           {{Member::kPhysical}, {}, {Member::kOtherSecurityDomain}},
-          DownloadAuthenticationFactorsRegistrationStateResult::kIrrecoverable,
-          3,
+          State::kIrrecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/std::nullopt,
+      },
+      {
+          {{Member::kGooglePasswordManagerPIN}, {Member::kOtherSecurityDomain}},
+          State::kRecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/gpm_pin_metadata,
+      },
+      {
+          {{Member::kGooglePasswordManagerPIN},
+           {Member::kGooglePasswordManagerPIN}},
+          State::kRecoverable,
+          /*expected_key_version=*/kTestKeyVersion,
+          /*expected_gpm_pin_metadata=*/gpm_pin_metadata,
       },
   };
 
@@ -1028,7 +1194,7 @@ TEST_P(TrustedVaultConnectionImplTest,
     auto callback = base::BindLambdaForTesting(
         [&result](
             DownloadAuthenticationFactorsRegistrationStateResult in_result) {
-          result = in_result;
+          result.emplace(std::move(in_result));
         });
 
     std::unique_ptr<TrustedVaultConnection::Request> request =
@@ -1037,7 +1203,7 @@ TEST_P(TrustedVaultConnectionImplTest,
     ASSERT_THAT(request, NotNull());
 
     std::optional<std::string> prev_next_page_token;
-    int num_pages_downloaded = 0;
+    size_t num_pages_downloaded = 0;
     for (size_t i = 0; i < test.responses.size(); i++) {
       if (result.has_value()) {
         // The process stopped early. (This is valid if enough members have been
@@ -1060,8 +1226,9 @@ TEST_P(TrustedVaultConnectionImplTest,
       prev_next_page_token = std::move(next_page_token);
     }
 
-    EXPECT_EQ(num_pages_downloaded, test.expected_num_pages_downloaded);
-    EXPECT_EQ(result.value(), test.expected_result);
+    EXPECT_EQ(num_pages_downloaded, test.responses.size());
+    EXPECT_EQ(result->state, test.expected_result);
+    EXPECT_EQ(result->gpm_pin_metadata, test.expected_gpm_pin_metadata);
   }
 }
 
@@ -1076,9 +1243,10 @@ TEST_P(TrustedVaultConnectionImplTest,
           /*account_info=*/CoreAccountInfo(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
-  EXPECT_CALL(
-      callback,
-      Run(DownloadAuthenticationFactorsRegistrationStateResult::kError));
+  EXPECT_CALL(callback,
+              Run(HasRecoveryState(
+                  DownloadAuthenticationFactorsRegistrationStateResult::State::
+                      kError)));
 
   ASSERT_TRUE(RespondToDownloadAuthenticationFactorsRegistrationStateRequest(
       /*next_page_token=*/std::nullopt, net::HTTP_INTERNAL_SERVER_ERROR,
@@ -1096,9 +1264,10 @@ TEST_P(TrustedVaultConnectionImplTest,
           /*account_info=*/CoreAccountInfo(), callback.Get());
   ASSERT_THAT(request, NotNull());
 
-  EXPECT_CALL(
-      callback,
-      Run(DownloadAuthenticationFactorsRegistrationStateResult::kError));
+  EXPECT_CALL(callback,
+              Run(HasRecoveryState(
+                  DownloadAuthenticationFactorsRegistrationStateResult::State::
+                      kError)));
 
   ASSERT_TRUE(RespondToDownloadAuthenticationFactorsRegistrationStateRequest(
       /*next_page_token=*/std::nullopt, net::HTTP_OK,

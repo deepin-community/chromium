@@ -125,8 +125,7 @@ class MockSeaPenProvider
               (override));
   MOCK_METHOD(void,
               SelectRecentSeaPenImage,
-              (const base::FilePath& file_path,
-               SelectRecentSeaPenImageCallback),
+              (uint32_t id, SelectRecentSeaPenImageCallback),
               (override));
   MOCK_METHOD(void,
               GetRecentSeaPenImages,
@@ -134,23 +133,21 @@ class MockSeaPenProvider
               (override));
   MOCK_METHOD(void,
               GetRecentSeaPenImageThumbnail,
-              (const base::FilePath& file_path,
-               GetRecentSeaPenImageThumbnailCallback),
+              (uint32_t id, GetRecentSeaPenImageThumbnailCallback),
               (override));
   MOCK_METHOD(void,
               DeleteRecentSeaPenImage,
-              (const base::FilePath& file_path,
-               DeleteRecentSeaPenImageCallback),
+              (uint32_t id, DeleteRecentSeaPenImageCallback),
               (override));
   MOCK_METHOD(void,
               OpenFeedbackDialog,
               (mojom::SeaPenFeedbackMetadataPtr metadata),
               (override));
   MOCK_METHOD(void,
-              ShouldShowSeaPenTermsOfServiceDialog,
-              (ShouldShowSeaPenTermsOfServiceDialogCallback callback),
+              ShouldShowSeaPenIntroductionDialog,
+              (ShouldShowSeaPenIntroductionDialogCallback callback),
               (override));
-  MOCK_METHOD(void, HandleSeaPenTermsOfServiceAccepted, (), (override));
+  MOCK_METHOD(void, HandleSeaPenIntroductionDialogClosed, (), (override));
 };
 
 class MockPersonalizationAppThemeProvider

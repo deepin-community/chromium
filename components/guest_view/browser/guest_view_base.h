@@ -212,7 +212,7 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   // for an extension, returns the host of its URL, which is an extension ID. If
   // the owner RenderFrameHost is a non-extension embedder of a Controlled
   // Frame, returns its serialized origin.
-  // TODO(crbug.com/1517391): Expose this information as a url::Origin.
+  // TODO(crbug.com/41490369): Expose this information as a url::Origin.
   std::string owner_host() const { return owner_host_; }
 
   // Whether the guest view is inside a plugin document.
@@ -330,6 +330,10 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   // This method is invoked when the contents preferred size changes. This will
   // only ever fire if IsPreferredSizeSupported returns true.
   virtual void OnPreferredSizeChanged(const gfx::Size& pref_size) {}
+
+  // This method is invoked when the owner contents audio muted state changes to
+  // give the container an opportunity to adjust their muted state.
+  virtual void OnOwnerAudioMutedStateUpdated(bool muted);
 
   // Signals that the guest view is ready.  The default implementation signals
   // immediately, but derived class can override this if they need to do

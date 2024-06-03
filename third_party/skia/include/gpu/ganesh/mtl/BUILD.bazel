@@ -8,7 +8,15 @@ exports_files_legacy()
 skia_filegroup(
     name = "public_hdrs",
     srcs = [
+        "GrMtlBackendContext.h",
+        "GrMtlBackendSemaphore.h",
+        "GrMtlBackendSurface.h",
+        "GrMtlDirectContext.h",
+        "GrMtlTypes.h",
         "SkSurfaceMetal.h",
     ],
-    visibility = ["//include/gpu/ganesh:__pkg__"],
+    visibility = [
+        "//include/gpu/ganesh:__pkg__",
+        "//src/gpu/ganesh/mtl:__pkg__",
+    ],
 )

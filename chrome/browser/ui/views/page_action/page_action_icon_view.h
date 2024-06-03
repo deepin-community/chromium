@@ -110,7 +110,7 @@ class PageActionIconView : public IconLabelBubbleView {
   void ExecuteForTesting();
 
   // Creates and updates the loading indicator.
-  // TODO(crbug.com/964127): Ideally this should be lazily initialized in
+  // TODO(crbug.com/40627870): Ideally this should be lazily initialized in
   // SetIsLoading(), but local card migration icon has a weird behavior that
   // doing so will cause the indicator being invisible. Investigate and fix.
   void InstallLoadingIndicatorForTesting();
@@ -227,7 +227,8 @@ class PageActionIconView : public IconLabelBubbleView {
   // The loading indicator, showing a throbber animation on top of the icon.
   raw_ptr<PageActionIconLoadingIndicatorView> loading_indicator_ = nullptr;
 
-  base::ObserverList<PageActionIconViewObserver>::Unchecked observer_list_;
+  base::ObserverList<PageActionIconViewObserver>::UncheckedAndDanglingUntriaged
+      observer_list_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PAGE_ACTION_PAGE_ACTION_ICON_VIEW_H_

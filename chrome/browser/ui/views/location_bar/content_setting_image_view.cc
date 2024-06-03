@@ -64,7 +64,7 @@ std::optional<ViewID> GetViewID(
     case ImageType::FRAMEBUST:
     case ImageType::CLIPBOARD_READ_WRITE:
     case ImageType::SENSORS:
-    case ImageType::NOTIFICATIONS_QUIET_PROMPT:
+    case ImageType::NOTIFICATIONS:
     case ImageType::STORAGE_ACCESS:
       return std::nullopt;
 
@@ -139,14 +139,14 @@ void ContentSettingImageView::Update() {
 
   if (!content_setting_image_model_->is_visible()) {
     SetVisible(false);
-    GetViewAccessibility().OverrideIsIgnored(true);
+    GetViewAccessibility().SetIsIgnored(true);
     critical_promo_bubble_.reset();
     return;
   }
   DCHECK(web_contents);
   UpdateImage();
   SetVisible(true);
-  GetViewAccessibility().OverrideIsIgnored(false);
+  GetViewAccessibility().SetIsIgnored(false);
   // An alert role is required in order to fire the alert event.
   SetAccessibleRole(ax::mojom::Role::kAlert);
 
@@ -156,7 +156,7 @@ void ContentSettingImageView::Update() {
     SetAccessibleName(name);
     const std::u16string& accessible_description =
         l10n_util::GetStringUTF16(IDS_A11Y_OMNIBOX_CHIP_HINT);
-    SetAccessibleDescription(accessible_description);
+    GetViewAccessibility().SetDescription(accessible_description);
     NotifyAccessibilityEvent(ax::mojom::Event::kAlert, true);
     content_setting_image_model_->AccessibilityWasNotified(web_contents);
   }

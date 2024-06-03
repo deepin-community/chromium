@@ -199,10 +199,11 @@ void LaunchServiceProcess(mojo::GenericPendingReceiver receiver,
   if (!options.preload_libraries.empty()) {
     host->SetPreloadLibraries(options.preload_libraries);
   }
-  if (options.pin_user32) {
-    host->SetPinUser32();
-  }
 #endif  // BUILDFLAG(IS_WIN)
+  if (options.allow_gpu_client.has_value() &&
+      options.allow_gpu_client.value()) {
+    host->SetAllowGpuClient();
+  }
   host->Start();
   host->GetChildProcess()->BindServiceInterface(std::move(receiver));
 }

@@ -691,7 +691,7 @@ void SearchPrefetchService::OnResultChanged(content::WebContents* web_contents,
     // comparatively higher than the prefetch to avoid the impact of wrong
     // predictions. We set confidence as 80 for prerender matches and 60 for
     // prefetch as an approximate number to differentiate both these cases.
-    int64_t confidence = BaseSearchProvider::ShouldPrerender(match) ? 80 : 60;
+    int confidence = BaseSearchProvider::ShouldPrerender(match) ? 80 : 60;
     auto* preloading_data =
         content::PreloadingData::GetOrCreateForWebContents(web_contents);
     SetIsNavigationInDomainCallback(preloading_data);
@@ -703,10 +703,12 @@ void SearchPrefetchService::OnResultChanged(content::WebContents* web_contents,
         base::BindRepeating(&IsSearchDestinationMatch, canonical_search_url,
                             web_contents->GetBrowserContext());
 
+    ukm::SourceId triggered_primary_page_source_id =
+        web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId();
     // Create PreloadingPrediction for this match.
     preloading_data->AddPreloadingPrediction(
         chrome_preloading_predictor::kDefaultSearchEngine, confidence,
-        std::move(same_url_matcher));
+        std::move(same_url_matcher), triggered_primary_page_source_id);
 
     // Record a prediction for default match prefetch suggest predictions.
     if (result.default_match() == &match) {
@@ -720,7 +722,8 @@ void SearchPrefetchService::OnResultChanged(content::WebContents* web_contents,
       // Create PreloadingPrediction for this match.
       preloading_data->AddPreloadingPrediction(
           chrome_preloading_predictor::kOmniboxSearchSuggestDefaultMatch,
-          confidence, std::move(same_url_matcher));
+          confidence, std::move(same_url_matcher),
+          triggered_primary_page_source_id);
     } else if (OnlyAllowDefaultMatchPreloading()) {
       // Only prefetch default match when in the experiment.
       continue;
@@ -841,8 +844,9 @@ bool SearchPrefetchService::OnNavigationLikely(
   SetIsNavigationInDomainCallback(preloading_data);
   // Create PreloadingPrediction for this match. We set the confidence to 100 as
   // when the user changed the selected match, we always trigger prefetch.
-  preloading_data->AddPreloadingPrediction(predictor, 100,
-                                           std::move(same_url_matcher));
+  preloading_data->AddPreloadingPrediction(
+      predictor, 100, std::move(same_url_matcher),
+      web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId());
 
   base::TimeTicks prefetch_started_time_stamp = base::TimeTicks::Now();
   bool was_prefetch_started =

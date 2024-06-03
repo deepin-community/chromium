@@ -24,9 +24,9 @@ import {announceAccessibleMessage} from '//resources/ash/common/util.js';
 import {afterNextRender, html, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {MultiStepBehavior, MultiStepBehaviorInterface} from '../components/behaviors/multi_step_behavior.js';
-import {OobeI18nBehavior} from '../components/behaviors/oobe_i18n_behavior.js';
+import {OobeI18nMixin} from '../components/mixins/oobe_i18n_mixin.js';
 
-import {BrowserProxy, BrowserProxyImpl} from './browser_proxy.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 
 
 /** Maximum recording index. */
@@ -51,7 +51,7 @@ const VoiceMatchUIState = {
  * @implements {MultiStepBehaviorInterface}
  */
 const AssistantVoiceMatchBase =
-    mixinBehaviors([OobeI18nBehavior, MultiStepBehavior], PolymerElement);
+    mixinBehaviors([MultiStepBehavior], OobeI18nMixin(PolymerElement));
 
 /**
  * @polymer
@@ -192,7 +192,9 @@ class AssistantVoiceMatch extends AssistantVoiceMatchBase {
    */
   reloadPage() {
     this.setUIStep(VoiceMatchUIState.INTRO);
-    this.$['agree-button'].focus();
+    if (!this.equalWeightButtons_) {
+      this.$['agree-button'].focus();
+    }
     this.resetElements_();
     this.browserProxy_.userActed(VOICE_MATCH_SCREEN_ID, ['reload-requested']);
     this.dispatchEvent(
@@ -271,7 +273,11 @@ class AssistantVoiceMatch extends AssistantVoiceMatchBase {
 
     this.browserProxy_.screenShown(VOICE_MATCH_SCREEN_ID);
     this.$['voice-match-lottie'].playing = true;
-    afterNextRender(this, () => this.$['agree-button'].focus());
+    afterNextRender(this, () => {
+      if (!this.equalWeightButtons_) {
+        this.$['agree-button'].focus();
+      }
+    });
   }
 
   /**

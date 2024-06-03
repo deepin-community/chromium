@@ -23,7 +23,6 @@
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/filling_product.h"
 #include "components/autofill/core/browser/payments/legal_message_line.h"
-#include "components/autofill/core/browser/payments/payments_window_manager.h"
 #include "components/autofill/core/browser/ui/fast_checkout_client.h"
 #include "components/autofill/core/browser/ui/popup_hiding_reasons.h"
 #include "components/autofill/core/browser/ui/popup_item_ids.h"
@@ -77,17 +76,13 @@ class AutofillAblationStudy;
 class AutofillComposeDelegate;
 class AutofillCrowdsourcingManager;
 class AutofillDriver;
-struct AutofillErrorDialogContext;
 class AutofillMlPredictionModelHandler;
 class AutofillOfferData;
 class AutofillOfferManager;
 class AutofillOptimizationGuide;
 class AutofillPopupDelegate;
 class AutofillProfile;
-enum class AutofillProgressDialogType;
 struct CardUnmaskChallengeOption;
-class CardUnmaskDelegate;
-struct CardUnmaskPromptOptions;
 class CreditCard;
 class CreditCardCvcAuthenticator;
 enum class CreditCardFetchResult;
@@ -100,8 +95,6 @@ class IbanManager;
 class LogManager;
 class MerchantPromoCodeManager;
 struct OfferNotificationOptions;
-class OtpUnmaskDelegate;
-enum class OtpUnmaskResult;
 class PersonalDataManager;
 class StrikeDatabase;
 struct Suggestion;
@@ -115,8 +108,6 @@ enum class WebauthnDialogState;
 namespace payments {
 class MandatoryReauthManager;
 class PaymentsAutofillClient;
-class PaymentsNetworkInterface;
-class PaymentsWindowManager;
 }
 
 // A client interface that needs to be supplied to the Autofill component by the
@@ -203,7 +194,7 @@ class AutofillClient {
     kFido = 2,
   };
 
-  enum class SaveAddressProfileOfferUserDecision {
+  enum class AddressPromptUserDecision {
     kUndefined,
     // No prompt is shown and no decision is needed to proceed with the process.
     kUserNotAsked,
@@ -307,7 +298,8 @@ class AutofillClient {
     PopupOpenArgs(const gfx::RectF& element_bounds,
                   base::i18n::TextDirection text_direction,
                   std::vector<Suggestion> suggestions,
-                  AutofillSuggestionTriggerSource trigger_source);
+                  AutofillSuggestionTriggerSource trigger_source,
+                  int32_t form_control_ax_id);
     PopupOpenArgs(const PopupOpenArgs&);
     PopupOpenArgs(PopupOpenArgs&&);
     PopupOpenArgs& operator=(const PopupOpenArgs&);
@@ -318,8 +310,9 @@ class AutofillClient {
     base::i18n::TextDirection text_direction =
         base::i18n::TextDirection::UNKNOWN_DIRECTION;
     std::vector<Suggestion> suggestions;
-    AutofillSuggestionTriggerSource trigger_source{
-        AutofillSuggestionTriggerSource::kUnspecified};
+    AutofillSuggestionTriggerSource trigger_source =
+        AutofillSuggestionTriggerSource::kUnspecified;
+    int32_t form_control_ax_id = 0;
   };
 
   // Describes the position of the Autofill popup on the screen.
@@ -374,7 +367,7 @@ class AutofillClient {
   // edited version of the profile should be passed as the second parameter. No
   // Autofill profile is passed otherwise.
   using AddressProfileSavePromptCallback =
-      base::OnceCallback<void(SaveAddressProfileOfferUserDecision,
+      base::OnceCallback<void(AddressPromptUserDecision,
                               base::optional_ref<const AutofillProfile>)>;
 
   // The callback accepts the boolean parameter indicating whether the user has
@@ -391,7 +384,7 @@ class AutofillClient {
   virtual version_info::Channel GetChannel() const;
 
   // Returns whether the user is currently operating in an incognito context.
-  virtual bool IsOffTheRecord() = 0;
+  virtual bool IsOffTheRecord() const = 0;
 
   // Returns the URL loader factory associated with this driver.
   virtual scoped_refptr<network::SharedURLLoaderFactory>
@@ -464,15 +457,9 @@ class AutofillClient {
   // Gets the payments::PaymentsAutofillClient instance owned by the client.
   virtual payments::PaymentsAutofillClient* GetPaymentsAutofillClient();
 
-  // Gets the payments::PaymentsNetworkInterface instance owned by the client.
-  virtual payments::PaymentsNetworkInterface* GetPaymentsNetworkInterface() = 0;
-
-  // Gets the payments::PaymentsWindowManager owned by the client.
-  virtual payments::PaymentsWindowManager* GetPaymentsWindowManager();
-
   // Gets the StrikeDatabase associated with the client. Note: Nullptr may be
   // returned so check before use.
-  // TODO(crbug.com/1472094): Make sure all strike database usages check for
+  // TODO(crbug.com/40926442): Make sure all strike database usages check for
   // the nullptr.
   virtual StrikeDatabase* GetStrikeDatabase() = 0;
 
@@ -526,22 +513,6 @@ class AutofillClient {
 
   // Causes the Autofill settings UI to be shown.
   virtual void ShowAutofillSettings(FillingProduct main_filling_product) = 0;
-
-  // Show the OTP unmask dialog to accept user-input OTP value.
-  virtual void ShowCardUnmaskOtpInputDialog(
-      const CardUnmaskChallengeOption& challenge_option,
-      base::WeakPtr<OtpUnmaskDelegate> delegate);
-
-  // Invoked when we receive the server response of the OTP unmask request.
-  virtual void OnUnmaskOtpVerificationResult(OtpUnmaskResult unmask_result);
-
-  // A user has attempted to use a masked card. Prompt them for further
-  // information to proceed.
-  virtual void ShowUnmaskPrompt(
-      const CreditCard& card,
-      const CardUnmaskPromptOptions& card_unmask_prompt_options,
-      base::WeakPtr<CardUnmaskDelegate> delegate);
-  virtual void OnUnmaskVerificationResult(PaymentsRpcResult result);
 
   // Shows a dialog for the user to choose/confirm the authentication
   // to use in card unmasking.
@@ -738,6 +709,7 @@ class AutofillClient {
   // Shows an Autofill popup with the given |values|, |labels|, |icons|, and
   // |identifiers| for the element at |element_bounds|. |delegate| will be
   // notified of popup events.
+  // The popup is shown asynchronously on Desktop and Android.
   virtual void ShowAutofillPopup(
       const PopupOpenArgs& open_args,
       base::WeakPtr<AutofillPopupDelegate> delegate) = 0;
@@ -749,19 +721,6 @@ class AutofillClient {
   // Informs the client that the popup needs to be kept alive. Call before
   // |UpdatePopup| to update the open popup in-place.
   virtual void PinPopupView() = 0;
-
-  // The returned arguments allow to reopen the dropdown with
-  // `ShowAutofillPopup()` even if the controller is destroyed temporarily.
-  // This function ensures that the element's bounds are transformed back to the
-  // screen space-independent bounds.
-  // The suggestion trigger source of the existing popup is not reused, but
-  // replaced with `trigger_source`. This is because it should indicate the
-  // reason for reopening the popup. Reusing the existing trigger source can
-  // have unwanted implications such as re-auto-selecting the first suggestion
-  // in the `AutofillSuggestionTriggerSource::kTextFieldDidReceiveKeyDown` case.
-  // Note that the password manager doesn't distinguish between trigger sources.
-  virtual PopupOpenArgs GetReopenPopupArgs(
-      AutofillSuggestionTriggerSource trigger_source) const = 0;
 
   // Returns the information of the popup on the screen, if there is one that is
   // showing. Note that this implemented only on Desktop.
@@ -780,7 +739,7 @@ class AutofillClient {
   // Hide the Autofill popup if one is currently showing.
   virtual void HideAutofillPopup(PopupHidingReason reason) = 0;
 
-  // TODO(crbug.com/1093057): Rename all the "domain" in this flow to origin.
+  // TODO(crbug.com/40134864): Rename all the "domain" in this flow to origin.
   //                          The server is passing down full origin of the
   //                          urls. "Domain" is no longer accurate.
   // Notifies the client to update the offer notification when the `offer` is
@@ -796,24 +755,6 @@ class AutofillClient {
   // necessary information in `options` to show the manual fallback bubble.
   virtual void OnVirtualCardDataAvailable(
       const VirtualCardManualFallbackBubbleOptions& options);
-
-  // Shows an error dialog when card retrieval errors happen. The type of error
-  // dialog that is shown will match the `type` in `context`. If the
-  // `server_returned_title` and `server_returned_description` in `context` are
-  // both set, the error dialog that is displayed will have these fields
-  // displayed for the title and description, respectively.
-  virtual void ShowAutofillErrorDialog(
-      const AutofillErrorDialogContext& context);
-
-  // Show/dismiss the progress dialog which contains a throbber and a text
-  // message indicating that something is in progress.
-  virtual void ShowAutofillProgressDialog(
-      AutofillProgressDialogType autofill_progress_dialog_type,
-      base::OnceClosure cancel_callback);
-  virtual void CloseAutofillProgressDialog(
-      bool show_confirmation_before_closing,
-      base::OnceClosure no_interactive_authentication_callback =
-          base::OnceClosure());
 
   // Maybe triggers a hats survey that measures the user's perception of
   // Autofill. When triggering happens, the survey dialog will be displayed with
@@ -856,6 +797,10 @@ class AutofillClient {
   virtual bool IsLastQueriedField(FieldGlobalId field_id) = 0;
 #endif
 
+  // Whether we can add more information to the contents of suggestions text due
+  // to the use of a large keyboard accessory view. See b/40942168.
+  virtual bool ShouldFormatForLargeKeyboardAccessory() const;
+
   // Navigates to |url| in a new tab. |url| links to the promo code offer
   // details page for the offers in a promo code suggestions popup. Every offer
   // in a promo code suggestions popup links to the same offer details page.
@@ -873,6 +818,25 @@ class AutofillClient {
   // platform is not supported.
   virtual std::unique_ptr<device_reauth::DeviceAuthenticator>
   GetDeviceAuthenticator();
+
+  // Attaches the IPH for the manual fallback feature to the `field`, on
+  // platforms that support manual fallback.
+  virtual void ShowAutofillFieldIphForManualFallbackFeature(
+      const FormFieldData& field);
+
+  // Hides the IPH for the manual fallback feature.
+  virtual void HideAutofillFieldIphForManualFallbackFeature();
+
+  // Notifies the IPH code that the manual fallback feature was used.
+  virtual void NotifyAutofillManualFallbackUsed();
+
+  // Stores test addresses provided by devtools and used to help developers
+  // debug their forms with a list of well formatted addresses. Differently from
+  // other `AutofillProfile`s/addresses, this list is stored in the client,
+  // instead of the `PersonalDataManager`.
+  virtual void set_test_addresses(std::vector<AutofillProfile> test_addresses);
+
+  virtual base::span<const AutofillProfile> GetTestAddresses() const;
 };
 
 }  // namespace autofill

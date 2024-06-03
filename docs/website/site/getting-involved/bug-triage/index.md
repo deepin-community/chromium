@@ -60,8 +60,8 @@ for reports that nobody has tried to reproduce.
                 that the reporter didn’t test, try with those browsers and
                 report your results.
     *   If you can edit bugs, and have tried to make sure that it's not a duplicate
-                and it's in the [Unconfirmed hotist](https://g-issues.chromium.org/savedsearches/6680973)
-                move it to the [Available hotlist])(https://g-issues.chromium.org/savedsearches/6681397)
+                and it's in the [Unconfirmed hotlist](https://g-issues.chromium.org/savedsearches/6680973)
+                move it to the [Available hotlist](https://g-issues.chromium.org/savedsearches/6681397)
 *   If you feel that the steps were clear but you couldn’t reproduce the
             bug:
     *   Leave a comment saying that you couldn’t reproduce it, including
@@ -150,7 +150,7 @@ are a lot of hotlists, here are the most important for incoming bugs:
                 appropriate Blink&gt;\* sub component instead.
     *   Try to find the best match; if it’s borderline, use your best
                 guess.
-*   If the bug is about a crash or hang, add the **Stability-**Crash or
+*   If the bug is about a crash or hang, add the **Stability-Crash** or
             **Stability-Hang** hotlist.
 *   If the bug is about a language translation, add the
             **UI&gt;Localization** component.

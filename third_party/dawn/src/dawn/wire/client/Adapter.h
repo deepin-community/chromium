@@ -35,7 +35,6 @@
 #include "dawn/wire/WireCmd_autogen.h"
 #include "dawn/wire/client/LimitsAndFeatures.h"
 #include "dawn/wire/client/ObjectBase.h"
-#include "dawn/wire/client/RequestTracker.h"
 #include "partition_alloc/pointers/raw_ptr.h"
 
 namespace dawn::wire::client {
@@ -43,9 +42,7 @@ namespace dawn::wire::client {
 class Adapter final : public ObjectWithEventsBase {
   public:
     using ObjectWithEventsBase::ObjectWithEventsBase;
-    ~Adapter() override;
 
-    void CancelCallbacksForDisconnect() override;
     ObjectType GetObjectType() const override;
 
     bool GetLimits(WGPUSupportedLimits* limits) const;
@@ -64,24 +61,19 @@ class Adapter final : public ObjectWithEventsBase {
     // Unimplementable. Only availale in dawn_native.
     WGPUInstance GetInstance() const;
     WGPUDevice CreateDevice(const WGPUDeviceDescriptor*);
+    bool GetFormatCapabilities(WGPUTextureFormat format, WGPUFormatCapabilities* capabilities);
 
   private:
     LimitsAndFeatures mLimitsAndFeatures;
     WGPUAdapterProperties mProperties;
     std::vector<WGPUMemoryHeapInfo> mMemoryHeapInfo;
     WGPUAdapterPropertiesD3D mD3DProperties;
-
-    struct RequestDeviceData {
-        WGPURequestDeviceCallback callback = nullptr;
-        ObjectId deviceObjectId;
-        // TODO(https://crbug.com/dawn/2345): Investigate `DanglingUntriaged` in dawn/wire.
-        raw_ptr<void, DanglingUntriaged> userdata = nullptr;
-    };
-    RequestTracker<RequestDeviceData> mRequestDeviceRequests;
+    WGPUAdapterPropertiesVk mVkProperties;
 };
 
 void ClientAdapterPropertiesFreeMembers(WGPUAdapterProperties);
 void ClientAdapterPropertiesMemoryHeapsFreeMembers(WGPUAdapterPropertiesMemoryHeaps);
+void ClientDrmFormatCapabilitiesFreeMembers(WGPUDrmFormatCapabilities capabilities);
 
 }  // namespace dawn::wire::client
 

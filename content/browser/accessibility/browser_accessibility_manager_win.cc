@@ -14,18 +14,19 @@
 #include "base/containers/contains.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/typed_macros.h"
+#include "base/win/scoped_bstr.h"
 #include "base/win/scoped_variant.h"
 #include "base/win/windows_version.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
 #include "content/browser/accessibility/browser_accessibility_win.h"
-#include "content/browser/accessibility/web_ax_platform_tree_manager_delegate.h"
 #include "content/browser/renderer_host/legacy_render_widget_host_win.h"
 #include "content/public/common/content_switches.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_role_properties.h"
 #include "ui/accessibility/platform/ax_fragment_root_win.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate_utils_win.h"
 #include "ui/accessibility/platform/ax_platform_node_textprovider_win.h"
+#include "ui/accessibility/platform/ax_platform_tree_manager_delegate.h"
 #include "ui/accessibility/platform/uia_registrar_win.h"
 #include "ui/base/win/atl_module.h"
 
@@ -61,13 +62,13 @@ BrowserAccessibility* GetUiaTextPatternProvider(BrowserAccessibility& node) {
 // static
 BrowserAccessibilityManager* BrowserAccessibilityManager::Create(
     const ui::AXTreeUpdate& initial_tree,
-    WebAXPlatformTreeManagerDelegate* delegate) {
+    ui::AXPlatformTreeManagerDelegate* delegate) {
   return new BrowserAccessibilityManagerWin(initial_tree, delegate);
 }
 
 // static
 BrowserAccessibilityManager* BrowserAccessibilityManager::Create(
-    WebAXPlatformTreeManagerDelegate* delegate) {
+    ui::AXPlatformTreeManagerDelegate* delegate) {
   return new BrowserAccessibilityManagerWin(
       BrowserAccessibilityManagerWin::GetEmptyDocument(), delegate);
 }
@@ -79,7 +80,7 @@ BrowserAccessibilityManager::ToBrowserAccessibilityManagerWin() {
 
 BrowserAccessibilityManagerWin::BrowserAccessibilityManagerWin(
     const ui::AXTreeUpdate& initial_tree,
-    WebAXPlatformTreeManagerDelegate* delegate)
+    ui::AXPlatformTreeManagerDelegate* delegate)
     : BrowserAccessibilityManager(delegate) {
   ui::win::CreateATLModuleIfNeeded();
   Initialize(initial_tree);
@@ -107,7 +108,7 @@ BrowserAccessibilityManagerWin::~BrowserAccessibilityManagerWin() {
 // static
 ui::AXTreeUpdate BrowserAccessibilityManagerWin::GetEmptyDocument() {
   ui::AXNodeData empty_document;
-  empty_document.id = 1;
+  empty_document.id = ui::kInitialEmptyDocumentRootNodeID;
   empty_document.role = ax::mojom::Role::kRootWebArea;
   empty_document.AddBoolAttribute(ax::mojom::BoolAttribute::kBusy, true);
   ui::AXTreeUpdate update;
@@ -117,7 +118,7 @@ ui::AXTreeUpdate BrowserAccessibilityManagerWin::GetEmptyDocument() {
 }
 
 HWND BrowserAccessibilityManagerWin::GetParentHWND() const {
-  WebAXPlatformTreeManagerDelegate* delegate = GetDelegateFromRootManager();
+  ui::AXPlatformTreeManagerDelegate* delegate = GetDelegateFromRootManager();
   if (!delegate)
     return NULL;
   return delegate->AccessibilityGetAcceleratedWidget();
@@ -127,6 +128,55 @@ void BrowserAccessibilityManagerWin::UserIsReloading() {
   if (GetBrowserAccessibilityRoot())
     FireWinAccessibilityEvent(IA2_EVENT_DOCUMENT_RELOAD,
                               GetBrowserAccessibilityRoot());
+}
+
+void BrowserAccessibilityManagerWin::FireAriaNotificationEvent(
+    BrowserAccessibility* node,
+    const std::string& announcement,
+    const std::string& notification_id,
+    ax::mojom::AriaNotificationInterrupt interrupt_property,
+    ax::mojom::AriaNotificationPriority priority_property) {
+  DCHECK(node);
+
+  auto MapPropertiesToUiaNotificationProcessing =
+      [&]() -> NotificationProcessing {
+    switch (interrupt_property) {
+      case ax::mojom::AriaNotificationInterrupt::kNone:
+        switch (priority_property) {
+          case ax::mojom::AriaNotificationPriority::kNone:
+            return NotificationProcessing_All;
+          case ax::mojom::AriaNotificationPriority::kImportant:
+            return NotificationProcessing_ImportantAll;
+        }
+      case ax::mojom::AriaNotificationInterrupt::kAll:
+        switch (priority_property) {
+          case ax::mojom::AriaNotificationPriority::kNone:
+            return NotificationProcessing_MostRecent;
+          case ax::mojom::AriaNotificationPriority::kImportant:
+            return NotificationProcessing_ImportantMostRecent;
+        }
+      case ax::mojom::AriaNotificationInterrupt::kPending:
+        switch (priority_property) {
+          case ax::mojom::AriaNotificationPriority::kNone:
+            return NotificationProcessing_CurrentThenMostRecent;
+          case ax::mojom::AriaNotificationPriority::kImportant:
+            // This is resolved the same as `AriaNotificationInterrupt::kAll`,
+            // but UIA doesn't have a specific enum value for these options yet.
+            return NotificationProcessing_ImportantMostRecent;
+        }
+    }
+    NOTREACHED_NORETURN();
+  };
+
+  const base::win::ScopedBstr announcement_bstr(base::UTF8ToWide(announcement));
+  const base::win::ScopedBstr notification_id_bstr(
+      base::UTF8ToWide(notification_id));
+
+  UiaRaiseNotificationEvent(ToBrowserAccessibilityWin(node)->GetCOM(),
+                            NotificationKind_ActionCompleted,
+                            MapPropertiesToUiaNotificationProcessing(),
+                            announcement_bstr.Get(),
+                            notification_id_bstr.Get());
 }
 
 void BrowserAccessibilityManagerWin::FireFocusEvent(ui::AXNode* node) {
@@ -227,9 +277,6 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
       }
       break;
     }
-    case ui::AXEventGenerator::Event::CLASS_NAME_CHANGED:
-      FireUiaPropertyChangedEvent(UIA_ClassNamePropertyId, wrapper);
-      break;
     case ui::AXEventGenerator::Event::COLLAPSED:
     case ui::AXEventGenerator::Event::EXPANDED:
       FireUiaPropertyChangedEvent(
@@ -442,6 +489,7 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
       HandleAriaPropertiesChangedEvent(*wrapper);
       break;
     case ui::AXEventGenerator::Event::ROLE_CHANGED:
+      FireWinAccessibilityEvent(IA2_EVENT_ROLE_CHANGED, wrapper);
       FireUiaPropertyChangedEvent(UIA_AriaRolePropertyId, wrapper);
       break;
     case ui::AXEventGenerator::Event::SCROLL_HORIZONTAL_POSITION_CHANGED:
@@ -499,6 +547,7 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
 
     // Currently unused events on this platform.
     case ui::AXEventGenerator::Event::NONE:
+    case ui::AXEventGenerator::Event::ARIA_NOTIFICATIONS_POSTED:
     case ui::AXEventGenerator::Event::ATK_TEXT_OBJECT_ATTRIBUTE_CHANGED:
     case ui::AXEventGenerator::Event::AUTO_COMPLETE_CHANGED:
     case ui::AXEventGenerator::Event::AUTOFILL_AVAILABILITY_CHANGED:
@@ -510,7 +559,6 @@ void BrowserAccessibilityManagerWin::FireGeneratedEvent(
     case ui::AXEventGenerator::Event::LIVE_REGION_NODE_CHANGED:
     case ui::AXEventGenerator::Event::MENU_ITEM_SELECTED:
     case ui::AXEventGenerator::Event::ORIENTATION_CHANGED:
-    case ui::AXEventGenerator::Event::OTHER_ATTRIBUTE_CHANGED:
     case ui::AXEventGenerator::Event::PARENT_CHANGED:
     case ui::AXEventGenerator::Event::PORTAL_ACTIVATED:
     case ui::AXEventGenerator::Event::RELATED_NODE_CHANGED:
@@ -571,7 +619,7 @@ bool BrowserAccessibilityManagerWin::IsIgnoredChangedNode(
 void BrowserAccessibilityManagerWin::FireUiaAccessibilityEvent(
     LONG uia_event,
     BrowserAccessibility* node) {
-  if (!::features::IsUiaProviderEnabled()) {
+  if (!::ui::AXPlatform::GetInstance().IsUiaProviderEnabled()) {
     return;
   }
   if (!ShouldFireEventForNode(node))
@@ -611,7 +659,7 @@ void BrowserAccessibilityManagerWin::FireUiaAccessibilityEvent(
 void BrowserAccessibilityManagerWin::FireUiaPropertyChangedEvent(
     LONG uia_property,
     BrowserAccessibility* node) {
-  if (!::features::IsUiaProviderEnabled()) {
+  if (!::ui::AXPlatform::GetInstance().IsUiaProviderEnabled()) {
     return;
   }
   if (!ShouldFireEventForNode(node))
@@ -642,7 +690,7 @@ void BrowserAccessibilityManagerWin::FireUiaPropertyChangedEvent(
 void BrowserAccessibilityManagerWin::FireUiaStructureChangedEvent(
     StructureChangeType change_type,
     BrowserAccessibility* node) {
-  if (!::features::IsUiaProviderEnabled()) {
+  if (!::ui::AXPlatform::GetInstance().IsUiaProviderEnabled()) {
     return;
   }
   if (!ShouldFireEventForNode(node))
@@ -946,7 +994,7 @@ void BrowserAccessibilityManagerWin::EnqueueSelectionChangedEvent(
 
 gfx::Rect BrowserAccessibilityManagerWin::GetViewBoundsInScreenCoordinates()
     const {
-  WebAXPlatformTreeManagerDelegate* delegate = GetDelegateFromRootManager();
+  ui::AXPlatformTreeManagerDelegate* delegate = GetDelegateFromRootManager();
   if (!delegate) {
     return gfx::Rect();
   }

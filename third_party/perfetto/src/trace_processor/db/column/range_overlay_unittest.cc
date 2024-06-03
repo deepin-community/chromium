@@ -17,8 +17,6 @@
 #include "src/trace_processor/db/column/range_overlay.h"
 
 #include <cstdint>
-#include <limits>
-#include <utility>
 #include <vector>
 
 #include "perfetto/trace_processor/basic_types.h"
@@ -37,7 +35,10 @@ using testing::ElementsAre;
 using testing::IsEmpty;
 using Range = Range;
 
-TEST(RangeOverlay, SingleSearch) {
+using Indices = DataLayerChain::Indices;
+using OrderedIndices = DataLayerChain::OrderedIndices;
+
+TEST(RangeOverlay, SearchSingle) {
   Range range(3, 8);
   RangeOverlay storage(&range);
   auto fake = FakeStorageChain::SearchSubset(
@@ -48,40 +49,6 @@ TEST(RangeOverlay, SingleSearch) {
             SingleSearchResult::kMatch);
   ASSERT_EQ(chain->SingleSearch(FilterOp::kEq, SqlValue::Long(0u), 1),
             SingleSearchResult::kNoMatch);
-}
-
-TEST(RangeOverlay, UniqueSearch) {
-  Range range(1, 3);
-  RangeOverlay storage(&range);
-  auto fake = FakeStorageChain::SearchSubset(5, Range(2, 3));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kMatch);
-  ASSERT_EQ(row, 1u);
-}
-
-TEST(RangeOverlay, UniqueSearchLowOutOfBounds) {
-  Range range(3, 8);
-  RangeOverlay storage(&range);
-  auto fake = FakeStorageChain::SearchSubset(8, Range(1, 2));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kNoMatch);
-}
-
-TEST(RangeOverlay, UniqueSearchHighOutOfBounds) {
-  Range range(3, 8);
-  RangeOverlay storage(&range);
-  auto fake = FakeStorageChain::SearchSubset(9, Range(8, 9));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kNoMatch);
 }
 
 TEST(RangeOverlay, SearchAll) {
@@ -132,12 +99,10 @@ TEST(RangeOverlay, IndexSearch) {
   RangeOverlay storage(&range);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{1u, 0u, 3u};
-  RangeOrBitVector res = chain->IndexSearch(
-      FilterOp::kGe, SqlValue::Long(0u),
-      Indices{table_idx.data(), static_cast<uint32_t>(table_idx.size()),
-              Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), ElementsAre(1u));
+  Indices indices = Indices::CreateWithIndexPayloadForTesting(
+      {1u, 0u, 3u}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kGe, SqlValue::Long(0u), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), ElementsAre(1u));
 }
 
 TEST(RangeOverlay, StableSort) {

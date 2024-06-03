@@ -20,12 +20,12 @@
 #include "core/fpdfapi/parser/fpdf_parser_decode.h"
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "core/fxcrt/cfx_memorystream.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_stream.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/span_util.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 namespace {
 
@@ -54,7 +54,7 @@ CPDF_Stream::CPDF_Stream(RetainPtr<IFX_SeekableReadStream> file,
                          RetainPtr<CPDF_Dictionary> dict)
     : data_(std::move(file)), dict_(std::move(dict)) {
   CHECK(dict_->IsInline());
-  SetLengthInDict(pdfium::base::checked_cast<int>(
+  SetLengthInDict(pdfium::checked_cast<int>(
       absl::get<RetainPtr<IFX_SeekableReadStream>>(data_)->GetSize()));
 }
 
@@ -62,8 +62,8 @@ CPDF_Stream::CPDF_Stream(DataVector<uint8_t> data,
                          RetainPtr<CPDF_Dictionary> dict)
     : data_(std::move(data)), dict_(std::move(dict)) {
   CHECK(dict_->IsInline());
-  SetLengthInDict(pdfium::base::checked_cast<int>(
-      absl::get<DataVector<uint8_t>>(data_).size()));
+  SetLengthInDict(
+      pdfium::checked_cast<int>(absl::get<DataVector<uint8_t>>(data_).size()));
 }
 
 CPDF_Stream::~CPDF_Stream() {
@@ -86,7 +86,7 @@ CPDF_Stream* CPDF_Stream::AsMutableStream() {
 }
 
 void CPDF_Stream::InitStreamFromFile(RetainPtr<IFX_SeekableReadStream> file) {
-  const int size = pdfium::base::checked_cast<int>(file->GetSize());
+  const int size = pdfium::checked_cast<int>(file->GetSize());
   data_ = std::move(file);
   dict_ = pdfium::MakeRetain<CPDF_Dictionary>();
   SetLengthInDict(size);
@@ -125,10 +125,8 @@ void CPDF_Stream::SetDataFromStringstreamAndRemoveFilter(
     SetDataAndRemoveFilter({});
     return;
   }
-
-  SetDataAndRemoveFilter(
-      {reinterpret_cast<const uint8_t*>(stream->str().c_str()),
-       static_cast<size_t>(stream->tellp())});
+  SetDataAndRemoveFilter(pdfium::as_byte_span(stream->str())
+                             .first(static_cast<size_t>(stream->tellp())));
 }
 
 void CPDF_Stream::SetData(pdfium::span<const uint8_t> pData) {
@@ -137,7 +135,7 @@ void CPDF_Stream::SetData(pdfium::span<const uint8_t> pData) {
 }
 
 void CPDF_Stream::TakeData(DataVector<uint8_t> data) {
-  const int size = pdfium::base::checked_cast<int>(data.size());
+  const int size = pdfium::checked_cast<int>(data.size());
   data_ = std::move(data);
   SetLengthInDict(size);
 }
@@ -147,8 +145,8 @@ void CPDF_Stream::SetDataFromStringstream(fxcrt::ostringstream* stream) {
     SetData({});
     return;
   }
-  SetData({reinterpret_cast<const uint8_t*>(stream->str().c_str()),
-           static_cast<size_t>(stream->tellp())});
+  SetData(pdfium::as_byte_span(stream->str())
+              .first(static_cast<size_t>(stream->tellp())));
 }
 
 DataVector<uint8_t> CPDF_Stream::ReadAllRawData() const {
@@ -201,7 +199,7 @@ bool CPDF_Stream::WriteTo(IFX_ArchiveStream* archive,
 
 size_t CPDF_Stream::GetRawSize() const {
   if (IsFileBased()) {
-    return pdfium::base::checked_cast<size_t>(
+    return pdfium::checked_cast<size_t>(
         absl::get<RetainPtr<IFX_SeekableReadStream>>(data_)->GetSize());
   }
   return absl::get<DataVector<uint8_t>>(data_).size();

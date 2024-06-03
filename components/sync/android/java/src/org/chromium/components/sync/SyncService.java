@@ -18,8 +18,8 @@ import java.util.Set;
 
 /**
  * Java version of the native SyncService interface. Must only be used on the UI thread.
- * TODO(crbug.com/1451811): Update to no reference UI thread.
- * TODO(crbug.com/1158816): Document the remaining methods.
+ * TODO(crbug.com/1451811): Update to no reference UI thread. TODO(crbug.com/40161455): Document the
+ * remaining methods.
  */
 public interface SyncService {
     /** Listener for the underlying sync status. */
@@ -47,24 +47,31 @@ public interface SyncService {
     public boolean isTransportStateActive();
 
     /**
-     * Checks whether Sync-the-feature can (attempt to) start. This means that there is a primary
-     * account and no disable reasons. Note that the Sync machinery may start up in transport-only
-     * mode even if this is false.
+     * Checks whether Sync-the-feature can (attempt to) start. This means that there is a
+     * ConsentLevel::kSync account and no disable reasons. It does *not* require first-time Sync
+     * setup to be complete.
+     *
+     * <p>Note: This refers to Sync-the-feature. Sync-the-transport may be running even if this is
+     * false.
      *
      * @return true if Sync can start, false otherwise.
      */
+    // TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is deleted from the
+    // codebase. See ConsentLevel::kSync documentation for details.
     public boolean canSyncFeatureStart();
 
     /**
-     * Returns whether all conditions are satisfied for Sync-the-feature to start.
-     * This means that there is a Sync-consented account, no disable reasons, and
-     * first-time Sync setup has been completed by the user.
+     * Returns whether all conditions are satisfied for Sync-the-feature to start. This means that
+     * there is a Sync-consented account, no disable reasons, and first-time Sync setup has been
+     * completed by the user.
      *
-     * Note: This does not imply that Sync is actually running. Check
-     * IsSyncFeatureActive or GetTransportState to get the current state.
+     * <p>Note: This does not imply that Sync is actually running. Check IsSyncFeatureActive or
+     * GetTransportState to get the current state.
      *
      * @return true if the sync feature is enabled.
      */
+    // TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is deleted from the
+    // codebase. See ConsentLevel::kSync documentation for details.
     public boolean isSyncFeatureEnabled();
 
     /**
@@ -73,6 +80,8 @@ public interface SyncService {
      *
      * @return true if Sync is active, false otherwise.
      */
+    // TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is deleted from the
+    // codebase. See ConsentLevel::kSync documentation for details.
     public boolean isSyncFeatureActive();
 
     public @GoogleServiceAuthError.State int getAuthError();
@@ -111,12 +120,15 @@ public interface SyncService {
     /**
      * Gets the set of types that the user has selected.
      *
-     * NOTE: This returns "all types" by default, even if the user has never
-     *       enabled Sync, or if only Sync-the-transport is running.
-     *
      * @return UserSelectableType set of selected types.
      */
     public Set<Integer> getSelectedTypes();
+
+    /**
+     * Returns the datatypes which have local changes that have not yet been synced with the server.
+     * Note: This includes deletions as well.
+     */
+    public void getTypesWithUnsyncedData(Callback<Set<Integer>> callback);
 
     public boolean hasKeepEverythingSynced();
 
@@ -186,7 +198,7 @@ public interface SyncService {
      * Returns the time the current explicit passphrase was set (if any). Null if no explicit
      * passphrase is in use, or no time is available.
      */
-    // TODO(crbug.com/1503649): Remove this method since no usage exists anymore.
+    // TODO(crbug.com/40944114): Remove this method since no usage exists anymore.
     public @Nullable Date getExplicitPassphraseTime();
 
     /**

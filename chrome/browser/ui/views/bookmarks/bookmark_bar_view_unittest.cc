@@ -63,8 +63,6 @@ namespace {
 class BookmarkBarViewBaseTest : public ChromeViewsTestBase {
  public:
   BookmarkBarViewBaseTest() {
-    feature_list_.InitAndEnableFeature(features::kTabGroupsSave);
-
     TestingProfile::Builder profile_builder;
     profile_builder.AddTestingFactory(
         search_engines::SearchEngineChoiceServiceFactory::GetInstance(),
@@ -136,6 +134,7 @@ class BookmarkBarViewBaseTest : public ChromeViewsTestBase {
   void AddNodesToBookmarkBarFromModelString(const std::string& string) {
     bookmarks::test::AddNodesFromModelString(
         model(), model()->bookmark_bar_node(), string);
+    views::test::RunScheduledLayout(bookmark_bar_view());
   }
 
   // Creates the model, blocking until it loads, then creates the
@@ -260,6 +259,21 @@ TEST_F(BookmarkBarViewTest, AppsShortcutVisibility) {
   EXPECT_FALSE(test_helper_->apps_page_shortcut()->GetVisible());
 }
 
+TEST_F(BookmarkBarViewTest, TabGroupsBarVisibility) {
+  // Pref to show by default. Tab group bar is visible by default.
+  EXPECT_TRUE(test_helper_->saved_tab_group_bar()->GetVisible());
+
+  // Pref not to show hides tab group bar.
+  browser()->profile()->GetPrefs()->SetBoolean(
+      bookmarks::prefs::kShowTabGroupsInBookmarkBar, false);
+  EXPECT_FALSE(test_helper_->saved_tab_group_bar()->GetVisible());
+
+  // Pref to show displays tab group bar.
+  browser()->profile()->GetPrefs()->SetBoolean(
+      bookmarks::prefs::kShowTabGroupsInBookmarkBar, true);
+  EXPECT_TRUE(test_helper_->saved_tab_group_bar()->GetVisible());
+}
+
 // Various assertions around visibility of the overflow_button.
 TEST_F(BookmarkBarViewTest, OverflowVisibility) {
   EXPECT_FALSE(test_helper_->overflow_button()->GetVisible());
@@ -301,8 +315,8 @@ TEST_F(BookmarkBarViewTest, ButtonsDynamicallyAddedAfterModelHasNodes) {
   EXPECT_EQ(6u, test_helper_->GetBookmarkButtonCount());
 
   // Ensure buttons were added in the correct place.
-  auto button_iter =
-      bookmark_bar_view()->FindChild(test_helper_->saved_tab_group_bar());
+  auto button_iter = bookmark_bar_view()->FindChild(
+      test_helper_->saved_tab_groups_separator_view_());
   for (size_t i = 0; i < test_helper_->GetBookmarkButtonCount(); ++i) {
     ++button_iter;
     ASSERT_NE(bookmark_bar_view()->children().cend(), button_iter);
@@ -323,8 +337,8 @@ TEST_F(BookmarkBarViewTest, ButtonsDynamicallyAdded) {
   views::test::RunScheduledLayout(bookmark_bar_view());
   EXPECT_EQ(6u, test_helper_->GetBookmarkButtonCount());
   // Ensure buttons were added in the correct place.
-  auto button_iter =
-      bookmark_bar_view()->FindChild(test_helper_->saved_tab_group_bar());
+  auto button_iter = bookmark_bar_view()->FindChild(
+      test_helper_->saved_tab_groups_separator_view_());
   for (size_t i = 0; i < test_helper_->GetBookmarkButtonCount(); ++i) {
     ++button_iter;
     ASSERT_NE(bookmark_bar_view()->children().cend(), button_iter);
@@ -336,7 +350,6 @@ TEST_F(BookmarkBarViewTest, AddNodesWhenBarAlreadySized) {
   bookmark_bar_view()->SetBounds(0, 0, 5000,
                                  bookmark_bar_view()->bounds().height());
   AddNodesToBookmarkBarFromModelString("a b c d e f ");
-  views::test::RunScheduledLayout(bookmark_bar_view());
   EXPECT_EQ("a b c d e f", GetStringForVisibleButtons());
 }
 
@@ -351,11 +364,13 @@ TEST_F(BookmarkBarViewTest, RemoveNode) {
   // Remove the 2nd node, should still only have 1 visible.
   model()->Remove(bookmark_bar_node->children()[1].get(),
                   bookmarks::metrics::BookmarkEditSource::kOther);
+  views::test::RunScheduledLayout(bookmark_bar_view());
   EXPECT_EQ("a", GetStringForVisibleButtons());
 
   // Remove the first node, should force a new button (for the 'c' node).
   model()->Remove(bookmark_bar_node->children()[0].get(),
                   bookmarks::metrics::BookmarkEditSource::kOther);
+  views::test::RunScheduledLayout(bookmark_bar_view());
   ASSERT_EQ("c", GetStringForVisibleButtons());
 }
 
@@ -552,24 +567,25 @@ TEST_F(BookmarkBarViewTest, PageNavigatorSet) {
 }
 
 TEST_F(BookmarkBarViewTest, OnSavedTabGroupUpdateBookmarkBarCallsLayout) {
-  SavedTabGroupKeyedService* keyed_service =
-      SavedTabGroupServiceFactory::GetForProfile(browser()->profile());
+  tab_groups::SavedTabGroupKeyedService* keyed_service =
+      tab_groups::SavedTabGroupServiceFactory::GetForProfile(
+          browser()->profile());
   ASSERT_TRUE(keyed_service);
   ASSERT_TRUE(keyed_service->model());
 
   // Add 3 saved tab groups.
-  keyed_service->model()->Add(SavedTabGroup(std::u16string(u"tab group 1"),
-                                            tab_groups::TabGroupColorId::kGrey,
-                                            {}, std::nullopt));
+  keyed_service->model()->Add(tab_groups::SavedTabGroup(
+      std::u16string(u"tab group 1"), tab_groups::TabGroupColorId::kGrey, {},
+      std::nullopt));
 
   base::Uuid button_2_id = base::Uuid::GenerateRandomV4();
-  keyed_service->model()->Add(SavedTabGroup(std::u16string(u"tab group 2"),
-                                            tab_groups::TabGroupColorId::kGrey,
-                                            {}, std::nullopt, button_2_id));
+  keyed_service->model()->Add(tab_groups::SavedTabGroup(
+      std::u16string(u"tab group 2"), tab_groups::TabGroupColorId::kGrey, {},
+      std::nullopt, button_2_id));
 
-  keyed_service->model()->Add(SavedTabGroup(std::u16string(u"tab group 3"),
-                                            tab_groups::TabGroupColorId::kGrey,
-                                            {}, std::nullopt));
+  keyed_service->model()->Add(tab_groups::SavedTabGroup(
+      std::u16string(u"tab group 3"), tab_groups::TabGroupColorId::kGrey, {},
+      std::nullopt));
 
   // Save the position of the 3rd button. The 4th button is an overflow menu
   // that is only visible when there are more than 4 groups saved.

@@ -277,7 +277,9 @@ class GbmDeviceWrapper {
     // flag.
     constexpr auto kScanoutUsages = base::MakeFixedFlatSet<gfx::BufferUsage>(
         {gfx::BufferUsage::SCANOUT,
+#if !BUILDFLAG(USE_V4L2_CODEC)
          gfx::BufferUsage::PROTECTED_SCANOUT_VDA_WRITE,
+#endif
          gfx::BufferUsage::SCANOUT_FRONT_RENDERING});
     if (!kScanoutUsages.contains(buffer_usage))
       flags &= ~GBM_BO_USE_SCANOUT;
@@ -289,6 +291,7 @@ class GbmDeviceWrapper {
   base::Lock lock_;
   std::unique_ptr<ui::GbmDevice> gbm_device_ GUARDED_BY(lock_);
 };
+}  // namespace
 
 gfx::GpuMemoryBufferHandle AllocateGpuMemoryBufferHandle(
     VideoPixelFormat pixel_format,
@@ -301,7 +304,6 @@ gfx::GpuMemoryBufferHandle AllocateGpuMemoryBufferHandle(
   return GbmDeviceWrapper::Get()->CreateGpuMemoryBuffer(
       *buffer_format, coded_size, buffer_usage);
 }
-}  // namespace
 
 gfx::GpuMemoryBufferId GetNextGpuMemoryBufferId() {
   static base::NoDestructor<base::Lock> id_lock;
@@ -323,6 +325,19 @@ scoped_refptr<VideoFrame> CreateGpuMemoryBufferVideoFrame(
   if (gmb_handle.is_null() || gmb_handle.type != gfx::NATIVE_PIXMAP)
     return nullptr;
 
+  return CreateVideoFrameFromGpuMemoryBufferHandle(
+      std::move(gmb_handle), pixel_format, coded_size, visible_rect,
+      natural_size, timestamp, buffer_usage);
+}
+
+scoped_refptr<VideoFrame> CreateVideoFrameFromGpuMemoryBufferHandle(
+    gfx::GpuMemoryBufferHandle gmb_handle,
+    VideoPixelFormat pixel_format,
+    const gfx::Size& coded_size,
+    const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
+    base::TimeDelta timestamp,
+    gfx::BufferUsage buffer_usage) {
   const bool supports_zero_copy_webgpu_import =
       gmb_handle.native_pixmap_handle.supports_zero_copy_webgpu_import;
 

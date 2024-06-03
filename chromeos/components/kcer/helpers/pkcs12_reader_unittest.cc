@@ -34,12 +34,6 @@ namespace {
 
 const char kPkcs12FilePassword[] = "12345";
 
-// Custom X509 object creation allows to avoid calls to X509_free()
-// after every test where X509 objects are required.
-struct X509Deleter {
-  void operator()(X509* cert) { X509_free(cert); }
-};
-using ScopedX509 = std::unique_ptr<X509, X509Deleter>;
 ScopedX509 X509New() {
   return ScopedX509(X509_new());
 }
@@ -443,7 +437,7 @@ TEST_F(Pkcs12ReaderTest, GetPkcs12KeyAndCerts) {
 
     Pkcs12ReaderStatusCode result = pkcs12Reader_->GetPkcs12KeyAndCerts(
         wrong_pkcs12_data, kPkcs12FilePassword, key, certs);
-    EXPECT_EQ(result, Pkcs12ReaderStatusCode::kFailedToParsePkcs12Data);
+    EXPECT_EQ(result, Pkcs12ReaderStatusCode::kPkcs12InvalidFile);
   }
 
   // Not testing for normal case and for password, those cases are tested from

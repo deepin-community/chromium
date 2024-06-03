@@ -86,8 +86,6 @@ source_set("browser_sources") {
 
     # TODO(https://crbug.com/883570): Anything under api/ should be moved out of
     # this target.
-    "api/activity_log/web_request_constants.cc",
-    "api/activity_log/web_request_constants.h",
     "api/api_resource.cc",
     "api/api_resource.h",
     "api/api_resource_manager.h",
@@ -540,16 +538,16 @@ source_set("browser_sources") {
     "service_worker/service_worker_host.h",
     "service_worker/service_worker_keepalive.cc",
     "service_worker/service_worker_keepalive.h",
+    "service_worker/service_worker_task_queue.cc",
+    "service_worker/service_worker_task_queue.h",
+    "service_worker/service_worker_task_queue_factory.cc",
+    "service_worker/service_worker_task_queue_factory.h",
     "service_worker/worker_id.cc",
     "service_worker/worker_id.h",
     "service_worker/worker_id_set.cc",
     "service_worker/worker_id_set.h",
     "service_worker_manager.cc",
     "service_worker_manager.h",
-    "service_worker_task_queue.cc",
-    "service_worker_task_queue.h",
-    "service_worker_task_queue_factory.cc",
-    "service_worker_task_queue_factory.h",
     "state_store.cc",
     "state_store.h",
     "state_store_test_observer.cc",
@@ -573,6 +571,8 @@ source_set("browser_sources") {
     "user_script_loader.h",
     "user_script_manager.cc",
     "user_script_manager.h",
+    "user_script_world_configuration_manager.cc",
+    "user_script_world_configuration_manager.h",
     "verified_contents.cc",
     "verified_contents.h",
     "view_type_utils.cc",
@@ -605,7 +605,6 @@ source_set("browser_sources") {
     "//components/permissions",
     "//components/pref_registry",
     "//components/prefs",
-    "//components/safe_browsing/core/browser/hashprefix_realtime:hash_realtime_utils",
     "//components/safe_browsing/core/common",
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
@@ -653,6 +652,7 @@ source_set("browser_sources") {
     "//third_party/re2",
     "//third_party/zlib/google:zip",
     "//tools/json_schema_compiler:generated_api_util",
+    "//ui/color",
     "//ui/display",
     "//url",
   ]
@@ -758,7 +758,6 @@ source_set("browser_tests") {
     "//build:chromeos_buildflags",
     "//components/guest_view/browser:test_support",
     "//components/storage_monitor:test_support",
-    "//content/test:test_support",
     "//device/bluetooth:mocks",
     "//extensions:test_support",
     "//extensions/browser:test_support",
@@ -773,6 +772,8 @@ source_set("browser_tests") {
     "//services/service_manager/public/cpp",
     "//ui/display:test_support",
   ]
+
+  public_deps = [ "//content/test:test_support" ]
 
   if (is_chromeos_ash) {
     sources += [
@@ -979,8 +980,8 @@ source_set("unit_tests") {
     "//components/permissions:permissions_common",
     "//components/pref_registry:pref_registry",
     "//components/prefs:test_support",
-    "//components/safe_browsing/core/browser/hashprefix_realtime:hash_realtime_utils",
     "//components/safe_browsing/core/common",
+    "//components/safe_browsing/core/common/hashprefix_realtime:hash_realtime_utils",
     "//components/services/unzip:in_process",
     "//components/services/unzip/content",
     "//components/storage_monitor:test_support",
@@ -1016,7 +1017,10 @@ source_set("unit_tests") {
   ]
 
   if (is_chromeos) {
-    deps += [ "//chromeos/constants" ]
+    deps += [
+      "//chromeos/constants",
+      "//chromeos/crosapi/mojom",
+    ]
   }
 
   if (is_chromeos_ash) {
@@ -1045,6 +1049,7 @@ source_set("unit_tests") {
       "//chromeos:test_support",
       "//chromeos/ash/components/dbus:test_support",
       "//chromeos/ash/components/dbus/audio",
+      "//chromeos/ash/components/dbus/debug_daemon",
       "//chromeos/ash/components/dbus/media_analytics",
       "//chromeos/ash/components/dbus/media_analytics:media_perception_proto",
       "//chromeos/ash/components/dbus/shill",
@@ -1062,6 +1067,10 @@ source_set("unit_tests") {
       "//components/user_manager:test_support",
       "//extensions/shell:app_shell_lib",
     ]
+  }
+
+  if (is_chromeos_lacros) {
+    deps += [ "//chromeos/startup" ]
   }
 
   data = [

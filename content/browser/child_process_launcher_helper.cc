@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
@@ -24,6 +25,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_launcher_utils.h"
 #include "content/public/common/content_descriptors.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "mojo/core/configuration.h"
@@ -31,6 +33,10 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/android/launcher_thread.h"
+#endif
+
+#if BUILDFLAG(IS_IOS)
+#include "base/mac/mach_port_rendezvous.h"
 #endif
 
 namespace content {
@@ -206,7 +212,14 @@ ChildProcessLauncherHelper::ChildProcessLauncherHelper(
   command_line_->DetachFromCurrentSequence();
 }
 
-ChildProcessLauncherHelper::~ChildProcessLauncherHelper() = default;
+ChildProcessLauncherHelper::~ChildProcessLauncherHelper() {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(features::kSchedQoSOnResourcedForChrome) &&
+      process_id_.has_value()) {
+    base::Process::Open(process_id_.value()).ForgetPriority();
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+}
 
 void ChildProcessLauncherHelper::StartLaunchOnClientThread() {
   DCHECK(client_task_runner_->RunsTasksInCurrentSequence());
@@ -261,6 +274,9 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
                                   files_to_register.get());
   PassFieldTrialSharedMemoryHandle(command_line(), options_ptr,
                                    files_to_register.get());
+
+  // Transfer logging switches & handles if necessary.
+  PassLoggingSwitches(options_ptr, command_line());
 
   // Launch the child process.
   Process process;
@@ -381,6 +397,24 @@ void ChildProcessLauncherHelper::ForceNormalProcessTerminationAsync(
           &ChildProcessLauncherHelper::ForceNormalProcessTerminationSync,
           std::move(process)));
 }
+
+#if !BUILDFLAG(IS_WIN)
+void ChildProcessLauncherHelper::PassLoggingSwitches(
+    base::LaunchOptions* launch_options,
+    base::CommandLine* cmd_line) {
+  const base::CommandLine& browser_command_line =
+      *base::CommandLine::ForCurrentProcess();
+  constexpr const char* kForwardSwitches[] = {
+      switches::kDisableLogging,
+      switches::kEnableLogging,
+      switches::kLogFile,
+      switches::kLoggingLevel,
+      switches::kV,
+      switches::kVModule,
+  };
+  cmd_line->CopySwitchesFrom(browser_command_line, kForwardSwitches);
+}
+#endif  // !BUILDFLAG(IS_WIN)
 
 }  // namespace internal
 

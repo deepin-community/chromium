@@ -14,7 +14,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "content/common/content_export.h"
-#include "content/public/renderer/plugin_ax_tree_source.h"
 #include "content/public/renderer/render_accessibility.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
@@ -82,8 +81,8 @@ class RenderAccessibilityManager;
 class CONTENT_EXPORT RenderAccessibilityImpl : public RenderAccessibility,
                                                public RenderFrameObserver {
  public:
-  // A call to AccessibilityModeChanged() is required after construction to
-  // start accessibility.
+  // A call to NotifyAccessibilityModeChange() is required after construction
+  // to start accessibility.
   RenderAccessibilityImpl(
       RenderAccessibilityManager* const render_accessibility_manager,
       RenderFrameImpl* const render_frame);
@@ -93,21 +92,19 @@ class CONTENT_EXPORT RenderAccessibilityImpl : public RenderAccessibility,
 
   ~RenderAccessibilityImpl() override;
 
+  void NotifyAccessibilityModeChange(const ui::AXMode& mode);
   ui::AXMode GetAccessibilityMode() { return accessibility_mode_; }
 
   // RenderAccessibility implementation.
   bool HasActiveDocument() const override;
-  int GenerateAXID() override;
   ui::AXMode GetAXMode() const override;
-  ui::AXTreeID GetTreeIDForPluginHost() const override;
-  void SetPluginTreeSource(PluginAXTreeSource* source) override;
-  void MarkPluginDescendantDirty(ui::AXNodeID node_id) override;
   void RecordInaccessiblePdfUkm() override;
+  void SetPluginAXTreeActionTargetAdapter(
+      PluginAXTreeActionTargetAdapter* adapter) override;
 
   // RenderFrameObserver implementation.
   void DidCreateNewDocument() override;
   void DidCommitProvisionalLoad(ui::PageTransition transition) override;
-  void AccessibilityModeChanged(const ui::AXMode& mode) override;
 
   void HitTest(const gfx::Point& point,
                ax::mojom::Event event_to_fire,
@@ -134,7 +131,9 @@ class CONTENT_EXPORT RenderAccessibilityImpl : public RenderAccessibility,
     ax::mojom::Event event_type = ax::mojom::Event::kNone);
   // Called when it is safe to begin a serialization.
   // Returns true if a serialization occurs.
-  bool AXReadyCallback();
+  bool SendAccessibilitySerialization(std::vector<ui::AXTreeUpdate> updates,
+                                      std::vector<ui::AXEvent> events,
+                                      bool had_load_complete_messages);
 
   // Returns the main top-level document for this page, or NULL if there's
   // no view or frame.
@@ -162,11 +161,9 @@ class CONTENT_EXPORT RenderAccessibilityImpl : public RenderAccessibility,
   // for debugging.
   bool image_annotation_debugging_ = false;
 
- protected:
-  // Check the entire accessibility tree to see if any nodes have
-  // changed location, by comparing their locations to the cached
-  // versions. If any have moved, send an IPC with the new locations.
-  void SendLocationChanges();
+  AXAnnotatorsManager* ax_annotators_manager_for_testing() {
+    return ax_annotators_manager_.get();
+  }
 
  private:
   // Called whenever the "ack" message is received for a serialization message
@@ -190,8 +187,8 @@ class CONTENT_EXPORT RenderAccessibilityImpl : public RenderAccessibility,
   void MarkAllAXObjectsDirty(ax::mojom::Role role,
                              ax::mojom::Action event_from_action);
 
-  // Ensure that AXReadyCallback() will be called at the next available
-  // opportunity, so that any dirty objects will be serialized soon.
+  // Ensure that SendAccessibilitySerialization() will be called at the next
+  // available opportunity, so that any dirty objects will be serialized soon.
   void ScheduleImmediateAXUpdate();
 
   // Returns the document for the active popup if any.
@@ -212,15 +209,13 @@ class CONTENT_EXPORT RenderAccessibilityImpl : public RenderAccessibility,
   bool SerializeUpdatesAndEvents(blink::WebDocument document,
                                  blink::WebAXObject root,
                                  std::vector<ui::AXEvent>& events,
-                                 std::vector<ui::AXTreeUpdate>& updates,
-                                 bool mark_plugin_subtree_dirty);
+                                 std::vector<ui::AXTreeUpdate>& updates);
 
   // The RenderAccessibilityManager that owns us.
-  raw_ptr<RenderAccessibilityManager, ExperimentalRenderer>
-      render_accessibility_manager_;
+  raw_ptr<RenderAccessibilityManager> render_accessibility_manager_;
 
   // The associated RenderFrameImpl by means of the RenderAccessibilityManager.
-  raw_ptr<RenderFrameImpl, ExperimentalRenderer> render_frame_;
+  raw_ptr<RenderFrameImpl> render_frame_;
 
   // This keeps accessibility enabled as long as it lives.
   std::unique_ptr<blink::WebAXContext> ax_context_;
@@ -228,12 +223,7 @@ class CONTENT_EXPORT RenderAccessibilityImpl : public RenderAccessibility,
   // Manages generated annotations of the AXTree.
   std::unique_ptr<AXAnnotatorsManager> ax_annotators_manager_;
 
-  using PluginAXTreeSerializer =
-      ui::AXTreeSerializer<const ui::AXNode*, std::vector<const ui::AXNode*>>;
-  // AXTreeSerializer's AXSourceNodeVectorType is not a vector<raw_ptr> due to
-  // performance regressions detected in blink_perf.accessibility tests.
-  RAW_PTR_EXCLUSION std::unique_ptr<PluginAXTreeSerializer> plugin_serializer_;
-  raw_ptr<PluginAXTreeSource, ExperimentalRenderer> plugin_tree_source_;
+  raw_ptr<PluginAXTreeActionTargetAdapter> plugin_action_target_adapter_;
 
   // Token to return this token in the next IPC, so that RenderFrameHostImpl
   // can discard stale data, when the token does not match the expected token.

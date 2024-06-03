@@ -5,6 +5,7 @@
 #include "content/browser/web_package/signed_exchange_handler.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -404,8 +405,8 @@ SignedExchangeHandler::ParseHeadersAndFetchCertificate() {
 
   DCHECK(version_.has_value());
 
-  base::StringPiece data(header_buf_->data(), header_read_buf_->size());
-  base::StringPiece signature_header_field = data.substr(
+  std::string_view data(header_buf_->data(), header_read_buf_->size());
+  std::string_view signature_header_field = data.substr(
       0, prologue_fallback_url_and_after_.signature_header_field_length());
   base::span<const uint8_t> cbor_header =
       base::as_bytes(base::make_span(data.substr(
@@ -737,6 +738,7 @@ void SignedExchangeHandler::CheckAbsenceOfCookies(base::OnceClosure callback) {
       envelope_->request_url().url, isolation_info.site_for_cookies(),
       *isolation_info.top_frame_origin(), /*has_storage_access=*/true,
       std::move(match_options), /*is_ad_tagged=*/false,
+      /*force_disable_third_party_cookies=*/false,
       base::BindOnce(&SignedExchangeHandler::OnGetCookies,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }

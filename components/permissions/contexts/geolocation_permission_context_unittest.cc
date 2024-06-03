@@ -70,7 +70,7 @@
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
 #include "components/permissions/contexts/geolocation_permission_context_system.h"
-#include "services/device/public/cpp/test/fake_geolocation_manager.h"
+#include "services/device/public/cpp/test/fake_geolocation_system_permission_manager.h"
 #endif
 
 using content::MockRenderProcessHost;
@@ -200,7 +200,8 @@ class GeolocationPermissionContextTests
       mock_permission_prompt_factories_;
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  raw_ptr<device::FakeGeolocationManager> fake_geolocation_manager_;
+  raw_ptr<device::FakeGeolocationSystemPermissionManager>
+      fake_geolocation_system_permission_manager_;
 #endif
 
   // A map between renderer child id and a pair represending the bridge id and
@@ -361,13 +362,14 @@ void GeolocationPermissionContextTests::SetUp() {
                                                         GRANTED);
   MockLocationSettings::ClearHasShownLocationSettingsDialog();
 #elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  auto fake_geolocation_manager =
-      std::make_unique<device::FakeGeolocationManager>();
-  fake_geolocation_manager_ = fake_geolocation_manager.get();
-  fake_geolocation_manager->SetSystemPermission(
+  auto fake_geolocation_system_permission_manager =
+      std::make_unique<device::FakeGeolocationSystemPermissionManager>();
+  fake_geolocation_system_permission_manager_ =
+      fake_geolocation_system_permission_manager.get();
+  fake_geolocation_system_permission_manager->SetSystemPermission(
       device::LocationSystemPermissionStatus::kAllowed);
-  device::FakeGeolocationManager::SetInstance(
-      std::move(fake_geolocation_manager));
+  device::FakeGeolocationSystemPermissionManager::SetInstance(
+      std::move(fake_geolocation_system_permission_manager));
   auto context = std::make_unique<GeolocationPermissionContextSystem>(
       browser_context(), std::move(delegate));
 #else
@@ -1226,7 +1228,8 @@ TEST_F(GeolocationPermissionContextTests,
   for (auto test_case : kTestCases) {
     SetGeolocationContentSetting(requesting_frame, requesting_frame,
                                  test_case.site_permission);
-    fake_geolocation_manager_->SetSystemPermission(test_case.system_permission);
+    fake_geolocation_system_permission_manager_->SetSystemPermission(
+        test_case.system_permission);
     base::RunLoop().RunUntilIdle();
     ASSERT_EQ(test_case.expected_effective_site_permission,
               GetPermissionStatus(blink::PermissionType::GEOLOCATION,
@@ -1247,9 +1250,9 @@ TEST_F(GeolocationPermissionContextTests, SystemPermissionUpdates) {
                                CONTENT_SETTING_ALLOW);
   ASSERT_EQ(1, num_permission_updates_);
   primary_pattern = ContentSettingsPattern::Wildcard();
-  fake_geolocation_manager_->SetSystemPermission(
+  fake_geolocation_system_permission_manager_->SetSystemPermission(
       LocationSystemPermissionStatus::kDenied);
-  fake_geolocation_manager_->SetSystemPermission(
+  fake_geolocation_system_permission_manager_->SetSystemPermission(
       LocationSystemPermissionStatus::kAllowed);
   base::RunLoop().RunUntilIdle();
   ASSERT_EQ(3, num_permission_updates_);

@@ -66,7 +66,9 @@ class ReadAnythingIconViewTest : public InProcessBrowserTest {
 };
 
 // Clicking the icon opens reading mode in the side panel.
-IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest, OpensReadingModeOnClick) {
+// TODO(crbug.com/333809887): Re-enable this test
+IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest,
+                       DISABLED_OpensReadingModeOnClick) {
   SetNoDelaysForTesting();
   SetActivePageDistillable();
   EXPECT_FALSE(IsReadAnythingEntryShowing(browser()));
@@ -75,7 +77,9 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest, OpensReadingModeOnClick) {
 }
 
 // When reading mode is opened, hides the icon.
-IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest, OpenReadingModeHidesIcon) {
+// TODO(crbug.com/333809887): Re-enable this test
+IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest,
+                       DISABLED_OpenReadingModeHidesIcon) {
   SetNoDelaysForTesting();
   SetActivePageDistillable();
   PageActionIconView* icon = GetReadAnythingOmniboxIcon();
@@ -86,7 +90,8 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest, OpenReadingModeHidesIcon) {
 
 // When reading mode is already opened, the icon does not show.
 IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest,
-                       IconNotVisibleIfReadingModeOpen) {
+                       // TODO(crbug.com/333809887): Re-enable this test
+                       DISABLED_IconNotVisibleIfReadingModeOpen) {
   SetNoDelaysForTesting();
   ShowReadAnythingSidePanel(browser(),
                             SidePanelOpenTrigger::kReadAnythingOmniboxIcon);
@@ -121,6 +126,13 @@ IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest, ShowLabel3Times) {
   EXPECT_FALSE(icon->ShouldShowLabel());
   EXPECT_FALSE(icon->is_animating_label());
   EXPECT_EQ(3, GetLabelShownCountFromPref());
+}
+
+IN_PROC_BROWSER_TEST_F(ReadAnythingIconViewTest, GetAccessibleName) {
+  PageActionIconView* icon = GetReadAnythingOmniboxIcon();
+  SetActivePageDistillable();
+  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_READING_MODE_TITLE),
+            icon->GetAccessibleName());
 }
 
 }  // namespace

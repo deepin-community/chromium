@@ -60,8 +60,11 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/shell_integration_win.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
+#include "ui/base/ime/text_input_client.h"
+#include "ui/base/ime/win/tsf_input_scope.h"
 #include "ui/base/win/shell.h"
 #endif
 
@@ -219,6 +222,21 @@ class OverlayWindowFrameView : public views::NonClientFrameView {
     // Allows for dragging and resizing the window.
     return (window_component == HTNOWHERE) ? HTCAPTION : window_component;
   }
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  void UpdateWindowRoundedCorners() override {
+    // The first call to  occurs in `UpdateWindowRoundedCorners()`. However, the
+    // layer is initialized after the widget is initialized, hence the null
+    // check.
+    ui::Layer* root_view_layer = GetWidget()->GetRootView()->layer();
+    if (root_view_layer) {
+      aura::Window* window = GetWidget()->GetNativeWindow();
+      window->SetProperty(aura::client::kWindowCornerRadiusKey,
+                          chromeos::kPipRoundedCornerRadius);
+      ash::SetCornerRadius(window, root_view_layer,
+                           chromeos::kPipRoundedCornerRadius);
+    }
+  }
+#endif
 
   // views::ViewTargeterDelegate:
   bool DoesIntersectRect(const View* target,
@@ -310,6 +328,17 @@ std::unique_ptr<VideoOverlayWindowViews> VideoOverlayWindowViews::Create(
           overlay_window->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
     }
   }
+
+  InputScope input_scope = overlay_window->GetController()
+                                   ->GetWebContents()
+                                   ->GetRenderWidgetHostView()
+                                   ->GetTextInputClient()
+                                   ->ShouldDoLearning()
+                               ? IS_DEFAULT
+                               : IS_PRIVATE;
+  ui::tsf_inputscope::SetInputScope(
+      overlay_window->GetNativeWindow()->GetHost()->GetAcceleratedWidget(),
+      input_scope);
 #endif  // BUILDFLAG(IS_WIN)
 
   PictureInPictureOcclusionTracker* tracker =
@@ -1253,14 +1282,14 @@ void VideoOverlayWindowViews::ShowInactive() {
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  ash::SetCornerRadius(GetNativeWindow(), GetRootView()->layer(),
-                       chromeos::kPipRoundedCornerRadius);
+  non_client_view()->frame_view()->UpdateWindowRoundedCorners();
 #endif
 
   // If there is an existing overlay view, remove it now.
   RemoveOverlayViewIfExists();
 
-  // TODO(crbug.com/1472386): Confirm whether the anchor should remain as FLOAT.
+  // TODO(crbug.com/40278613): Confirm whether the anchor should remain as
+  // FLOAT.
   auto overlay_view =
       get_overlay_view_cb_
           ? get_overlay_view_cb_.Run()

@@ -18,10 +18,12 @@ class BrowserServiceLacros;
 class ChromeKioskLaunchControllerLacros;
 class DeskTemplateClientLacros;
 class DeviceLocalAccountExtensionInstallerLacros;
-class DriveFsCache;
+class CloudFileSystemPathCache;
 class DownloadControllerClientLacros;
 class ForceInstalledTrackerLacros;
+class FullRestoreClientLacros;
 class FullscreenControllerClientLacros;
+class SuggestionServiceLacros;
 class LacrosAppsPublisher;
 class LacrosExtensionAppsController;
 class LacrosExtensionAppsPublisher;
@@ -50,6 +52,7 @@ class ClipboardHistoryLacros;
 class DebugInterfaceLacros;
 class DeskProfilesLacros;
 class SearchControllerLacros;
+class SearchControllerFactoryLacros;
 class TaskManagerLacros;
 class WebAppProviderBridgeLacros;
 class WebPageInfoProviderLacros;
@@ -103,6 +106,10 @@ class ChromeBrowserMainExtraPartsLacros : public ChromeBrowserMainExtraParts {
   // Handles requests for desk template data from ash-chrome.
   std::unique_ptr<DeskTemplateClientLacros> desk_template_client_;
 
+  // Handles request for session restore data used to display a nice UI in
+  // ash-chrome.
+  std::unique_ptr<FullRestoreClientLacros> full_restore_client_;
+
   // Handles queries regarding full screen control from ash-chrome.
   std::unique_ptr<FullscreenControllerClientLacros>
       fullscreen_controller_client_;
@@ -110,11 +117,15 @@ class ChromeBrowserMainExtraPartsLacros : public ChromeBrowserMainExtraParts {
   // Handles search queries from ash-chrome.
   std::unique_ptr<crosapi::SearchControllerLacros> search_controller_;
 
+  // Handles creating SearchControllers (above) from ash-chrome.
+  std::unique_ptr<crosapi::SearchControllerFactoryLacros>
+      search_controller_factory_;
+
   // Handles task manager crosapi from ash for sending lacros tasks to ash.
   std::unique_ptr<crosapi::TaskManagerLacros> task_manager_provider_;
 
-  // Receiver and cache of drive mount point path updates.
-  std::unique_ptr<DriveFsCache> drivefs_cache_;
+  // Receiver and cache of cloud file systems mount points paths updates.
+  std::unique_ptr<CloudFileSystemPathCache> cloud_file_system_cache_;
 
   // Handles requests from DriveFS to connect to an extension in lacros.
   std::unique_ptr<drive::DriveFsNativeMessageHostBridge>
@@ -223,6 +234,9 @@ class ChromeBrowserMainExtraPartsLacros : public ChromeBrowserMainExtraParts {
 
   // Handles debug commands sent from ash-chrome.
   std::unique_ptr<crosapi::DebugInterfaceLacros> debug_interface_;
+
+  // Handles sending requested suggestions to ash.
+  std::unique_ptr<SuggestionServiceLacros> suggestion_service_;
 };
 
 #endif  // CHROME_BROWSER_LACROS_CHROME_BROWSER_MAIN_EXTRA_PARTS_LACROS_H_

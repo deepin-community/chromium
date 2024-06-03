@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller.h"
 #include "chrome/browser/ui/autofill/autofill_popup_hide_helper.h"
 #include "chrome/browser/ui/autofill/next_idle_time_ticks.h"
@@ -73,38 +74,6 @@ class AutofillPopupControllerImpl
   AutofillPopupControllerImpl& operator=(const AutofillPopupControllerImpl&) =
       delete;
 
-  // Creates a new `AutofillPopupControllerImpl`, or reuses `previous` if the
-  // construction arguments are the same. `previous` may be invalidated by this
-  // call. The controller will listen for keyboard input routed to
-  // `web_contents` while the popup is showing, unless `web_contents` is NULL.
-  static base::WeakPtr<AutofillPopupControllerImpl> GetOrCreate(
-      base::WeakPtr<AutofillPopupControllerImpl> previous,
-      base::WeakPtr<AutofillPopupDelegate> delegate,
-      content::WebContents* web_contents,
-      gfx::NativeView container_view,
-      const gfx::RectF& element_bounds,
-      base::i18n::TextDirection text_direction);
-
-  // Shows the popup, or updates the existing popup with the given values.
-  virtual void Show(std::vector<Suggestion> suggestions,
-                    AutofillSuggestionTriggerSource trigger_source,
-                    AutoselectFirstSuggestion autoselect_first_suggestion);
-
-  // Updates the data list values currently shown with the popup.
-  virtual void UpdateDataListValues(base::span<const SelectOption> options);
-
-  // Informs the controller that the popup may not be hidden by stale data or
-  // interactions with native Chrome UI. This state remains active until the
-  // view is destroyed.
-  void PinView();
-
-  // Hides the popup and destroys the controller. This also invalidates
-  // `delegate_`.
-  void Hide(PopupHidingReason reason) override;
-
-  // Invoked when the view was destroyed by by someone other than this class.
-  void ViewDestroyed() override;
-
   // Handles a key press event and returns whether the event should be swallowed
   // (meaning that no other handler, in not particular the default handler, can
   // process it).
@@ -114,7 +83,7 @@ class AutofillPopupControllerImpl
   void OnSuggestionsChanged() override;
   void SelectSuggestion(int index) override;
   void UnselectSuggestion() override;
-  void AcceptSuggestion(int index, base::TimeTicks event_time) override;
+  void AcceptSuggestion(int index) override;
   void PerformButtonActionForSuggestion(int index) override;
   bool RemoveSuggestion(
       int list_index,
@@ -138,28 +107,27 @@ class AutofillPopupControllerImpl
   std::optional<AutofillClient::PopupScreenLocation> GetPopupScreenLocation()
       const override;
   void HideSubPopup() override;
-
-  void KeepPopupOpenForTesting() { keep_popup_open_for_testing_ = true; }
-
-  // Disables show thresholds. See the documentation of the member for details.
-  void DisableThresholdForTesting(bool disable_threshold) {
-    disable_threshold_for_testing_ = disable_threshold;
-  }
+  void Hide(PopupHidingReason reason) override;
+  void ViewDestroyed() override;
+  void Show(std::vector<Suggestion> suggestions,
+            AutofillSuggestionTriggerSource trigger_source,
+            AutoselectFirstSuggestion autoselect_first_suggestion) override;
+  void DisableThresholdForTesting(bool disable_threshold) override;
+  void KeepPopupOpenForTesting() override;
+  void UpdateDataListValues(base::span<const SelectOption> options) override;
+  void PinView() override;
 
   void SetViewForTesting(base::WeakPtr<AutofillPopupView> view) {
     view_ = std::move(view);
     time_view_shown_ = NextIdleTimeTicks::CaptureNextIdleTimeTicks();
   }
 
-  int GetLineCountForTesting() const { return GetLineCount(); }
-
  protected:
   AutofillPopupControllerImpl(
       base::WeakPtr<AutofillPopupDelegate> delegate,
       content::WebContents* web_contents,
-      gfx::NativeView container_view,
-      const gfx::RectF& element_bounds,
-      base::i18n::TextDirection text_direction,
+      PopupControllerCommon controller_common,
+      int32_t form_control_ax_id,
       base::RepeatingCallback<void(
           gfx::NativeWindow,
           Profile*,
@@ -171,7 +139,6 @@ class AutofillPopupControllerImpl
   gfx::NativeView container_view() const override;
   content::WebContents* GetWebContents() const override;
   const gfx::RectF& element_bounds() const override;
-  void SetElementBounds(const gfx::RectF& bounds);
   base::i18n::TextDirection GetElementTextDirection() const override;
 
   // Returns true if the popup still has non-options entries to show the user.
@@ -196,6 +163,8 @@ class AutofillPopupControllerImpl
   virtual void HideViewAndDie();
 
  private:
+  friend class AutofillPopupController;
+
   // Clear the internal state of the controller. This is needed to ensure that
   // when the popup is reused it doesn't leak values between uses.
   void ClearState();
@@ -255,18 +224,24 @@ class AutofillPopupControllerImpl
   AutofillSuggestionTriggerSource trigger_source_ =
       AutofillSuggestionTriggerSource::kUnspecified;
 
+  // The AX ID of the field on which Autofill was triggered.
+  int32_t form_control_ax_id_ = 0;
+
   // If set to true, the popup will stay open regardless of external changes on
   // the machine that would normally cause the popup to be hidden.
   bool keep_popup_open_for_testing_ = false;
 
   // Callback invoked to try to show the password migration warning on Android.
   // Used to facilitate testing.
-  // TODO(crbug.com/1454469): Remove when the warning isn't needed anymore.
+  // TODO(crbug.com/40272324): Remove when the warning isn't needed anymore.
   base::RepeatingCallback<void(
       gfx::NativeWindow,
       Profile*,
       password_manager::metrics_util::PasswordMigrationWarningTriggers)>
       show_pwd_migration_warning_callback_;
+
+  // Timer to close a fading popup.
+  base::OneShotTimer fading_popup_timer_;
 
   // Whether the popup should ignore mouse observed outside check.
   bool should_ignore_mouse_observed_outside_item_bounds_check_ = false;
@@ -280,7 +255,7 @@ class AutofillPopupControllerImpl
   base::WeakPtr<AutofillPopupControllerImpl> sub_popup_controller_;
 
   // This is a helper which detects events that should hide the popup.
-  std::unique_ptr<AutofillPopupHideHelper> popup_hide_helper_;
+  std::optional<AutofillPopupHideHelper> popup_hide_helper_;
 
   // AutofillPopupControllerImpl deletes itself. To simplify memory management,
   // we delete the object asynchronously.

@@ -6,7 +6,7 @@
 load("//lib/args.star", "args")
 load("//lib/builder_config.star", "builder_config")
 load("//lib/builder_health_indicators.star", "health_spec")
-load("//lib/builders.star", "builders", "os", "reclient", "sheriff_rotations")
+load("//lib/builders.star", "builders", "os", "reclient", "sheriff_rotations", "siso")
 load("//lib/branches.star", "branches")
 load("//lib/ci.star", "ci")
 load("//lib/consoles.star", "consoles")
@@ -28,6 +28,11 @@ ci.defaults.set(
     reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
     service_account = ci.DEFAULT_SERVICE_ACCOUNT,
     shadow_service_account = ci.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_enable_cloud_profiler = True,
+    siso_enable_cloud_trace = True,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = reclient.jobs.HIGH_JOBS_FOR_CI,
 )
 
 consoles.console_view(
@@ -36,13 +41,14 @@ consoles.console_view(
     ordering = {
         None: ["release", "debug"],
         "release": consoles.ordering(short_names = ["bld", "tst", "nsl", "gcc"]),
-        "cast": consoles.ordering(short_names = ["vid"]),
+        "cast": ["x64", "arm64"],
     },
 )
 
 ci.builder(
-    name = "Cast Linux",
-    branch_selector = branches.selector.LINUX_BRANCHES,
+    name = "linux-x64-cast-dbg",
+    branch_selector = branches.selector.MAIN,
+    description_html = "Run Linux and Cast Receiver tests on Linux x64",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -63,58 +69,25 @@ ci.builder(
     gn_args = gn_args.config(
         configs = [
             "cast_receiver",
-            "cast_os",
-            "release_builder",
             "reclient",
             "minimal_symbols",
         ],
     ),
-    console_view_entry = consoles.console_view_entry(
-        category = "cast",
-        short_name = "vid",
-    ),
-    cq_mirrors_console_view = "mirrors",
-)
-
-ci.builder(
-    name = "Cast Linux Debug",
-    branch_selector = branches.selector.LINUX_BRANCHES,
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium_clang",
-            apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.LINUX,
-        ),
-        build_gs_bucket = "chromium-linux-archive",
-    ),
-    gn_args = gn_args.config(
-        configs = [
-            "cast_receiver",
-            "cast_os",
-            "debug_builder",
-            "reclient",
-        ],
-    ),
-    # TODO(crbug.com/1173333): Make it tree-closing.
+    # TODO(crbug.com/332735845): Garden this once stabilized.
+    sheriff_rotations = args.ignore_default(None),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
         category = "cast",
-        short_name = "dbg",
+        short_name = "x64",
     ),
     cq_mirrors_console_view = "mirrors",
+    contact_team_email = "cast-eng@google.com",
 )
 
 ci.builder(
-    name = "Cast Linux ARM64",
+    name = "linux-arm64-cast-rel",
+    branch_selector = branches.selector.MAIN,
+    description_html = "Run Linux and Cast Receiver tests on Linux arm64",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -137,19 +110,21 @@ ci.builder(
     gn_args = gn_args.config(
         configs = [
             "cast_receiver",
-            "cast_os",
             "release_builder",
             "reclient",
             "arm64",
             "minimal_symbols",
         ],
     ),
+    # TODO(crbug.com/332735845): Garden this once stabilized.
+    sheriff_rotations = args.ignore_default(None),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
         category = "cast",
-        short_name = "arm64",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
+    contact_team_email = "cast-eng@google.com",
 )
 
 ci.builder(
@@ -233,6 +208,9 @@ ci.builder(
             config = "chromium",
             apply_configs = [
                 "use_clang_coverage",
+                # This is necessary due to child builders running the
+                # telemetry_perf_unittests suite.
+                "chromium_with_telemetry_dependencies",
             ],
         ),
         chromium_config = builder_config.chromium_config(
@@ -268,6 +246,11 @@ ci.builder(
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
+            apply_configs = [
+                # This is necessary due to child builders running the
+                # telemetry_perf_unittests suite.
+                "chromium_with_telemetry_dependencies",
+            ],
         ),
         chromium_config = builder_config.chromium_config(
             config = "chromium",
@@ -550,7 +533,6 @@ ci.builder(
             "release_builder",
             "minimal_symbols",
             "no_clang",
-            "no_goma",
         ],
     ),
     # Focal is needed for better C++20 support. See crbug.com/1284275.

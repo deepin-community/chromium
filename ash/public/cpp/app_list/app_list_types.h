@@ -113,6 +113,19 @@ class ASH_PUBLIC_EXPORT IconColor {
   int hue_ = kHueInvalid;
 };
 
+// The different available AppsCollections.
+// Note: Do not change the order of these as they are used for metrics.
+enum class AppCollection {
+  kUnknown = 0,
+  kEssentials = 1,
+  kProductivity = 2,
+  kCreativity = 3,
+  kEntertainment = 4,
+  kOem = 5,
+  kUtilities = 6,
+  kMaxValue = kUtilities,
+};
+
 // A structure holding the common information which is sent between ash and,
 // chrome representing an app list item.
 struct ASH_PUBLIC_EXPORT AppListItemMetadata {
@@ -161,6 +174,8 @@ struct ASH_PUBLIC_EXPORT AppListItemMetadata {
 
   // Applicable only for promise apps. Percentage of app installation completed.
   float progress = -1;
+
+  AppCollection collection_id = AppCollection::kUnknown;
 };
 
 // Where an app list item is being shown. Used for context menu.
@@ -171,6 +186,8 @@ enum class AppListItemContext {
   kAppsGrid,
   // Recent apps.
   kRecentApps,
+  // The apps collections grid.
+  kAppsCollectionsGrid,
 };
 
 // All possible orders to sort app list items.
@@ -294,6 +311,10 @@ enum class AppListToastType {
   // Shows the notification that the apps are temporarily sorted and allows
   // users to undo the sorting actions.
   kReorderUndo,
+
+  // Show the notification that the tutorial view is showing in the bubble
+  // launcher. Allows user to exit the tutorial view into the default apps view.
+  kTutorialViewNudge,
 };
 
 ASH_PUBLIC_EXPORT std::ostream& operator<<(std::ostream& os,
@@ -351,7 +372,8 @@ enum class AppListLaunchedFrom {
   kLaunchedFromRecentApps = 5,
   kLaunchedFromContinueTask = 6,
   kLaunchedFromQuickAppAccess = 7,
-  kMaxValue = kLaunchedFromQuickAppAccess,
+  kLaunchedFromAppsCollections = 8,
+  kMaxValue = kLaunchedFromAppsCollections,
 };
 
 // The UI representation of the app that's being launched. Currently all search
@@ -806,6 +828,10 @@ struct ASH_PUBLIC_EXPORT SearchResultMetadata {
 
   // A search result type used for metrics.
   ash::SearchResultType metrics_type = ash::SEARCH_RESULT_TYPE_BOUNDARY;
+
+  // For file suggestions in continue section, the suggestion type - i.e. the
+  // reason the file was suggested to the user.
+  std::optional<ContinueFileSuggestionType> continue_file_suggestion_type;
 
   // Which UI container(s) the result should be displayed in.
   SearchResultDisplayType display_type = SearchResultDisplayType::kList;

@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "components/autofill/core/browser/filling_product.h"
+#include "components/autofill/core/browser/ui/popup_item_ids.h"
 #include "components/autofill/core/browser/ui/suggestion.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/style/typography.h"
@@ -26,6 +27,7 @@ class PopupRowContentView;
 
 namespace gfx {
 class Insets;
+struct VectorIcon;
 }
 
 namespace autofill::popup_cell_utils {
@@ -114,13 +116,12 @@ void FormatLabel(views::Label& label,
                  int maximum_width_single_line);
 
 // Creates a label for the suggestion's main text.
-std::unique_ptr<views::Label> CreateMainTextLabel(
-    const Suggestion::Text& main_text,
-    int text_style);
+std::unique_ptr<views::Label> CreateMainTextLabel(const Suggestion& suggestion,
+                                                  int text_style);
 
 // Creates a label for the suggestion's minor text.
 std::unique_ptr<views::Label> CreateMinorTextLabel(
-    const Suggestion::Text& minor_text);
+    const Suggestion& suggestion);
 
 // Creates sub-text views and pass their references to `PopupRowContentView` for
 // centralized style management. If `text_style` is not provided, the default
@@ -136,6 +137,13 @@ int GetMaxPopupAddressProfileWidth();
 std::unique_ptr<views::ImageView> ImageViewFromVectorIcon(
     const gfx::VectorIcon& vector_icon,
     int icon_size);
+
+// Appplies a grayed-out disabled style to views conveying that it is
+// deactivated and non-acceptable.
+void ApplyDeactivatedStyle(views::View& view);
+
+// Returns the expandable menu icon depending on `popup_item_id`.
+const gfx::VectorIcon& GetExpandableMenuIcon(PopupItemId popup_item_id);
 
 }  // namespace autofill::popup_cell_utils
 

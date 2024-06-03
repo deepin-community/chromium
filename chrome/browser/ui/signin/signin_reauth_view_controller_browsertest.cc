@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/signin/signin_reauth_view_controller.h"
+
 #include <memory>
 #include <optional>
 
@@ -22,7 +24,6 @@
 #include "chrome/browser/sync/test/integration/encryption_helper.h"
 #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/signin/signin_reauth_view_controller.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/webui/signin/login_ui_test_utils.h"
@@ -595,8 +596,8 @@ IN_PROC_BROWSER_TEST_F(SigninReauthViewControllerBrowserTest,
   EXPECT_EQ(WaitForReauthResult(), signin::ReauthResult::kUnexpectedResponse);
 }
 
-// TODO(crbug.com/1489482): Remove kNoPasskeySyncing path after metadata syncing
-// is enabled by default.
+// TODO(crbug.com/40284051): Remove kNoPasskeySyncing path after metadata
+// syncing is enabled by default.
 enum HasPasskeySyncing {
   kHasPasskeySyncing,
   kNoPasskeySyncing,

@@ -12,6 +12,8 @@
 
 #include "build/build_config.h"
 #include "core/fxcrt/byteorder.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_folder.h"
@@ -20,7 +22,6 @@
 #include "core/fxcrt/fx_system.h"
 #include "core/fxge/cfx_fontmapper.h"
 #include "core/fxge/fx_font.h"
-#include "third_party/base/containers/contains.h"
 
 namespace {
 
@@ -121,29 +122,6 @@ uint32_t GetCharset(FX_Charset charset) {
       break;
   }
   return 0;
-}
-
-int32_t GetSimilarValue(int weight,
-                        bool bItalic,
-                        int pitch_family,
-                        uint32_t style,
-                        bool bMatchName,
-                        size_t familyNameLength,
-                        size_t bsNameLength) {
-  int32_t iSimilarValue = 0;
-  if (bMatchName && (familyNameLength == bsNameLength))
-    iSimilarValue += 4;
-  if (FontStyleIsForceBold(style) == (weight > 400))
-    iSimilarValue += 16;
-  if (FontStyleIsItalic(style) == bItalic)
-    iSimilarValue += 16;
-  if (FontStyleIsSerif(style) == FontFamilyIsRoman(pitch_family))
-    iSimilarValue += 16;
-  if (FontStyleIsScript(style) == FontFamilyIsScript(pitch_family))
-    iSimilarValue += 8;
-  if (FontStyleIsFixedPitch(style) == FontFamilyIsFixedPitch(pitch_family))
-    iSimilarValue += 8;
-  return iSimilarValue;
 }
 
 }  // namespace
@@ -250,16 +228,16 @@ void CFX_FolderFontInfo::ReportFace(const ByteString& path,
 
   static constexpr uint32_t kNameTag =
       CFX_FontMapper::MakeTag('n', 'a', 'm', 'e');
-  ByteString names =
-      LoadTableFromTT(pFile, tables.raw_str(), nTables, kNameTag, filesize);
+  ByteString names = LoadTableFromTT(pFile, tables.unsigned_str(), nTables,
+                                     kNameTag, filesize);
   if (names.IsEmpty())
     return;
 
-  ByteString facename = GetNameFromTT(names.raw_span(), 1);
+  ByteString facename = GetNameFromTT(names.unsigned_span(), 1);
   if (facename.IsEmpty())
     return;
 
-  ByteString style = GetNameFromTT(names.raw_span(), 2);
+  ByteString style = GetNameFromTT(names.unsigned_span(), 2);
   if (style != "Regular")
     facename += " " + style;
 
@@ -271,9 +249,9 @@ void CFX_FolderFontInfo::ReportFace(const ByteString& path,
   static constexpr uint32_t kOs2Tag =
       CFX_FontMapper::MakeTag('O', 'S', '/', '2');
   ByteString os2 =
-      LoadTableFromTT(pFile, tables.raw_str(), nTables, kOs2Tag, filesize);
+      LoadTableFromTT(pFile, tables.unsigned_str(), nTables, kOs2Tag, filesize);
   if (os2.GetLength() >= 86) {
-    pdfium::span<const uint8_t> p = os2.raw_span().subspan(78);
+    pdfium::span<const uint8_t> p = os2.unsigned_span().subspan(78);
     uint32_t codepages = fxcrt::GetUInt32MSBFirst(p);
     if (codepages & (1U << 17)) {
       m_pMapper->AddInstalledFont(facename, FX_Charset::kShiftJIS);
@@ -324,23 +302,41 @@ void* CFX_FolderFontInfo::FindFont(int weight,
                                    const ByteString& family,
                                    bool bMatchName) {
   FontFaceInfo* pFind = nullptr;
-
-  ByteStringView bsFamily = family.AsStringView();
   uint32_t charset_flag = GetCharset(charset);
+
   int32_t iBestSimilar = 0;
+  if (bMatchName) {
+    // Try a direct lookup for either a perfect score or to determine a
+    // baseline similarity score.
+    auto direct_it = m_FontList.find(family);
+    if (direct_it != m_FontList.end()) {
+      FontFaceInfo* pFont = direct_it->second.get();
+      if (pFont->IsEligibleForFindFont(charset_flag, charset)) {
+        iBestSimilar =
+            pFont->SimilarityScore(weight, bItalic, pitch_family, bMatchName);
+        if (iBestSimilar == FontFaceInfo::kSimilarityScoreMax) {
+          return pFont;
+        }
+        pFind = pFont;
+      }
+    }
+  }
+  // Try and find a better match. Since FindFamilyNameMatch() is expensive,
+  // avoid calling it unless there might be a better match.
+  ByteStringView bsFamily = family.AsStringView();
   for (const auto& it : m_FontList) {
     const ByteString& bsName = it.first;
     FontFaceInfo* pFont = it.second.get();
-    if (!(pFont->m_Charsets & charset_flag) && charset != FX_Charset::kDefault)
+    if (!pFont->IsEligibleForFindFont(charset_flag, charset)) {
       continue;
-
-    if (bMatchName && !FindFamilyNameMatch(bsFamily, bsName))
-      continue;
-
-    int32_t iSimilarValue =
-        GetSimilarValue(weight, bItalic, pitch_family, pFont->m_Styles,
-                        bMatchName, bsFamily.GetLength(), bsName.GetLength());
+    }
+    int32_t iSimilarValue = pFont->SimilarityScore(
+        weight, bItalic, pitch_family,
+        bMatchName && bsFamily.GetLength() == bsName.GetLength());
     if (iSimilarValue > iBestSimilar) {
+      if (bMatchName && !FindFamilyNameMatch(bsFamily, bsName)) {
+        continue;
+      }
       iBestSimilar = iSimilarValue;
       pFind = pFont;
     }
@@ -390,7 +386,7 @@ size_t CFX_FolderFontInfo::GetFontData(void* hFont,
     for (size_t i = 0; i < nTables; i++) {
       // TODO(tsepez): iterate over span.
       pdfium::span<const uint8_t> p =
-          pFont->m_FontTables.raw_span().subspan(i * 16);
+          pFont->m_FontTables.unsigned_span().subspan(i * 16);
       if (fxcrt::GetUInt32MSBFirst(p) == table) {
         offset = fxcrt::GetUInt32MSBFirst(p.subspan(8));
         datasize = fxcrt::GetUInt32MSBFirst(p.subspan(12));
@@ -436,3 +432,37 @@ CFX_FolderFontInfo::FontFaceInfo::FontFaceInfo(ByteString filePath,
       m_FontTables(fontTables),
       m_FontOffset(fontOffset),
       m_FileSize(fileSize) {}
+
+bool CFX_FolderFontInfo::FontFaceInfo::IsEligibleForFindFont(
+    uint32_t flag,
+    FX_Charset charset) const {
+  return (m_Charsets & flag) || charset == FX_Charset::kDefault;
+}
+
+int32_t CFX_FolderFontInfo::FontFaceInfo::SimilarityScore(
+    int weight,
+    bool italic,
+    int pitch_family,
+    bool exact_match_bonus) const {
+  int32_t score = 0;
+  if (FontStyleIsForceBold(m_Styles) == (weight > 400)) {
+    score += 16;
+  }
+  if (FontStyleIsItalic(m_Styles) == italic) {
+    score += 16;
+  }
+  if (FontStyleIsSerif(m_Styles) == FontFamilyIsRoman(pitch_family)) {
+    score += 16;
+  }
+  if (FontStyleIsScript(m_Styles) == FontFamilyIsScript(pitch_family)) {
+    score += 8;
+  }
+  if (FontStyleIsFixedPitch(m_Styles) == FontFamilyIsFixedPitch(pitch_family)) {
+    score += 8;
+  }
+  if (exact_match_bonus) {
+    score += 4;
+  }
+  DCHECK_LE(score, kSimilarityScoreMax);
+  return score;
+}

@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "base/containers/queue.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
@@ -22,13 +24,12 @@
 #include "base/process/process.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
-#include "base/strings/string_piece.h"
 #include "base/template_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/types/strong_alias.h"
+#include "base/types/to_address.h"
 #include "build/build_config.h"
 #include "cc/test/pixel_test_utils.h"
-#include "components/viz/common/quads/compositor_frame.h"
 #include "content/public/browser/commit_deferring_condition.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/global_routing_id.h"
@@ -41,7 +42,6 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/common/page_type.h"
-#include "content/public/test/fake_frame_widget.h"
 #include "content/public/test/test_utils.h"
 #include "ipc/message_filter.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -51,6 +51,7 @@
 #include "net/base/load_flags.h"
 #include "net/cookies/cookie_options.h"
 #include "net/cookies/cookie_partition_key_collection.h"
+#include "services/network/public/mojom/cookie_manager.mojom-forward.h"
 #include "storage/common/file_system/file_system_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/blob/blob_utils.h"
@@ -60,9 +61,9 @@
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-test-utils.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom.h"
-#include "third_party/blink/public/mojom/frame/frame.mojom-test-utils.h"
-#include "third_party/blink/public/mojom/frame/remote_frame.mojom-test-utils.h"
 #include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom.h"
+#include "third_party/blink/public/mojom/keyboard_lock/keyboard_lock.mojom-shared.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom-shared.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree_update.h"
@@ -76,10 +77,6 @@
 #if BUILDFLAG(IS_WIN)
 #include "base/win/scoped_handle.h"
 #endif
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-#include "content/public/test/mock_captured_surface_controller.h"
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 namespace gfx {
 class Point;
@@ -121,7 +118,11 @@ typedef int PROPERTYID;
 
 namespace blink {
 class StorageKey;
-struct FrameVisualProperties;
+
+namespace mojom {
+class FrameWidget;
+}  // namespace mojom
+
 }  // namespace blink
 
 namespace storage {
@@ -129,6 +130,10 @@ class BlobUrlRegistry;
 }
 
 namespace content {
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+class MockCapturedSurfaceController;
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 #if defined(USE_AURA)
 class SelectionBoundsWaiter;
@@ -139,7 +144,6 @@ class FileSystemAccessPermissionContext;
 class FrameTreeNode;
 class NavigationHandle;
 class NavigationRequest;
-class RenderFrameHostImpl;
 class RenderFrameMetadataProviderImpl;
 class RenderFrameProxyHost;
 class RenderWidgetHost;
@@ -214,8 +218,8 @@ void NavigateToURLBlockUntilNavigationsComplete(
 //   RenderProcessHostBadMojoMessageWaiter kill_waiter(rfh->GetProcess());
 //   EXPECT_THAT(kill_waiter.Wait(), Optional(HasSubstr("...")));
 
-// Perform a renderer-initiated navigation of |window| to |url|, blocking
-// until the navigation finishes.  The navigation is done by assigning
+// Perform a renderer-initiated navigation of the frame |adapter| to |url|,
+// blocking until the navigation finishes. The navigation is done by assigning
 // location.href in the frame |adapter|. Returns true if the page was loaded
 // successfully and the last committed URL matches |url|.
 [[nodiscard]] bool NavigateToURLFromRenderer(const ToRenderFrameHost& adapter,
@@ -238,8 +242,8 @@ void NavigateToURLBlockUntilNavigationsComplete(
     const GURL& url,
     const GURL& expected_commit_url);
 
-// Perform a renderer-initiated navigation of `window` to `url`. Returns true if
-// the navigation started successfully and false otherwise.
+// Perform a renderer-initiated navigation of the frame `adapter` to `url`.
+// Returns true if the navigation started successfully and false otherwise.
 [[nodiscard]] bool BeginNavigateToURLFromRenderer(
     const ToRenderFrameHost& adapter,
     const GURL& url);
@@ -252,18 +256,18 @@ void NavigateToURLBlockUntilNavigationsComplete(
 // necessary, a user activation can be triggered right before calling this
 // method, e.g. by calling |ExecJs(frame_tree_node, "")|.
 bool NavigateIframeToURL(WebContents* web_contents,
-                         base::StringPiece iframe_id,
+                         std::string_view iframe_id,
                          const GURL& url);
 
 // Similar to |NavigateIframeToURL()| but returns as soon as the navigation is
 // initiated.
 bool BeginNavigateIframeToURL(WebContents* web_contents,
-                              base::StringPiece iframe_id,
+                              std::string_view iframe_id,
                               const GURL& url);
 
 // Generate a URL for a file path including a query string.
 GURL GetFileUrlWithQuery(const base::FilePath& path,
-                         base::StringPiece query_string);
+                         std::string_view query_string);
 
 // Checks whether the page type of the last committed navigation entry matches
 // |page_type|.
@@ -316,6 +320,11 @@ void PwnCommitIPC(WebContents* web_contents,
                   const GURL& new_url,
                   const url::Origin& new_origin);
 
+// Test helper to check the content-internal CanCommitURL() method on
+// ChildProcessSecurityPolicy, determining whether a particular process is
+// allowed to commit a navigation to `url`.
+bool CanCommitURLForTesting(int child_id, const GURL& url);
+
 // Causes the specified web_contents to issue an OnUnresponsiveRenderer event
 // to its observers.
 void SimulateUnresponsiveRenderer(WebContents* web_contents,
@@ -350,12 +359,12 @@ void SimulateMouseClickAt(WebContents* web_contents,
 // friendly by taking zooming into account.
 gfx::PointF GetCenterCoordinatesOfElementWithId(
     const ToRenderFrameHost& adapter,
-    base::StringPiece id);
+    std::string_view id);
 
 // Retrieves the center coordinates of the element with id |id| and simulates a
 // mouse click there using SimulateMouseClickAt().
 void SimulateMouseClickOrTapElementWithId(content::WebContents* web_contents,
-                                          base::StringPiece id);
+                                          std::string_view id);
 
 // Simulates asynchronously a mouse enter/move/leave event. The mouse event is
 // routed through RenderWidgetHostInputEventRouter and thus can target OOPIFs.
@@ -534,6 +543,10 @@ BindFakeFrameWidgetInterfaces(RenderFrameHost* frame);
 // RenderFrameHost
 void SimulateActiveStateForWidget(RenderFrameHost* frame, bool active);
 
+// Return the value set for VisitedLinkSalt in the navigation's commit_params.
+std::optional<uint64_t> GetVisitedLinkSaltForNavigation(
+    NavigationHandle* navigation_handle);
+
 // Holds down modifier keys for the duration of its lifetime and releases them
 // upon destruction. This allows simulating multiple input events without
 // simulating modifier key releases in between.
@@ -585,10 +598,11 @@ bool IsWebcamAvailableOnSystem(WebContents* web_contents);
 class ToRenderFrameHost {
  public:
   template <typename Ptr>
+    requires requires(Ptr p) { base::to_address(p); }
   // NOLINTNEXTLINE(google-explicit-constructor)
   ToRenderFrameHost(Ptr frame_convertible_value)
       : render_frame_host_(ConvertToRenderFrameHost(
-            std::to_address(frame_convertible_value))) {}
+            base::to_address(frame_convertible_value))) {}
 
   // Extract the underlying frame.
   RenderFrameHost* render_frame_host() const { return render_frame_host_; }
@@ -608,12 +622,12 @@ RenderFrameHost* ConvertToRenderFrameHost(WebContents* web_contents);
 // - EvalJs (if you want to retrieve a value)
 // - DOMMessageQueue (to manually wait for domAutomationController.send(...))
 void ExecuteScriptAsync(const ToRenderFrameHost& adapter,
-                        base::StringPiece script);
+                        std::string_view script);
 
 // Same as `content::ExecuteScriptAsync()`, but doesn't send a user gesture to
 // the renderer.
 void ExecuteScriptAsyncWithoutUserGesture(const ToRenderFrameHost& adapter,
-                                          base::StringPiece script);
+                                          std::string_view script);
 
 // JsLiteralHelper is a helper class that determines what types are legal to
 // pass to StringifyJsLiteral. Legal types include int, string, StringPiece,
@@ -661,8 +675,9 @@ base::Value ListValueOf(Args&&... args) {
   return base::Value(std::move(values));
 }
 
-// Replaces $1, $2, $3, etc in |script_template| with JS literal values
-// constructed from |args|, similar to base::ReplaceStringPlaceholders.
+// Replaces $1, $2, $3, ..., $9 in |script_template| with JS literal values
+// constructed from |args|, similar to base::ReplaceStringPlaceholders. Note
+// that $10 and above aren't allowed.
 //
 // Unlike StringPrintf or manual concatenation, this version will properly
 // escape string content, even if it contains slashes or quotation marks.
@@ -690,7 +705,7 @@ base::Value ListValueOf(Args&&... args) {
 // This becomes "window.location.reload(true);" -- because bool values are
 // supported by base::Value. Numbers, lists, and dicts also work.
 template <typename... Args>
-std::string JsReplace(base::StringPiece script_template, Args&&... args) {
+std::string JsReplace(std::string_view script_template, Args&&... args) {
   base::Value::List values =
       ListValueOf(std::forward<Args>(args)...).TakeList();
   std::vector<std::string> replacements(values.size());
@@ -729,7 +744,7 @@ struct EvalJsResult {
 
   // Creates an EvalJs result. If |error| is non-empty, |value| will be
   // ignored.
-  EvalJsResult(base::Value value, base::StringPiece error);
+  EvalJsResult(base::Value value, std::string_view error);
 
   // Copy ctor.
   EvalJsResult(const EvalJsResult& value);
@@ -884,12 +899,17 @@ enum EvalJsOptions {
 //    callers of domAutomationController.send() -- EvalJs does not rely on
 //    domAutomationController.
 //  - Lists, dicts, null values, etc. can be returned as base::Values.
+//  - |after_script_invoke| is an optional callback which will be invoked after
+//    script execution has started in the renderer but before the RunLoop is
+//    blocked on the result.
 //
 // It is guaranteed that EvalJs works even when the target frame is frozen.
-[[nodiscard]] EvalJsResult EvalJs(const ToRenderFrameHost& execution_target,
-                                  base::StringPiece script,
-                                  int options = EXECUTE_SCRIPT_DEFAULT_OPTIONS,
-                                  int32_t world_id = ISOLATED_WORLD_ID_GLOBAL);
+[[nodiscard]] EvalJsResult EvalJs(
+    const ToRenderFrameHost& execution_target,
+    std::string_view script,
+    int options = EXECUTE_SCRIPT_DEFAULT_OPTIONS,
+    int32_t world_id = ISOLATED_WORLD_ID_GLOBAL,
+    base::OnceClosure after_script_invoke = base::DoNothing());
 
 // Like EvalJs(), but runs |raf_script| inside a requestAnimationFrame handler,
 // and runs |script| after the rendering update has completed. By the time
@@ -898,8 +918,8 @@ enum EvalJsOptions {
 // processed by the browser.
 [[nodiscard]] EvalJsResult EvalJsAfterLifecycleUpdate(
     const ToRenderFrameHost& execution_target,
-    base::StringPiece raf_script,
-    base::StringPiece script,
+    std::string_view raf_script,
+    std::string_view script,
     int options = EXECUTE_SCRIPT_DEFAULT_OPTIONS,
     int32_t world_id = ISOLATED_WORLD_ID_GLOBAL);
 
@@ -913,7 +933,7 @@ enum EvalJsOptions {
 // until it resolves (by default).
 [[nodiscard]] ::testing::AssertionResult ExecJs(
     const ToRenderFrameHost& execution_target,
-    base::StringPiece script,
+    std::string_view script,
     int options = EXECUTE_SCRIPT_DEFAULT_OPTIONS,
     int32_t world_id = ISOLATED_WORLD_ID_GLOBAL);
 
@@ -932,7 +952,7 @@ RenderFrameHost* FrameMatchingPredicate(
     base::RepeatingCallback<bool(RenderFrameHost*)> predicate);
 
 // Predicates for use with FrameMatchingPredicate[OrNullPtr]().
-bool FrameMatchesName(base::StringPiece name, RenderFrameHost* frame);
+bool FrameMatchesName(std::string_view name, RenderFrameHost* frame);
 bool FrameIsChildOfMainFrame(RenderFrameHost* frame);
 bool FrameHasSourceUrl(const GURL& url, RenderFrameHost* frame);
 
@@ -1057,7 +1077,7 @@ void WaitForAccessibilityTreeToChange(WebContents* web_contents);
 // WaitForAccessibilityTreeToChange, above, and then checks again.
 // Keeps looping until the text is found (or the test times out).
 void WaitForAccessibilityTreeToContainNodeWithName(WebContents* web_contents,
-                                                   base::StringPiece name);
+                                                   std::string_view name);
 
 // Get a snapshot of a web page's accessibility tree.
 ui::AXTreeUpdate GetAccessibilityTreeSnapshot(WebContents* web_contents);
@@ -1110,8 +1130,10 @@ RenderWidgetHost* GetMouseLockWidget(WebContents* web_contents);
 // |codes| represents the set of keys to lock.  If |codes| has no value, then
 // all keys will be considered locked.  If |codes| has a value, then at least
 // one key must be specified.
-bool RequestKeyboardLock(WebContents* web_contents,
-                         std::optional<base::flat_set<ui::DomCode>> codes);
+void RequestKeyboardLock(
+    WebContents* web_contents,
+    std::optional<base::flat_set<ui::DomCode>> codes,
+    base::OnceCallback<void(blink::mojom::KeyboardLockRequestResult)> callback);
 void CancelKeyboardLock(WebContents* web_contents);
 
 // Returns the screen orientation provider that's been set via
@@ -1227,7 +1249,7 @@ class RenderProcessHostKillWaiter {
   // |uma_name| is the name of the histogram from which the |bad_message_reason|
   // can be extracted.
   RenderProcessHostKillWaiter(RenderProcessHost* render_process_host,
-                              base::StringPiece uma_name);
+                              std::string_view uma_name);
 
   RenderProcessHostKillWaiter(const RenderProcessHostKillWaiter&) = delete;
   RenderProcessHostKillWaiter& operator=(const RenderProcessHostKillWaiter&) =
@@ -1884,14 +1906,19 @@ class NavigationHandleCommitObserver : public content::WebContentsObserver {
   bool has_committed() const { return has_committed_; }
   bool was_same_document() const { return was_same_document_; }
   bool was_renderer_initiated() const { return was_renderer_initiated_; }
+  blink::mojom::NavigationType navigation_type() const {
+    return navigation_type_;
+  }
 
  private:
   void DidFinishNavigation(content::NavigationHandle* handle) override;
 
   const GURL url_;
-  bool has_committed_;
-  bool was_same_document_;
-  bool was_renderer_initiated_;
+  bool has_committed_ = false;
+  bool was_same_document_ = false;
+  bool was_renderer_initiated_ = false;
+  blink::mojom::NavigationType navigation_type_ =
+      blink::mojom::NavigationType::RELOAD;
 };
 
 // A test utility that monitors console messages sent to a WebContents. This
@@ -2012,73 +2039,6 @@ void VerifyStaleContentOnFrameEviction(
 
 #endif  // defined(USE_AURA)
 
-// This class intercepts for ShowContextMenu Mojo method called from a
-// renderer process, and allows observing the UntrustworthyContextMenuParams as
-// sent by the renderer.
-class ContextMenuInterceptor
-    : public blink::mojom::LocalFrameHostInterceptorForTesting {
- public:
-  // Whether or not the ContextMenu should be prevented from performing
-  // its default action, preventing the context menu from showing.
-  enum ShowBehavior { kShow, kPreventShow };
-
-  explicit ContextMenuInterceptor(content::RenderFrameHost* render_frame_host,
-                                  ShowBehavior behavior = ShowBehavior::kShow);
-  ContextMenuInterceptor(const ContextMenuInterceptor&) = delete;
-  ContextMenuInterceptor& operator=(const ContextMenuInterceptor&) = delete;
-  ~ContextMenuInterceptor() override;
-
-  blink::mojom::LocalFrameHost* GetForwardingInterface() override;
-
-  void ShowContextMenu(
-      mojo::PendingAssociatedRemote<blink::mojom::ContextMenuClient>
-          context_menu_client,
-      const blink::UntrustworthyContextMenuParams& params) override;
-
-  void Wait();
-  void Reset();
-
-  blink::UntrustworthyContextMenuParams get_params() { return last_params_; }
-
- private:
-  raw_ptr<content::RenderFrameHostImpl> render_frame_host_impl_;
-  mojo::test::ScopedSwapImplForTesting<
-      mojo::AssociatedReceiver<blink::mojom::LocalFrameHost>>
-      swapped_impl_;
-  std::unique_ptr<base::RunLoop> run_loop_;
-  base::OnceClosure quit_closure_;
-  blink::UntrustworthyContextMenuParams last_params_;
-  const ShowBehavior show_behavior_;
-};
-
-class UpdateUserActivationStateInterceptor
-    : public blink::mojom::LocalFrameHostInterceptorForTesting {
- public:
-  explicit UpdateUserActivationStateInterceptor(
-      content::RenderFrameHost* render_frame_host);
-  UpdateUserActivationStateInterceptor(
-      const UpdateUserActivationStateInterceptor&) = delete;
-  UpdateUserActivationStateInterceptor& operator=(
-      const UpdateUserActivationStateInterceptor&) = delete;
-  ~UpdateUserActivationStateInterceptor() override;
-
-  void set_quit_handler(base::OnceClosure handler);
-  bool update_user_activation_state() { return update_user_activation_state_; }
-
-  blink::mojom::LocalFrameHost* GetForwardingInterface() override;
-  void UpdateUserActivationState(
-      blink::mojom::UserActivationUpdateType update_type,
-      blink::mojom::UserActivationNotificationType notification_type) override;
-
- private:
-  raw_ptr<content::RenderFrameHostImpl> render_frame_host_impl_;
-  mojo::test::ScopedSwapImplForTesting<
-      mojo::AssociatedReceiver<blink::mojom::LocalFrameHost>>
-      swapped_impl_;
-  base::OnceClosure quit_handler_;
-  bool update_user_activation_state_ = false;
-};
-
 // Helper class to interpose on Blob URL registrations, replacing the URL
 // contained in incoming registration requests with the specified URL.
 class BlobURLStoreInterceptor
@@ -2137,65 +2097,6 @@ void EnsureCookiesFlushed(BrowserContext* browser_context);
 // single response messages back from the guest, with the expected values.
 bool TestGuestAutoresize(WebContents* embedder_web_contents,
                          RenderFrameHost* guest_main_frame);
-
-// Class to intercept SynchronizeVisualProperties method. This allows the
-// message to continue to the target child so that processing can be verified by
-// tests. It also monitors for GesturePinchBegin/End events.
-class SynchronizeVisualPropertiesInterceptor
-    : public blink::mojom::RemoteFrameHostInterceptorForTesting {
- public:
-  explicit SynchronizeVisualPropertiesInterceptor(
-      RenderFrameProxyHost* render_frame_proxy_host);
-
-  SynchronizeVisualPropertiesInterceptor(
-      const SynchronizeVisualPropertiesInterceptor&) = delete;
-  SynchronizeVisualPropertiesInterceptor& operator=(
-      const SynchronizeVisualPropertiesInterceptor&) = delete;
-
-  ~SynchronizeVisualPropertiesInterceptor() override;
-
-  blink::mojom::RemoteFrameHost* GetForwardingInterface() override;
-
-  void SynchronizeVisualProperties(
-      const blink::FrameVisualProperties& visual_properties) override;
-
-  gfx::Rect last_rect() const { return last_rect_; }
-
-  void WaitForRect();
-  void ResetRectRunLoop();
-
-  // Waits for the next viz::LocalSurfaceId be received and returns it.
-  viz::LocalSurfaceId WaitForSurfaceId();
-
-  void WaitForPinchGestureEnd();
-
- private:
-  // |rect| is in DIPs.
-  void OnUpdatedFrameRectOnUI(const gfx::Rect& rect);
-  void OnUpdatedFrameSinkIdOnUI();
-  void OnUpdatedSurfaceIdOnUI(viz::LocalSurfaceId surface_id);
-
-  base::RunLoop run_loop_;
-
-  raw_ptr<RenderFrameProxyHost> render_frame_proxy_host_;
-
-  std::unique_ptr<base::RunLoop> local_root_rect_run_loop_;
-  bool local_root_rect_received_ = false;
-  gfx::Rect last_rect_;
-
-  viz::LocalSurfaceId last_surface_id_;
-  std::unique_ptr<base::RunLoop> surface_id_run_loop_;
-
-  bool last_pinch_gesture_active_ = false;
-  base::RunLoop pinch_end_run_loop_;
-
-  mojo::test::ScopedSwapImplForTesting<
-      mojo::AssociatedReceiver<blink::mojom::RemoteFrameHost>>
-      swapped_impl_;
-
-  base::WeakPtrFactory<SynchronizeVisualPropertiesInterceptor> weak_factory_{
-      this};
-};
 
 // This class allows monitoring of mouse events received by a specific
 // RenderWidgetHost.

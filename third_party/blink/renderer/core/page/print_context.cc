@@ -32,6 +32,8 @@
 #include "third_party/blink/renderer/core/layout/physical_fragment_link.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
+#include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
+#include "third_party/blink/renderer/platform/graphics/paint/scoped_paint_chunk_properties.h"
 #include "ui/gfx/geometry/size_f.h"
 
 namespace blink {
@@ -119,8 +121,7 @@ void PrintContext::BeginPrintMode(const WebPrintParams& print_params) {
 
   // This changes layout, so callers need to make sure that they don't paint to
   // screen while in printing mode.
-  frame_->StartPrinting(print_params.default_page_description,
-                        maximum_shink_factor);
+  frame_->StartPrinting(print_params, maximum_shink_factor);
 }
 
 void PrintContext::EndPrintMode() {
@@ -179,8 +180,17 @@ void PrintContext::CollectLinkedDestinations(Node* node) {
   }
 }
 
-void PrintContext::OutputLinkedDestinations(GraphicsContext& context,
-                                            const gfx::Rect& page_rect) {
+void PrintContext::OutputLinkedDestinations(
+    GraphicsContext& context,
+    const PropertyTreeStateOrAlias& property_tree_state,
+    const gfx::Rect& page_rect) {
+  DEFINE_STATIC_DISPLAY_ITEM_CLIENT(client, "PrintedLinkedDestinations");
+  ScopedPaintChunkProperties scoped_paint_chunk_properties(
+      context.GetPaintController(), property_tree_state, *client,
+      DisplayItem::kPrintedContentDestinationLocations);
+  DrawingRecorder line_boundary_recorder(
+      context, *client, DisplayItem::kPrintedContentDestinationLocations);
+
   if (!linked_destinations_valid_) {
     // Collect anchors in the top-level frame only because our PrintContext
     // supports only one namespace for the anchors.
@@ -196,40 +206,6 @@ void PrintContext::OutputLinkedDestinations(GraphicsContext& context,
     if (page_rect.Contains(anchor_point))
       context.SetURLDestinationLocation(entry.key, anchor_point);
   }
-}
-
-// static
-String PrintContext::PageProperty(LocalFrame* frame,
-                                  const char* property_name,
-                                  uint32_t page_number) {
-  Document* document = frame->GetDocument();
-  ScopedPrintContext print_context(frame);
-  // Any non-zero size is OK here. We don't care about actual layout. We just
-  // want to collect @page rules and figure out what declarations apply on a
-  // given page (that may or may not exist).
-  print_context->BeginPrintMode(WebPrintParams(gfx::SizeF(800, 1000)));
-  const ComputedStyle* style = document->StyleForPage(page_number);
-
-  // Implement formatters for properties we care about.
-  if (!strcmp(property_name, "margin-left")) {
-    if (style->MarginLeft().IsAuto())
-      return String("auto");
-    return String::Number(style->MarginLeft().Value());
-  }
-  if (!strcmp(property_name, "line-height"))
-    return String::Number(style->LineHeight().Value());
-  if (!strcmp(property_name, "font-size"))
-    return String::Number(style->GetFontDescription().ComputedPixelSize());
-  if (!strcmp(property_name, "font-family")) {
-    return ComputedStyleUtils::ValueForFontFamily(
-               style->GetFontDescription().Family())
-        ->CssText();
-  }
-  if (!strcmp(property_name, "size")) {
-    return String::Number(style->PageSize().width()) + ' ' +
-           String::Number(style->PageSize().height());
-  }
-  return String("pageProperty() unimplemented for: ") + property_name;
 }
 
 // static

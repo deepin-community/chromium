@@ -142,9 +142,13 @@ class RecentAppsView::GridDelegateImpl : public AppListItemView::GridDelegate {
     // which may be destroyed during the procedure as the function parameter
     // may bring the crash like https://crbug.com/990282.
     const std::string id = pressed_item_view->item()->id();
+    RecordAppListByCollectionLaunched(
+        pressed_item_view->item()->collection_id(),
+        /*is_apps_collections_page=*/false);
+
+    // `this` may be deleted after activation.
     view_delegate_->ActivateItem(id, event.flags(),
                                  AppListLaunchedFrom::kLaunchedFromRecentApps);
-    // `this` may be deleted.
   }
 
  private:
@@ -166,8 +170,9 @@ RecentAppsView::RecentAppsView(AppListKeyboardController* keyboard_controller,
       views::BoxLayout::CrossAxisAlignment::kStart);
   GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   // TODO(https://crbug.com/1298211): This needs a designated string resource.
-  GetViewAccessibility().OverrideName(
-      l10n_util::GetStringUTF16(IDS_ASH_LAUNCHER_RECENT_APPS_A11Y_NAME));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_ASH_LAUNCHER_RECENT_APPS_A11Y_NAME),
+      ax::mojom::NameFrom::kAttribute);
   SetVisible(false);
 }
 
@@ -218,8 +223,9 @@ void RecentAppsView::UpdateResults(
   if (auto* notifier = view_delegate_->GetNotifier()) {
     std::vector<AppListNotifier::Result> notifier_results;
     for (const RecentAppInfo& app : apps)
-      notifier_results.emplace_back(app.result->id(),
-                                    app.result->metrics_type());
+      notifier_results.emplace_back(
+          app.result->id(), app.result->metrics_type(),
+          app.result->continue_file_suggestion_type());
     notifier->NotifyResultsUpdated(SearchResultDisplayType::kRecentApps,
                                    notifier_results);
   }

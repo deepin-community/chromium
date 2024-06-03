@@ -697,7 +697,7 @@ export const NativeFunctions = [
   {
     name: "forEach",
     signatures: [["callbackfn","?thisArg"]],
-    receivers: ["ReadonlyArray","Array","Int8Array","Uint8Array","Uint8ClampedArray","Int16Array","Uint16Array","Int32Array","Uint32Array","Float32Array","Float64Array","AudioParamMap","CSSNumericArray","CSSTransformValue","CSSUnparsedValue","DOMTokenList","EventCounts","FontFaceSet","FormData","Headers","MIDIInputMap","MIDIOutputMap","MediaKeyStatusMap","NodeList","NodeListOf","RTCStatsReport","StylePropertyMapReadOnly","URLSearchParams","Map","ReadonlyMap","Set","ReadonlySet","BigInt64Array","BigUint64Array"]
+    receivers: ["ReadonlyArray","Array","Int8Array","Uint8Array","Uint8ClampedArray","Int16Array","Uint16Array","Int32Array","Uint32Array","Float32Array","Float64Array","AudioParamMap","CSSNumericArray","CSSTransformValue","CSSUnparsedValue","DOMTokenList","EventCounts","FontFaceSet","FormData","Headers","Highlight","HighlightRegistry","MIDIInputMap","MIDIOutputMap","MediaKeyStatusMap","NodeList","NodeListOf","RTCStatsReport","StylePropertyMapReadOnly","URLSearchParams","Map","ReadonlyMap","Set","ReadonlySet","BigInt64Array","BigUint64Array"]
   },
   {
     name: "forEach",
@@ -706,11 +706,23 @@ export const NativeFunctions = [
   },
   {
     name: "map",
-    signatures: [["callbackfn","?thisArg"]]
+    signatures: [["callbackfn","?thisArg"]],
+    receivers: ["ReadonlyArray","Array","Int8Array","Uint8Array","Uint8ClampedArray","Int16Array","Uint16Array","Int32Array","Uint32Array","Float32Array","Float64Array","BigInt64Array","BigUint64Array"]
+  },
+  {
+    name: "map",
+    signatures: [["mapper"]],
+    receivers: ["Observable"]
   },
   {
     name: "filter",
-    signatures: [["predicate","?thisArg"]]
+    signatures: [["predicate","?thisArg"]],
+    receivers: ["ReadonlyArray","Array","Int8Array","Uint8Array","Uint8ClampedArray","Int16Array","Uint16Array","Int32Array","Uint32Array","Float32Array","Float64Array","BigInt64Array","BigUint64Array"]
+  },
+  {
+    name: "filter",
+    signatures: [["predicate"]],
+    receivers: ["Observable"]
   },
   {
     name: "reduce",
@@ -867,6 +879,11 @@ export const NativeFunctions = [
     name: "from",
     signatures: [["iterable","?mapfn","?thisArg"],["arrayLike","?mapfn","?thisArg"]],
     receivers: ["ArrayConstructor"]
+  },
+  {
+    name: "from",
+    signatures: [["value"]],
+    receivers: ["Observable"]
   },
   {
     name: "drawArraysInstancedANGLE",
@@ -1112,7 +1129,7 @@ export const NativeFunctions = [
   {
     name: "createBuffer",
     signatures: [["descriptor"]],
-    receivers: ["GPUDevice"]
+    receivers: ["MLContext","GPUDevice"]
   },
   {
     name: "createChannelMerger",
@@ -1169,7 +1186,7 @@ export const NativeFunctions = [
   {
     name: "deleteRule",
     signatures: [["index"]],
-    receivers: ["CSSGroupingRule","CSSStyleRule","CSSStyleSheet"]
+    receivers: ["CSSGroupingRule","CSSStyleSheet","CSSStyleRule"]
   },
   {
     name: "deleteRule",
@@ -1236,7 +1253,7 @@ export const NativeFunctions = [
   {
     name: "add",
     signatures: [["key"]],
-    receivers: ["CustomStateSet"]
+    receivers: ["CustomStateSet","ViewTransitionTypeSet"]
   },
   {
     name: "add",
@@ -1918,6 +1935,10 @@ export const NativeFunctions = [
     signatures: [["name","constructor","?options"]]
   },
   {
+    name: "getName",
+    signatures: [["constructor"]]
+  },
+  {
     name: "upgrade",
     signatures: [["root"]]
   },
@@ -2117,11 +2138,6 @@ export const NativeFunctions = [
     name: "setData",
     signatures: [["format","data"]],
     receivers: ["DataTransfer"]
-  },
-  {
-    name: "setData",
-    signatures: [["data"]],
-    receivers: ["PendingPostBeacon"]
   },
   {
     name: "setData",
@@ -2509,7 +2525,7 @@ export const NativeFunctions = [
   },
   {
     name: "resolve",
-    signatures: [["token"]],
+    signatures: [["token","?options"]],
     receivers: ["IdentityProvider"]
   },
   {
@@ -2735,6 +2751,10 @@ export const NativeFunctions = [
   {
     name: "setMediaKeys",
     signatures: [["mediaKeys"]]
+  },
+  {
+    name: "setSinkId",
+    signatures: [["sinkId"]]
   },
   {
     name: "focus",
@@ -3145,7 +3165,7 @@ export const NativeFunctions = [
   },
   {
     name: "initMutationEvent",
-    signatures: [["typeArg","?bubblesArg","?cancelableArg","?relatedNodeArg","?prevValueArg","?newValueArg","?attrNameArg","?attrChangeArg"],["?type","?bubbles","?cancelable","?relatedNode","?prevValue","?newValue","?attrName","?attrChange"]]
+    signatures: [["typeArg","?bubblesArg","?cancelableArg","?relatedNodeArg","?prevValueArg","?newValueArg","?attrNameArg","?attrChangeArg"],["type","?bubbles","?cancelable","?relatedNode","?prevValue","?newValue","?attrName","?attrChange"]]
   },
   {
     name: "getNamedItem",
@@ -3497,7 +3517,7 @@ export const NativeFunctions = [
   },
   {
     name: "setParameters",
-    signatures: [["parameters","?options"]]
+    signatures: [["parameters","?setParameterOptions"],["parameters","?options"]]
   },
   {
     name: "setStreams",
@@ -4273,7 +4293,13 @@ export const NativeFunctions = [
   },
   {
     name: "readBuffer",
-    signatures: [["src"],["mode"]]
+    signatures: [["src"],["mode"]],
+    receivers: ["WebGL2RenderingContext"]
+  },
+  {
+    name: "readBuffer",
+    signatures: [["srcBuffer"]],
+    receivers: ["MLContext"]
   },
   {
     name: "renderbufferStorageMultisample",
@@ -5601,6 +5627,10 @@ export const NativeFunctions = [
     receivers: ["FileSystemFileHandle","FileSystemHandle"]
   },
   {
+    name: "groupBy",
+    signatures: [["items","keySelector"]]
+  },
+  {
     name: "addInitializer",
     signatures: [["initializer"]]
   },
@@ -5736,7 +5766,13 @@ export const NativeFunctions = [
   },
   {
     name: "flatMap",
-    signatures: [["callback","?thisArg"]]
+    signatures: [["callback","?thisArg"]],
+    receivers: ["ReadonlyArray","Array"]
+  },
+  {
+    name: "flatMap",
+    signatures: [["mapper"]],
+    receivers: ["Observable"]
   },
   {
     name: "flat",
@@ -5817,6 +5853,10 @@ export const NativeFunctions = [
   {
     name: "createSyncAccessHandle",
     signatures: [["?options"]]
+  },
+  {
+    name: "generateKeyFrame",
+    signatures: [["?rid"]]
   },
   {
     name: "navigate",
@@ -6367,12 +6407,36 @@ export const NativeFunctions = [
     signatures: [["root","node","?init"]]
   },
   {
+    name: "moveBefore",
+    signatures: [["node","child"]]
+  },
+  {
     name: "Observable",
     signatures: [["callback"]]
   },
   {
     name: "takeUntil",
     signatures: [["notifier"]]
+  },
+  {
+    name: "take",
+    signatures: [["number_to_take"]]
+  },
+  {
+    name: "drop",
+    signatures: [["number_to_drop"]]
+  },
+  {
+    name: "switchMap",
+    signatures: [["mapper"]]
+  },
+  {
+    name: "first",
+    signatures: [["?options"]]
+  },
+  {
+    name: "last",
+    signatures: [["?options"]]
   },
   {
     name: "getPartNode",
@@ -6477,6 +6541,10 @@ export const NativeFunctions = [
     signatures: [["type","?eventInitDict"]]
   },
   {
+    name: "InterestEvent",
+    signatures: [["type","?eventInitDict"]]
+  },
+  {
     name: "InvokeEvent",
     signatures: [["type","?eventInitDict"]]
   },
@@ -6522,7 +6590,7 @@ export const NativeFunctions = [
   },
   {
     name: "initTextEvent",
-    signatures: [["?type","?bubbles","?cancelable","?view","?data"]]
+    signatures: [["type","?bubbles","?cancelable","?view","?data"]]
   },
   {
     name: "ToggleEvent",
@@ -6597,18 +6665,6 @@ export const NativeFunctions = [
   {
     name: "getHighEntropyValues",
     signatures: [["hints"]]
-  },
-  {
-    name: "PendingGetBeacon",
-    signatures: [["url","?options"]]
-  },
-  {
-    name: "setURL",
-    signatures: [["url"]]
-  },
-  {
-    name: "PendingPostBeacon",
-    signatures: [["url","?options"]]
   },
   {
     name: "ReportingObserver",
@@ -6707,16 +6763,16 @@ export const NativeFunctions = [
     signatures: [["?options"]]
   },
   {
-    name: "getName",
-    signatures: [["constructor"]]
-  },
-  {
     name: "reportEvent",
     signatures: [["event"]]
   },
   {
     name: "setReportEventDataForAutomaticBeacons",
     signatures: [["event"]]
+  },
+  {
+    name: "notifyEvent",
+    signatures: [["triggering_event"]]
   },
   {
     name: "FencedFrameConfig",
@@ -7039,10 +7095,6 @@ export const NativeFunctions = [
     signatures: [["type","?eventInitDict"]]
   },
   {
-    name: "setSinkId",
-    signatures: [["sinkId"]]
-  },
-  {
     name: "setResizable",
     signatures: [["resizable"]]
   },
@@ -7276,18 +7328,6 @@ export const NativeFunctions = [
     signatures: [["type","?eventInitDict"]]
   },
   {
-    name: "TCPServerSocket",
-    signatures: [["localAddress","?options"]]
-  },
-  {
-    name: "TCPSocket",
-    signatures: [["remoteAddress","remotePort","?options"]]
-  },
-  {
-    name: "UDPSocket",
-    signatures: [["options"]]
-  },
-  {
     name: "DocumentPictureInPictureEvent",
     signatures: [["type","eventInitDict"]]
   },
@@ -7402,10 +7442,6 @@ export const NativeFunctions = [
   {
     name: "GamepadEvent",
     signatures: [["type","?eventInitDict"]]
-  },
-  {
-    name: "canPlay",
-    signatures: [["type"]]
   },
   {
     name: "addStroke",
@@ -7576,6 +7612,16 @@ export const NativeFunctions = [
     receivers: ["MLModel"]
   },
   {
+    name: "writeBuffer",
+    signatures: [["dstBuffer","srcData","?srcElementOffset","?srcElementSize"],["dstBuffer","srcData","?srcByteOffset","?srcByteSize"]],
+    receivers: ["MLContext"]
+  },
+  {
+    name: "writeBuffer",
+    signatures: [["buffer","bufferOffset","data","?dataElementOffset","?dataElementCount"],["buffer","bufferOffset","data","?dataByteOffset","?byteSize"]],
+    receivers: ["GPUQueue"]
+  },
+  {
     name: "MLModelLoader",
     signatures: [["context"]]
   },
@@ -7676,6 +7722,14 @@ export const NativeFunctions = [
     signatures: [["a","b","?options"]]
   },
   {
+    name: "gru",
+    signatures: [["input","weight","recurrentWeight","steps","hiddenSize","?options"]]
+  },
+  {
+    name: "gruCell",
+    signatures: [["input","weight","recurrentWeight","hiddenState","hiddenSize","?options"]]
+  },
+  {
     name: "hardSigmoid",
     signatures: [["?options"],["x","?options"]]
   },
@@ -7706,6 +7760,10 @@ export const NativeFunctions = [
   {
     name: "lstm",
     signatures: [["input","weight","recurrentWeight","steps","hiddenSize","?options"]]
+  },
+  {
+    name: "lstmCell",
+    signatures: [["input","weight","recurrentWeight","hiddenState","cellState","hiddenSize","?options"]]
   },
   {
     name: "pad",
@@ -7800,6 +7858,10 @@ export const NativeFunctions = [
     signatures: [["input","?options"]]
   },
   {
+    name: "triangular",
+    signatures: [["input","?options"]]
+  },
+  {
     name: "where",
     signatures: [["condition","true_value","false_value"]]
   },
@@ -7814,6 +7876,10 @@ export const NativeFunctions = [
   {
     name: "executeStreaming",
     signatures: [["input"]]
+  },
+  {
+    name: "createGenericSession",
+    signatures: [["?options"]]
   },
   {
     name: "getFileSystemAccessTransferToken",
@@ -7920,12 +7986,20 @@ export const NativeFunctions = [
     signatures: [["type","eventInitDict"]]
   },
   {
+    name: "RTCEncodedAudioFrame",
+    signatures: [["originalFrame","?newMetadata"]]
+  },
+  {
     name: "setTimestamp",
     signatures: [["timestamp"]]
   },
   {
     name: "setMetadata",
     signatures: [["metadata"]]
+  },
+  {
+    name: "RTCEncodedVideoFrame",
+    signatures: [["originalFrame","?newMetadata"]]
   },
   {
     name: "RTCErrorEvent",
@@ -8056,10 +8130,6 @@ export const NativeFunctions = [
     signatures: [["?options"]]
   },
   {
-    name: "isAncestor",
-    signatures: [["parentId"]]
-  },
-  {
     name: "TaskController",
     signatures: [["?init"]]
   },
@@ -8133,10 +8203,6 @@ export const NativeFunctions = [
   },
   {
     name: "addRoutes",
-    signatures: [["rules"]]
-  },
-  {
-    name: "registerRouter",
     signatures: [["rules"]]
   },
   {
@@ -8618,10 +8684,6 @@ export const NativeFunctions = [
   {
     name: "setBindGroup",
     signatures: [["index","bindGroup","?dynamicOffsets"],["index","bindGroup","dynamicOffsetsData","dynamicOffsetsDataStart","dynamicOffsetsDataLength"]]
-  },
-  {
-    name: "writeBuffer",
-    signatures: [["buffer","bufferOffset","data","?dataElementOffset","?dataElementCount"],["buffer","bufferOffset","data","?dataByteOffset","?byteSize"]]
   },
   {
     name: "writeTexture",

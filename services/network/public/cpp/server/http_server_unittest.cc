@@ -14,6 +14,7 @@
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
@@ -81,7 +82,7 @@ class TestHttpClient {
 
   void Send(const std::string& message) {
     size_t index = 0;
-    uint32_t write_size = message.size();
+    size_t write_size = message.size();
     while (write_size > 0) {
       base::RunLoop().RunUntilIdle();
       MojoResult result = send_pipe_handle_->WriteData(
@@ -99,14 +100,13 @@ class TestHttpClient {
     while (data->size() < num_bytes) {
       base::RunLoop().RunUntilIdle();
       std::vector<char> buffer(num_bytes);
-      uint32_t read_size = num_bytes;
       MojoResult result = receive_pipe_handle_->ReadData(
-          buffer.data(), &read_size, MOJO_READ_DATA_FLAG_NONE);
+          buffer.data(), &num_bytes, MOJO_READ_DATA_FLAG_NONE);
       if (result == MOJO_RESULT_SHOULD_WAIT)
         continue;
       if (result != MOJO_RESULT_OK)
         return false;
-      data->append(buffer.data(), read_size);
+      data->append(buffer.data(), num_bytes);
     }
     return true;
   }
@@ -372,16 +372,17 @@ std::string EncodeFrame(std::string message,
   header.final = finish;
   header.masked = mask;
   header.payload_length = message.size();
-  const int header_size = GetWebSocketFrameHeaderSize(header);
+  const size_t header_size = GetWebSocketFrameHeaderSize(header);
   std::string frame_header;
   frame_header.resize(header_size);
   if (mask) {
     net::WebSocketMaskingKey masking_key = net::GenerateWebSocketMaskingKey();
     WriteWebSocketFrameHeader(header, &masking_key, &frame_header[0],
-                              header_size);
+                              base::checked_cast<int>(header_size));
     MaskWebSocketFramePayload(masking_key, 0, &message[0], message.size());
   } else {
-    WriteWebSocketFrameHeader(header, nullptr, &frame_header[0], header_size);
+    WriteWebSocketFrameHeader(header, nullptr, &frame_header[0],
+                              base::checked_cast<int>(header_size));
   }
   return frame_header + message;
 }

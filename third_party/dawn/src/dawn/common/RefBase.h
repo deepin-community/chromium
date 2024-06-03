@@ -117,12 +117,14 @@ class RefBase {
         return *this;
     }
 
-    operator bool() const { return !!mValue; }
+    explicit operator bool() const { return !!mValue; }
 
     // Comparison operators.
     bool operator==(const T& other) const { return mValue == other; }
-
     bool operator!=(const T& other) const { return mValue != other; }
+
+    bool operator==(const RefBase<T, Traits>& other) const { return mValue == other.mValue; }
+    bool operator!=(const RefBase<T, Traits>& other) const { return mValue != other.mValue; }
 
     const T operator->() const { return mValue; }
     T operator->() { return mValue; }
@@ -149,11 +151,24 @@ class RefBase {
         return &mValue;
     }
 
+    // Cast operator.
+    template <typename Other>
+    Other Cast() && {
+        Other other;
+        CastImpl(this, &other);
+        return other;
+    }
+
   private:
     // Friend is needed so that instances of RefBase<U> can call Reference and Release on
     // RefBase<T>.
     template <typename U, typename UTraits>
     friend class RefBase;
+
+    template <typename U, typename UTraits, typename = typename std::is_convertible<U, T>::type>
+    static void CastImpl(RefBase<T, Traits>* ref, RefBase<U, UTraits>* other) {
+        other->Acquire(static_cast<U>(ref->Detach()));
+    }
 
     static void Reference(T value) {
         if (value != Traits::kNullValue) {

@@ -18,14 +18,12 @@
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_command_line.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/spin_wait.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "net/base/features.h"
 #include "net/cookies/canonical_cookie_test_helpers.h"
 #include "net/cookies/cookie_access_result.h"
 #include "net/cookies/cookie_constants.h"
@@ -243,10 +241,7 @@ class SynchronousCookieManager {
 
 class CookieManagerTest : public testing::Test {
  public:
-  CookieManagerTest() {
-    scoped_feature_list_.InitWithFeatures({net::features::kPartitionedCookies},
-                                          {});
-  }
+  CookieManagerTest() = default;
 
   void SetUp() override { InitializeCookieService(nullptr, nullptr); }
 
@@ -328,10 +323,6 @@ class CookieManagerTest : public testing::Test {
 
   bool connection_error_seen() const { return connection_error_seen_; }
 
-  base::test::ScopedFeatureList& scoped_feature_list() {
-    return scoped_feature_list_;
-  }
-
  protected:
   void InitializeCookieService(
       scoped_refptr<net::CookieMonster::PersistentCookieStore> store,
@@ -357,8 +348,10 @@ class CookieManagerTest : public testing::Test {
     context_builder->SetCookieStore(std::move(cookie_monster));
     url_request_context_ = context_builder->Build();
     cookie_service_ = std::make_unique<CookieManager>(
-        url_request_context_.get(), nullptr /* first_party_sets */,
-        std::move(cleanup_store), nullptr);
+        url_request_context_.get(),
+        /*first_party_sets_access_delegate=*/nullptr, std::move(cleanup_store),
+        /*params=*/nullptr,
+        /*tpcd_metadata_manager=*/nullptr);
     cookie_service_->AddReceiver(
         cookie_service_remote_.BindNewPipeAndPassReceiver());
     service_wrapper_ = std::make_unique<SynchronousCookieManager>(
@@ -376,7 +369,6 @@ class CookieManagerTest : public testing::Test {
 
   bool connection_error_seen_;
 
-  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<net::URLRequestContext> url_request_context_;
   std::unique_ptr<CookieManager> cookie_service_;
   mojo::Remote<mojom::CookieManager> cookie_service_remote_;
@@ -1003,9 +995,8 @@ TEST_F(CookieManagerTest, ConfirmSecureSetFails) {
 // from potentially trustworthy origins, even if non-cryptographic.
 TEST_F(CookieManagerTest, SecureCookieNonCryptographicPotentiallyTrustworthy) {
   GURL http_localhost_url("http://localhost/path");
-  auto http_localhost_cookie = net::CanonicalCookie::Create(
-      http_localhost_url, "http_localhost=1; Secure", base::Time::Now(),
-      std::nullopt, std::nullopt /* cookie_partition_key */);
+  auto http_localhost_cookie = net::CanonicalCookie::CreateForTesting(
+      http_localhost_url, "http_localhost=1; Secure", base::Time::Now());
 
   // Secure cookie can be set from non-cryptographic localhost URL.
   EXPECT_TRUE(service_wrapper()
@@ -1025,9 +1016,8 @@ TEST_F(CookieManagerTest, SecureCookieNonCryptographicPotentiallyTrustworthy) {
   EXPECT_TRUE(http_localhost_cookies[0].SecureAttribute());
 
   GURL http_other_url("http://other.test/path");
-  auto http_other_cookie = net::CanonicalCookie::Create(
-      http_other_url, "http_other=1; Secure", base::Time::Now(), std::nullopt,
-      std::nullopt /* cookie_partition_key */);
+  auto http_other_cookie = net::CanonicalCookie::CreateForTesting(
+      http_other_url, "http_other=1; Secure", base::Time::Now());
 
   // Secure cookie cannot be set from another non-cryptographic URL if there is
   // no CookieAccessDelegate.
@@ -2668,15 +2658,22 @@ TEST_F(SessionCleanupCookieManagerTest, SettingMustMatchDomain) {
   EXPECT_EQ(0u, service_wrapper()->GetAllCookies().size());
 }
 
-TEST_F(SessionCleanupCookieManagerTest, FirstSettingTakesPrecedence) {
+TEST_F(SessionCleanupCookieManagerTest, MorePreciseSettingTakesPrecedence) {
   EXPECT_TRUE(SetCanonicalCookie(CreateCookie(), "https", true));
 
   EXPECT_EQ(1u, service_wrapper()->GetAllCookies().size());
 
   // If a rule with ALLOW is before a SESSION_ONLY rule, the cookie should not
   // be deleted.
-  SetContentSettings({CreateSetting(CONTENT_SETTING_ALLOW, kCookieURL),
-                      CreateSetting(CONTENT_SETTING_SESSION_ONLY, kCookieURL)});
+  SetContentSettings(
+      {ContentSettingPatternSource(
+           ContentSettingsPattern::FromURLNoWildcard(GURL(kCookieURL)),
+           ContentSettingsPattern::Wildcard(),
+           base::Value(CONTENT_SETTING_SESSION_ONLY), std::string(), false),
+       ContentSettingPatternSource(
+           ContentSettingsPattern::FromURL(GURL(kCookieURL)),
+           ContentSettingsPattern::Wildcard(),
+           base::Value(CONTENT_SETTING_ALLOW), std::string(), false)});
 
   auto store = CreateCookieStore();
   InitializeCookieService(store, store);

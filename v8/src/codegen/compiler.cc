@@ -1720,10 +1720,8 @@ BackgroundCompileTask::BackgroundCompileTask(
 
 BackgroundCompileTask::~BackgroundCompileTask() = default;
 
-namespace {
-
 void SetScriptFieldsFromDetails(Isolate* isolate, Tagged<Script> script,
-                                ScriptDetails script_details,
+                                const ScriptDetails& script_details,
                                 DisallowGarbageCollection* no_gc) {
   Handle<Object> script_name;
   if (script_details.name_obj.ToHandle(&script_name)) {
@@ -1748,6 +1746,8 @@ void SetScriptFieldsFromDetails(Isolate* isolate, Tagged<Script> script,
     }
   }
 }
+
+namespace {
 
 #ifdef ENABLE_SLOW_DCHECKS
 
@@ -1796,7 +1796,7 @@ class MergeAssumptionChecker final : public ObjectVisitor {
   void VisitPointers(Tagged<HeapObject> host, MaybeObjectSlot start,
                      MaybeObjectSlot end) override {
     for (MaybeObjectSlot current = start; current != end; ++current) {
-      MaybeObject maybe_obj = current.load(cage_base_);
+      Tagged<MaybeObject> maybe_obj = current.load(cage_base_);
       Tagged<HeapObject> obj;
       bool is_weak = maybe_obj.IsWeak();
       if (maybe_obj.GetHeapObject(&obj)) {
@@ -1946,8 +1946,6 @@ void BackgroundCompileTask::Run(
   // Update the character stream's runtime call stats.
   info.character_stream()->set_runtime_call_stats(info.runtime_call_stats());
 
-  // Parser needs to stay alive for finalizing the parsing on the main
-  // thread.
   Parser parser(isolate, &info, script_);
   if (flags().is_toplevel()) {
     parser.InitializeEmptyScopeChain(&info);
@@ -2132,7 +2130,7 @@ void BackgroundMergeTask::BeginMergeInBackground(LocalIsolate* isolate,
 
   {
     DisallowGarbageCollection no_gc;
-    MaybeObject maybe_old_toplevel_sfi =
+    Tagged<MaybeObject> maybe_old_toplevel_sfi =
         old_script->shared_function_infos()->get(kFunctionLiteralIdTopLevel);
     if (maybe_old_toplevel_sfi.IsWeak()) {
       Tagged<SharedFunctionInfo> old_toplevel_sfi = SharedFunctionInfo::cast(
@@ -2148,11 +2146,13 @@ void BackgroundMergeTask::BeginMergeInBackground(LocalIsolate* isolate,
            new_script->shared_function_infos()->length());
   for (int i = 0; i < old_script->shared_function_infos()->length(); ++i) {
     DisallowGarbageCollection no_gc;
-    MaybeObject maybe_new_sfi = new_script->shared_function_infos()->get(i);
+    Tagged<MaybeObject> maybe_new_sfi =
+        new_script->shared_function_infos()->get(i);
     if (maybe_new_sfi.IsWeak()) {
       Tagged<SharedFunctionInfo> new_sfi =
           SharedFunctionInfo::cast(maybe_new_sfi.GetHeapObjectAssumeWeak());
-      MaybeObject maybe_old_sfi = old_script->shared_function_infos()->get(i);
+      Tagged<MaybeObject> maybe_old_sfi =
+          old_script->shared_function_infos()->get(i);
       if (maybe_old_sfi.IsWeak()) {
         // The old script and the new script both have SharedFunctionInfos for
         // this function literal.
@@ -2225,8 +2225,9 @@ Handle<SharedFunctionInfo> BackgroundMergeTask::CompleteMergeInForeground(
   for (Handle<SharedFunctionInfo> new_sfi : used_new_sfis_) {
     DisallowGarbageCollection no_gc;
     DCHECK_GE(new_sfi->function_literal_id(), 0);
-    MaybeObject maybe_old_sfi = old_script->shared_function_infos()->get(
-        new_sfi->function_literal_id());
+    Tagged<MaybeObject> maybe_old_sfi =
+        old_script->shared_function_infos()->get(
+            new_sfi->function_literal_id());
     if (maybe_old_sfi.IsWeak()) {
       // The old script's SFI didn't exist during the background work, but
       // does now. This means a re-merge is necessary so that any pointers to
@@ -2235,9 +2236,8 @@ Handle<SharedFunctionInfo> BackgroundMergeTask::CompleteMergeInForeground(
           SharedFunctionInfo::cast(maybe_old_sfi.GetHeapObjectAssumeWeak());
       forwarder.Forward(*new_sfi, old_sfi);
     } else {
-      old_script->shared_function_infos()->set(
-          new_sfi->function_literal_id(),
-          MaybeObject::MakeWeak(MaybeObject::FromObject(*new_sfi)));
+      old_script->shared_function_infos()->set(new_sfi->function_literal_id(),
+                                               MakeWeak(*new_sfi));
     }
   }
 
@@ -2259,7 +2259,7 @@ Handle<SharedFunctionInfo> BackgroundMergeTask::CompleteMergeInForeground(
     forwarder.IterateAndForwardPointers();
   }
 
-  MaybeObject maybe_toplevel_sfi =
+  Tagged<MaybeObject> maybe_toplevel_sfi =
       old_script->shared_function_infos()->get(kFunctionLiteralIdTopLevel);
   CHECK(maybe_toplevel_sfi.IsWeak());
   Handle<SharedFunctionInfo> result = handle(
@@ -2309,8 +2309,7 @@ MaybeHandle<SharedFunctionInfo> BackgroundCompileTask::FinalizeScript(
     maybe_result = result;
     script = handle(Script::cast(result->script()), isolate);
     DCHECK(Object::StrictEquals(script->source(), *source));
-    DCHECK(isolate->factory()->script_list()->Contains(
-        MaybeObject::MakeWeak(MaybeObject::FromObject(*script))));
+    DCHECK(isolate->factory()->script_list()->Contains(MakeWeak(*script)));
   } else {
     Script::SetSource(isolate, script, source);
     script->set_origin_options(origin_options);
@@ -2460,10 +2459,10 @@ void BackgroundDeserializeTask::MergeWithExistingScript() {
 
 MaybeHandle<SharedFunctionInfo> BackgroundDeserializeTask::Finish(
     Isolate* isolate, Handle<String> source,
-    ScriptOriginOptions origin_options) {
+    const ScriptDetails& script_details) {
   return CodeSerializer::FinishOffThreadDeserialize(
       isolate, std::move(off_thread_data_), &cached_data_, source,
-      origin_options, &background_merge_task_);
+      script_details, &background_merge_task_);
 }
 
 // ----------------------------------------------------------------------------
@@ -2564,7 +2563,7 @@ bool Compiler::CollectSourcePositions(Isolate* isolate,
   if (base::Optional<Tagged<DebugInfo>> debug_info =
           shared_info->TryGetDebugInfo(isolate)) {
     if (debug_info.value()->HasInstrumentedBytecodeArray()) {
-      Tagged<ByteArray> source_position_table =
+      Tagged<TrustedByteArray> source_position_table =
           job->compilation_info()->bytecode_array()->SourcePositionTable();
       shared_info->GetActiveBytecodeArray(isolate)->set_source_position_table(
           source_position_table, kReleaseStore);
@@ -3219,7 +3218,6 @@ struct ScriptCompileTimerScope {
         all_scripts_histogram_scope_(isolate->counters()->compile_script()),
         no_cache_reason_(no_cache_reason),
         hit_isolate_cache_(false),
-        producing_code_cache_(false),
         consuming_code_cache_(false),
         consuming_code_cache_failed_(false) {}
 
@@ -3242,8 +3240,6 @@ struct ScriptCompileTimerScope {
 
   void set_hit_isolate_cache() { hit_isolate_cache_ = true; }
 
-  void set_producing_code_cache() { producing_code_cache_ = true; }
-
   void set_consuming_code_cache() { consuming_code_cache_ = true; }
 
   void set_consuming_code_cache_failed() {
@@ -3258,19 +3254,10 @@ struct ScriptCompileTimerScope {
   NestedTimedHistogramScope all_scripts_histogram_scope_;
   ScriptCompiler::NoCacheReason no_cache_reason_;
   bool hit_isolate_cache_;
-  bool producing_code_cache_;
   bool consuming_code_cache_;
   bool consuming_code_cache_failed_;
 
   CacheBehaviour GetCacheBehaviour() {
-    if (producing_code_cache_) {
-      if (hit_isolate_cache_) {
-        return CacheBehaviour::kHitIsolateCacheWhenProduceCodeCache;
-      } else {
-        return CacheBehaviour::kProduceCodeCache;
-      }
-    }
-
     if (consuming_code_cache_) {
       if (hit_isolate_cache_) {
         return CacheBehaviour::kHitIsolateCacheWhenConsumeCodeCache;
@@ -3281,7 +3268,15 @@ struct ScriptCompileTimerScope {
     }
 
     if (hit_isolate_cache_) {
-      if (no_cache_reason_ == ScriptCompiler::kNoCacheBecauseStreamingSource) {
+      // A roundabout way of knowing the embedder is going to produce a code
+      // cache (which is done by a separate API call later) is to check whether
+      // no_cache_reason_ is
+      // ScriptCompiler::kNoCacheBecauseDeferredProduceCodeCache.
+      if (no_cache_reason_ ==
+          ScriptCompiler::kNoCacheBecauseDeferredProduceCodeCache) {
+        return CacheBehaviour::kHitIsolateCacheWhenProduceCodeCache;
+      } else if (no_cache_reason_ ==
+                 ScriptCompiler::kNoCacheBecauseStreamingSource) {
         return CacheBehaviour::kHitIsolateCacheWhenStreamingSource;
       }
       return CacheBehaviour::kHitIsolateCacheWhenNoCache;
@@ -3316,14 +3311,9 @@ struct ScriptCompileTimerScope {
         return CacheBehaviour::kNoCacheBecauseInDocumentWrite;
       case ScriptCompiler::kNoCacheBecauseResourceWithNoCacheHandler:
         return CacheBehaviour::kNoCacheBecauseResourceWithNoCacheHandler;
-      case ScriptCompiler::kNoCacheBecauseDeferredProduceCodeCache: {
-        if (hit_isolate_cache_) {
-          return CacheBehaviour::kHitIsolateCacheWhenProduceCodeCache;
-        } else {
-          return CacheBehaviour::kProduceCodeCache;
-        }
+      case ScriptCompiler::kNoCacheBecauseDeferredProduceCodeCache:
+        return CacheBehaviour::kProduceCodeCache;
       }
-    }
     UNREACHABLE();
   }
 
@@ -3640,8 +3630,8 @@ MaybeHandle<SharedFunctionInfo> GetSharedFunctionInfoForScriptImpl(
                    "V8.CompileDeserialize");
       if (deserialize_task) {
         // If there's a cache consume task, finish it.
-        maybe_result = deserialize_task->Finish(isolate, source,
-                                                script_details.origin_options);
+        maybe_result =
+            deserialize_task->Finish(isolate, source, script_details);
         // It is possible at this point that there is a Script object for this
         // script in the compilation cache (held in the variable maybe_script),
         // which does not match maybe_result->script(). This could happen any of
@@ -3662,8 +3652,7 @@ MaybeHandle<SharedFunctionInfo> GetSharedFunctionInfoForScriptImpl(
         // would be non-trivial.
       } else {
         maybe_result = CodeSerializer::Deserialize(
-            isolate, cached_data, source, script_details.origin_options,
-            maybe_script);
+            isolate, cached_data, source, script_details, maybe_script);
       }
 
       bool consuming_code_cache_succeeded = false;
@@ -3839,7 +3828,7 @@ MaybeHandle<JSFunction> Compiler::GetWrappedFunction(
     TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.compile"),
                  "V8.CompileDeserialize");
     maybe_result = CodeSerializer::Deserialize(isolate, cached_data, source,
-                                               script_details.origin_options);
+                                               script_details);
     bool consuming_code_cache_succeeded = false;
     if (maybe_result.ToHandle(&result)) {
       is_compiled_scope = result->is_compiled_scope(isolate);

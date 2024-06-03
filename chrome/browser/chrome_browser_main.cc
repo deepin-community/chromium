@@ -238,9 +238,9 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/hardware_data_usage_controller.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
@@ -252,6 +252,10 @@
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "components/crash/core/app/crashpad.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/nix/xdg_util.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -318,6 +322,11 @@
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
 #include "chrome/browser/offline_pages/offline_page_info_handler.h"
+#endif
+
+#if BUILDFLAG(ENABLE_OOP_PRINTING)
+#include "chrome/browser/printing/oop_features.h"
+#include "chrome/browser/printing/printing_init.h"
 #endif
 
 #if BUILDFLAG(ENABLE_PLUGINS)
@@ -496,7 +505,7 @@ OSStatus KeychainCallback(SecKeychainEvent keychain_event,
 
 #if BUILDFLAG(ENABLE_PROCESS_SINGLETON)
 void ProcessSingletonNotificationCallbackImpl(
-    const base::CommandLine& command_line,
+    base::CommandLine command_line,
     const base::FilePath& current_directory) {
   // Drop the request if the browser process is already shutting down.
   if (!g_browser_process || g_browser_process->IsShuttingDown() ||
@@ -512,6 +521,13 @@ void ProcessSingletonNotificationCallbackImpl(
   if (command_line.HasSwitch(switches::kUninstall)) {
     return;
   }
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+  // Set the global activation token sent as a command line switch by another
+  // browser process. This also removes the switch after use to prevent any side
+  // effects of leaving it in the command line after this point.
+  base::nix::ExtractXdgActivationTokenFromCmdLine(command_line);
 #endif
 
   StartupProfilePathInfo startup_profile_path_info =
@@ -1028,7 +1044,7 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
   PrefService* local_state = browser_process_->local_state();
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  ash::CrosSettings::Initialize(local_state);
+  browser_process_->platform_part()->InitializeCrosSettings();
   ash::StatsReportingController::Initialize(local_state);
   arc::StabilityMetricsManager::Initialize(local_state);
   ash::HWDataUsageController::Initialize(local_state);
@@ -1153,21 +1169,6 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
   }
 #endif
 
-  if (local_state->IsManagedPreference(
-          prefs::kThrottleNonVisibleCrossOriginIframesAllowed) &&
-      !local_state->GetBoolean(
-          prefs::kThrottleNonVisibleCrossOriginIframesAllowed)) {
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        blink::switches::kDisableThrottleNonVisibleCrossOriginIframes);
-  }
-
-  if (local_state->IsManagedPreference(
-          prefs::kNewBaseUrlInheritanceBehaviorAllowed) &&
-      !local_state->GetBoolean(prefs::kNewBaseUrlInheritanceBehaviorAllowed)) {
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        blink::switches::kDisableNewBaseUrlInheritanceBehavior);
-  }
-
   // ChromeOS needs ui::ResourceBundle::InitSharedInstance to be called before
   // this.
   browser_process_->PreCreateThreads();
@@ -1210,6 +1211,7 @@ void ChromeBrowserMainParts::PostCreateThreads() {
 
   tracing::MaybeSetupSystemTracingFromFieldTrial();
   tracing::SetupBackgroundTracingFromCommandLine();
+  tracing::SetupPresetTracingFromFieldTrial();
 
   for (auto& chrome_extra_part : chrome_extra_parts_)
     chrome_extra_part->PostCreateThreads();
@@ -1228,7 +1230,7 @@ int ChromeBrowserMainParts::PreMainMessageLoopRun() {
 
 // PreMainMessageLoopRun calls these extra stages in the following order:
 //  PreMainMessageLoopRunImpl()
-//   ... initial setup, including browser_process_ setup.
+//   ... initial setup.
 //   PreProfileInit()
 //   ... additional setup, including CreateProfile()
 //   PostProfileInit()
@@ -1394,6 +1396,8 @@ void ChromeBrowserMainParts::PreBrowserStart() {
   // available at no cost in an indexed format. This enables activating
   // subresource filtering, if needed, also for page loads on start-up.
   g_browser_process->subresource_filter_ruleset_service();
+  // Also enable subresource filtering for fingerprinting protection.
+  g_browser_process->fingerprinting_protection_ruleset_service();
 }
 
 void ChromeBrowserMainParts::PostBrowserStart() {
@@ -1710,7 +1714,13 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
 
 #if BUILDFLAG(ENABLE_PRINTING)
   printing::InitializeProcessForPrinting();
+
+#if BUILDFLAG(ENABLE_OOP_PRINTING)
+  if (printing::ShouldEarlyStartPrintBackendService()) {
+    printing::EarlyStartPrintBackendService();
+  }
 #endif
+#endif  // BUILDFLAG(ENABLE_PRINTING)
 
   HandleTestParameters(*base::CommandLine::ForCurrentProcess());
 
@@ -1956,7 +1966,7 @@ void ChromeBrowserMainParts::PostDestroyThreads() {
   ash::HWDataUsageController::Shutdown();
   arc::StabilityMetricsManager::Shutdown();
   ash::StatsReportingController::Shutdown();
-  ash::CrosSettings::Shutdown();
+  browser_process_->platform_part()->ShutdownCrosSettings();
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
@@ -2002,7 +2012,7 @@ std::unique_ptr<base::RunLoop> ChromeBrowserMainParts::TakeRunLoopForTest() {
 #if BUILDFLAG(ENABLE_PROCESS_SINGLETON)
 // static
 bool ChromeBrowserMainParts::ProcessSingletonNotificationCallback(
-    const base::CommandLine& command_line,
+    base::CommandLine command_line,
     const base::FilePath& current_directory) {
   // Drop the request if the browser process is already shutting down.
   // Note that we're going to post an async task below. Even if the browser
@@ -2030,6 +2040,6 @@ bool ChromeBrowserMainParts::ProcessSingletonNotificationCallback(
   // So, we post a task to asynchronously finish the command line processing.
   return base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&ProcessSingletonNotificationCallbackImpl,
-                                command_line, current_directory));
+                                std::move(command_line), current_directory));
 }
 #endif  // BUILDFLAG(ENABLE_PROCESS_SINGLETON)

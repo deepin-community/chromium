@@ -323,7 +323,7 @@ content::PermissionResult PermissionContextBase::GetPermissionStatus(
   // we drop permission requests from guests for cases where it's not possible
   // for the guest to have been granted the permission. Note that sharing of
   // permissions that the guest could legitimately be granted is still possible.
-  // TODO(crbug.com/1469672): Scope granted permissions to a StoragePartition.
+  // TODO(crbug.com/40068594): Scope granted permissions to a StoragePartition.
   if (base::FeatureList::IsEnabled(
           features::kMitigateUnpartitionedWebviewPermissions)) {
     guest_view::GuestViewBase* guest =
@@ -618,9 +618,9 @@ void PermissionContextBase::UpdateContentSetting(const GURL& requesting_origin,
          content_setting == CONTENT_SETTING_BLOCK);
 
   content_settings::ContentSettingConstraints constraints;
-  constraints.set_session_model(is_one_time
-                                    ? content_settings::SessionModel::OneTime
-                                    : content_settings::SessionModel::Durable);
+  constraints.set_session_model(
+      is_one_time ? content_settings::mojom::SessionModel::ONE_TIME
+                  : content_settings::mojom::SessionModel::DURABLE);
 
 #if !BUILDFLAG(IS_ANDROID)
   // The Permissions module in Safety check will revoke permissions after

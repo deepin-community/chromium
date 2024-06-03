@@ -115,6 +115,8 @@ class GPU_GLES2_EXPORT SharedImageRepresentation {
   SkAlphaType alpha_type() const { return backing_->alpha_type(); }
   uint32_t usage() const { return backing_->usage(); }
   const gpu::Mailbox& mailbox() const { return backing_->mailbox(); }
+  const std::string& debug_label() const { return backing_->debug_label(); }
+  const char* backing_name() const { return backing_->GetName(); }
   MemoryTypeTracker* tracker() { return tracker_; }
   bool IsCleared() const { return backing_->IsCleared(); }
   void SetCleared() { backing_->SetCleared(); }
@@ -333,6 +335,7 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
 
     // NOTE: All references to the returned SkSurface(s) must be destroyed
     // before ScopedWriteAccess is destroyed.
+    bool has_surfaces() const { return !surfaces_.empty(); }
     SkSurface* surface() const {
       // Writes do not support external sampler.
       CHECK(representation()->format().is_single_plane());
@@ -350,6 +353,9 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
       return graphite_textures_[plane_index];
     }
 
+    // NOTE: Implemented only for Ganesh.
+    // Checks if there's a need to apply skgpu::MutableTextureState.
+    virtual bool HasBackendSurfaceEndState() = 0;
     // NOTE: Implemented only for Ganesh.
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
@@ -409,7 +415,7 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
         SharedContextState* context_state) = 0;
 
     // NOTE: Implemented only for Ganesh.
-    // Checks if need to apply skgpu::MutableTextureState.
+    // Checks if there's a need to apply skgpu::MutableTextureState.
     virtual bool HasBackendSurfaceEndState() = 0;
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
@@ -491,6 +497,8 @@ class GPU_GLES2_EXPORT SkiaGaneshImageRepresentation
         std::unique_ptr<skgpu::MutableTextureState> end_state);
     ~ScopedGaneshWriteAccess() override;
 
+    // Checks if there's a need to apply skgpu::MutableTextureState.
+    bool HasBackendSurfaceEndState() override;
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
     void ApplyBackendSurfaceEndState() override;
@@ -525,7 +533,7 @@ class GPU_GLES2_EXPORT SkiaGaneshImageRepresentation
         int plane_index,
         SharedContextState* context_state) override;
 
-    // Checks if need to apply skgpu::MutableTextureState.
+    // Checks if there's a need to apply skgpu::MutableTextureState.
     bool HasBackendSurfaceEndState() override;
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
@@ -647,8 +655,7 @@ class GPU_GLES2_EXPORT SkiaGraphiteImageRepresentation
         std::vector<skgpu::graphite::BackendTexture> graphite_textures);
     ~ScopedGraphiteWriteAccess() override;
 
-    // Graphite-Dawn backend handles Vulkan transitions by itself, so nothing to
-    // do here.
+    bool HasBackendSurfaceEndState() override;
     void ApplyBackendSurfaceEndState() override;
   };
 
@@ -673,8 +680,6 @@ class GPU_GLES2_EXPORT SkiaGraphiteImageRepresentation
         int plane_index,
         SharedContextState* context_state) override;
 
-    // Graphite-Dawn backend handles Vulkan transitions by itself, so nothing to
-    // do here.
     bool HasBackendSurfaceEndState() override;
     void ApplyBackendSurfaceEndState() override;
   };

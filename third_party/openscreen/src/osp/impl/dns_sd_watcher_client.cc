@@ -84,19 +84,19 @@ void DnsSdWatcherClient::StopListener() {
 }
 
 void DnsSdWatcherClient::SuspendListener() {
-  OSP_DCHECK(dns_sd_watcher_);
+  OSP_CHECK(dns_sd_watcher_);
   dns_sd_watcher_->StopDiscovery();
   SetState(State::kSuspended);
 }
 
 void DnsSdWatcherClient::ResumeListener() {
-  OSP_DCHECK(dns_sd_watcher_);
+  OSP_CHECK(dns_sd_watcher_);
   dns_sd_watcher_->StartDiscovery();
   SetState(State::kRunning);
 }
 
 void DnsSdWatcherClient::SearchNow(State from) {
-  OSP_DCHECK(dns_sd_watcher_);
+  OSP_CHECK(dns_sd_watcher_);
   if (from == State::kSuspended) {
     dns_sd_watcher_->StartDiscovery();
   }
@@ -107,7 +107,7 @@ void DnsSdWatcherClient::SearchNow(State from) {
 
 void DnsSdWatcherClient::StartWatcherInternal(
     const ServiceListener::Config& config) {
-  OSP_DCHECK(!dns_sd_watcher_);
+  OSP_CHECK(!dns_sd_watcher_);
   if (!dns_sd_service_) {
     dns_sd_service_ = CreateDnsSdServiceInternal(config);
   }
@@ -137,7 +137,7 @@ DnsSdWatcherClient::CreateDnsSdServiceInternal(
   // discovery::DnsSdService, e.g. through a ref-counting handle, so that the
   // OSP publisher and the OSP listener don't have to coordinate through an
   // additional object.
-  return CreateDnsSdService(task_runner_, listener_, dns_sd_config);
+  return CreateDnsSdService(task_runner_, *listener_, dns_sd_config);
 }
 
 void DnsSdWatcherClient::OnDnsWatcherUpdated(

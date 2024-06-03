@@ -9,6 +9,7 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 #include "base/compiler_specific.h"
@@ -20,7 +21,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 
@@ -48,8 +48,6 @@ WaitableEvent::WaitableEvent(win::ScopedHandle handle)
     : handle_(std::move(handle)) {
   CHECK(handle_.is_valid()) << "Tried to create WaitableEvent from NULL handle";
 }
-
-WaitableEvent::~WaitableEvent() = default;
 
 void WaitableEvent::Reset() {
   ResetEvent(handle_.get());
@@ -113,11 +111,7 @@ bool WaitableEvent::TimedWaitImpl(TimeDelta wait_delta) {
 }
 
 // static
-size_t WaitableEvent::WaitMany(WaitableEvent** events, size_t count) {
-  DCHECK(count) << "Cannot wait on no events";
-  internal::ScopedBlockingCallWithBaseSyncPrimitives scoped_blocking_call(
-      FROM_HERE, BlockingType::MAY_BLOCK);
-
+size_t WaitableEvent::WaitManyImpl(WaitableEvent** events, size_t count) {
   HANDLE handles[MAXIMUM_WAIT_OBJECTS];
   CHECK_LE(count, static_cast<size_t>(MAXIMUM_WAIT_OBJECTS))
       << "Can only wait on " << MAXIMUM_WAIT_OBJECTS << " with WaitMany";

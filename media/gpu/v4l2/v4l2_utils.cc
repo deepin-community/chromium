@@ -176,11 +176,7 @@ VideoCodecProfile V4L2ProfileToVideoCodecProfile(uint32_t v4l2_codec,
         case V4L2_MPEG_VIDEO_VP9_PROFILE_0:
           return VP9PROFILE_PROFILE0;
         case V4L2_MPEG_VIDEO_VP9_PROFILE_2:
-          if (base::FeatureList::IsEnabled(kV4L2FlatStatelessVideoDecoder)) {
-            return VP9PROFILE_PROFILE2;
-          } else {
-            return VIDEO_CODEC_PROFILE_UNKNOWN;
-          }
+          return VP9PROFILE_PROFILE2;
       }
       break;
 #if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
@@ -344,7 +340,8 @@ static const std::map<v4l2_enum_type, std::vector<VideoCodecProfile>>
              H264PROFILE_HIGH,
          }},
 #if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
-        {V4L2_CID_MPEG_VIDEO_HEVC_PROFILE, {HEVCPROFILE_MAIN}},
+        {V4L2_CID_MPEG_VIDEO_HEVC_PROFILE,
+         {HEVCPROFILE_MAIN, HEVCPROFILE_MAIN10}},
 #endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
         {V4L2_CID_MPEG_VIDEO_VP8_PROFILE, {VP8PROFILE_ANY}},
         {V4L2_CID_MPEG_VIDEO_VP9_PROFILE, {VP9PROFILE_PROFILE0}},
@@ -363,9 +360,11 @@ static const std::map<VideoCodecProfile,
         {H264PROFILE_HIGH, MAKE_V4L2_CODEC_PAIR(V4L2_PIX_FMT_H264, SLICE)},
 #if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
         {HEVCPROFILE_MAIN, MAKE_V4L2_CODEC_PAIR(V4L2_PIX_FMT_HEVC, SLICE)},
+        {HEVCPROFILE_MAIN10, MAKE_V4L2_CODEC_PAIR(V4L2_PIX_FMT_HEVC, SLICE)},
 #endif  // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
         {VP8PROFILE_ANY, MAKE_V4L2_CODEC_PAIR(V4L2_PIX_FMT_VP8, FRAME)},
         {VP9PROFILE_PROFILE0, MAKE_V4L2_CODEC_PAIR(V4L2_PIX_FMT_VP9, FRAME)},
+        {VP9PROFILE_PROFILE2, MAKE_V4L2_CODEC_PAIR(V4L2_PIX_FMT_VP9, FRAME)},
 #if BUILDFLAG(IS_CHROMEOS)
         {AV1PROFILE_PROFILE_MAIN,
          MAKE_V4L2_CODEC_PAIR(V4L2_PIX_FMT_AV1, FRAME)},
@@ -505,6 +504,7 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
   base::ScopedFD device_fd(HANDLE_EINTR(
       open(kVideoDeviceDriverPath, O_RDWR | O_NONBLOCK | O_CLOEXEC)));
   if (!device_fd.is_valid()) {
+    PLOG(ERROR) << "Could not open " << kVideoDeviceDriverPath;
     return std::nullopt;
   }
 
@@ -525,7 +525,12 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
     for (const auto& profile : media_codec_profiles) {
       supported_media_configs.emplace_back(SupportedVideoDecoderConfig(
           profile, profile, min_coded_size, max_coded_size,
-          /*allow_encrypted=*/false, /*require_encrypted=*/false));
+#if BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
+          /*allow_encrypted=*/true,
+#else
+          /*allow_encrypted=*/false,
+#endif
+          /*require_encrypted=*/false));
     }
   }
 

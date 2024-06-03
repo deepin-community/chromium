@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/i18n/break_iterator.h"
 #include "base/lazy_instance.h"
+#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -81,8 +82,7 @@ constexpr int kMinimumCharacterCountForInvalid = 7;
 std::unique_ptr<BrowserAccessibility> BrowserAccessibility::Create(
     BrowserAccessibilityManager* manager,
     ui::AXNode* node) {
-  return std::unique_ptr<BrowserAccessibilityAndroid>(
-      new BrowserAccessibilityAndroid(manager, node));
+  return base::WrapUnique(new BrowserAccessibilityAndroid(manager, node));
 }
 
 using UniqueIdMap = std::unordered_map<int32_t, BrowserAccessibilityAndroid*>;
@@ -137,7 +137,7 @@ BrowserAccessibilityAndroid::GetLocalizedStringForImageAnnotationStatus(
     return BrowserAccessibility::GetLocalizedStringForImageAnnotationStatus(
         status);
 
-  ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   int message_id = 0;
 
@@ -563,6 +563,12 @@ bool BrowserAccessibilityAndroid::IsLeaf() const {
   if (ui::IsLink(GetRole()))
     return false;
 
+  // For Android only, tab-panels are never leaves. We do this to temporarily
+  // get around the gap for aria-labelledby in the Android API. See b/241526393.
+  if (GetRole() == ax::mojom::Role::kTabPanel) {
+    return false;
+  }
+
   BrowserAccessibilityManagerAndroid* manager_android =
       static_cast<BrowserAccessibilityManagerAndroid*>(manager());
   if (manager_android->prune_tree_for_screen_reader()) {
@@ -655,6 +661,10 @@ std::u16string BrowserAccessibilityAndroid::GetTextContentUTF16() const {
   return GetSubstringTextContentUTF16(std::nullopt);
 }
 
+int BrowserAccessibilityAndroid::GetTextContentLengthUTF16() const {
+  return GetTextContentUTF16().length();
+}
+
 std::u16string BrowserAccessibilityAndroid::GetSubstringTextContentUTF16(
     std::optional<EarlyExitPredicate> predicate) const {
   if (ui::IsIframe(GetRole()))
@@ -682,7 +692,7 @@ std::u16string BrowserAccessibilityAndroid::GetSubstringTextContentUTF16(
     // If the value itself is empty on a progress indicator, then this would
     // suggest it is indeterminate, so add that keyword.
     if (value.empty() && GetRole() == ax::mojom::Role::kProgressIndicator) {
-      content::ContentClient* content_client = content::GetContentClient();
+      ContentClient* content_client = GetContentClient();
       value = content_client->GetLocalizedString(IDS_AX_INDETERMINATE_VALUE);
     }
 
@@ -831,7 +841,7 @@ std::u16string BrowserAccessibilityAndroid::GetDialogModalMessageText() const {
     return GetString16Attribute(ax::mojom::StringAttribute::kDescription);
   }
 
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
   return content_client->GetLocalizedString(IDS_AX_DIALOG_MODAL_OPENED);
 }
 
@@ -875,7 +885,7 @@ std::u16string BrowserAccessibilityAndroid::GetStateDescription() const {
 
 std::u16string BrowserAccessibilityAndroid::GetMultiselectableStateDescription()
     const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   // Count the number of children and selected children.
   int child_count = 0;
@@ -905,7 +915,7 @@ std::u16string BrowserAccessibilityAndroid::GetMultiselectableStateDescription()
 }
 
 std::u16string BrowserAccessibilityAndroid::GetToggleStateDescription() const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   // For checked Toggle buttons and switches, we will return "on", otherwise
   // "off".
@@ -917,14 +927,14 @@ std::u16string BrowserAccessibilityAndroid::GetToggleStateDescription() const {
 
 std::u16string BrowserAccessibilityAndroid::GetCheckboxStateDescription()
     const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   return content_client->GetLocalizedString(IDS_AX_CHECKBOX_PARTIALLY_CHECKED);
 }
 
 std::u16string BrowserAccessibilityAndroid::GetAriaCurrentStateDescription()
     const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   int message_id;
   switch (static_cast<ax::mojom::AriaCurrentState>(
@@ -955,7 +965,7 @@ std::u16string BrowserAccessibilityAndroid::GetAriaCurrentStateDescription()
 
 std::u16string BrowserAccessibilityAndroid::GetRadioButtonStateDescription()
     const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   // The radio button should have an IntListAttribute of kRadioGroupIds, with
   // a length of the total number of radio buttons in this group. Blink sets
@@ -982,7 +992,7 @@ std::u16string BrowserAccessibilityAndroid::GetRadioButtonStateDescription()
 }
 
 std::u16string BrowserAccessibilityAndroid::GetComboboxExpandedText() const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   // We consider comboboxes of the form:
   //
@@ -1048,7 +1058,7 @@ std::u16string BrowserAccessibilityAndroid::GetComboboxExpandedText() const {
 
 std::u16string BrowserAccessibilityAndroid::GetComboboxExpandedTextFallback()
     const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   // If a combobox was of an indeterminate form, attempt any special cases here,
   // or return "expanded" as a final option.
@@ -1091,7 +1101,7 @@ std::u16string BrowserAccessibilityAndroid::GetRoleDescription() const {
   if (HasStringAttribute(ax::mojom::StringAttribute::kRoleDescription))
     return GetString16Attribute(ax::mojom::StringAttribute::kRoleDescription);
 
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   // As a special case, if we have a heading level return a string like
   // "heading level 1", etc. - and if the heading consists of a link,
@@ -1173,7 +1183,6 @@ std::u16string BrowserAccessibilityAndroid::GetRoleDescription() const {
     case ax::mojom::Role::kAudio:
     case ax::mojom::Role::kCode:
     case ax::mojom::Role::kDescriptionList:
-    case ax::mojom::Role::kDescriptionListTerm:
     case ax::mojom::Role::kDetails:
     case ax::mojom::Role::kEmphasis:
     case ax::mojom::Role::kFooterAsNonLandmark:
@@ -2014,7 +2023,7 @@ int BrowserAccessibilityAndroid::CountChildrenWithRole(
 
 std::u16string BrowserAccessibilityAndroid::GetContentInvalidErrorMessage()
     const {
-  content::ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
   int message_id = -1;
 
   if (!IsContentInvalid())

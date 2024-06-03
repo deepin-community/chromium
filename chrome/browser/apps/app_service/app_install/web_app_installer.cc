@@ -196,10 +196,13 @@ void WebAppInstaller::OnManifestRetrieved(
     web_app_install_info->manifest = std::move(*response);
     web_app_install_info->install_source = [&] {
       switch (surface) {
-        case AppInstallSurface::kAppInstallNavigationThrottle:
-          // TODO(b/315078159): Support non-preload installs over crosapi.
-          NOTREACHED();
-          [[fallthrough]];
+        case AppInstallSurface::kAppInstallUriUnknown:
+        case AppInstallSurface::kAppInstallUriShowoff:
+        case AppInstallSurface::kAppInstallUriMall:
+        case AppInstallSurface::kAppInstallUriGetit:
+        case AppInstallSurface::kAppInstallUriLauncher:
+          return crosapi::mojom::PreloadWebAppInstallSource::
+              kAlmanacInstallAppUri;
         case AppInstallSurface::kAppPreloadServiceOem:
           return crosapi::mojom::PreloadWebAppInstallSource::kOemPreload;
         case AppInstallSurface::kAppPreloadServiceDefault:
@@ -217,10 +220,12 @@ void WebAppInstaller::OnManifestRetrieved(
   } else {
     webapps::WebappInstallSource install_source = [&] {
       switch (surface) {
-        case AppInstallSurface::kAppInstallNavigationThrottle:
-          // TODO(b/315078159): Add nav throttle as a new surface.
-          NOTREACHED();
-          [[fallthrough]];
+        case AppInstallSurface::kAppInstallUriUnknown:
+        case AppInstallSurface::kAppInstallUriShowoff:
+        case AppInstallSurface::kAppInstallUriMall:
+        case AppInstallSurface::kAppInstallUriGetit:
+        case AppInstallSurface::kAppInstallUriLauncher:
+          return webapps::WebappInstallSource::ALMANAC_INSTALL_APP_URI;
         case AppInstallSurface::kAppPreloadServiceOem:
           return webapps::WebappInstallSource::PRELOADED_OEM;
         case AppInstallSurface::kAppPreloadServiceDefault:
@@ -228,6 +233,8 @@ void WebAppInstaller::OnManifestRetrieved(
       }
     }();
 
+    // TODO(b/315077087): Rename this command to be more generic than just for
+    // preloads.
     provider->command_manager().ScheduleCommand(
         std::make_unique<web_app::InstallPreloadedVerifiedAppCommand>(
             install_source,

@@ -134,12 +134,21 @@ Text* Text::splitText(unsigned offset, ExceptionState& exception_state) {
     return nullptr;
 
   if (LayoutText* layout_text = GetLayoutObject()) {
-    // TODO(kojii): The `0, old_str.length()` doesn't look right.
-    layout_text->SetTextWithOffset(data(),
-                                   TextDiffRange::Delete(0, old_str.length()));
-    if (ContainsOnlyWhitespaceOrEmpty()) {
+    if (RuntimeEnabledFeatures::TextDiffSplitFixEnabled()) {
       // To avoid |LayoutText| has empty text, we rebuild layout tree.
-      SetForceReattachLayoutTree();
+      if (ContainsOnlyWhitespaceOrEmpty()) {
+        SetForceReattachLayoutTree();
+      } else {
+        layout_text->SetTextWithOffset(
+            data(), TextDiffRange::Delete(offset, old_str.length() - offset));
+      }
+    } else {
+      layout_text->SetTextWithOffset(
+          data(), TextDiffRange::Delete(0, old_str.length()));
+      if (ContainsOnlyWhitespaceOrEmpty()) {
+        // To avoid |LayoutText| has empty text, we rebuild layout tree.
+        SetForceReattachLayoutTree();
+      }
     }
   }
 
@@ -488,10 +497,9 @@ void Text::UpdateTextLayoutObject(const TextDiffRange& diff) {
   LayoutText* text_layout_object = GetLayoutObject();
   if (ShouldUpdateLayoutByReattaching(*this, text_layout_object)) {
     SetForceReattachLayoutTree();
-    return;
+  } else {
+    text_layout_object->SetTextWithOffset(data(), diff);
   }
-
-  text_layout_object->SetTextWithOffset(data(), diff);
 }
 
 CharacterData* Text::CloneWithData(Document& factory,

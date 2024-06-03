@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/ash/desks/desks_client.h"
+
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -43,9 +45,11 @@
 #include "base/containers/contains.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_base.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/spin_wait.h"
 #include "base/uuid.h"
@@ -58,6 +62,8 @@
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/ash/app_restore/app_restore_arc_test_helper.h"
 #include "chrome/browser/ash/app_restore/app_restore_test_util.h"
+#include "chrome/browser/ash/crosapi/browser_manager.h"
+#include "chrome/browser/ash/crosapi/browser_util.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/ui/user_adding_screen.h"
@@ -71,7 +77,6 @@
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/desks/chrome_desks_util.h"
-#include "chrome/browser/ui/ash/desks/desks_client.h"
 #include "chrome/browser/ui/ash/desks/desks_templates_app_launch_handler.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
@@ -856,7 +861,7 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchMultipleDeskTemplates) {
   auto* desks_controller = ash::DesksController::Get();
   ASSERT_EQ(0, desks_controller->GetActiveDeskIndex());
 
-  // TODO(crbug.com/1273532): Note that `SetTemplate` allows setting an empty
+  // TODO(crbug.com/40206393): Note that `SetTemplate` allows setting an empty
   // desk template which shouldn't be possible in a real workflow. Make sure a
   // non empty desks are launched when this test is updated to use the real
   // workflow.
@@ -907,7 +912,6 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateWithSystemApp) {
 
   aura::Window* settings_window = FindBrowserWindow(kSettingsWindowId);
   ASSERT_TRUE(settings_window);
-  const std::u16string settings_title = settings_window->GetTitle();
 
   std::unique_ptr<ash::DeskTemplate> desk_template =
       CaptureActiveDeskAndSaveTemplate(ash::DeskTemplateType::kTemplate);
@@ -916,7 +920,6 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateWithSystemApp) {
       views::Widget::GetWidgetForNativeWindow(settings_window);
   settings_widget->CloseNow();
   ASSERT_FALSE(FindBrowserWindow(kSettingsWindowId));
-  settings_window = nullptr;
 
   auto* desks_controller = ash::DesksController::Get();
   ASSERT_EQ(0, desks_controller->GetActiveDeskIndex());
@@ -927,21 +930,17 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateWithSystemApp) {
   browsers_added.Wait();
 
   // Verify that the settings window has been launched on the new desk (desk B).
-  // TODO(sammiequon): Right now the app just launches, so verify the title
-  // matches. We should verify the restore id and use
-  // `FindBrowserWindow(kSettingsWindowId)` once things are wired up properly.
   EXPECT_EQ(1, desks_controller->GetActiveDeskIndex());
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    aura::Window* window = browser->window()->GetNativeWindow();
-    if (window->GetTitle() == settings_title) {
-      settings_window = window;
-      break;
-    }
-  }
-  ASSERT_TRUE(settings_window);
-  EXPECT_EQ(ash::Shell::GetContainer(settings_window->GetRootWindow(),
+  auto it =
+      base::ranges::find_if(*BrowserList::GetInstance(), [](Browser* browser) {
+        return ash::IsBrowserForSystemWebApp(browser,
+                                             ash::SystemWebAppType::SETTINGS);
+      });
+  ASSERT_NE(it, BrowserList::GetInstance()->end());
+  aura::Window* new_settings_window = (*it)->window()->GetNativeWindow();
+  EXPECT_EQ(ash::Shell::GetContainer(new_settings_window->GetRootWindow(),
                                      ash::kShellWindowId_DeskContainerB),
-            settings_window->parent());
+            new_settings_window->parent());
 }
 
 // Tests that launching a template that contains a system web app will move the
@@ -2617,7 +2616,7 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateAndCleanUpDesk) {
 // and then save the desk, that the desk is closed. Regression test for
 // https://crbug.com/1329350.
 IN_PROC_BROWSER_TEST_F(DesksClientTest,
-                       // TODO(crbug.com/1369348): Re-enable this test
+                       // TODO(crbug.com/40240645): Re-enable this test
                        DISABLED_SystemUIReEnterLibraryAndSaveDesk) {
   // Create a template that has a window because the "Save desk for later"
   // button is not enabled on empty desks.
@@ -3325,7 +3324,7 @@ IN_PROC_BROWSER_TEST_F(SaveAndRecallBrowserTest,
   // We should be in overview mode.
   ASSERT_TRUE(ash::Shell::Get()->overview_controller()->overview_session());
 }
-// TODO(crbug.com/1333965): Add some tests to launch LaCros browser.
+// TODO(crbug.com/40228006): Add some tests to launch LaCros browser.
 
 class DesksTemplatesClientArcTest : public InProcessBrowserTest {
  public:

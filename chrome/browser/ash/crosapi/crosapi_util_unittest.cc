@@ -192,6 +192,8 @@ TEST_F(CrosapiUtilTest, EmptyDeviceSettings) {
   EXPECT_TRUE(settings->report_upload_frequency.is_null());
   EXPECT_TRUE(
       settings->report_device_network_telemetry_collection_rate_ms.is_null());
+  EXPECT_EQ(settings->device_extensions_system_log_enabled,
+            crosapi::mojom::DeviceSettings::OptionalBool::kUnset);
 }
 
 TEST_F(CrosapiUtilTest, DeviceSettingsWithData) {
@@ -212,6 +214,9 @@ TEST_F(CrosapiUtilTest, DeviceSettingsWithData) {
   testing_profile_->ScopedCrosSettingsTestHelper()
       ->GetStubbedProvider()
       ->SetBoolean(ash::kReportDeviceNetworkStatus, true);
+  testing_profile_->ScopedCrosSettingsTestHelper()
+      ->GetStubbedProvider()
+      ->SetBoolean(ash::kDeviceExtensionsSystemLogEnabled, true);
 
   const int64_t kReportUploadFrequencyMs = base::Hours(1).InMilliseconds();
   testing_profile_->ScopedCrosSettingsTestHelper()
@@ -258,6 +263,8 @@ TEST_F(CrosapiUtilTest, DeviceSettingsWithData) {
   EXPECT_EQ(settings->report_upload_frequency->value, kReportUploadFrequencyMs);
   EXPECT_EQ(settings->report_device_network_telemetry_collection_rate_ms->value,
             kReportDeviceNetworkTelemetryCollectionRateMs);
+  EXPECT_EQ(settings->device_extensions_system_log_enabled,
+            crosapi::mojom::DeviceSettings::OptionalBool::kTrue);
 }
 
 TEST_F(CrosapiUtilTest, IsArcAvailable) {
@@ -266,10 +273,8 @@ TEST_F(CrosapiUtilTest, IsArcAvailable) {
   IdleServiceAsh::DisableForTesting();
   AddRegularUser(TestingProfile::kDefaultProfileUserName);
 
-  EnvironmentProvider environment_provider;
   mojom::BrowserInitParamsPtr browser_init_params =
       browser_util::GetBrowserInitParams(
-          &environment_provider,
           browser_util::InitialBrowserAction(
               crosapi::mojom::InitialBrowserAction::kDoNotOpenWindow),
           /*is_keep_alive_enabled=*/false, std::nullopt);
@@ -283,10 +288,8 @@ TEST_F(CrosapiUtilTest, IsTabletFormFactor) {
   IdleServiceAsh::DisableForTesting();
   AddRegularUser(TestingProfile::kDefaultProfileUserName);
 
-  EnvironmentProvider environment_provider;
   mojom::BrowserInitParamsPtr browser_init_params =
       browser_util::GetBrowserInitParams(
-          &environment_provider,
           browser_util::InitialBrowserAction(
               crosapi::mojom::InitialBrowserAction::kDoNotOpenWindow),
           /*is_keep_alive_enabled=*/false, std::nullopt);
@@ -302,10 +305,8 @@ TEST_F(CrosapiUtilTest, SerialNumber) {
   statistics_provider_.SetMachineStatistic("serial_number",
                                            expected_serial_number);
 
-  EnvironmentProvider environment_provider;
   mojom::BrowserInitParamsPtr browser_init_params =
       browser_util::GetBrowserInitParams(
-          &environment_provider,
           browser_util::InitialBrowserAction(
               crosapi::mojom::InitialBrowserAction::kDoNotOpenWindow),
           /*is_keep_alive_enabled=*/false, std::nullopt);
@@ -332,15 +333,31 @@ TEST_F(CrosapiUtilTest, BrowserInitParamsContainsUserPolicy) {
   task_environment_.RunUntilIdle();
 
   std::string actual_user_policy_blob;
-  EnvironmentProvider environment_provider;
   mojom::BrowserInitParamsPtr browser_init_params =
       browser_util::GetBrowserInitParams(
-          &environment_provider,
           browser_util::InitialBrowserAction(
               crosapi::mojom::InitialBrowserAction::kDoNotOpenWindow),
           /*is_keep_alive_enabled=*/false, std::nullopt);
 
   EXPECT_EQ(expected_policy_bytes, browser_init_params->device_account_policy);
+}
+
+TEST_F(CrosapiUtilTest, DeviceExtensionsSystemLogEnabledFalse) {
+  testing_profile_->ScopedCrosSettingsTestHelper()
+      ->ReplaceDeviceSettingsProviderWithStub();
+  testing_profile_->ScopedCrosSettingsTestHelper()->SetTrustedStatus(
+      ash::CrosSettingsProvider::TRUSTED);
+  base::RunLoop().RunUntilIdle();
+  testing_profile_->ScopedCrosSettingsTestHelper()
+      ->GetStubbedProvider()
+      ->SetBoolean(ash::kDeviceExtensionsSystemLogEnabled, false);
+
+  auto settings = browser_util::GetDeviceSettings();
+  testing_profile_->ScopedCrosSettingsTestHelper()
+      ->RestoreRealDeviceSettingsProvider();
+
+  EXPECT_EQ(settings->device_extensions_system_log_enabled,
+            crosapi::mojom::DeviceSettings::OptionalBool::kFalse);
 }
 
 }  // namespace crosapi

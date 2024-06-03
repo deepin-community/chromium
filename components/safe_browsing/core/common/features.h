@@ -29,6 +29,10 @@ BASE_DECLARE_FEATURE(kAddWarningShownTSToClientSafeBrowsingReport);
 // OptimizationGuide.
 BASE_DECLARE_FEATURE(kClientSideDetectionKillswitch);
 
+// Expand CSPP beyond phishing and trigger when keyboard or pointer lock request
+// occurs on the page.
+BASE_DECLARE_FEATURE(kClientSideDetectionKeyboardPointerLockRequest);
+
 // Expand CSD-Phishing beyond phishing and trigger when a notification prompt
 // occurs on the page.
 BASE_DECLARE_FEATURE(kClientSideDetectionNotificationPrompt);
@@ -40,15 +44,19 @@ BASE_DECLARE_FEATURE(kCreateNotificationsAcceptedClientSafeBrowsingReports);
 // Creates and sends CSBRRs when warnings are first shown to users.
 BASE_DECLARE_FEATURE(kCreateWarningShownClientSafeBrowsingReports);
 
-// Controls whether we prompt encrypted archive deep scans to provide a
-// password.
-BASE_DECLARE_FEATURE(kDeepScanningEncryptedArchives);
+// Controls whether we prompt the user on unencrypted deep scans.
+BASE_DECLARE_FEATURE(kDeepScanningPromptRemoval);
 
 // Controls whether the delayed warning experiment is enabled.
 BASE_DECLARE_FEATURE(kDelayedWarnings);
 // True if mouse clicks should undelay the warnings immediately when delayed
 // warnings feature is enabled.
 extern const base::FeatureParam<bool> kDelayedWarningsEnableMouseClicks;
+
+// Sends download report without explicit user decision. This can be either the
+// download is automatically discarded 1 hour after the warning is shown, or
+// the profile is closed while the warning is still showing.
+BASE_DECLARE_FEATURE(kDownloadReportWithoutUserDecision);
 
 // The kill switch for download tailored warnings. The main control is on the
 // server-side.
@@ -142,9 +150,6 @@ BASE_DECLARE_FEATURE(kNestedArchives);
 // enterprise interstitials.
 BASE_DECLARE_FEATURE(kRealTimeUrlFilteringCustomMessage);
 
-// Controls whether we are using red interstitial facelift updates.
-BASE_DECLARE_FEATURE(kRedInterstitialFacelift);
-
 // Enables modifying key parameters on the navigation event collection used to
 // populate referrer chains.
 BASE_DECLARE_FEATURE(kReferrerChainParameters);
@@ -163,6 +168,9 @@ extern const base::FeatureParam<int> kReferrerChainEventMaximumCount;
 BASE_DECLARE_FEATURE(kSafeBrowsingAsyncRealTimeCheck);
 
 #if BUILDFLAG(IS_ANDROID)
+// Whether to call the new API on startup to reduce latency.
+BASE_DECLARE_FEATURE(kSafeBrowsingCallNewGmsApiOnStartup);
+
 // Use new GMSCore API for hash database check on browser URLs.
 BASE_DECLARE_FEATURE(kSafeBrowsingNewGmsApiForBrowseUrlDatabaseCheck);
 
@@ -178,10 +186,6 @@ BASE_DECLARE_FEATURE(kSafeBrowsingReferrerChainWithCopyPasteNavigation);
 
 // Controls whether cookies are removed when the access token is present.
 BASE_DECLARE_FEATURE(kSafeBrowsingRemoveCookiesInAuthRequests);
-
-// Controls whether to skip Safe Browsing checks on all subresource URLs in
-// renderer and browser URL loader throttles.
-BASE_DECLARE_FEATURE(kSafeBrowsingSkipSubresources);
 
 // Controls whether to skip Safe Browsing checks for WebSockets and Web API
 // handshakes.
@@ -271,6 +275,8 @@ extern const base::FeatureParam<std::string> kRedWarningSurveyReportTypeFilter;
 extern const base::FeatureParam<std::string> kRedWarningSurveyDidProceedFilter;
 
 BASE_DECLARE_FEATURE(kClientSideDetectionImagesCache);
+
+BASE_DECLARE_FEATURE(kClientSideDetectionDebuggingMetadataCache);
 
 }  // namespace safe_browsing
 #endif  // COMPONENTS_SAFE_BROWSING_CORE_COMMON_FEATURES_H_

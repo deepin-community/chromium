@@ -29,6 +29,7 @@ MockShoppingService::MockShoppingService()
                                 nullptr,
                                 nullptr,
                                 nullptr,
+                                nullptr,
                                 nullptr) {}
 
 MockShoppingService::~MockShoppingService() = default;
@@ -58,6 +59,11 @@ void MockShoppingService::SetupPermissiveMock() {
   SetGetAllParcelStatusesCallbackValue(std::vector<ParcelTrackingStatus>());
 }
 
+void MockShoppingService::SetAccountChecker(AccountChecker* account_checker) {
+  ON_CALL(*this, GetAccountChecker)
+      .WillByDefault(testing::Return(account_checker));
+}
+
 void MockShoppingService::SetResponseForGetProductInfoForUrl(
     std::optional<commerce::ProductInfo> product_info) {
   ON_CALL(*this, GetProductInfoForUrl)
@@ -81,6 +87,12 @@ void MockShoppingService::SetResponseForGetPriceInsightsInfoForUrl(
                 FROM_HERE,
                 base::BindOnce(std::move(callback), url, price_insights_info));
           });
+}
+
+void MockShoppingService::SetResponseForGetUrlInfosForActiveWebWrappers(
+    std::vector<commerce::UrlInfo> url_infos) {
+  ON_CALL(*this, GetUrlInfosForActiveWebWrappers)
+      .WillByDefault(testing::Return(url_infos));
 }
 
 void MockShoppingService::SetResponsesForGetUpdatedProductInfoForBookmarks(
@@ -260,5 +272,19 @@ void MockShoppingService::SetGetAllParcelStatusesCallbackValue(
 
 void StopTrackingParcel(const std::string& tracking_id,
                         base::OnceCallback<void(bool)> callback) {}
+
+void MockShoppingService::SetResponseForGetProductSpecificationsForUrls(
+    ProductSpecifications specs) {
+  ON_CALL(*this, GetProductSpecificationsForUrls)
+      .WillByDefault(
+          [specs = std::move(specs)](const std::vector<GURL>& urls,
+                                     ProductSpecificationsCallback callback) {
+            std::vector<uint64_t> ids{0};
+            base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE, base::BindOnce(std::move(callback), std::move(ids),
+                                          std::optional<ProductSpecifications>(
+                                              std::move(specs))));
+          });
+}
 
 }  // namespace commerce

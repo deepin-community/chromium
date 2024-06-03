@@ -11,11 +11,13 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/types/pass_key.h"
 #include "base/unguessable_token.h"
+#include "components/viz/common/navigation_id.h"
 #include "third_party/blink/public/common/frame/view_transition_state.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_function.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_sync_iterator_view_transition_type_set.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_view_transition_callback.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
@@ -30,7 +32,7 @@
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace viz {
-using NavigationID = base::UnguessableToken;
+using TransitionId = base::UnguessableToken;
 }
 
 namespace blink {
@@ -72,7 +74,9 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
       base::OnceCallback<void(const ViewTransitionState&)>;
   static ViewTransition* CreateForSnapshotForNavigation(
       Document*,
+      const viz::NavigationId& navigation_id,
       ViewTransitionStateCallback,
+      const Vector<String>& types,
       Delegate*);
 
   // Creates a ViewTransition using cached state from the previous Document
@@ -91,7 +95,12 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // Skipped transition constructor.
   ViewTransition(PassKey, Document*, V8ViewTransitionCallback*);
   // Navigation-initiated for-snapshot constructor.
-  ViewTransition(PassKey, Document*, ViewTransitionStateCallback, Delegate*);
+  ViewTransition(PassKey,
+                 Document*,
+                 const viz::NavigationId& navigation_id,
+                 ViewTransitionStateCallback,
+                 const Vector<String>& types,
+                 Delegate*);
   // Navigation-initiated from-snapshot constructor.
   ViewTransition(PassKey, Document*, ViewTransitionState, Delegate*);
 
@@ -105,9 +114,13 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   bool MatchForOnlyChild(PseudoId pseudo_id,
                          const AtomicString& view_transition_name) const;
 
-  // Returns true if the transition matches :active-view-transition with the
-  // given types.
-  bool MatchForActiveViewTransition(const Vector<AtomicString>& pseudo_types);
+  // Returns true if the transition matches :active-view-transition
+  bool MatchForActiveViewTransition();
+
+  // Returns true if the transition matches :active-view-transition-type with
+  // the given types.
+  bool MatchForActiveViewTransitionType(
+      const Vector<AtomicString>& pseudo_types);
 
   // ExecutionContextLifecycleObserver implementation.
   void ContextDestroyed() override;
@@ -246,6 +259,10 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // called only if a callback is provided.
   void NotifyDOMCallbackFinished(bool success);
 
+  ViewTransitionTypeSet* Types();
+
+  void InitTypes(const Vector<String>&);
+
  private:
   friend class ViewTransitionTest;
   friend class AXViewTransitionTest;
@@ -323,12 +340,21 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   void OnRenderingPausedTimeout();
   void ResumeRendering();
 
+  // Returns the navigation id to use when creating a capture request. This id
+  // is the same for captures on both old and new documents of a cross-document
+  // transition. It is an empty id if the transition is not cross document.
+  viz::NavigationId CrossDocumentNavigationId() const;
+
   State state_ = State::kInitial;
   const CreationType creation_type_;
 
   Member<Document> document_;
   Delegate* const delegate_ = nullptr;
-  const viz::NavigationID navigation_id_;
+
+  // Each transition is assigned a unique ID. For cross-document navigations
+  // this is also the `navigation_id` provided to the browser/GPU process to
+  // track the lifetime of generated resources.
+  const viz::TransitionId transition_id_;
 
   // The document tag identifies the document to which this transition
   // belongs. It's unique among other local documents.
@@ -361,12 +387,12 @@ class CORE_EXPORT ViewTransition : public GarbageCollected<ViewTransition>,
   // is cleared if the document is torn down.
   Member<DOMViewTransition> script_delegate_;
 
+  Member<ViewTransitionTypeSet> types_;
+
   bool in_main_lifecycle_update_ = false;
   bool dom_callback_succeeded_ = false;
   bool first_animating_frame_ = true;
   bool context_destroyed_ = false;
-
-  std::optional<Vector<String>> types_;
 };
 
 }  // namespace blink

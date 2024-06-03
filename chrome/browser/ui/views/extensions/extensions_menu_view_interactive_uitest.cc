@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/extensions/extensions_menu_view.h"
-
 #include <algorithm>
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/ranges/algorithm.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
@@ -17,7 +16,7 @@
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/install_verifier.h"
-#include "chrome/browser/extensions/scripting_permissions_modifier.h"
+#include "chrome/browser/extensions/permissions/scripting_permissions_modifier.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/extensions/extension_install_ui_default.h"
@@ -25,6 +24,7 @@
 #include "chrome/browser/ui/views/controls/hover_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_item_view.h"
+#include "chrome/browser/ui/views/extensions/extensions_menu_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_interactive_uitest.h"
@@ -58,7 +58,8 @@ using ::testing::ElementsAre;
 
 class ExtensionsMenuViewInteractiveUITest : public ExtensionsToolbarUITest {
  public:
-  static base::flat_set<ExtensionMenuItemView*> GetExtensionMenuItemViews() {
+  static base::flat_set<raw_ptr<ExtensionMenuItemView, CtnExperimental>>
+  GetExtensionMenuItemViews() {
     return ExtensionsMenuView::GetExtensionsMenuViewForTesting()
         ->extensions_menu_items_for_testing();
   }
@@ -254,7 +255,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest, InvokeUi_default) {
 
 // Invokes the UI shown when a user has to reload a page in order to run an
 // extension.
-// TODO(https://crbug.com/1184437): Very flaky on Linux and Windows.
+// TODO(crbug.com/40171640): Very flaky on Linux and Windows.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #define MAYBE_InvokeUi_ReloadPageBubble DISABLED_InvokeUi_ReloadPageBubble
 #else
@@ -625,7 +626,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
 }
 
 #if BUILDFLAG(IS_LINUX)
-// TODO(crbug.com/1251961): Flaky on Linux (CFI)
+// TODO(crbug.com/40792869): Flaky on Linux (CFI)
 #define MAYBE_ClickingContextMenuButton DISABLED_ClickingContextMenuButton
 #else
 #define MAYBE_ClickingContextMenuButton ClickingContextMenuButton
@@ -662,7 +663,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(crbug.com/1164612): Flaky on Linux and Lacros.
+// TODO(crbug.com/40740852): Flaky on Linux and Lacros.
 #define MAYBE_InvokeUi_UninstallDialog_Accept \
   DISABLED_InvokeUi_UninstallDialog_Accept
 #else
@@ -674,7 +675,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewInteractiveUITest,
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(crbug.com/1173344): Flaky on Linux.
+// TODO(crbug.com/40746111): Flaky on Linux.
 #define MAYBE_InvokeUi_UninstallDialog_Cancel \
   DISABLED_InvokeUi_UninstallDialog_Cancel
 #else

@@ -4,8 +4,9 @@
 
 #include "chrome/updater/win/app_command_runner.h"
 
-#include <shellapi.h>
 #include <windows.h>
+
+#include <shellapi.h>
 
 #include <optional>
 #include <string>
@@ -64,7 +65,6 @@ HRESULT LoadAppCommandFormat(UpdaterScope scope,
 // REG_SZ `cmd`. Along with `cmd`, there are other properties of the app
 // registered, such as the version "pv"="107.0.5304.107". So, `pv` is also a
 // potential "command" for `IProcessLauncher`, which is unexpected.
-// TODO(crbug.com/1399177): Parameterize `LoadLegacyProcessLauncherFormat`.
 HRESULT LoadLegacyProcessLauncherFormat(const std::wstring& app_id,
                                         const std::wstring& command_id,
                                         std::wstring& command_format) {
@@ -316,7 +316,7 @@ HRESULT AppCommandRunner::ExecuteAppCommand(
     const std::vector<std::wstring>& substitutions,
     base::Process& process) {
   VLOG(2) << __func__ << ": " << executable << ": "
-          << base::JoinString(parameters, L",")
+          << base::JoinString(parameters, L",") << " : "
           << base::JoinString(substitutions, L",");
 
   const std::optional<std::wstring> command_line_parameters =

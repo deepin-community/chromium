@@ -26,8 +26,8 @@
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_memory_wrappers.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 namespace {
 
@@ -36,17 +36,23 @@ constexpr char kChecksumKey[] = "CheckSum";
 ByteString CFXByteStringHexDecode(const ByteString& bsHex) {
   std::unique_ptr<uint8_t, FxFreeDeleter> result;
   uint32_t size = 0;
-  HexDecode(bsHex.raw_span(), &result, &size);
+  HexDecode(bsHex.unsigned_span(), &result, &size);
   return ByteString(result.get(), size);
 }
 
+// TODO(tsepez): should be UNSAFE_BUFFER_USAGE.
 ByteString GenerateMD5Base16(const void* contents, const unsigned long len) {
   uint8_t digest[16];
-  CRYPT_MD5Generate({static_cast<const uint8_t*>(contents), len}, digest);
-  char buf[32];
-  for (int i = 0; i < 16; ++i)
-    FXSYS_IntToTwoHexChars(digest[i], &buf[i * 2]);
 
+  // SAFETY: caller ensures `contents` points to at least `len` bytes.
+  CRYPT_MD5Generate(UNSAFE_BUFFERS(pdfium::make_span(
+                        static_cast<const uint8_t*>(contents), len)),
+                    digest);
+
+  char buf[32];
+  for (int i = 0; i < 16; ++i) {
+    FXSYS_IntToTwoHexChars(digest[i], &buf[i * 2]);
+  }
   return ByteString(buf, 32);
 }
 
@@ -59,7 +65,7 @@ FPDFDoc_GetAttachmentCount(FPDF_DOCUMENT document) {
     return 0;
 
   auto name_tree = CPDF_NameTree::Create(pDoc, "EmbeddedFiles");
-  return name_tree ? pdfium::base::checked_cast<int>(name_tree->GetCount()) : 0;
+  return name_tree ? pdfium::checked_cast<int>(name_tree->GetCount()) : 0;
 }
 
 FPDF_EXPORT FPDF_ATTACHMENT FPDF_CALLCONV
@@ -274,8 +280,10 @@ FPDFAttachment_GetFile(FPDF_ATTACHMENT attachment,
   if (!pFileStream)
     return false;
 
+  // SAFETY: required from caller.
   *out_buflen = DecodeStreamMaybeCopyAndReturnLength(
       std::move(pFileStream),
-      {static_cast<uint8_t*>(buffer), static_cast<size_t>(buflen)});
+      UNSAFE_BUFFERS(pdfium::make_span(static_cast<uint8_t*>(buffer),
+                                       static_cast<size_t>(buflen))));
   return true;
 }

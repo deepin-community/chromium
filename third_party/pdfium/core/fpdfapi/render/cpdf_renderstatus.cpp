@@ -52,10 +52,13 @@
 #include "core/fpdfapi/render/cpdf_textrenderer.h"
 #include "core/fpdfapi/render/cpdf_type3cache.h"
 #include "core/fxcrt/autorestorer.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_2d_size.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxcrt/unowned_ptr.h"
@@ -68,9 +71,6 @@
 #include "core/fxge/renderdevicedriver_iface.h"
 #include "core/fxge/text_char_pos.h"
 #include "core/fxge/text_glyph_pos.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/notreached.h"
 
 namespace {
 
@@ -717,33 +717,33 @@ RetainPtr<CFX_DIBitmap> CPDF_RenderStatus::GetBackdrop(
     bool bBackAlphaRequired) {
   int width = bbox.Width();
   int height = bbox.Height();
-  auto pBackdrop = pdfium::MakeRetain<CFX_DIBitmap>();
+  auto backdrop = pdfium::MakeRetain<CFX_DIBitmap>();
   if (bBackAlphaRequired && !m_bDropObjects) {
-    if (!pBackdrop->Create(width, height, FXDIB_Format::kArgb)) {
+    if (!backdrop->Create(width, height, FXDIB_Format::kArgb)) {
       return nullptr;
     }
   } else {
-    if (!m_pDevice->CreateCompatibleBitmap(pBackdrop, width, height)) {
+    if (!m_pDevice->CreateCompatibleBitmap(backdrop, width, height)) {
       return nullptr;
     }
   }
 
   const int cap_to_check =
-      pBackdrop->IsAlphaFormat() ? FXRC_ALPHA_OUTPUT : FXRC_GET_BITS;
+      backdrop->IsAlphaFormat() ? FXRC_ALPHA_OUTPUT : FXRC_GET_BITS;
   if (m_pDevice->GetRenderCaps() & cap_to_check) {
-    m_pDevice->GetDIBits(pBackdrop, bbox.left, bbox.top);
-    return pBackdrop;
+    m_pDevice->GetDIBits(backdrop, bbox.left, bbox.top);
+    return backdrop;
   }
   CFX_Matrix FinalMatrix = m_DeviceMatrix;
   FinalMatrix.Translate(-bbox.left, -bbox.top);
-  if (!pBackdrop->IsAlphaFormat()) {
-    pBackdrop->Clear(0xffffffff);
+  if (!backdrop->IsAlphaFormat()) {
+    backdrop->Clear(0xffffffff);
   }
 
   CFX_DefaultRenderDevice device;
-  device.Attach(pBackdrop);
+  device.Attach(backdrop);
   m_pContext->Render(&device, pObj, &m_Options, &FinalMatrix);
-  return pBackdrop;
+  return backdrop;
 }
 
 std::unique_ptr<CPDF_GraphicStates> CPDF_RenderStatus::CloneObjStates(
@@ -1310,8 +1310,8 @@ void CPDF_RenderStatus::CompositeDIBitmap(
   }
 
   auto new_backdrop = pdfium::MakeRetain<CFX_DIBitmap>();
-  new_backdrop->Create(backdrop->GetWidth(), backdrop->GetHeight(),
-                       FXDIB_Format::kRgb32);
+  CHECK(new_backdrop->Create(backdrop->GetWidth(), backdrop->GetHeight(),
+                             FXDIB_Format::kRgb32));
   new_backdrop->Clear(0xffffffff);
   new_backdrop->CompositeBitmap(0, 0, new_backdrop->GetWidth(),
                                 new_backdrop->GetHeight(), std::move(backdrop),
@@ -1386,7 +1386,7 @@ RetainPtr<CFX_DIBitmap> CPDF_RenderStatus::LoadSMask(
   const int src_pitch = bitmap->GetPitch();
   DataVector<uint8_t> transfers(256);
   if (pFunc) {
-    std::vector<float> results(pFunc->CountOutputs());
+    std::vector<float> results(pFunc->OutputCount());
     for (size_t i = 0; i < transfers.size(); ++i) {
       float input = i / 255.0f;
       pFunc->Call(pdfium::span_from_ref(input), results);
@@ -1449,7 +1449,7 @@ FX_ARGB CPDF_RenderStatus::GetBackgroundColor(
   // Store Color Space Family to use in CPDF_RenderStatus::Initialize().
   *pCSFamily = family;
 
-  uint32_t comps = std::max(8u, pCS->CountComponents());
+  uint32_t comps = std::max(8u, pCS->ComponentCount());
   size_t count = std::min<size_t>(8, pBC->size());
   std::vector<float> floats = ReadArrayElementsToVector(pBC.Get(), count);
   floats.resize(comps);

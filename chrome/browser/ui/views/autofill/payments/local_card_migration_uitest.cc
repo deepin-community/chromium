@@ -45,7 +45,7 @@
 #include "chrome/browser/ui/views/page_action/page_action_icon_loading_indicator_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -142,6 +142,7 @@ constexpr char kFirstCardNumber[] = "5428424047572420";   // Mastercard
 constexpr char kSecondCardNumber[] = "4782187095085933";  // Visa
 constexpr char kThirdCardNumber[] = "4111111111111111";   // Visa
 constexpr char kInvalidCardNumber[] = "4444444444444444";
+constexpr char kMaskedCardNumber[] = "2420";
 
 constexpr double kFakeGeolocationLatitude = 1.23;
 constexpr double kFakeGeolocationLongitude = 4.56;
@@ -159,8 +160,8 @@ class LocalCardMigrationBrowserTest
  protected:
   class TestAutofillManager : public BrowserAutofillManager {
    public:
-    TestAutofillManager(ContentAutofillDriver* driver, AutofillClient* client)
-        : BrowserAutofillManager(driver, client, "en-US") {}
+    explicit TestAutofillManager(ContentAutofillDriver* driver)
+        : BrowserAutofillManager(driver, "en-US") {}
 
     testing::AssertionResult WaitForFormsSeen(int min_num_awaited_calls) {
       return forms_seen_waiter_.Wait(min_num_awaited_calls);
@@ -206,8 +207,9 @@ class LocalCardMigrationBrowserTest
             &test_url_loader_factory_);
     ContentAutofillClient* client =
         ContentAutofillClient::FromWebContents(GetActiveWebContents());
-    client->GetPaymentsNetworkInterface()->set_url_loader_factory_for_testing(
-        test_shared_loader_factory_);
+    client->GetPaymentsAutofillClient()
+        ->GetPaymentsNetworkInterface()
+        ->set_url_loader_factory_for_testing(test_shared_loader_factory_);
 
     // Set up this class as the ObserverForTest implementation.
     client->GetFormDataImporter()
@@ -333,8 +335,9 @@ class LocalCardMigrationBrowserTest
                             "12", test::NextYear().c_str(), "1");
     server_card.set_guid("00000000-0000-0000-0000-" +
                          card_number.substr(0, 12));
-    server_card.set_record_type(CreditCard::RecordType::kFullServerCard);
+    server_card.set_record_type(CreditCard::RecordType::kMaskedServerCard);
     server_card.set_server_id("full_id_" + card_number);
+    server_card.SetNetworkForMaskedCard(kVisaCard);
     AddTestServerCreditCard(GetProfile(0), server_card);
     return server_card;
   }
@@ -598,7 +601,7 @@ IN_PROC_BROWSER_TEST_F(
     DISABLED_ReusingServerCardDoesNotShowIntermediateMigrationOffer) {
   base::HistogramTester histogram_tester;
 
-  SaveServerCard(kFirstCardNumber);
+  SaveServerCard(kMaskedCardNumber);
   FillAndSubmitFormWithCard(kFirstCardNumber);
 
   // No bubble should be showing.
@@ -616,7 +619,7 @@ IN_PROC_BROWSER_TEST_F(
     DISABLED_ReusingServerCardWithMigratableLocalCardShowIntermediateMigrationOffer) {
   base::HistogramTester histogram_tester;
 
-  SaveServerCard(kFirstCardNumber);
+  SaveServerCard(kMaskedCardNumber);
   SaveLocalCard(kSecondCardNumber);
   UseCardAndWaitForMigrationOffer(kFirstCardNumber);
 
@@ -714,7 +717,7 @@ IN_PROC_BROWSER_TEST_F(
     LocalCardMigrationBrowserTest,
     // TODO(crbug.com/1007051): Flaky, but feature should soon be removed.
     DISABLED_CreditCardIconShownInLocationBar) {
-  SaveServerCard(kFirstCardNumber);
+  SaveServerCard(kMaskedCardNumber);
   SaveLocalCard(kSecondCardNumber);
   UseCardAndWaitForMigrationOffer(kFirstCardNumber);
 
@@ -1160,7 +1163,7 @@ IN_PROC_BROWSER_TEST_F(
   ShowAndVerifyUi();
 }
 
-// TODO(crbug.com/897998):
+// TODO(crbug.com/41422186):
 // - Add more tests for feedback dialog.
 
 }  // namespace autofill

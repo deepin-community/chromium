@@ -12,9 +12,9 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/queue.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -262,6 +262,9 @@ WebBluetoothServiceImpl::TranslateConnectErrorAndRecord(
     case BluetoothDevice::ERROR_INVALID_ARGS:
       RecordConnectGATTOutcome(UMAConnectGATTOutcome::INVALID_ARGS);
       return blink::mojom::WebBluetoothResult::CONNECT_INVALID_ARGS;
+    case BluetoothDevice::ERROR_NON_AUTH_TIMEOUT:
+      RecordConnectGATTOutcome(UMAConnectGATTOutcome::NON_AUTH_TIMEOUT);
+      return blink::mojom::WebBluetoothResult::CONNECT_NON_AUTH_TIMEOUT;
     case BluetoothDevice::NUM_CONNECT_ERROR_CODES:
       NOTREACHED();
       return blink::mojom::WebBluetoothResult::CONNECT_UNKNOWN_FAILURE;
@@ -540,7 +543,7 @@ void WebBluetoothServiceImpl::OnPermissionRevoked(const url::Origin& origin) {
 
   connected_devices_->CloseConnectionsToDevicesNotInList(permitted_ids);
 
-  base::EraseIf(watch_advertisements_clients_,
+  std::erase_if(watch_advertisements_clients_,
                 [&](const std::unique_ptr<WatchAdvertisementsClient>& client) {
                   return !base::Contains(permitted_ids, client->device_id());
                 });
@@ -1452,11 +1455,11 @@ void WebBluetoothServiceImpl::RemoveDisconnectedClients() {
 
   // TODO(https://crbug.com/1087007): These two classes can potentially be
   // combined into the same container.
-  base::EraseIf(scanning_clients_,
+  std::erase_if(scanning_clients_,
                 [](const std::unique_ptr<ScanningClient>& client) {
                   return !client->is_connected();
                 });
-  base::EraseIf(watch_advertisements_clients_,
+  std::erase_if(watch_advertisements_clients_,
                 [](const std::unique_ptr<WatchAdvertisementsClient>& client) {
                   return !client->is_connected();
                 });

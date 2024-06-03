@@ -511,10 +511,6 @@ void VisualViewport::SetScaleAndLocation(float scale,
     // constraints.
     DCHECK(IsActiveViewport());
     NotifyRootFrameViewport();
-    Document* document = LocalMainFrame().GetDocument();
-    if (AXObjectCache* cache = document->ExistingAXObjectCache()) {
-      cache->LocationChanged(document->GetLayoutView());
-    }
   }
 }
 
@@ -688,6 +684,13 @@ std::optional<blink::Color> VisualViewport::CSSScrollbarThumbColor() const {
   return std::nullopt;
 }
 
+void VisualViewport::DropCompositorScrollDeltaNextCommit() {
+  if (auto* paint_artifact_compositor = GetPaintArtifactCompositor()) {
+    paint_artifact_compositor->DropCompositorScrollDeltaNextCommit(
+        scroll_element_id_);
+  }
+}
+
 int VisualViewport::ScrollbarThickness() const {
   DCHECK(IsActiveViewport());
   return ScrollbarThemeOverlayMobile::GetInstance().ScrollbarThickness(
@@ -780,6 +783,7 @@ bool VisualViewport::SetScrollOffset(
 
 PhysicalRect VisualViewport::ScrollIntoView(
     const PhysicalRect& rect_in_absolute,
+    const PhysicalBoxStrut& scroll_margin,
     const mojom::blink::ScrollIntoViewParamsPtr& params) {
   if (!IsActiveViewport())
     return rect_in_absolute;
@@ -788,8 +792,8 @@ PhysicalRect VisualViewport::ScrollIntoView(
 
   ScrollOffset new_scroll_offset =
       ClampScrollOffset(ScrollAlignment::GetScrollOffsetToExpose(
-          scroll_snapport_rect, rect_in_absolute, *params->align_x.get(),
-          *params->align_y.get(), GetScrollOffset()));
+          scroll_snapport_rect, rect_in_absolute, scroll_margin,
+          *params->align_x.get(), *params->align_y.get(), GetScrollOffset()));
 
   if (new_scroll_offset != GetScrollOffset()) {
     if (params->is_for_scroll_sequence) {
@@ -1169,10 +1173,8 @@ void VisualViewport::Paint(GraphicsContext& context) const {
   if (scroll_layer_) {
     auto state = parent_property_tree_state_;
     state.SetTransform(*scroll_translation_node_);
-    DEFINE_STATIC_LOCAL(Persistent<LiteralDebugNameClient>, debug_name_client,
-                        (MakeGarbageCollected<LiteralDebugNameClient>(
-                            "Inner Viewport Scroll Layer")));
-    RecordForeignLayer(context, *debug_name_client,
+    DEFINE_STATIC_DISPLAY_ITEM_CLIENT(client, "Inner Viewport Scroll Layer");
+    RecordForeignLayer(context, *client,
                        DisplayItem::kForeignLayerViewportScroll, scroll_layer_,
                        gfx::Point(), &state);
   }
@@ -1180,25 +1182,22 @@ void VisualViewport::Paint(GraphicsContext& context) const {
   if (scrollbar_layer_horizontal_) {
     auto state = parent_property_tree_state_;
     state.SetEffect(*horizontal_scrollbar_effect_node_);
-    DEFINE_STATIC_LOCAL(Persistent<LiteralDebugNameClient>, debug_name_client,
-                        (MakeGarbageCollected<LiteralDebugNameClient>(
-                            "Inner Viewport Horizontal Scrollbar")));
-    RecordForeignLayer(context, *debug_name_client,
-                       DisplayItem::kForeignLayerViewportScrollbar,
-                       scrollbar_layer_horizontal_,
-                       gfx::Point(0, size_.height() - ScrollbarThickness()),
-                       &state);
+    DEFINE_STATIC_DISPLAY_ITEM_CLIENT(client,
+                                      "Inner Viewport Horizontal Scrollbar");
+    RecordForeignLayer(
+        context, *client, DisplayItem::kForeignLayerViewportScrollbar,
+        scrollbar_layer_horizontal_,
+        gfx::Point(0, size_.height() - ScrollbarThickness()), &state);
   }
 
   if (scrollbar_layer_vertical_) {
     auto state = parent_property_tree_state_;
     state.SetEffect(*vertical_scrollbar_effect_node_);
-    DEFINE_STATIC_LOCAL(Persistent<LiteralDebugNameClient>, debug_name_client,
-                        (MakeGarbageCollected<LiteralDebugNameClient>(
-                            "Inner Viewport Vertical Scrollbar")));
+    DEFINE_STATIC_DISPLAY_ITEM_CLIENT(client,
+                                      "Inner Viewport Vertical Scrollbar");
     RecordForeignLayer(
-        context, *debug_name_client,
-        DisplayItem::kForeignLayerViewportScrollbar, scrollbar_layer_vertical_,
+        context, *client, DisplayItem::kForeignLayerViewportScrollbar,
+        scrollbar_layer_vertical_,
         gfx::Point(size_.width() - ScrollbarThickness(), 0), &state);
   }
 }

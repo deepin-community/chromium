@@ -622,7 +622,8 @@ TEST(
   // First check that when `triggering_field_type` is not present, a second
   // differentiating label is added.
   AutofillProfile::CreateInferredLabels(
-      {&profile1, &profile2}, /*suggested_fields=*/std::nullopt,
+      {&profile1, &profile2},
+      /*suggested_fields=*/std::nullopt,
       /*triggering_field_type=*/std::nullopt,
       /*excluded_fields=*/{}, /*minimal_fields_shown=*/1, "en-US", &labels);
   ASSERT_EQ(2U, labels.size());
@@ -632,7 +633,8 @@ TEST(
   // If the `triggering_field_type` is present and is unique, there is no need
   // for a second differentiating label.
   AutofillProfile::CreateInferredLabels(
-      {&profile1, &profile2}, /*suggested_fields=*/std::nullopt,
+      {&profile1, &profile2},
+      /*suggested_fields=*/std::nullopt,
       /*triggering_field_type=*/EMAIL_ADDRESS,
       /*excluded_fields=*/{}, /*minimal_fields_shown=*/1, "en-US", &labels);
   ASSERT_EQ(2U, labels.size());
@@ -642,7 +644,8 @@ TEST(
   // If the `triggering_field_type` is present and is not unique, a second
   // differentiating label is added.
   AutofillProfile::CreateInferredLabels(
-      {&profile1, &profile2}, /*suggested_fields=*/std::nullopt,
+      {&profile1, &profile2},
+      /*suggested_fields=*/std::nullopt,
       /*triggering_field_type=*/NAME_FIRST,
       /*excluded_fields=*/{}, /*minimal_fields_shown=*/1, "en-US", &labels);
   ASSERT_EQ(2U, labels.size());
@@ -851,28 +854,10 @@ TEST(AutofillProfileTest, IsSubsetOfForFieldSet_DifferentStreetAddresses) {
   profile2.SetRawInfo(ADDRESS_HOME_STREET_ADDRESS, u"275 Main Street");
 
   const AutofillProfileComparator comparator("en-US");
-  {
-    // The two profiles have different streets, since the default behavior is to
-    // ignore streets, they are considered equal.
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndDisableFeature(
-        features::kAutofillUseAddressRewriterInProfileSubsetComparison);
-    EXPECT_TRUE(profile1.IsSubsetOfForFieldSet(comparator, profile2,
-                                               {ADDRESS_HOME_STREET_ADDRESS}));
-    EXPECT_TRUE(profile2.IsSubsetOfForFieldSet(comparator, profile1,
-                                               {ADDRESS_HOME_STREET_ADDRESS}));
-  }
-  {
-    // When we start considering streets in subset comparison, the two profiles
-    // won't be considered equal anymore, since the differences in street
-    // addresses are more than just formatting differences.
-    base::test::ScopedFeatureList scoped_feature_list(
-        features::kAutofillUseAddressRewriterInProfileSubsetComparison);
-    EXPECT_FALSE(profile1.IsSubsetOfForFieldSet(comparator, profile2,
-                                                {ADDRESS_HOME_STREET_ADDRESS}));
-    EXPECT_FALSE(profile2.IsSubsetOfForFieldSet(comparator, profile1,
-                                                {ADDRESS_HOME_STREET_ADDRESS}));
-  }
+  EXPECT_FALSE(profile1.IsSubsetOfForFieldSet(comparator, profile2,
+                                              {ADDRESS_HOME_STREET_ADDRESS}));
+  EXPECT_FALSE(profile2.IsSubsetOfForFieldSet(comparator, profile1,
+                                              {ADDRESS_HOME_STREET_ADDRESS}));
 }
 
 TEST(AutofillProfileTest, IsSubsetOfForFieldSet_DifferentNonStreetAddresses) {
@@ -1357,7 +1342,9 @@ TEST(AutofillProfileTest, Compare_StructuredTypes) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
       {features::kAutofillUseI18nAddressModel,
+       features::kAutofillUseBRAddressModel,
        features::kAutofillUseINAddressModel,
+       features::kAutofillUseMXAddressModel,
        features::kAutofillEnableSupportForLandmark,
        features::kAutofillEnableSupportForBetweenStreets,
        features::kAutofillEnableSupportForAdminLevel2,
@@ -1521,7 +1508,8 @@ TEST(AutofillProfileTest, SetRawInfoDoesntTrimWhitespace) {
 TEST(AutofillProfileTest, SetRawInfoWorksForLandmark) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures({features::kAutofillEnableSupportForLandmark,
-                                 features::kAutofillUseI18nAddressModel},
+                                 features::kAutofillUseI18nAddressModel,
+                                 features::kAutofillUseMXAddressModel},
                                 {});
 
   AutofillProfile profile(AddressCountryCode("MX"));
@@ -1534,7 +1522,8 @@ TEST(AutofillProfileTest, SetRawInfoWorksForBetweenStreets) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
       {features::kAutofillEnableSupportForBetweenStreets,
-       features::kAutofillUseI18nAddressModel},
+       features::kAutofillUseI18nAddressModel,
+       features::kAutofillUseMXAddressModel},
       {});
   AutofillProfile profile(AddressCountryCode("MX"));
 
@@ -1642,11 +1631,11 @@ TEST(AutofillProfileTest, RemoveInaccessibleProfileValues) {
       i18n_model_definition::kLegacyHierarchyCountryCode);
   actual_profile.SetRawInfo(NAME_FIRST, u"Florian");
 
-  // State is uncommon in Germany and inaccessible in the settings. Expect it
+  // State is uncommon in Bolivia and inaccessible in the settings. Expect it
   // to be removed.
-  actual_profile.SetRawInfo(ADDRESS_HOME_COUNTRY, u"DE");
+  actual_profile.SetRawInfo(ADDRESS_HOME_COUNTRY, u"BO");
   AutofillProfile expected_profile = actual_profile;
-  actual_profile.SetRawInfo(ADDRESS_HOME_STATE, u"Bayern");
+  actual_profile.SetRawInfo(ADDRESS_HOME_STATE, u"Dummy state");
   EXPECT_TRUE(RemoveInaccessibleProfileValues(actual_profile));
   EXPECT_EQ(actual_profile.Compare(expected_profile), 0);
 

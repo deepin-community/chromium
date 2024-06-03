@@ -143,11 +143,19 @@ bool IsCompressedTextureFormat(wgpu::TextureFormat textureFormat) {
            IsETC2TextureFormat(textureFormat);
 }
 
-bool IsNorm16TextureFormat(wgpu::TextureFormat textureFormat) {
+bool IsUnorm16TextureFormat(wgpu::TextureFormat textureFormat) {
     switch (textureFormat) {
         case wgpu::TextureFormat::R16Unorm:
         case wgpu::TextureFormat::RG16Unorm:
         case wgpu::TextureFormat::RGBA16Unorm:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsSnorm16TextureFormat(wgpu::TextureFormat textureFormat) {
+    switch (textureFormat) {
         case wgpu::TextureFormat::R16Snorm:
         case wgpu::TextureFormat::RG16Snorm:
         case wgpu::TextureFormat::RGBA16Snorm:
@@ -199,8 +207,12 @@ bool IsRenderableFormat(const wgpu::Device& device, wgpu::TextureFormat textureF
         return false;
     }
 
-    if (IsNorm16TextureFormat(textureFormat)) {
-        return device.HasFeature(wgpu::FeatureName::Norm16TextureFormats);
+    if (IsUnorm16TextureFormat(textureFormat)) {
+        return device.HasFeature(wgpu::FeatureName::Unorm16TextureFormats);
+    }
+
+    if (IsSnorm16TextureFormat(textureFormat)) {
+        return device.HasFeature(wgpu::FeatureName::Snorm16TextureFormats);
     }
 
     switch (textureFormat) {
@@ -225,8 +237,12 @@ bool TextureFormatSupportsMultisampling(const wgpu::Device& device,
         return false;
     }
 
-    if (IsNorm16TextureFormat(textureFormat)) {
-        return device.HasFeature(wgpu::FeatureName::Norm16TextureFormats);
+    if (IsUnorm16TextureFormat(textureFormat)) {
+        return device.HasFeature(wgpu::FeatureName::Unorm16TextureFormats);
+    }
+
+    if (IsSnorm16TextureFormat(textureFormat)) {
+        return device.HasFeature(wgpu::FeatureName::Snorm16TextureFormats);
     }
 
     switch (textureFormat) {
@@ -273,7 +289,7 @@ bool TextureFormatSupportsResolveTarget(const wgpu::Device& device,
         case wgpu::TextureFormat::RG16Snorm:
         case wgpu::TextureFormat::RGBA16Unorm:
         case wgpu::TextureFormat::RGBA16Snorm:
-            return device.HasFeature(wgpu::FeatureName::Norm16TextureFormats);
+            return device.HasFeature(wgpu::FeatureName::Unorm16TextureFormats);
 
         default:
             return false;
@@ -841,52 +857,9 @@ const char* GetWGSLImageFormatQualifier(wgpu::TextureFormat textureFormat) {
             return "rgba32sint";
         case wgpu::TextureFormat::RGBA32Float:
             return "rgba32float";
-
-        // The below do not currently exist in the WGSL spec, but are used
-        // for tests that expect compilation failure.
+        // For Chromium Internal Graphite
         case wgpu::TextureFormat::R8Unorm:
             return "r8unorm";
-        case wgpu::TextureFormat::R8Snorm:
-            return "r8snorm";
-        case wgpu::TextureFormat::R8Uint:
-            return "r8uint";
-        case wgpu::TextureFormat::R8Sint:
-            return "r8sint";
-        case wgpu::TextureFormat::R16Unorm:
-            return "r16unorm";
-        case wgpu::TextureFormat::R16Snorm:
-            return "r16snorm";
-        case wgpu::TextureFormat::R16Uint:
-            return "r16uint";
-        case wgpu::TextureFormat::R16Sint:
-            return "r16sint";
-        case wgpu::TextureFormat::R16Float:
-            return "r16float";
-        case wgpu::TextureFormat::RG8Unorm:
-            return "rg8unorm";
-        case wgpu::TextureFormat::RG8Snorm:
-            return "rg8snorm";
-        case wgpu::TextureFormat::RG8Uint:
-            return "rg8uint";
-        case wgpu::TextureFormat::RG8Sint:
-            return "rg8sint";
-        case wgpu::TextureFormat::RG16Unorm:
-            return "rg16unorm";
-        case wgpu::TextureFormat::RG16Snorm:
-            return "rg16snorm";
-        case wgpu::TextureFormat::RG16Uint:
-            return "rg16uint";
-        case wgpu::TextureFormat::RG16Sint:
-            return "rg16sint";
-        case wgpu::TextureFormat::RG16Float:
-            return "rg16float";
-        case wgpu::TextureFormat::RGB10A2Uint:
-            return "rgb10a2uint";
-        case wgpu::TextureFormat::RGB10A2Unorm:
-            return "rgb10a2unorm";
-        case wgpu::TextureFormat::RG11B10Ufloat:
-            return "rg11b10ufloat";
-
         default:
             DAWN_UNREACHABLE();
     }
@@ -901,8 +874,8 @@ wgpu::TextureDimension ViewDimensionToTextureDimension(const wgpu::TextureViewDi
             return wgpu::TextureDimension::e2D;
         case wgpu::TextureViewDimension::e3D:
             return wgpu::TextureDimension::e3D;
-        // TODO(crbug.com/dawn/814): Implement for 1D texture.
         case wgpu::TextureViewDimension::e1D:
+            return wgpu::TextureDimension::e1D;
         default:
             DAWN_UNREACHABLE();
             break;

@@ -25,10 +25,10 @@ class AccountManagerFactory;
 class AshProxyMonitor;
 class BrowserContextFlusher;
 class ChromeSessionManager;
+class CrosSettingsHolder;
 class InSessionPasswordChangeManager;
 class ProfileHelper;
 class SchedulerConfigurationManager;
-class TimeZoneResolver;
 class UserImageManagerRegistry;
 
 namespace system {
@@ -69,6 +69,9 @@ class BrowserProcessPlatformPart : public BrowserProcessPlatformPartChromeOS {
 
   void InitializeSessionManager();
   void ShutdownSessionManager();
+
+  void InitializeCrosSettings();
+  void ShutdownCrosSettings();
 
   void InitializeCrosComponentManager();
   void ShutdownCrosComponentManager();
@@ -135,8 +138,6 @@ class BrowserProcessPlatformPart : public BrowserProcessPlatformPartChromeOS {
 
   ash::system::TimeZoneResolverManager* GetTimezoneResolverManager();
 
-  ash::TimeZoneResolver* GetTimezoneResolver();
-
   // Overridden from BrowserProcessPlatformPartBase:
   void StartTearDown() override;
   void AttemptExit(bool try_to_quit_application) override;
@@ -180,11 +181,12 @@ class BrowserProcessPlatformPart : public BrowserProcessPlatformPartChromeOS {
 
   std::unique_ptr<ash::system::TimeZoneResolverManager>
       timezone_resolver_manager_;
-  std::unique_ptr<ash::TimeZoneResolver> timezone_resolver_;
 
   std::unique_ptr<ash::system::SystemClock> system_clock_;
 
   std::unique_ptr<ScopedKeepAlive> keep_alive_;
+
+  std::unique_ptr<ash::CrosSettingsHolder> cros_settings_holder_;
 
   // Whether cros_component_manager_ has been initialized for test. Set by
   // BrowserProcessPlatformPartTestApi.

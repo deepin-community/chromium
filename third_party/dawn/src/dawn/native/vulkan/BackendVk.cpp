@@ -283,6 +283,10 @@ OnInstanceCreationDebugUtilsCallback(VkDebugUtilsMessageSeverityFlagBitsEXT mess
 
 }  // anonymous namespace
 
+SamplerYCbCrVulkanDescriptor::SamplerYCbCrVulkanDescriptor() {
+    sType = wgpu::SType::SamplerYCbCrVulkanDescriptor;
+}
+
 VulkanInstance::VulkanInstance() = default;
 
 VulkanInstance::~VulkanInstance() {
@@ -463,7 +467,7 @@ ResultOrError<VulkanGlobalKnobs> VulkanInstance::CreateVkInstance(const Instance
     appInfo.pNext = nullptr;
     appInfo.pApplicationName = nullptr;
     appInfo.applicationVersion = 0;
-    appInfo.pEngineName = nullptr;
+    appInfo.pEngineName = "Dawn";
     appInfo.engineVersion = 0;
     appInfo.apiVersion = std::min(mGlobalInfo.apiVersion, VK_API_VERSION_1_3);
 
@@ -573,10 +577,12 @@ std::vector<Ref<PhysicalDeviceBase>> Backend::DiscoverPhysicalDevices(
             if (!mVulkanInstancesCreated[icd]) {
                 mVulkanInstancesCreated.set(icd);
 
-                instance->ConsumedErrorAndWarnOnce([&]() -> MaybeError {
-                    DAWN_TRY_ASSIGN(mVulkanInstances[icd], VulkanInstance::Create(instance, icd));
-                    return {};
-                }());
+                [[maybe_unused]] bool hadError =
+                    instance->ConsumedErrorAndWarnOnce([&]() -> MaybeError {
+                        DAWN_TRY_ASSIGN(mVulkanInstances[icd],
+                                        VulkanInstance::Create(instance, icd));
+                        return {};
+                    }());
             }
 
             if (mVulkanInstances[icd] == nullptr) {

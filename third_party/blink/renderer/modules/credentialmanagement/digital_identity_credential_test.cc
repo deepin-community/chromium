@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/webid/digital_identity_request.mojom.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_credential_creation_options.h"
@@ -23,18 +24,36 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
 
 namespace {
 
-IdentityProviderRequestOptions* CreateValidIdentityProviderRequestOptions() {
-  IdentityProviderRequestOptions* identity_provider_request =
-      IdentityProviderRequestOptions::Create();
-  identity_provider_request->setHolder(DigitalCredentialProvider::Create());
-  return identity_provider_request;
-}
+// Mock mojom::DigitalIdentityRequest which succeeds and returns "token".
+class MockDigitalIdentityRequest : public mojom::DigitalIdentityRequest {
+ public:
+  MockDigitalIdentityRequest() = default;
+
+  MockDigitalIdentityRequest(const MockDigitalIdentityRequest&) = delete;
+  MockDigitalIdentityRequest& operator=(const MockDigitalIdentityRequest&) =
+      delete;
+
+  void Bind(mojo::PendingReceiver<mojom::DigitalIdentityRequest> receiver) {
+    receiver_.Bind(std::move(receiver));
+  }
+
+  void Request(blink::mojom::DigitalCredentialProviderPtr provider,
+               RequestCallback callback) override {
+    std::move(callback).Run(mojom::RequestDigitalIdentityStatus::kSuccess,
+                            "token");
+  }
+  void Abort() override {}
+
+ private:
+  mojo::Receiver<mojom::DigitalIdentityRequest> receiver_{this};
+};
 
 CredentialRequestOptions* CreateOptionsWithProviders(
     const HeapVector<Member<IdentityProviderRequestOptions>>& providers) {
@@ -47,8 +66,11 @@ CredentialRequestOptions* CreateOptionsWithProviders(
 }
 
 CredentialRequestOptions* CreateValidOptions() {
+  IdentityProviderRequestOptions* identity_provider_request =
+      IdentityProviderRequestOptions::Create();
+  identity_provider_request->setHolder(DigitalCredentialProvider::Create());
   HeapVector<Member<IdentityProviderRequestOptions>> identity_providers;
-  identity_providers.push_back(CreateValidIdentityProviderRequestOptions());
+  identity_providers.push_back(identity_provider_request);
   return CreateOptionsWithProviders(identity_providers);
 }
 
@@ -67,41 +89,6 @@ class DigitalIdentityCredentialTest : public testing::Test {
   test::TaskEnvironment task_environment_;
 };
 
-TEST_F(DigitalIdentityCredentialTest, IsDigitalIdentityCredentialTypeValid) {
-  EXPECT_TRUE(IsDigitalIdentityCredentialType(*CreateValidOptions()));
-}
-
-TEST_F(DigitalIdentityCredentialTest,
-       IsDigitalIdentityCredentialTypeNoProviders) {
-  CredentialRequestOptions* options = CredentialRequestOptions::Create();
-  options->setIdentity(IdentityCredentialRequestOptions::Create());
-  EXPECT_FALSE(IsDigitalIdentityCredentialType(*options));
-}
-
-TEST_F(DigitalIdentityCredentialTest,
-       IsDigitalIdentityCredentialTypeEmptyProviders) {
-  CredentialRequestOptions* options = CreateValidOptions();
-  options->identity()->setProviders({});
-  EXPECT_FALSE(IsDigitalIdentityCredentialType(*options));
-}
-
-TEST_F(DigitalIdentityCredentialTest, IsDigitalIdentityCredentialTypeNoHolder) {
-  IdentityProviderRequestOptions* provider_no_holder =
-      IdentityProviderRequestOptions::Create();
-  CredentialRequestOptions* options =
-      CreateOptionsWithProviders({provider_no_holder});
-  EXPECT_FALSE(IsDigitalIdentityCredentialType(*options));
-}
-
-TEST_F(DigitalIdentityCredentialTest,
-       IsDigitalIdentityCredentialManyProviders) {
-  IdentityProviderRequestOptions* provider_no_holder =
-      IdentityProviderRequestOptions::Create();
-  CredentialRequestOptions* options = CreateOptionsWithProviders(
-      {provider_no_holder, CreateValidIdentityProviderRequestOptions()});
-  EXPECT_TRUE(IsDigitalIdentityCredentialType(*options));
-}
-
 // Test that navigator.credentials.get() increments the feature use counter when
 // one of the identity providers is a digital identity credential.
 TEST_F(DigitalIdentityCredentialTest, IdentityDigitalCredentialUseCounter) {
@@ -110,14 +97,33 @@ TEST_F(DigitalIdentityCredentialTest, IdentityDigitalCredentialUseCounter) {
   ScopedWebIdentityDigitalCredentialsForTest scoped_digital_credentials(
       /*enabled=*/true);
 
+  std::unique_ptr mock_request = std::make_unique<MockDigitalIdentityRequest>();
+  auto mock_request_ptr = mock_request.get();
+  context.GetWindow().GetBrowserInterfaceBroker().SetBinderForTesting(
+      mojom::DigitalIdentityRequest::Name_,
+      WTF::BindRepeating(
+          [](MockDigitalIdentityRequest* mock_request_ptr,
+             mojo::ScopedMessagePipeHandle handle) {
+            mock_request_ptr->Bind(
+                mojo::PendingReceiver<mojom::DigitalIdentityRequest>(
+                    std::move(handle)));
+          },
+          WTF::Unretained(mock_request_ptr)));
+
   ScriptState* script_state = context.GetScriptState();
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
   auto promise = DiscoverDigitalIdentityCredentialFromExternalSource(
       script_state, resolver, *CreateValidOptions(),
       IGNORE_EXCEPTION_FOR_TESTING);
 
+  test::RunPendingTasks();
+
   EXPECT_TRUE(context.GetWindow().document()->IsUseCounted(
       blink::mojom::WebFeature::kIdentityDigitalCredentials));
+  EXPECT_TRUE(context.GetWindow().document()->IsUseCounted(
+      blink::mojom::WebFeature::kIdentityDigitalCredentialsSuccess));
 }
 
 }  // namespace blink

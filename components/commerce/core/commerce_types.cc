@@ -11,6 +11,17 @@ ProductInfo::ProductInfo(const ProductInfo&) = default;
 ProductInfo& ProductInfo::operator=(const ProductInfo&) = default;
 ProductInfo::~ProductInfo() = default;
 
+ProductSpecifications::ProductSpecifications() = default;
+
+ProductSpecifications::ProductSpecifications(const ProductSpecifications&) =
+    default;
+ProductSpecifications::~ProductSpecifications() = default;
+
+ProductSpecifications::Product::Product() = default;
+ProductSpecifications::Product::Product(const ProductSpecifications::Product&) =
+    default;
+ProductSpecifications::Product::~Product() = default;
+
 MerchantInfo::MerchantInfo() = default;
 MerchantInfo::MerchantInfo(const MerchantInfo&) = default;
 MerchantInfo& MerchantInfo::operator=(const MerchantInfo&) = default;
@@ -27,6 +38,11 @@ DiscountInfo::DiscountInfo() = default;
 DiscountInfo::DiscountInfo(const DiscountInfo&) = default;
 DiscountInfo& DiscountInfo::operator=(const DiscountInfo&) = default;
 DiscountInfo::~DiscountInfo() = default;
+
+UrlInfo::UrlInfo() = default;
+UrlInfo::UrlInfo(const UrlInfo&) = default;
+UrlInfo& UrlInfo::operator=(const UrlInfo& other) = default;
+UrlInfo::~UrlInfo() = default;
 
 ParcelTrackingStatus::ParcelTrackingStatus() = default;
 ParcelTrackingStatus::ParcelTrackingStatus(const ParcelTrackingStatus&) =

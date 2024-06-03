@@ -36,7 +36,6 @@
 #include "cc/trees/paint_holding_reason.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/common/input/web_menu_source_type.h"
 #include "third_party/blink/public/common/scheduler/task_attribution_id.h"
@@ -88,6 +87,8 @@ class Cursor;
 
 namespace blink {
 
+class AssociatedInterfaceProvider;
+
 class CORE_EXPORT EmptyChromeClient : public ChromeClient {
  public:
   EmptyChromeClient() = default;
@@ -107,7 +108,8 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
   void DidFocusPage() override {}
   bool CanTakeFocus(mojom::blink::FocusType) override { return false; }
   void TakeFocus(mojom::blink::FocusType) override {}
-  bool SupportsAppRegion() override { return false; }
+  bool SupportsDraggableRegions() override { return false; }
+  void DraggableRegionsChanged() override {}
   void Show(LocalFrame& frame,
             LocalFrame& opener_frame,
             NavigationPolicy navigation_policy,
@@ -350,7 +352,7 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
       const std::optional<Impression>&,
       const LocalFrameToken* initiator_frame_token,
       std::unique_ptr<SourceLocation>,
-      mojo::PendingRemote<mojom::blink::PolicyContainerHostKeepAliveHandle>,
+      mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>,
       bool is_container_initiated,
       bool is_fullscreen_requested) override;
 
@@ -456,7 +458,6 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
     return nullptr;
   }
 
-  void AnnotatedRegionsChanged() override {}
   base::UnguessableToken GetDevToolsFrameToken() const override {
     return base::UnguessableToken::Create();
   }
@@ -477,6 +478,8 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
  protected:
   // Not owned
   WebTextCheckClient* text_check_client_;
+
+  std::unique_ptr<AssociatedInterfaceProvider> associated_interface_provider_;
 };
 
 class EmptySpellCheckPanelHostClient : public WebSpellCheckPanelHostClient {

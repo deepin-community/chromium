@@ -10,6 +10,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/events/event_rewriter_controller_impl.h"
 #include "ash/events/peripheral_customization_event_rewriter.h"
 #include "ash/public/cpp/accelerators_util.h"
@@ -23,6 +24,7 @@
 #include "ash/system/input_device_settings/input_device_key_alias_manager.h"
 #include "ash/system/input_device_settings/input_device_notifier.h"
 #include "ash/system/input_device_settings/input_device_settings_defaults.h"
+#include "ash/system/input_device_settings/input_device_settings_logging.h"
 #include "ash/system/input_device_settings/input_device_settings_metadata.h"
 #include "ash/system/input_device_settings/input_device_settings_notification_controller.h"
 #include "ash/system/input_device_settings/input_device_settings_policy_handler.h"
@@ -33,10 +35,12 @@
 #include "ash/system/input_device_settings/pref_handlers/mouse_pref_handler_impl.h"
 #include "ash/system/input_device_settings/pref_handlers/pointing_stick_pref_handler_impl.h"
 #include "ash/system/input_device_settings/pref_handlers/touchpad_pref_handler_impl.h"
+#include "base/command_line.h"
 #include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
+#include "base/hash/sha1.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -294,9 +298,18 @@ bool KeyboardSettingsAreValid(
     const mojom::Keyboard& keyboard,
     const mojom::KeyboardSettings& settings,
     const mojom::KeyboardPolicies& keyboard_policies) {
+  const bool containsFnKey =
+      base::Contains(keyboard.modifier_keys, ui::mojom::ModifierKey::kFunction);
+
   for (const auto& remapping : settings.modifier_remappings) {
     auto it = base::ranges::find(keyboard.modifier_keys, remapping.first);
     if (it == keyboard.modifier_keys.end()) {
+      return false;
+    }
+    // No modifier key can be remapped to function key if function key is not a
+    // modifier key.
+    if (!containsFnKey &&
+        remapping.second == ui::mojom::ModifierKey::kFunction) {
       return false;
     }
   }
@@ -679,6 +692,7 @@ void InputDeviceSettingsControllerImpl::RegisterProfilePrefs(
       prefs::kPointingStickUpdateSettingsMetricInfo);
 
   pref_registry->RegisterListPref(prefs::kKeyboardDeviceImpostersListPref);
+  pref_registry->RegisterListPref(prefs::kMouseDeviceImpostersListPref);
   pref_registry->RegisterDictionaryPref(prefs::kMouseButtonRemappingsDictPref);
   pref_registry->RegisterDictionaryPref(
       prefs::kGraphicsTabletTabletButtonRemappingsDictPref);
@@ -706,6 +720,10 @@ void InputDeviceSettingsControllerImpl::RegisterProfilePrefs(
 
 void InputDeviceSettingsControllerImpl::OnActiveUserPrefServiceChanged(
     PrefService* pref_service) {
+  if (!features::IsMouseImposterCheckEnabled()) {
+    pref_service->ClearPref(prefs::kMouseDeviceImpostersListPref);
+  }
+
   // If the flag is disabled, clear the button remapping dictionaries.
   if (!features::IsPeripheralCustomizationEnabled()) {
     pref_service->ClearPref(
@@ -729,6 +747,7 @@ void InputDeviceSettingsControllerImpl::OnActiveUserPrefServiceChanged(
     pref_service->SetDict(prefs::kPointingStickDeviceSettingsDictPref, {});
     pref_service->SetDict(prefs::kTouchpadDeviceSettingsDictPref, {});
     pref_service->SetList(prefs::kKeyboardDeviceImpostersListPref, {});
+    pref_service->SetList(prefs::kMouseDeviceImpostersListPref, {});
 
     pref_service->ClearPref(prefs::kKeyboardInternalSettings);
     pref_service->ClearPref(prefs::kKeyboardUpdateSettingsMetricInfo);
@@ -871,6 +890,9 @@ void InputDeviceSettingsControllerImpl::
     keyboard_pref_handler_->UpdateLoginScreenKeyboardSettings(
         local_state_, active_account_id_.value(),
         policy_handler_->keyboard_policies(), external_keyboard);
+    PR_LOG(INFO, Feature::IDS) << GetKeyboardSettingsLog(
+        "Login screen external keyboard default settings updated",
+        external_keyboard);
   }
 
   if (internal_iter != keyboards_.rend()) {
@@ -878,6 +900,9 @@ void InputDeviceSettingsControllerImpl::
     keyboard_pref_handler_->UpdateLoginScreenKeyboardSettings(
         local_state_, active_account_id_.value(),
         policy_handler_->keyboard_policies(), internal_keyboard);
+    PR_LOG(INFO, Feature::IDS) << GetKeyboardSettingsLog(
+        "Login screen internal keyboard default settings updated",
+        internal_keyboard);
   }
 }
 
@@ -901,6 +926,8 @@ void InputDeviceSettingsControllerImpl::
     mouse_pref_handler_->UpdateLoginScreenMouseSettings(
         local_state_, active_account_id_.value(),
         policy_handler_->mouse_policies(), external_mouse);
+    PR_LOG(INFO, Feature::IDS) << GetMouseSettingsLog(
+        "Login screen external mouse default settings updated", external_mouse);
   }
 
   if (internal_iter != mice_.rend()) {
@@ -908,6 +935,8 @@ void InputDeviceSettingsControllerImpl::
     mouse_pref_handler_->UpdateLoginScreenMouseSettings(
         local_state_, active_account_id_.value(),
         policy_handler_->mouse_policies(), internal_mouse);
+    PR_LOG(INFO, Feature::IDS) << GetMouseSettingsLog(
+        "Login screen internal mouse default settings updated", internal_mouse);
   }
 }
 
@@ -934,12 +963,18 @@ void InputDeviceSettingsControllerImpl::
     auto& external_pointing_stick = *external_iter->second;
     pointing_stick_pref_handler_->UpdateLoginScreenPointingStickSettings(
         local_state_, active_account_id_.value(), external_pointing_stick);
+    PR_LOG(INFO, Feature::IDS) << GetPointingStickSettingsLog(
+        "Login screen external pointing stick default settings updated",
+        external_pointing_stick);
   }
 
   if (internal_iter != pointing_sticks_.rend()) {
     auto& internal_pointing_stick = *internal_iter->second;
     pointing_stick_pref_handler_->UpdateLoginScreenPointingStickSettings(
         local_state_, active_account_id_.value(), internal_pointing_stick);
+    PR_LOG(INFO, Feature::IDS) << GetPointingStickSettingsLog(
+        "Login screen internal pointing stick default settings updated",
+        internal_pointing_stick);
   }
 }
 
@@ -962,12 +997,18 @@ void InputDeviceSettingsControllerImpl::
     auto& external_touchpad = *external_iter->second;
     touchpad_pref_handler_->UpdateLoginScreenTouchpadSettings(
         local_state_, active_account_id_.value(), external_touchpad);
+    PR_LOG(INFO, Feature::IDS) << GetTouchpadSettingsLog(
+        "Login screen external touchpad default settings updated",
+        external_touchpad);
   }
 
   if (internal_iter != touchpads_.rend()) {
     auto& internal_touchpad = *internal_iter->second;
     touchpad_pref_handler_->UpdateLoginScreenTouchpadSettings(
         local_state_, active_account_id_.value(), internal_touchpad);
+    PR_LOG(INFO, Feature::IDS) << GetTouchpadSettingsLog(
+        "Login screen internal touchpad default settings updated",
+        internal_touchpad);
   }
 }
 
@@ -982,6 +1023,9 @@ void InputDeviceSettingsControllerImpl::
   graphics_tablet_pref_handler_->UpdateLoginScreenGraphicsTabletSettings(
       local_state_, active_account_id_.value(),
       *graphics_tablets_.rbegin()->second);
+  PR_LOG(INFO, Feature::IDS)
+      << GetGraphicsTabletSettingsLog("Login screen default settings updated",
+                                      *graphics_tablets_.rbegin()->second);
 }
 
 void InputDeviceSettingsControllerImpl::OnLoginScreenFocusedPodChanged(
@@ -992,6 +1036,8 @@ void InputDeviceSettingsControllerImpl::OnLoginScreenFocusedPodChanged(
     keyboard_pref_handler_->InitializeLoginScreenKeyboardSettings(
         local_state_, account_id, policy_handler_->keyboard_policies(),
         keyboard.get());
+    PR_LOG(INFO, Feature::IDS) << GetKeyboardSettingsLog(
+        "Login screen default settings initialized", *keyboard.get());
     DispatchKeyboardSettingsChanged(id);
   }
 
@@ -999,18 +1045,24 @@ void InputDeviceSettingsControllerImpl::OnLoginScreenFocusedPodChanged(
     mouse_pref_handler_->InitializeLoginScreenMouseSettings(
         local_state_, account_id, policy_handler_->mouse_policies(),
         mouse.get());
+    PR_LOG(INFO, Feature::IDS) << GetMouseSettingsLog(
+        "Login screen default settings initialized", *mouse.get());
     DispatchMouseSettingsChanged(id);
   }
 
   for (const auto& [id, pointing_stick] : pointing_sticks_) {
     pointing_stick_pref_handler_->InitializeLoginScreenPointingStickSettings(
         local_state_, account_id, pointing_stick.get());
+    PR_LOG(INFO, Feature::IDS) << GetPointingStickSettingsLog(
+        "Login screen default settings initialized", *pointing_stick.get());
     DispatchPointingStickSettingsChanged(id);
   }
 
   for (const auto& [id, touchpad] : touchpads_) {
     touchpad_pref_handler_->InitializeLoginScreenTouchpadSettings(
         local_state_, account_id, touchpad.get());
+    PR_LOG(INFO, Feature::IDS) << GetTouchpadSettingsLog(
+        "Login screen default settings initialized", *touchpad.get());
     DispatchTouchpadSettingsChanged(id);
   }
 
@@ -1019,6 +1071,8 @@ void InputDeviceSettingsControllerImpl::OnLoginScreenFocusedPodChanged(
       graphics_tablet_pref_handler_
           ->InitializeLoginScreenGraphicsTabletSettings(
               local_state_, account_id, graphics_tablet.get());
+      PR_LOG(INFO, Feature::IDS) << GetGraphicsTabletSettingsLog(
+          "Login screen default settings initialized", *graphics_tablet.get());
       DispatchGraphicsTabletSettingsChanged(id);
     }
   }
@@ -1034,6 +1088,8 @@ void InputDeviceSettingsControllerImpl::OnKeyboardPoliciesChanged() {
 void InputDeviceSettingsControllerImpl::OnMousePoliciesChanged() {
   for (const auto& [id, mouse] : mice_) {
     InitializeMouseSettings(mouse.get());
+    PR_LOG(INFO, Feature::IDS)
+        << GetMouseSettingsLog("Default settings initialized", *mouse.get());
     DispatchMouseSettingsChanged(id);
   }
 
@@ -1169,6 +1225,8 @@ bool InputDeviceSettingsControllerImpl::SetKeyboardSettings(
   keyboard_pref_handler_->UpdateKeyboardSettings(
       active_pref_service_, policy_handler_->keyboard_policies(),
       found_keyboard);
+  PR_LOG(INFO, Feature::IDS)
+      << GetKeyboardSettingsLog("Updated", found_keyboard);
   metrics_manager_->RecordKeyboardChangedMetrics(found_keyboard, *old_settings);
   DispatchKeyboardSettingsChanged(id);
 
@@ -1204,6 +1262,8 @@ bool InputDeviceSettingsControllerImpl::SetTouchpadSettings(
   found_touchpad.settings = settings.Clone();
   touchpad_pref_handler_->UpdateTouchpadSettings(active_pref_service_,
                                                  found_touchpad);
+  PR_LOG(INFO, Feature::IDS)
+      << GetTouchpadSettingsLog("Updated", found_touchpad);
   metrics_manager_->RecordTouchpadChangedMetrics(found_touchpad, *old_settings);
   DispatchTouchpadSettingsChanged(id);
 
@@ -1239,6 +1299,7 @@ bool InputDeviceSettingsControllerImpl::SetMouseSettings(
   found_mouse.settings = settings.Clone();
   mouse_pref_handler_->UpdateMouseSettings(
       active_pref_service_, policy_handler_->mouse_policies(), found_mouse);
+  PR_LOG(INFO, Feature::IDS) << GetMouseSettingsLog("Updated", found_mouse);
   metrics_manager_->RecordMouseChangedMetrics(found_mouse, *old_settings);
   DispatchMouseSettingsChanged(id);
 
@@ -1269,6 +1330,8 @@ bool InputDeviceSettingsControllerImpl::SetPointingStickSettings(
   found_pointing_stick.settings = settings.Clone();
   pointing_stick_pref_handler_->UpdatePointingStickSettings(
       active_pref_service_, found_pointing_stick);
+  PR_LOG(INFO, Feature::IDS)
+      << GetPointingStickSettingsLog("Updated", found_pointing_stick);
   metrics_manager_->RecordPointingStickChangedMetrics(found_pointing_stick,
                                                       *old_settings);
   DispatchPointingStickSettingsChanged(id);
@@ -1306,6 +1369,8 @@ bool InputDeviceSettingsControllerImpl::SetGraphicsTabletSettings(
   found_graphics_tablet.settings = settings.Clone();
   graphics_tablet_pref_handler_->UpdateGraphicsTabletSettings(
       active_pref_service_, found_graphics_tablet);
+  PR_LOG(INFO, Feature::IDS)
+      << GetGraphicsTabletSettingsLog("Updated", found_graphics_tablet);
   metrics_manager_->RecordGraphicsTabletChangedMetrics(found_graphics_tablet,
                                                        *old_settings);
   DispatchGraphicsTabletSettingsChanged(id);
@@ -1585,11 +1650,11 @@ void InputDeviceSettingsControllerImpl::OnMouseListUpdated(
     auto mojom_mouse =
         BuildMojomMouse(mouse, GetMouseCustomizationRestriction(mouse),
                         GetMouseButtonConfig(mouse));
+    InitializeMouseSettings(mojom_mouse.get());
     if (features::IsPeripheralNotificationEnabled()) {
       notification_controller_->NotifyMouseFirstTimeConnected(*mojom_mouse);
     }
 
-    InitializeMouseSettings(mojom_mouse.get());
     mice_.insert_or_assign(mouse.id, std::move(mojom_mouse));
     DispatchMouseConnected(mouse.id);
   }
@@ -1630,7 +1695,7 @@ void InputDeviceSettingsControllerImpl::OnGraphicsTabletListUpdated(
     InitializeGraphicsTabletSettings(mojom_graphics_tablet.get());
     if (features::IsPeripheralNotificationEnabled()) {
       notification_controller_->NotifyGraphicsTabletFirstTimeConnected(
-          mojom_graphics_tablet.get());
+          *mojom_graphics_tablet);
     }
 
     graphics_tablets_.insert_or_assign(graphics_tablet.id,
@@ -1666,6 +1731,8 @@ void InputDeviceSettingsControllerImpl::InitializeKeyboardSettings(
   if (active_pref_service_) {
     keyboard_pref_handler_->InitializeKeyboardSettings(
         active_pref_service_, policy_handler_->keyboard_policies(), keyboard);
+    PR_LOG(INFO, Feature::IDS)
+        << GetKeyboardSettingsLog("Connected", *keyboard);
     metrics_manager_->RecordKeyboardInitialMetrics(*keyboard);
     return;
   }
@@ -1675,12 +1742,16 @@ void InputDeviceSettingsControllerImpl::InitializeKeyboardSettings(
   if (!active_account_id_.has_value() || !local_state_) {
     keyboard_pref_handler_->InitializeWithDefaultKeyboardSettings(
         policy_handler_->keyboard_policies(), keyboard);
+    PR_LOG(INFO, Feature::IDS)
+        << GetKeyboardSettingsLog("Default settings initialized", *keyboard);
     return;
   }
 
   keyboard_pref_handler_->InitializeLoginScreenKeyboardSettings(
       local_state_, active_account_id_.value(),
       policy_handler_->keyboard_policies(), keyboard);
+  PR_LOG(INFO, Feature::IDS)
+      << GetKeyboardSettingsLog("Login screen settings initialized", *keyboard);
 }
 
 // GetGeneralizedTopRowAreFKeys returns false if there is no keyboard. If there
@@ -1709,6 +1780,7 @@ void InputDeviceSettingsControllerImpl::InitializeMouseSettings(
   if (active_pref_service_) {
     mouse_pref_handler_->InitializeMouseSettings(
         active_pref_service_, policy_handler_->mouse_policies(), mouse);
+    PR_LOG(INFO, Feature::IDS) << GetMouseSettingsLog("Connected", *mouse);
     metrics_manager_->RecordMouseInitialMetrics(*mouse);
     return;
   }
@@ -1718,12 +1790,16 @@ void InputDeviceSettingsControllerImpl::InitializeMouseSettings(
   if (!active_account_id_.has_value() || !local_state_) {
     mouse_pref_handler_->InitializeWithDefaultMouseSettings(
         policy_handler_->mouse_policies(), mouse);
+    PR_LOG(INFO, Feature::IDS)
+        << GetMouseSettingsLog("Default settings initialized", *mouse);
     return;
   }
 
   mouse_pref_handler_->InitializeLoginScreenMouseSettings(
       local_state_, active_account_id_.value(),
       policy_handler_->mouse_policies(), mouse);
+  PR_LOG(INFO, Feature::IDS)
+      << GetMouseSettingsLog("Login screen settings initialized", *mouse);
 }
 
 void InputDeviceSettingsControllerImpl::InitializePointingStickSettings(
@@ -1731,6 +1807,8 @@ void InputDeviceSettingsControllerImpl::InitializePointingStickSettings(
   if (active_pref_service_) {
     pointing_stick_pref_handler_->InitializePointingStickSettings(
         active_pref_service_, pointing_stick);
+    PR_LOG(INFO, Feature::IDS)
+        << GetPointingStickSettingsLog("Connected", *pointing_stick);
     metrics_manager_->RecordPointingStickInitialMetrics(*pointing_stick);
     return;
   }
@@ -1740,11 +1818,15 @@ void InputDeviceSettingsControllerImpl::InitializePointingStickSettings(
   if (!active_account_id_.has_value() || !local_state_) {
     pointing_stick_pref_handler_->InitializeWithDefaultPointingStickSettings(
         pointing_stick);
+    PR_LOG(INFO, Feature::IDS) << GetPointingStickSettingsLog(
+        "Default settings initialized", *pointing_stick);
     return;
   }
 
   pointing_stick_pref_handler_->InitializeLoginScreenPointingStickSettings(
       local_state_, active_account_id_.value(), pointing_stick);
+  PR_LOG(INFO, Feature::IDS) << GetPointingStickSettingsLog(
+      "Login screen settings initialized", *pointing_stick);
 }
 
 void InputDeviceSettingsControllerImpl::InitializeGraphicsTabletSettings(
@@ -1752,6 +1834,8 @@ void InputDeviceSettingsControllerImpl::InitializeGraphicsTabletSettings(
   if (active_pref_service_) {
     graphics_tablet_pref_handler_->InitializeGraphicsTabletSettings(
         active_pref_service_, graphics_tablet);
+    PR_LOG(INFO, Feature::IDS)
+        << GetGraphicsTabletSettingsLog("Connected", *graphics_tablet);
     metrics_manager_->RecordGraphicsTabletInitialMetrics(*graphics_tablet);
     return;
   }
@@ -1766,6 +1850,8 @@ void InputDeviceSettingsControllerImpl::InitializeGraphicsTabletSettings(
 
   graphics_tablet_pref_handler_->InitializeLoginScreenGraphicsTabletSettings(
       local_state_, active_account_id_.value(), graphics_tablet);
+  PR_LOG(INFO, Feature::IDS) << GetGraphicsTabletSettingsLog(
+      "Login screen settings initialized", *graphics_tablet);
 }
 
 void InputDeviceSettingsControllerImpl::InitializeTouchpadSettings(
@@ -1773,6 +1859,8 @@ void InputDeviceSettingsControllerImpl::InitializeTouchpadSettings(
   if (active_pref_service_) {
     touchpad_pref_handler_->InitializeTouchpadSettings(active_pref_service_,
                                                        touchpad);
+    PR_LOG(INFO, Feature::IDS)
+        << GetTouchpadSettingsLog("Connected", *touchpad);
     metrics_manager_->RecordTouchpadInitialMetrics(*touchpad);
     return;
   }
@@ -1781,11 +1869,15 @@ void InputDeviceSettingsControllerImpl::InitializeTouchpadSettings(
   // during OOBE setup and when signing in a new user.
   if (!active_account_id_.has_value() || !local_state_) {
     touchpad_pref_handler_->InitializeWithDefaultTouchpadSettings(touchpad);
+    PR_LOG(INFO, Feature::IDS)
+        << GetTouchpadSettingsLog("Default settings initialized", *touchpad);
     return;
   }
 
   touchpad_pref_handler_->InitializeLoginScreenTouchpadSettings(
       local_state_, active_account_id_.value(), touchpad);
+  PR_LOG(INFO, Feature::IDS)
+      << GetTouchpadSettingsLog("Login screen settings initialized", *touchpad);
 }
 
 const mojom::Mouse* InputDeviceSettingsControllerImpl::GetMouse(DeviceId id) {
@@ -1912,6 +2004,7 @@ void InputDeviceSettingsControllerImpl::OnMouseButtonPressed(
                                  /*is_mouse_button_remapping=*/true);
   mouse_pref_handler_->UpdateMouseSettings(
       active_pref_service_, policy_handler_->mouse_policies(), mouse);
+  PR_LOG(INFO, Feature::IDS) << GetMouseSettingsLog("Updated", mouse);
   DispatchCustomizableMouseButtonPressed(mouse, button);
   metrics_manager_->RecordNewButtonRegisteredMetrics(button, kMouseDeviceType);
   DispatchMouseSettingsChanged(mouse_ptr->id);
@@ -1971,6 +2064,8 @@ void InputDeviceSettingsControllerImpl::OnGraphicsTabletButtonPressed(
   }
   graphics_tablet_pref_handler_->UpdateGraphicsTabletSettings(
       active_pref_service_, graphics_tablet);
+  PR_LOG(INFO, Feature::IDS)
+      << GetGraphicsTabletSettingsLog("Updated", graphics_tablet);
   DispatchGraphicsTabletSettingsChanged(graphics_tablet_ptr->id);
 
   UpdateDuplicateDeviceSettings(
@@ -2049,6 +2144,8 @@ void InputDeviceSettingsControllerImpl::RefreshMouseDefaultSettings() {
   mouse_pref_handler_->UpdateDefaultMouseSettings(
       active_pref_service_, policy_handler_->mouse_policies(),
       *mice_.rbegin()->second);
+  PR_LOG(INFO, Feature::IDS) << GetMouseSettingsLog(
+      "Default settings refreshed", *mice_.rbegin()->second);
 }
 
 void InputDeviceSettingsControllerImpl::RefreshKeyboardDefaultSettings() {
@@ -2072,11 +2169,16 @@ void InputDeviceSettingsControllerImpl::RefreshKeyboardDefaultSettings() {
     keyboard_pref_handler_->UpdateDefaultChromeOSKeyboardSettings(
         active_pref_service_, policy_handler_->keyboard_policies(),
         *chromeos_iter->second);
+    PR_LOG(INFO, Feature::IDS) << GetKeyboardSettingsLog(
+        "Default ChromeOS Keyboard settings refreshed", *chromeos_iter->second);
   }
 
   if (non_chromeos_iter != keyboards_.rend()) {
     keyboard_pref_handler_->UpdateDefaultNonChromeOSKeyboardSettings(
         active_pref_service_, policy_handler_->keyboard_policies(),
+        *non_chromeos_iter->second);
+    PR_LOG(INFO, Feature::IDS) << GetKeyboardSettingsLog(
+        "Default NonChromeOS Keyboard settings refreshed",
         *non_chromeos_iter->second);
   }
 }
@@ -2088,6 +2190,8 @@ void InputDeviceSettingsControllerImpl::RefreshTouchpadDefaultSettings() {
 
   touchpad_pref_handler_->UpdateDefaultTouchpadSettings(
       active_pref_service_, *touchpads_.rbegin()->second);
+  PR_LOG(INFO, Feature::IDS) << GetTouchpadSettingsLog(
+      "Default settings refreshed", *touchpads_.rbegin()->second);
 }
 
 void InputDeviceSettingsControllerImpl::RefreshKeyDisplay() {

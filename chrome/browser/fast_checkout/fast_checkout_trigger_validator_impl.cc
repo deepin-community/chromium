@@ -72,7 +72,7 @@ FastCheckoutTriggerOutcome FastCheckoutTriggerValidatorImpl::ShouldRun(
   }
 
   // Trigger only on empty fields.
-  if (!field.value.empty()) {
+  if (!field.value().empty()) {
     LogAutofillInternals("not triggered because field was not empty.");
     return FastCheckoutTriggerOutcome::kFailureFieldNotEmpty;
   }
@@ -122,12 +122,12 @@ FastCheckoutTriggerOutcome
 FastCheckoutTriggerValidatorImpl::HasValidPersonalData() const {
   autofill::PersonalDataManager* pdm =
       personal_data_helper_->GetPersonalDataManager();
-  if (!pdm->IsAutofillProfileEnabled()) {
+  if (!pdm->address_data_manager().IsAutofillProfileEnabled()) {
     LogAutofillInternals("not triggered because Autofill profile is disabled.");
     return FastCheckoutTriggerOutcome::kFailureAutofillProfileDisabled;
   }
 
-  if (!pdm->IsAutofillPaymentMethodsEnabled()) {
+  if (!pdm->payments_data_manager().IsAutofillPaymentMethodsEnabled()) {
     LogAutofillInternals(
         "not triggered because Autofill credit card is disabled.");
     return FastCheckoutTriggerOutcome::kFailureAutofillCreditCardDisabled;

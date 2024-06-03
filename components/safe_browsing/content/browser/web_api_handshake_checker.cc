@@ -10,6 +10,7 @@
 #include "components/safe_browsing/core/browser/safe_browsing_url_checker_impl.h"
 #include "components/safe_browsing/core/browser/url_checker_delegate.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/scheme_logger.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
@@ -34,9 +35,7 @@ class WebApiHandshakeChecker::CheckerOnSB {
   }
 
   void Check(const GURL& url) {
-    DCHECK_CURRENTLY_ON(base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)
-                            ? content::BrowserThread::UI
-                            : content::BrowserThread::IO);
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     DCHECK(delegate_getter_);
     DCHECK(web_contents_getter_);
 
@@ -54,6 +53,8 @@ class WebApiHandshakeChecker::CheckerOnSB {
       return;
     }
 
+    scheme_logger::LogScheme(url,
+                             "SafeBrowsing.WebApiHandshakeCheck.UrlScheme");
     // If |kSafeBrowsingSkipSubresources2| is enabled, skip Safe Browsing checks
     // for WebTransport.
     if (base::FeatureList::IsEnabled(kSafeBrowsingSkipSubresources2)) {
@@ -80,7 +81,7 @@ class WebApiHandshakeChecker::CheckerOnSB {
         /*hash_realtime_service_on_ui=*/nullptr,
         /*hash_realtime_selection=*/
         hash_realtime_utils::HashRealTimeSelection::kNone,
-        /*is_async_check=*/false);
+        /*is_async_check=*/false, SessionID::InvalidValue());
     url_checker_->CheckUrl(
         url, "GET",
         base::BindOnce(&WebApiHandshakeChecker::CheckerOnSB::OnCheckUrlResult,
@@ -97,9 +98,7 @@ class WebApiHandshakeChecker::CheckerOnSB {
       bool showed_interstitial,
       bool has_post_commit_interstitial_skipped,
       SafeBrowsingUrlCheckerImpl::PerformedCheck performed_check) {
-    DCHECK_CURRENTLY_ON(base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)
-                            ? content::BrowserThread::UI
-                            : content::BrowserThread::IO);
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     if (!slow_check_notifier) {
       OnCompleteCheckInternal(proceed);
       return;
@@ -119,16 +118,8 @@ class WebApiHandshakeChecker::CheckerOnSB {
   }
 
   void OnCompleteCheckInternal(bool proceed) {
-    DCHECK_CURRENTLY_ON(base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)
-                            ? content::BrowserThread::UI
-                            : content::BrowserThread::IO);
-    if (base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)) {
-      handshake_checker_->OnCompleteCheck(proceed);
-    } else {
-      content::GetUIThreadTaskRunner({})->PostTask(
-          FROM_HERE, base::BindOnce(&WebApiHandshakeChecker::OnCompleteCheck,
-                                    handshake_checker_, proceed));
-    }
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    handshake_checker_->OnCompleteCheck(proceed);
   }
 
   base::WeakPtr<WebApiHandshakeChecker> handshake_checker_;
@@ -151,23 +142,13 @@ WebApiHandshakeChecker::WebApiHandshakeChecker(
 
 WebApiHandshakeChecker::~WebApiHandshakeChecker() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)) {
-    content::GetIOThreadTaskRunner({})->DeleteSoon(FROM_HERE,
-                                                   std::move(sb_checker_));
-  }
 }
 
 void WebApiHandshakeChecker::Check(const GURL& url, CheckCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(!check_callback_);
   check_callback_ = std::move(callback);
-  if (base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)) {
-    sb_checker_->Check(url);
-  } else {
-    content::GetIOThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(&WebApiHandshakeChecker::CheckerOnSB::Check,
-                                  sb_checker_->AsWeakPtr(), url));
-  }
+  sb_checker_->Check(url);
 }
 
 void WebApiHandshakeChecker::OnCompleteCheck(bool proceed) {

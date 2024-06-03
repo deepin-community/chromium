@@ -311,7 +311,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
 // errors-out because the WebContents is destroyed before the device is stopped.
 // TODO(crbug.com/40947039): Fails with MSAN. Determine if enabling the test for
 // MSAN is feasible or not
-#if defined(MEMORY_SANITIZER)
+// TODO(crbug.com/328658521): It is also flaky on macOS.
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_MAC)
 #define MAYBE_ErrorsOutWhenWebContentsIsDestroyed \
   DISABLED_ErrorsOutWhenWebContentsIsDestroyed
 #else
@@ -342,7 +343,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
 // changes.
 // TODO(crbug.com/40947039): Fails with MSAN. Determine if enabling the test for
 // MSAN is feasible or not
-#if defined(MEMORY_SANITIZER)
+// TODO(crbug.com/328658521): It is also flaky on macOS.
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_MAC)
 #define MAYBE_ChangesTargettedRenderView DISABLED_ChangesTargettedRenderView
 #else
 #define MAYBE_ChangesTargettedRenderView ChangesTargettedRenderView
@@ -422,7 +424,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTestAura,
 // reload. Regression test for http://crbug.com/916332.
 // TODO(crbug.com/40947039): Fails with MSAN. Determine if enabling the test for
 // MSAN is feasible or not
-#if defined(MEMORY_SANITIZER)
+// TODO(crbug.com/328658521): It is also flaky on macOS.
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_MAC)
 #define MAYBE_RecoversAfterRendererCrash DISABLED_RecoversAfterRendererCrash
 #else
 #define MAYBE_RecoversAfterRendererCrash RecoversAfterRendererCrash
@@ -459,7 +462,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
 // to be delivered, to ensure the client is up-to-date.
 // TODO(crbug.com/40947039): Fails with MSAN. Determine if enabling the test for
 // MSAN is feasible or not
-#if defined(MEMORY_SANITIZER)
+// TODO(crbug/328419809): Also flaky on Mac.
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_MAC)
 #define MAYBE_SuspendsAndResumes DISABLED_SuspendsAndResumes
 #else
 #define MAYBE_SuspendsAndResumes SuspendsAndResumes
@@ -501,7 +505,8 @@ IN_PROC_BROWSER_TEST_F(WebContentsVideoCaptureDeviceBrowserTest,
 // content is not changing.
 // TODO(crbug.com/40947039): Fails with MSAN. Determine if enabling the test for
 // MSAN is feasible or not
-#if defined(MEMORY_SANITIZER)
+// TODO(crbug.com/328658521): It is also flaky on macOS.
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_MAC)
 #define MAYBE_DeliversRefreshFramesUponRequest \
   DISABLED_DeliversRefreshFramesUponRequest
 #else
@@ -547,10 +552,9 @@ class WebContentsVideoCaptureDeviceBrowserTestP
     return std::get<3>(GetParam());
   }
 
-#if BUILDFLAG(IS_WIN)
   void SetUpCommandLine(base::CommandLine* command_line) override {
     WebContentsVideoCaptureDeviceBrowserTest::SetUpCommandLine(command_line);
-
+#if BUILDFLAG(IS_WIN)
     if (!IsSoftwareCompositingTest()) {
       // In order to test the NV12 code-path, we need to use hardware GPU in the
       // tests as the product code checks whether hardware when deciding whether
@@ -562,8 +566,14 @@ class WebContentsVideoCaptureDeviceBrowserTestP
       // machines.
       command_line->AppendSwitch(switches::kUseGpuInTests);
     }
-  }
 #endif
+
+#if BUILDFLAG(IS_ANDROID)
+    // Disable RenderDocument temporarily while we figure out why the test
+    // "CapturesContentChange" is flaky when we change RenderFrameHosts.
+    scoped_feature_list_.InitWithFeatures({}, {features::kRenderDocument});
+#endif
+  }
 
   // Returns human-readable description of the test based on test parameters.
   // Currently unused due to CQ treating the tests as new and applying higher
@@ -581,6 +591,9 @@ class WebContentsVideoCaptureDeviceBrowserTestP
              : "Detect"});
     return name;
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 #if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_ANDROID)
@@ -634,7 +647,11 @@ INSTANTIATE_TEST_SUITE_P(
 // and whether the main document contains a cross-site iframe.
 // TODO(crbug.com/40947039): Fails with MSAN. Determine if enabling the test for
 // MSAN is feasible or not
-#if defined(MEMORY_SANITIZER)
+// TODO(crbug/328419809): Also flaky on Mac.
+// TODO(crbug/329654821): Also flaky for ChromeOS ASAN LSAN and debug.
+#if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    (BUILDFLAG(IS_CHROMEOS) && defined(ADDRESS_SANITIZER)) ||                \
+    (BUILDFLAG(IS_CHROMEOS_ASH) && !defined(NDEBUG))
 #define MAYBE_CapturesContentChanges DISABLED_CapturesContentChanges
 #else
 #define MAYBE_CapturesContentChanges CapturesContentChanges

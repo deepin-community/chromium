@@ -170,7 +170,6 @@ source_set("tests") {
     ":test_support",
     "//base",
     "//base/test:test_support",
-    "//base/third_party/dynamic_annotations",
     "//build:chromeos_buildflags",
     "//components/system_cpu:test_support",
     "//components/variations",
@@ -206,8 +205,7 @@ source_set("tests") {
   }
 
   if (is_chromeos || is_mac) {
-    sources +=
-        [ "public/cpp/geolocation/geolocation_system_permissions_unittest.cc" ]
+    sources += [ "public/cpp/geolocation/geolocation_system_permission_manager_unittest.cc" ]
   }
 
   if (is_chromeos) {
@@ -363,7 +361,7 @@ source_set("tests") {
   }
 
   if (is_apple) {
-    sources += [ "geolocation/core_location_provider_unittest.mm" ]
+    sources += [ "geolocation/core_location_provider_unittest.cc" ]
   }
 
   # UsbContext is a libusb-specific object.

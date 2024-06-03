@@ -105,18 +105,15 @@ BookmarkModelObserverImpl::BookmarkModelObserverImpl(
 BookmarkModelObserverImpl::~BookmarkModelObserverImpl() = default;
 
 void BookmarkModelObserverImpl::BookmarkModelLoaded(
-    bookmarks::BookmarkModel* /*unused*/,
     bool ids_reassigned) {
   // This class isn't responsible for any loading-related logic.
 }
 
-void BookmarkModelObserverImpl::BookmarkModelBeingDeleted(
-    bookmarks::BookmarkModel* /*unused*/) {
+void BookmarkModelObserverImpl::BookmarkModelBeingDeleted() {
   std::move(on_bookmark_model_being_deleted_closure_).Run();
 }
 
 void BookmarkModelObserverImpl::BookmarkNodeMoved(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* old_parent,
     size_t old_index,
     const bookmarks::BookmarkNode* new_parent,
@@ -129,8 +126,10 @@ void BookmarkModelObserverImpl::BookmarkNodeMoved(
   // Handle moves that make a node newly syncable.
   if (!bookmark_model_->IsNodeSyncable(old_parent) &&
       bookmark_model_->IsNodeSyncable(new_parent)) {
-    BookmarkNodeAdded(nullptr /*unused*/, new_parent, new_index,
-                      false /*unused*/);
+    BookmarkNodeAdded(new_parent, new_index, false /*unused*/);
+    // If the moved node is a folder, the descendants also became syncable and
+    // must be reported as well.
+    ProcessMovedDescendentsAsBookmarkNodeAddedRecursive(node);
     return;
   }
 
@@ -173,7 +172,6 @@ void BookmarkModelObserverImpl::BookmarkNodeMoved(
 }
 
 void BookmarkModelObserverImpl::BookmarkNodeAdded(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* parent,
     size_t index,
     bool added_by_user) {
@@ -225,7 +223,6 @@ void BookmarkModelObserverImpl::BookmarkNodeAdded(
 }
 
 void BookmarkModelObserverImpl::OnWillRemoveBookmarks(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* parent,
     size_t old_index,
     const bookmarks::BookmarkNode* node) {
@@ -239,7 +236,6 @@ void BookmarkModelObserverImpl::OnWillRemoveBookmarks(
 }
 
 void BookmarkModelObserverImpl::BookmarkNodeRemoved(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* parent,
     size_t old_index,
     const bookmarks::BookmarkNode* node,
@@ -249,8 +245,7 @@ void BookmarkModelObserverImpl::BookmarkNodeRemoved(
   bookmark_tracker_->CheckAllNodesTracked(bookmark_model_);
 }
 
-void BookmarkModelObserverImpl::OnWillRemoveAllUserBookmarks(
-    bookmarks::BookmarkModel* /*unused*/) {
+void BookmarkModelObserverImpl::OnWillRemoveAllUserBookmarks() {
   bookmark_tracker_->CheckAllNodesTracked(bookmark_model_);
   const bookmarks::BookmarkNode* root_node = bookmark_model_->root_node();
   for (const auto& permanent_node : root_node->children()) {
@@ -264,14 +259,12 @@ void BookmarkModelObserverImpl::OnWillRemoveAllUserBookmarks(
 }
 
 void BookmarkModelObserverImpl::BookmarkAllUserNodesRemoved(
-    bookmarks::BookmarkModel* /*unused*/,
     const std::set<GURL>& removed_urls) {
   // All the work should have already been done in OnWillRemoveAllUserBookmarks.
   bookmark_tracker_->CheckAllNodesTracked(bookmark_model_);
 }
 
 void BookmarkModelObserverImpl::BookmarkNodeChanged(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* node) {
   // Ignore changes to non-syncable nodes (e.g. managed nodes).
   if (!bookmark_model_->IsNodeSyncable(node)) {
@@ -306,13 +299,11 @@ void BookmarkModelObserverImpl::BookmarkNodeChanged(
 }
 
 void BookmarkModelObserverImpl::BookmarkMetaInfoChanged(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* node) {
-  BookmarkNodeChanged(nullptr /*unused*/, node);
+  BookmarkNodeChanged(node);
 }
 
 void BookmarkModelObserverImpl::BookmarkNodeFaviconChanged(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* node) {
   // Ignore changes to non-syncable nodes (e.g. managed nodes).
   if (!bookmark_model_->IsNodeSyncable(node)) {
@@ -344,7 +335,7 @@ void BookmarkModelObserverImpl::BookmarkNodeFaviconChanged(
       node, bookmark_model_, entity->metadata().unique_position(),
       /*force_favicon_load=*/false);
 
-  // TODO(crbug.com/1094825): implement |base_specifics_hash| similar to
+  // TODO(crbug.com/40699726): implement |base_specifics_hash| similar to
   // ClientTagBasedModelTypeProcessor.
   if (!entity->MatchesFaviconHash(specifics.bookmark().favicon())) {
     ProcessUpdate(entity, specifics);
@@ -362,7 +353,6 @@ void BookmarkModelObserverImpl::BookmarkNodeFaviconChanged(
 }
 
 void BookmarkModelObserverImpl::BookmarkNodeChildrenReordered(
-    bookmarks::BookmarkModel* /*unused*/,
     const bookmarks::BookmarkNode* node) {
   // Ignore changes to non-syncable nodes (e.g. managed nodes).
   if (!bookmark_model_->IsNodeSyncable(node)) {
@@ -568,6 +558,17 @@ void BookmarkModelObserverImpl::ProcessDelete(
   bookmark_tracker_->MarkDeleted(entity);
   // Mark the entity that it needs to be committed.
   bookmark_tracker_->IncrementSequenceNumber(entity);
+}
+
+void BookmarkModelObserverImpl::
+    ProcessMovedDescendentsAsBookmarkNodeAddedRecursive(
+        const bookmarks::BookmarkNode* node) {
+  CHECK(node);
+  for (size_t index = 0; index < node->children().size(); ++index) {
+    BookmarkNodeAdded(node, index, false /*unused*/);
+    ProcessMovedDescendentsAsBookmarkNodeAddedRecursive(
+        node->children()[index].get());
+  }
 }
 
 syncer::UniquePosition BookmarkModelObserverImpl::GetUniquePositionForNode(

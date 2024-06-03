@@ -40,10 +40,10 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
 #include "chrome/common/chrome_features.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/webapps/browser/install_result_code.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "components/webapps/common/web_page_metadata.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -332,7 +332,8 @@ class ExternallyAppManagerTest : public WebAppTest {
                                                       GURL start_url) {
     auto& install_page_state =
         web_contents_manager().GetOrCreatePageState(install_url);
-    install_page_state.url_load_result = WebAppUrlLoaderResult::kUrlLoaded;
+    install_page_state.url_load_result =
+        webapps::WebAppUrlLoaderResult::kUrlLoaded;
     install_page_state.redirection_url = std::nullopt;
 
     install_page_state.opt_metadata =
@@ -342,15 +343,16 @@ class ExternallyAppManagerTest : public WebAppTest {
     install_page_state.manifest_url = manifest_url;
     install_page_state.valid_manifest_for_web_app = true;
 
-    install_page_state.opt_manifest = blink::mojom::Manifest::New();
-    install_page_state.opt_manifest->scope =
-        url::Origin::Create(start_url).GetURL();
-    install_page_state.opt_manifest->start_url = start_url;
-    install_page_state.opt_manifest->id =
+    install_page_state.manifest_before_default_processing =
+        blink::mojom::Manifest::New();
+    install_page_state.manifest_before_default_processing->start_url =
+        start_url;
+    install_page_state.manifest_before_default_processing->id =
         GenerateManifestIdFromStartUrlOnly(start_url);
-    install_page_state.opt_manifest->display =
+    install_page_state.manifest_before_default_processing->display =
         blink::mojom::DisplayMode::kStandalone;
-    install_page_state.opt_manifest->short_name = u"Basic app name";
+    install_page_state.manifest_before_default_processing->short_name =
+        u"Basic app name";
 
     return GenerateAppId(/*manifest_id=*/std::nullopt, start_url);
   }
@@ -649,7 +651,8 @@ TEST_F(ExternallyAppManagerTest, PolicyAppOverridesUserInstalledApp) {
     // Install user app
     auto& install_page_state =
         web_contents_manager().GetOrCreatePageState(kInstallUrl);
-    install_page_state.opt_manifest->short_name = u"Test user app";
+    install_page_state.manifest_before_default_processing->short_name =
+        u"Test user app";
 
     auto install_info = std::make_unique<WebAppInstallInfo>();
     install_info->start_url = kStartUrl;
@@ -667,7 +670,8 @@ TEST_F(ExternallyAppManagerTest, PolicyAppOverridesUserInstalledApp) {
     // Install policy app
     auto& install_page_state =
         web_contents_manager().GetOrCreatePageState(kInstallUrl);
-    install_page_state.opt_manifest->short_name = u"Test policy app";
+    install_page_state.manifest_before_default_processing->short_name =
+        u"Test policy app";
 
     SynchronizeFuture result;
     provider().externally_managed_app_manager().SynchronizeInstalledApps(

@@ -25,11 +25,11 @@
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/model_type.h"
 #include "components/sync/engine/nigori/cross_user_sharing_public_key.h"
 #include "components/sync/engine/nigori/cross_user_sharing_public_private_key_pair.h"
-#include "components/sync/nigori/cryptographer_impl.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
 #include "components/sync/protocol/password_sharing_invitation_specifics.pb.h"
 #include "components/sync/protocol/sync_entity.pb.h"
@@ -182,6 +182,16 @@ class SingleClientIncomingPasswordSharingInvitationTest : public SyncTest {
     if (!GetClient(0)->AwaitSyncTransportActive()) {
       return false;
     }
+
+#if !BUILDFLAG(IS_ANDROID)
+    // Explicitly opt out of account storage when signin is explicit.
+    if (switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
+            switches::ExplicitBrowserSigninPhase::kExperimental)) {
+      password_manager::features_util::OptOutOfAccountStorage(
+          GetProfile(0)->GetPrefs(), GetSyncService(0));
+    }
+#endif
+
     return true;
   }
 

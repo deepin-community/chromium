@@ -14,33 +14,33 @@ namespace blink {
 
 namespace {
 
-class RequestExtendedStorageAccess final : public ScriptFunction::Callable,
-                                           public Supplement<LocalDOMWindow> {
+class RequestExtendedStorageAccess final : public ScriptFunction::Callable {
  public:
-  explicit RequestExtendedStorageAccess(
+  RequestExtendedStorageAccess(
       LocalDOMWindow& window,
-      const StorageAccessTypes* storage_access_types)
-      : Supplement<LocalDOMWindow>(window),
-        storage_access_types_(storage_access_types) {}
+      const StorageAccessTypes* storage_access_types,
+      ScriptPromiseResolver<StorageAccessHandle>* resolver)
+      : window_(&window),
+        storage_access_types_(storage_access_types),
+        resolver_(resolver) {}
 
   ScriptValue Call(ScriptState* script_state, ScriptValue) override {
-    ScriptPromiseResolver* resolver =
-        MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-    ScriptPromise promise = resolver->Promise();
-    StorageAccessHandle* handle = MakeGarbageCollected<StorageAccessHandle>(
-        *GetSupplementable(), storage_access_types_);
-    resolver->Resolve(handle);
-    return promise.AsScriptValue();
+    resolver_->Resolve(MakeGarbageCollected<StorageAccessHandle>(
+        *window_, storage_access_types_));
+    return ScriptValue();
   }
 
   void Trace(Visitor* visitor) const override {
+    visitor->Trace(window_);
     visitor->Trace(storage_access_types_);
+    visitor->Trace(resolver_);
     ScriptFunction::Callable::Trace(visitor);
-    Supplement<LocalDOMWindow>::Trace(visitor);
   }
 
  private:
+  Member<LocalDOMWindow> window_;
   Member<const StorageAccessTypes> storage_access_types_;
+  Member<ScriptPromiseResolver<StorageAccessHandle>> resolver_;
 };
 
 }  // namespace
@@ -64,7 +64,7 @@ DocumentStorageAccess& DocumentStorageAccess::From(Document& document) {
 }
 
 // static
-ScriptPromise DocumentStorageAccess::requestStorageAccess(
+ScriptPromise<StorageAccessHandle> DocumentStorageAccess::requestStorageAccess(
     ScriptState* script_state,
     Document& document,
     const StorageAccessTypes* storage_access_types) {
@@ -73,7 +73,7 @@ ScriptPromise DocumentStorageAccess::requestStorageAccess(
 }
 
 // static
-ScriptPromise DocumentStorageAccess::hasUnpartitionedCookieAccess(
+ScriptPromise<IDLBoolean> DocumentStorageAccess::hasUnpartitionedCookieAccess(
     ScriptState* script_state,
     Document& document) {
   return From(document).hasUnpartitionedCookieAccess(script_state);
@@ -86,7 +86,7 @@ void DocumentStorageAccess::Trace(Visitor* visitor) const {
   Supplement<Document>::Trace(visitor);
 }
 
-ScriptPromise DocumentStorageAccess::requestStorageAccess(
+ScriptPromise<StorageAccessHandle> DocumentStorageAccess::requestStorageAccess(
     ScriptState* script_state,
     const StorageAccessTypes* storage_access_types) {
   if (!storage_access_types->all() && !storage_access_types->cookies() &&
@@ -100,22 +100,27 @@ ScriptPromise DocumentStorageAccess::requestStorageAccess(
       !storage_access_types->revokeObjectURL() &&
       !storage_access_types->broadcastChannel() &&
       !storage_access_types->sharedWorker()) {
-    return ScriptPromise::RejectWithDOMException(
+    return ScriptPromise<StorageAccessHandle>::RejectWithDOMException(
         script_state, MakeGarbageCollected<DOMException>(
                           DOMExceptionCode::kSecurityError,
                           DocumentStorageAccess::kNoAccessRequested));
   }
-  return GetSupplementable()
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<StorageAccessHandle>>(
+          script_state);
+  auto promise = resolver->Promise();
+  GetSupplementable()
       ->RequestStorageAccessImpl(
           script_state,
           storage_access_types->all() || storage_access_types->cookies())
       .Then(MakeGarbageCollected<ScriptFunction>(
-          script_state,
-          MakeGarbageCollected<RequestExtendedStorageAccess>(
-              *GetSupplementable()->domWindow(), storage_access_types)));
+          script_state, MakeGarbageCollected<RequestExtendedStorageAccess>(
+                            *GetSupplementable()->domWindow(),
+                            storage_access_types, resolver)));
+  return promise;
 }
 
-ScriptPromise DocumentStorageAccess::hasUnpartitionedCookieAccess(
+ScriptPromise<IDLBoolean> DocumentStorageAccess::hasUnpartitionedCookieAccess(
     ScriptState* script_state) {
   return GetSupplementable()->hasStorageAccess(script_state);
 }

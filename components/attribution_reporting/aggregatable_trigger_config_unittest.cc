@@ -59,13 +59,13 @@ TEST(AggregatableTriggerConfigTest, ParseAggregatableSourceRegistrationTime) {
           "aggregatable_source_registration_time_wrong_type",
           R"json({"aggregatable_source_registration_time":123})json",
           ErrorIs(TriggerRegistrationError::
-                      kAggregatableSourceRegistrationTimeWrongType),
+                      kAggregatableSourceRegistrationTimeValueInvalid),
       },
       {
           "aggregatable_source_registration_time_invalid_value",
           R"json({"aggregatable_source_registration_time":"unknown"})json",
           ErrorIs(TriggerRegistrationError::
-                      kAggregatableSourceRegistrationTimeUnknownValue),
+                      kAggregatableSourceRegistrationTimeValueInvalid),
       },
   };
 
@@ -105,12 +105,6 @@ TEST(AggregatableTriggerConfigTest, ParseTriggerContextId) {
       {
           "trigger_context_id_wrong_type",
           R"json({"trigger_context_id":123})json",
-          ErrorIs(TriggerRegistrationError::kTriggerContextIdInvalidValue),
-          ValueIs(AggregatableTriggerConfig()),
-      },
-      {
-          "trigger_context_id_invalid_value",
-          R"json({"trigger_context_id":""})json",
           ErrorIs(TriggerRegistrationError::kTriggerContextIdInvalidValue),
           ValueIs(AggregatableTriggerConfig()),
       },
@@ -182,12 +176,6 @@ TEST(AggregatableTriggerConfigTest, Create) {
           std::nullopt,
           *AggregatableTriggerConfig::Create(
               SourceRegistrationTimeConfig::kInclude, std::nullopt),
-      },
-      {
-          "trigger_context_id_empty",
-          SourceRegistrationTimeConfig::kExclude,
-          "",
-          std::nullopt,
       },
       {
           "trigger_context_id_too_long",

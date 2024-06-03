@@ -47,6 +47,8 @@ constexpr char kAddPasspointCredentialsFunction[] = "AddPasspointCredentials";
 constexpr char kRemovePasspointCredentialsFunction[] =
     "RemovePasspointCredentials";
 constexpr char kSetTetheringEnabledFunction[] = "SetTetheringEnabled";
+constexpr char kEnableTetheringFunction[] = "EnableTethering";
+constexpr char kDisableTetheringFunction[] = "DisableTethering";
 constexpr char kCheckTetheringReadinessFunction[] = "CheckTetheringReadiness";
 constexpr char kConnectToP2PGroupFunction[] = "ConnectToP2PGroup";
 constexpr char kDisconnectFromP2PGroupFunction[] = "DisconnectFromP2PGroup";
@@ -483,8 +485,6 @@ constexpr char kMacAddressRandomizationSupportedProperty[] =
     "MACAddressRandomizationSupported";
 constexpr char kNetDetectScanPeriodSecondsProperty[] =
     "NetDetectScanPeriodSeconds";
-constexpr char kPasspointInterworkingSelectEnabledProperty[] =
-    "PasspointInterworkingSelectEnabled";
 constexpr char kWakeOnWiFiSupportedProperty[] = "WakeOnWiFiSupported";
 constexpr char kWakeOnWiFiAllowedProperty[] = "WakeOnWiFiAllowed";
 constexpr char kWakeOnWiFiFeaturesEnabledProperty[] =
@@ -514,13 +514,15 @@ constexpr char kStateReady[] = "ready";
 constexpr char kStateNoConnectivity[] = "no-connectivity";
 constexpr char kStateRedirectFound[] = "redirect-found";
 constexpr char kStatePortalSuspected[] = "portal-suspected";
-// TODO(b/260792466): This state is only used in the State property of Manager.
-// Consider changing the to kStateIdle too, or removing the State property
-// altogether if nothing depends on it.
-constexpr char kStateOffline[] = "offline";
 constexpr char kStateOnline[] = "online";
-constexpr char kStateDisconnect[] = "disconnecting";
+constexpr char kStateDisconnecting[] = "disconnecting";
 constexpr char kStateFailure[] = "failure";
+
+// Shill CheckPortal property values.
+constexpr char kCheckPortalTrue[] = "true";
+constexpr char kCheckPortalAuto[] = "auto";
+constexpr char kCheckPortalFalse[] = "false";
+constexpr char kCheckPortalHTTPOnly[] = "http-only";
 
 // Shill WiFi roam state options.
 constexpr char kRoamStateIdle[] = "idle";
@@ -1033,10 +1035,13 @@ constexpr char kTetheringIdleReasonDownstreamNetworkDisconnect[] =
 constexpr char kTetheringIdleReasonError[] = "error";
 constexpr char kTetheringIdleReasonInactive[] = "inactive";
 constexpr char kTetheringIdleReasonInitialState[] = "initial_state";
+constexpr char kTetheringIdleReasonStartTimeout[] = "start_timeout";
 constexpr char kTetheringIdleReasonSuspend[] = "suspend";
 constexpr char kTetheringIdleReasonUpstreamDisconnect[] = "upstream_disconnect";
 constexpr char kTetheringIdleReasonUpstreamNoInternet[] =
     "upstream_no_internet";
+constexpr char kTetheringIdleReasonUpstreamNotAvailable[] =
+    "upstream_not_available";
 constexpr char kTetheringIdleReasonUserExit[] = "user_exit";
 
 // kTetheringStatusStateProperty values
@@ -1046,7 +1051,7 @@ constexpr char kTetheringStateRestarting[] = "restarting";
 constexpr char kTetheringStateStarting[] = "starting";
 constexpr char kTetheringStateStopping[] = "stopping";
 
-// SetTetheringEnabled result values
+// SetTetheringEnabled and {Enable,Disable}Tethering result values
 constexpr char kTetheringEnableResultAbort[] = "abort";
 constexpr char kTetheringEnableResultBusy[] = "busy";
 constexpr char kTetheringEnableResultDownstreamWiFiFailure[] =
@@ -1105,14 +1110,15 @@ constexpr char kP2PCapabilitiesPreferredChannelsProperty[] =
     "PreferredChannels";
 
 // kP2PCapabilitiesGroupReadinessProperty values
-constexpr char kP2PCapabilitiesGroupReadinessReady[] = "kReady";
-constexpr char kP2PCapabilitiesGroupReadinessNotReady[] = "kNotReady";
+constexpr char kP2PCapabilitiesGroupReadinessReady[] = "ready";
+constexpr char kP2PCapabilitiesGroupReadinessNotReady[] = "not_ready";
 
 // kP2PCapabilitiesClientReadinessProperty values
-constexpr char kP2PCapabilitiesClientReadinessReady[] = "kReady";
-constexpr char kP2PCapabilitiesClientReadinessNotReady[] = "kNotReady";
+constexpr char kP2PCapabilitiesClientReadinessReady[] = "ready";
+constexpr char kP2PCapabilitiesClientReadinessNotReady[] = "not_ready";
 
 // Manager kP2PGroupInfosProperty dictionary key names.
+constexpr char kP2PGroupInfoInterfaceProperty[] = "interface";
 constexpr char kP2PGroupInfoShillIDProperty[] = "shill_id";
 constexpr char kP2PGroupInfoStateProperty[] = "state";
 constexpr char kP2PGroupInfoSSIDProperty[] = "ssid";
@@ -1121,15 +1127,16 @@ constexpr char kP2PGroupInfoBSSIDProperty[] = "bssid";
 constexpr char kP2PGroupInfoIPv4AddressProperty[] = "ipv4_address";
 constexpr char kP2PGroupInfoIPv6AddressProperty[] = "ipv6_address";
 constexpr char kP2PGroupInfoMACAddressProperty[] = "mac_address";
+constexpr char kP2PGroupInfoNetworkIDProperty[] = "network_id";
 constexpr char kP2PGroupInfoFrequencyProperty[] = "frequency";
 constexpr char kP2PGroupInfoClientsProperty[] = "clients";
 
 // kP2PGroupInfoStateProperty values
-constexpr char kP2PGroupInfoStateIdle[] = "kIdle";
-constexpr char kP2PGroupInfoStateStarting[] = "kStarting";
-constexpr char kP2PGroupInfoStateConfiguring[] = "kConfiguring";
-constexpr char kP2PGroupInfoStateActive[] = "kActive";
-constexpr char kP2PGroupInfoStateStopping[] = "kStopping";
+constexpr char kP2PGroupInfoStateIdle[] = "idle";
+constexpr char kP2PGroupInfoStateStarting[] = "starting";
+constexpr char kP2PGroupInfoStateConfiguring[] = "configuring";
+constexpr char kP2PGroupInfoStateActive[] = "active";
+constexpr char kP2PGroupInfoStateStopping[] = "stopping";
 
 // Manager kP2PGroupInfoClientsProperty dictionary key names
 constexpr char kP2PGroupInfoClientMACAddressProperty[] = "mac_address";
@@ -1139,6 +1146,7 @@ constexpr char kP2PGroupInfoClientHostnameProperty[] = "hostname";
 constexpr char kP2PGroupInfoClientVendorClassProperty[] = "vendor_class";
 
 // Manager kP2PClientInfoProperty dictionary key names.
+constexpr char kP2PClientInfoInterfaceProperty[] = "interface";
 constexpr char kP2PClientInfoShillIDProperty[] = "shill_id";
 constexpr char kP2PClientInfoStateProperty[] = "state";
 constexpr char kP2PClientInfoSSIDProperty[] = "ssid";
@@ -1147,15 +1155,16 @@ constexpr char kP2PClientInfoGroupBSSIDProperty[] = "group_bssid";
 constexpr char kP2PClientInfoIPv4AddressProperty[] = "ipv4_address";
 constexpr char kP2PClientInfoIPv6AddressProperty[] = "ipv6_address";
 constexpr char kP2PClientInfoMACAddressProperty[] = "mac_address";
+constexpr char kP2PClientInfoNetworkIDProperty[] = "network_id";
 constexpr char kP2PClientInfoFrequencyProperty[] = "frequency";
 constexpr char kP2PClientInfoGroupOwnerProperty[] = "group_owner";
 
 // kP2PClientInfoStateProperty values
-constexpr char kP2PClientInfoStateIdle[] = "kIdle";
-constexpr char kP2PClientInfoStateAssociating[] = "kAssociating";
-constexpr char kP2PClientInfoStateConfiguring[] = "kConfiguring";
-constexpr char kP2PClientInfoStateConnected[] = "kConnected";
-constexpr char kP2PClientInfoStateDisconnecting[] = "kDisconnecting";
+constexpr char kP2PClientInfoStateIdle[] = "idle";
+constexpr char kP2PClientInfoStateAssociating[] = "associating";
+constexpr char kP2PClientInfoStateConfiguring[] = "configuring";
+constexpr char kP2PClientInfoStateConnected[] = "connected";
+constexpr char kP2PClientInfoStateDisconnecting[] = "disconnecting";
 
 // Manager kP2PClientInfoGroupOwnerProperty dictionary key names
 constexpr char kP2PClientInfoGroupOwnerMACAddressProperty[] = "mac_address";
@@ -1185,6 +1194,7 @@ constexpr char kCreateP2PGroupResultTimeout[] = "timeout";
 constexpr char kCreateP2PGroupResultFrequencyNotSupported[] =
     "frequency_not_supported";
 constexpr char kCreateP2PGroupResultBadSSID[] = "bad_ssid";
+constexpr char kCreateP2PGroupResultInvalidArguments[] = "invalid_arguments";
 constexpr char kCreateP2PGroupResultOperationInProgress[] =
     "operation_in_progress";
 constexpr char kCreateP2PGroupResultOperationFailed[] = "operation_failed";

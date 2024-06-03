@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "ash/wm/workspace/workspace_window_resizer.h"
-#include "base/memory/raw_ptr.h"
 
 #include <cmath>
 #include <utility>
@@ -14,7 +13,6 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/root_window_controller.h"
-#include "ash/scoped_animation_disabler.h"
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -24,6 +22,9 @@
 #include "ash/wm/float/tablet_mode_float_window_resizer.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/pip/pip_window_resizer.h"
+#include "ash/wm/snap_group/snap_group.h"
+#include "ash/wm/snap_group/snap_group_controller.h"
+#include "ash/wm/splitview/split_view_utils.h"
 #include "ash/wm/tile_group/window_splitter.h"
 #include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_animations.h"
@@ -34,10 +35,12 @@
 #include "ash/wm/workspace/phantom_window_controller.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/ranges/algorithm.h"
 #include "chromeos/ui/base/window_properties.h"
+#include "chromeos/ui/frame/caption_buttons/snap_controller.h"
 #include "chromeos/utils/haptics_util.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_types.h"
@@ -52,6 +55,7 @@
 #include "ui/gfx/geometry/transform.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/core/cursor_manager.h"
+#include "ui/wm/core/scoped_animation_disabler.h"
 
 namespace ash {
 
@@ -481,6 +485,21 @@ bool IsTransitionFromTopToMaximize(WorkspaceWindowResizer::SnapType from_type,
   const bool is_primary = chromeos::IsPrimaryOrientation(orientation);
   return is_primary ? from_type == WorkspaceWindowResizer::SnapType::kPrimary
                     : from_type == WorkspaceWindowResizer::SnapType::kSecondary;
+}
+
+// Returns the target snap ratio to be used by the snap phantom window.
+float GetTargetSnapRatio(const aura::Window* root_window,
+                         SnapViewType snap_type) {
+  if (IsSnapGroupEnabledInClamshellMode()) {
+    if (auto* snap_group =
+            SnapGroupController::Get()->GetTopmostVisibleSnapGroup(
+                root_window)) {
+      const WindowState* window_state =
+          WindowState::Get(snap_group->GetWindowOfSnapViewType(snap_type));
+      return window_state->snap_ratio().value_or(chromeos::kDefaultSnapRatio);
+    }
+  }
+  return chromeos::kDefaultSnapRatio;
 }
 
 }  // namespace
@@ -926,7 +945,7 @@ void WorkspaceWindowResizer::CompleteDrag() {
       // Since we saved the current bounds to the restore bounds, the restore
       // animation will use the current bounds as the target bounds, so we can
       // disable the animation here.
-      ScopedAnimationDisabler disabler(window_state()->window());
+      wm::ScopedAnimationDisabler disabler(window_state()->window());
       window_state()->Restore();
     }
     return;
@@ -946,7 +965,7 @@ void WorkspaceWindowResizer::CompleteDrag() {
     // Since we saved the current bounds to the restore bounds, the restore
     // animation will use the current bounds as the target bounds, so we can
     // disable the animation here.
-    ScopedAnimationDisabler disabler(window_state()->window());
+    wm::ScopedAnimationDisabler disabler(window_state()->window());
     window_state()->Restore();
     return;
   }
@@ -1568,16 +1587,20 @@ void WorkspaceWindowResizer::UpdateSnapPhantomWindow(
   }
 
   gfx::Rect phantom_bounds;
+  // Note that `target_root` is of the target display, not the currently dragged
+  // window of `GetTarget()`.
+  const aura::Window* target_root =
+      Shell::Get()->GetRootWindowForDisplayId(display.id());
   switch (snap_type_) {
     case SnapType::kPrimary:
       phantom_bounds = GetSnappedWindowBounds(
           display.work_area(), display, GetTarget(), SnapViewType::kPrimary,
-          chromeos::kDefaultSnapRatio);
+          GetTargetSnapRatio(target_root, SnapViewType::kPrimary));
       break;
     case SnapType::kSecondary:
       phantom_bounds = GetSnappedWindowBounds(
           display.work_area(), display, GetTarget(), SnapViewType::kSecondary,
-          chromeos::kDefaultSnapRatio);
+          GetTargetSnapRatio(target_root, SnapViewType::kSecondary));
       break;
     case SnapType::kMaximize:
       phantom_bounds = display.work_area();

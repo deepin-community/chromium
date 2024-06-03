@@ -18,6 +18,7 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/chromeos/extensions/telemetry/api/common/fake_hardware_info_delegate.h"
 #include "chrome/browser/extensions/extension_management_test_util.h"
+#include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/navigation_entry.h"
@@ -38,7 +39,7 @@
 #include "ash/public/cpp/session/session_controller.h"
 #include "ash/public/cpp/session/session_types.h"
 #include "ash/shell.h"
-#include "ash/webui/shimless_rma/3p_diagnostics/external_app_dialog.h"
+#include "ash/webui/shimless_rma/backend/external_app_dialog.h"
 #include "base/command_line.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
@@ -49,7 +50,6 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user.h"
@@ -551,7 +551,6 @@ class ApiGuardDelegateShimlessRMAAppTest : public ApiGuardDelegateTest {
     feature_list_.InitWithFeatures(
         {
             ::ash::features::kShimlessRMA3pDiagnostics,
-            ::chromeos::features::kIWAForTelemetryExtensionAPI,
         },
         {});
 
@@ -598,7 +597,7 @@ class ApiGuardDelegateShimlessRMAAppTest : public ApiGuardDelegateTest {
     auto* content = ash::shimless_rma::ExternalAppDialog::GetWebContents();
     CHECK(content);
 
-    CommitPendingLoad(&content->GetController());
+    web_app::CommitPendingIsolatedWebAppNavigation(content);
   }
 
   // BrowserWithTestWindowTest overrides.

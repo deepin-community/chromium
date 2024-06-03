@@ -19,9 +19,9 @@
 #include <utility>
 #include <vector>
 
+#include <sys/types.h>
 #include "perfetto/base/logging.h"
 #include "perfetto/trace_processor/basic_types.h"
-#include "src/trace_processor/containers/bit_vector.h"
 #include "src/trace_processor/containers/row_map.h"
 #include "src/trace_processor/db/column/data_layer.h"
 #include "src/trace_processor/db/column/types.h"
@@ -55,21 +55,6 @@ void QueryExecutor::FilterColumn(const Constraint& c,
       case SingleSearchResult::kNeedsFullSearch:
         break;
     }
-  }
-
-  // Given the chain a chance to return a single row which uniquely matches
-  // this constraint. This is a relatively frequent occurence e.g. id equality
-  // constraints so it is valuable to have an explicit fastpath.
-  uint32_t unique_row;
-  switch (chain.UniqueSearch(c.op, c.value, &unique_row)) {
-    case UniqueSearchResult::kMatch:
-      rm->IntersectExact(unique_row);
-      return;
-    case UniqueSearchResult::kNoMatch:
-      rm->Clear();
-      return;
-    case UniqueSearchResult::kNeedsFullSearch:
-      break;
   }
 
   // Comparison of NULL with any operation apart from |IS_NULL| and
@@ -131,36 +116,17 @@ void QueryExecutor::IndexSearch(const Constraint& c,
   // Create outmost TableIndexVector.
   std::vector<uint32_t> table_indices = std::move(*rm).TakeAsIndexVector();
 
-  RangeOrBitVector matched = chain.IndexSearch(
-      c.op, c.value,
-      Indices{table_indices.data(), static_cast<uint32_t>(table_indices.size()),
-              Indices::State::kMonotonic});
+  using Indices = column::DataLayerChain::Indices;
+  Indices indices = Indices::Create(table_indices, Indices::State::kMonotonic);
+  chain.IndexSearch(c.op, c.value, indices);
 
-  if (matched.IsBitVector()) {
-    BitVector res = std::move(matched).TakeIfBitVector();
-    uint32_t i = 0;
-    table_indices.erase(
-        std::remove_if(table_indices.begin(), table_indices.end(),
-                       [&i, &res](uint32_t) { return !res.IsSet(i++); }),
-        table_indices.end());
-    *rm = RowMap(std::move(table_indices));
-    return;
+  PERFETTO_DCHECK(indices.tokens.size() <= table_indices.size());
+  for (uint32_t i = 0; i < indices.tokens.size(); ++i) {
+    table_indices[i] = indices.tokens[i].payload;
   }
-
-  Range res = std::move(matched).TakeIfRange();
-  if (res.size() == 0) {
-    rm->Clear();
-    return;
-  }
-  if (res.size() == table_indices.size()) {
-    return;
-  }
-
-  PERFETTO_DCHECK(res.end <= table_indices.size());
-  std::vector<uint32_t> res_as_iv(
-      table_indices.begin() + static_cast<int>(res.start),
-      table_indices.begin() + static_cast<int>(res.end));
-  *rm = RowMap(std::move(res_as_iv));
+  table_indices.resize(indices.tokens.size());
+  PERFETTO_DCHECK(std::is_sorted(table_indices.begin(), table_indices.end()));
+  *rm = RowMap(std::move(table_indices));
 }
 
 RowMap QueryExecutor::FilterLegacy(const Table* table,

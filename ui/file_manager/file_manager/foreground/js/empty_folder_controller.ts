@@ -5,7 +5,7 @@
 import type {VolumeInfo} from '../../background/js/volume_info.js';
 import {queryRequiredElement} from '../../common/js/dom_utils.js';
 import {getODFSMetadataQueryEntry, isInteractiveVolume, isOneDrive, isRecentRootType} from '../../common/js/entry_utils.js';
-import {FakeEntry} from '../../common/js/files_app_entry_types.js';
+import type {FakeEntry} from '../../common/js/files_app_entry_types.js';
 import {str} from '../../common/js/translations.js';
 import {FileErrorToDomError} from '../../common/js/util.js';
 import {RootType} from '../../common/js/volume_manager_types.js';
@@ -13,8 +13,8 @@ import {updateIsInteractiveVolume} from '../../state/ducks/volumes.js';
 import {getStore} from '../../state/store.js';
 
 import {FSP_ACTION_HIDDEN_ONEDRIVE_REAUTHENTICATION_REQUIRED} from './constants.js';
-import {DirectoryModel} from './directory_model.js';
-import {ProvidersModel} from './providers_model.js';
+import type {DirectoryModel} from './directory_model.js';
+import type {ProvidersModel} from './providers_model.js';
 
 /**
  * The empty state image for the Recents folder.
@@ -61,16 +61,15 @@ export class EmptyFolderController {
     this.image_ = queryRequiredElement('.image', this.emptyFolder_);
 
     this.directoryModel_.addEventListener(
-        'scan-started', this.onScanStarted_.bind(this));
+        'cur-dir-scan-started', this.onScanStarted_.bind(this));
     this.directoryModel_.addEventListener(
-        'scan-failed',
-        this.onScanFailed_.bind(this) as EventListenerOrEventListenerObject);
+        'cur-dir-scan-failed', this.onScanFailed_.bind(this));
     this.directoryModel_.addEventListener(
-        'scan-cancelled', this.onScanFinished.bind(this));
+        'cur-dir-scan-canceled', this.onScanFinished.bind(this));
     this.directoryModel_.addEventListener(
-        'scan-completed', this.onScanFinished.bind(this));
+        'cur-dir-scan-completed', this.onScanFinished.bind(this));
     this.directoryModel_.addEventListener(
-        'rescan-completed', this.onScanFinished.bind(this));
+        'cur-dir-rescan-completed', this.onScanFinished.bind(this));
   }
 
   /**

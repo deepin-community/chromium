@@ -18,7 +18,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "content/common/content_export.h"
@@ -195,6 +194,11 @@ class CONTENT_EXPORT TrustedSignalsRequestManager {
     bool operator()(const RequestImpl* r1, const RequestImpl* r2) const;
   };
 
+  // Manages building and loading trusted signals URLs.
+  class TrustedSignalsUrlBuilder;
+  class TrustedBiddingSignalsUrlBuilder;
+  class TrustedScoringSignalsUrlBuilder;
+
   // Manages a single TrustedSignals object, which is associated with one or
   // more Requests. Tracks all associated live Requests, and manages invoking
   // their callbacks. Only created when a TrustedSignals request is started.
@@ -226,12 +230,7 @@ class CONTENT_EXPORT TrustedSignalsRequestManager {
   // request with it, cancelling the request if it's no longer needed.
   void OnRequestDestroyed(RequestImpl* request);
 
-  bool RequestsURLSizeIsTooBig(std::set<raw_ptr<RequestImpl, SetExperimental>,
-                                        CompareRequestImpl> requests,
-                               size_t limit);
-
-  void IssueRequests(std::set<raw_ptr<RequestImpl, SetExperimental>,
-                              CompareRequestImpl> requests);
+  void IssueRequests(TrustedSignalsUrlBuilder& url_builder);
 
   const Type type_;
   const raw_ptr<network::mojom::URLLoaderFactory> url_loader_factory_;
@@ -255,8 +254,6 @@ class CONTENT_EXPORT TrustedSignalsRequestManager {
 
   mojo::Remote<auction_worklet::mojom::AuctionNetworkEventsHandler>
       auction_network_events_handler_;
-
-  base::WeakPtrFactory<TrustedSignalsRequestManager> weak_ptr_factory{this};
 };
 
 }  // namespace auction_worklet

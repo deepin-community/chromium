@@ -40,6 +40,7 @@ android_library("java") {
     "java/src/org/chromium/components/autofill/AutofillProvider.java",
     "java/src/org/chromium/components/autofill/AutofillProviderUMA.java",
     "java/src/org/chromium/components/autofill/AutofillRequest.java",
+    "java/src/org/chromium/components/autofill/AutofillSelectionActionMenuDelegate.java",
     "java/src/org/chromium/components/autofill/AutofillSelectionMenuItemHelper.java",
     "java/src/org/chromium/components/autofill/FormData.java",
     "java/src/org/chromium/components/autofill/FormFieldData.java",
@@ -65,7 +66,6 @@ android_library("features_java") {
   ]
 
   deps = [
-    ":features",
     "//base:base_java",
     "//build/android:build_java",
     "//third_party/jni_zero:jni_zero_java",

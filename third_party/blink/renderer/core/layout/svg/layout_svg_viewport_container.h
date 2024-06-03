@@ -55,13 +55,15 @@ class LayoutSVGViewportContainer final : public LayoutSVGContainer {
   }
   gfx::RectF ViewBoxRect() const;
 
+  void IntersectChildren(HitTestResult&, const HitTestLocation&) const;
+
  private:
   bool IsSVGViewportContainer() const final {
     NOT_DESTROYED();
     return true;
   }
 
-  void UpdateLayout() override;
+  void UpdateSVGLayout() override;
 
   SVGTransformChange UpdateLocalTransform(
       const gfx::RectF& reference_box) override;

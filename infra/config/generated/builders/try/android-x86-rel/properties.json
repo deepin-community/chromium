@@ -14,7 +14,7 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "android-oreo-x86-rel",
-              "project": "chromium-m123"
+              "project": "chromium-m125"
             },
             "builder_spec": {
               "build_gs_bucket": "chromium-android-archive",
@@ -32,6 +32,7 @@
               "legacy_gclient_config": {
                 "apply_configs": [
                   "android",
+                  "chromium_with_telemetry_dependencies",
                   "enable_wpr_tests"
                 ],
                 "config": "chromium"
@@ -44,7 +45,7 @@
         {
           "bucket": "ci",
           "builder": "android-oreo-x86-rel",
-          "project": "chromium-m123"
+          "project": "chromium-m125"
         }
       ]
     }
@@ -60,6 +61,12 @@
   "$build/flakiness": {
     "check_for_flakiness": true,
     "check_for_flakiness_with_resultdb": true
+  },
+  "$build/reclient": {
+    "instance": "rbe-chromium-untrusted",
+    "jobs": 500,
+    "metrics_project": "chromium-reclient-metrics",
+    "scandeps_server": true
   },
   "$build/siso": {
     "configs": [

@@ -4,12 +4,11 @@
 #include "media/gpu/test/video_encoder/decoder_buffer_validator.h"
 
 #include <set>
+#include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
-#include "build/build_config.h"
 #include "build/buildflag.h"
 #include "media/base/decoder_buffer.h"
 #include "media/gpu/buildflags.h"
@@ -84,8 +83,10 @@ DecoderBufferValidator::~DecoderBufferValidator() = default;
 void DecoderBufferValidator::ProcessBitstream(
     scoped_refptr<BitstreamRef> bitstream,
     size_t frame_index) {
-  if (!Validate(*bitstream->buffer, bitstream->metadata))
+  CHECK(bitstream);
+  if (!Validate(bitstream->buffer.get(), bitstream->metadata)) {
     num_errors_++;
+  }
 }
 
 bool DecoderBufferValidator::WaitUntilDone() {
@@ -103,7 +104,7 @@ H264Validator::H264Validator(VideoCodecProfile profile,
 
 H264Validator::~H264Validator() = default;
 
-bool H264Validator::Validate(const DecoderBuffer& decoder_buffer,
+bool H264Validator::Validate(const DecoderBuffer* buffer,
                              const BitstreamBufferMetadata& metadata) {
   if (metadata.dropped_frame()) {
     LOG(ERROR)
@@ -111,12 +112,14 @@ bool H264Validator::Validate(const DecoderBuffer& decoder_buffer,
     return false;
   }
 
-  if (!metadata.end_of_picture) {
+  if (!metadata.end_of_picture()) {
     LOG(ERROR) << "end_of_picture must be true always in H264";
     return false;
   }
 
-  parser_.SetStream(decoder_buffer.data(), decoder_buffer.data_size());
+  CHECK(buffer);
+  const DecoderBuffer& decoder_buffer = *buffer;
+  parser_.SetStream(decoder_buffer.data(), decoder_buffer.size());
 
   if (num_temporal_layers_ > 1) {
     if (!metadata.h264) {
@@ -244,9 +247,6 @@ bool H264Validator::Validate(const DecoderBuffer& decoder_buffer,
         }
         seen_pps_ = true;
 
-        // TODO(b/324357617): MTK devices except elm doesn't turn on CABAC in
-        // main profile. Skip CABAC check until the issue is fixed.
-#if defined(ARCH_CPU_X86_FAMILY)
         const H264PPS* pps = parser_.GetPPS(pps_id);
         if ((profile_ == H264SPS::kProfileIDCMain ||
              profile_ == H264SPS::kProfileIDCHigh) &&
@@ -255,7 +255,7 @@ bool H264Validator::Validate(const DecoderBuffer& decoder_buffer,
           LOG(ERROR) << "The entropy coding is not CABAC";
           return false;
         }
-#endif
+
         // 8x8 transform should be enabled if a profile is High. However, we
         // don't check it because it is not enabled due to a hardware limitation
         // on AMD stoneyridge and picasso.
@@ -306,7 +306,7 @@ VP8Validator::VP8Validator(const gfx::Rect& visible_rect,
 
 VP8Validator::~VP8Validator() = default;
 
-bool VP8Validator::Validate(const DecoderBuffer& decoder_buffer,
+bool VP8Validator::Validate(const DecoderBuffer* buffer,
                             const BitstreamBufferMetadata& metadata) {
   if (metadata.dropped_frame()) {
     if (metadata.key_frame) {
@@ -320,16 +320,19 @@ bool VP8Validator::Validate(const DecoderBuffer& decoder_buffer,
     return true;
   }
 
-  if (!metadata.end_of_picture) {
+  if (!metadata.end_of_picture()) {
     LOG(ERROR) << "end_of_picture must be true always in VP8";
     return false;
   }
+
+  CHECK(buffer);
+  const DecoderBuffer& decoder_buffer = *buffer;
 
   // TODO(hiroh): We could be getting more frames in the buffer, but there is
   // no simple way to detect this. We'd need to parse the frames and go through
   // partition numbers/sizes. For now assume one frame per buffer.
   Vp8FrameHeader header;
-  if (!parser_.ParseFrame(decoder_buffer.data(), decoder_buffer.data_size(),
+  if (!parser_.ParseFrame(decoder_buffer.data(), decoder_buffer.size(),
                           &header)) {
     LOG(ERROR) << "Failed parsing";
     return false;
@@ -457,7 +460,7 @@ VP9Validator::VP9Validator(VideoCodecProfile profile,
 
 VP9Validator::~VP9Validator() = default;
 
-bool VP9Validator::Validate(const DecoderBuffer& decoder_buffer,
+bool VP9Validator::Validate(const DecoderBuffer* buffer,
                             const BitstreamBufferMetadata& metadata) {
   if (metadata.dropped_frame()) {
     if (metadata.key_frame) {
@@ -469,7 +472,7 @@ bool VP9Validator::Validate(const DecoderBuffer& decoder_buffer,
           << "BitstreamBufferMetadata has Vp9Metadata on a dropped frame";
       return false;
     }
-    if (metadata.end_of_picture) {
+    if (metadata.end_of_picture()) {
       dropped_superframe_timestamp_.reset();
     } else {
       if (!dropped_superframe_timestamp_) {
@@ -491,11 +494,14 @@ bool VP9Validator::Validate(const DecoderBuffer& decoder_buffer,
     return false;
   }
 
+  CHECK(buffer);
+  const DecoderBuffer& decoder_buffer = *buffer;
+
   // See Annex B "Superframes" in VP9 spec.
   constexpr uint8_t kSuperFrameMarkerMask = 0b11100000;
   constexpr uint8_t kSuperFrameMarker = 0b11000000;
-  if ((decoder_buffer.data()[decoder_buffer.data_size() - 1] &
-       kSuperFrameMarkerMask) == kSuperFrameMarker) {
+  if ((base::span(decoder_buffer).back() & kSuperFrameMarkerMask) ==
+      kSuperFrameMarker) {
     LOG(ERROR) << "Support for super-frames not yet implemented.";
     return false;
   }
@@ -515,7 +521,7 @@ bool VP9Validator::Validate(const DecoderBuffer& decoder_buffer,
   auto& parser = *parsers_[parser_index];
   Vp9FrameHeader header;
   gfx::Size allocate_size;
-  parser.SetStream(decoder_buffer.data(), decoder_buffer.data_size(), nullptr);
+  parser.SetStream(decoder_buffer.data(), decoder_buffer.size(), nullptr);
   if (parser.ParseNextFrame(&header, &allocate_size, nullptr) ==
       Vp9Parser::kInvalidStream) {
     LOG(ERROR) << "Failed parsing";
@@ -692,9 +698,9 @@ bool VP9Validator::ValidateSVCStream(const DecoderBuffer& decoder_buffer,
   };
 
   const bool end_of_picture = vp9.spatial_idx == cur_num_spatial_layers_ - 1;
-  if (end_of_picture != metadata.end_of_picture) {
+  if (end_of_picture != metadata.end_of_picture()) {
     LOG(ERROR) << "end_of_picture mismatches: end_of_picture=" << end_of_picture
-               << ", metadata.end_of_picture=" << metadata.end_of_picture;
+               << ", metadata.end_of_picture=" << metadata.end_of_picture();
     return false;
   }
 
@@ -757,7 +763,7 @@ bool VP9Validator::ValidateSVCStream(const DecoderBuffer& decoder_buffer,
       }
     }
     for (uint8_t p_diff : vp9.p_diffs) {
-      if (!base::Erase(expected_pdiffs, p_diff)) {
+      if (!std::erase(expected_pdiffs, p_diff)) {
         LOG(ERROR)
             << "Frame is referencing buffer not contained in the p_diff.";
         return false;
@@ -865,9 +871,9 @@ bool VP9Validator::ValidateSmodeStream(const DecoderBuffer& decoder_buffer,
   };
 
   const bool end_of_picture = vp9.spatial_idx == cur_num_spatial_layers_ - 1;
-  if (end_of_picture != metadata.end_of_picture) {
+  if (end_of_picture != metadata.end_of_picture()) {
     LOG(ERROR) << "end_of_picture mismatches: end_of_picture=" << end_of_picture
-               << ", metadata.end_of_picture=" << metadata.end_of_picture;
+               << ", metadata.end_of_picture=" << metadata.end_of_picture();
     return false;
   }
   if (end_of_picture) {
@@ -925,7 +931,7 @@ bool VP9Validator::ValidateSmodeStream(const DecoderBuffer& decoder_buffer,
       expected_pdiffs.push_back(new_buffer_state.picture_id - ref.picture_id);
     }
     for (uint8_t p_diff : vp9.p_diffs) {
-      if (!base::Erase(expected_pdiffs, p_diff)) {
+      if (!std::erase(expected_pdiffs, p_diff)) {
         LOG(ERROR)
             << "Frame is referencing buffer not contained in the p_diff.";
         return false;
@@ -970,7 +976,7 @@ AV1Validator::AV1Validator(const gfx::Rect& visible_rect)
 // TODO(b/268487938): Add more robust testing here. Currently we only perform
 // the most basic validation that the bitstream parses correctly and has the
 // right dimensions.
-bool AV1Validator::Validate(const DecoderBuffer& decoder_buffer,
+bool AV1Validator::Validate(const DecoderBuffer* buffer,
                             const BitstreamBufferMetadata& metadata) {
   if (metadata.dropped_frame()) {
     if (metadata.key_frame) {
@@ -983,14 +989,15 @@ bool AV1Validator::Validate(const DecoderBuffer& decoder_buffer,
     }
     return true;
   }
-  if (!metadata.end_of_picture) {
+  if (!metadata.end_of_picture()) {
     LOG(ERROR) << "end_of_picture must be true always in AV1";
     return false;
   }
 
-  libgav1::ObuParser av1_parser(decoder_buffer.data(),
-                                decoder_buffer.data_size(), 0, &buffer_pool_,
-                                &decoder_state_);
+  CHECK(buffer);
+  const DecoderBuffer& decoder_buffer = *buffer;
+  libgav1::ObuParser av1_parser(decoder_buffer.data(), decoder_buffer.size(), 0,
+                                &buffer_pool_, &decoder_state_);
   libgav1::RefCountedBufferPtr curr_frame;
 
   if (sequence_header_) {

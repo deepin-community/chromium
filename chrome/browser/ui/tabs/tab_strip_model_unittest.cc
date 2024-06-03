@@ -29,6 +29,7 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_group.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 #include "chrome/browser/ui/tabs/tab_utils.h"
 #include "chrome/browser/ui/tabs/test_tab_strip_model_delegate.h"
@@ -258,7 +259,6 @@ class MockTabStripModelObserver : public TabStripModelObserver {
         for (const auto& contents : change.GetRemove()->contents) {
           switch (contents.remove_reason) {
             case TabStripModelChange::RemoveReason::kDeleted:
-            case TabStripModelChange::RemoveReason::kCached:
               PushCloseState(contents.contents, contents.index);
               break;
             case TabStripModelChange::RemoveReason::kInsertedIntoOtherTabStrip:
@@ -559,42 +559,6 @@ TEST_F(TabStripModelTest, TestBasicAPI) {
     State s3(raw_contents3, 2, MockTabStripModelObserver::SELECT);
     s3.src_index = 1;
     observer.ExpectStateEquals(2, s3);
-    observer.ClearStates();
-  }
-  EXPECT_EQ("1 2 3", GetTabStripStateString(tabstrip));
-
-  // Test DetachWebContentsAtForInsertion
-  {
-    // Detach ...
-    std::unique_ptr<content::WebContents> detached_with_ownership =
-        tabstrip.DetachWebContentsAtForInsertion(2);
-    WebContents* detached = detached_with_ownership.get();
-    // ... and append again because we want this for later.
-    tabstrip.AppendWebContents(std::move(detached_with_ownership), true);
-    EXPECT_EQ(8, observer.GetStateCount());
-    State s1(detached, 2, MockTabStripModelObserver::DETACH);
-    observer.ExpectStateEquals(0, s1);
-    State s2(detached, 2, MockTabStripModelObserver::DEACTIVATE);
-    observer.ExpectStateEquals(1, s2);
-    State s3(raw_contents2, 1, MockTabStripModelObserver::ACTIVATE);
-    s3.src_contents = raw_contents3;
-    s3.change_reason = TabStripModelObserver::CHANGE_REASON_NONE;
-    observer.ExpectStateEquals(2, s3);
-    State s4(raw_contents2, 1, MockTabStripModelObserver::SELECT);
-    s4.src_index = 2;
-    observer.ExpectStateEquals(3, s4);
-    State s5(detached, 2, MockTabStripModelObserver::INSERT);
-    s5.foreground = true;
-    observer.ExpectStateEquals(4, s5);
-    State s6(raw_contents2, 1, MockTabStripModelObserver::DEACTIVATE);
-    observer.ExpectStateEquals(5, s6);
-    State s7(detached, 2, MockTabStripModelObserver::ACTIVATE);
-    s7.src_contents = raw_contents2;
-    s7.change_reason = TabStripModelObserver::CHANGE_REASON_NONE;
-    observer.ExpectStateEquals(6, s7);
-    State s8(detached, 2, MockTabStripModelObserver::SELECT);
-    s8.src_index = 1;
-    observer.ExpectStateEquals(7, s8);
     observer.ClearStates();
   }
   EXPECT_EQ("1 2 3", GetTabStripStateString(tabstrip));
@@ -3306,12 +3270,12 @@ TEST_F(TabStripModelTest, TabBlockedState) {
   EXPECT_TRUE(strip_src.IsTabBlocked(1));
 
   // Detach the tab.
-  std::unique_ptr<WebContents> moved_contents =
-      strip_src.DetachWebContentsAtForInsertion(1);
-  EXPECT_EQ(raw_contents2, moved_contents.get());
+  std::unique_ptr<tabs::TabModel> moved_tab =
+      strip_src.DetachTabAtForInsertion(1);
+  EXPECT_EQ(raw_contents2, moved_tab->contents());
 
   // Attach the tab to the destination tab strip.
-  strip_dst.AppendWebContents(std::move(moved_contents), true);
+  strip_dst.AppendTab(std::move(moved_tab), true);
   EXPECT_TRUE(strip_dst.IsTabBlocked(0));
 
   strip_dst.CloseAllTabs();
@@ -4671,4 +4635,57 @@ TEST_F(TabStripModelTest, ToggleMuteUnmuteMultipleSites) {
   EXPECT_FALSE(chrome::IsSiteMuted(tabstrip, 1));
 
   tabstrip.CloseAllTabs();
+}
+
+TEST_F(TabStripModelTest, AppendTab) {
+  TestTabStripModelDelegate delegate;
+  std::unique_ptr<TabStripModel> tabstrip =
+      std::make_unique<TabStripModel>(&delegate, profile());
+  ASSERT_TRUE(tabstrip->empty());
+
+  // Create a 2 tabs to serve as an opener and the previous opener.
+  PrepareTabs(tabstrip.get(), 4);
+  ASSERT_EQ(4, tabstrip->count());
+
+  // Force the opener of tab in index 1 to be tab at index 0.
+  tabstrip->SetOpenerOfWebContentsAt(1, tabstrip->GetWebContentsAt(0));
+  ASSERT_EQ(tabstrip->GetWebContentsAt(0),
+            tabstrip->GetTabHandleAt(1).Get()->opener());
+
+  // Detach 2 tabs for the test, one for each option.
+  std::unique_ptr<tabs::TabModel> tab_model_with_foreground_true =
+      tabstrip->DetachTabAtForInsertion(2);
+  tabs::TabModel* tab_model_with_foreground_true_ptr =
+      tab_model_with_foreground_true.get();
+  ASSERT_EQ(3, tabstrip->count());
+  ASSERT_EQ(tab_model_with_foreground_true->owning_model(), nullptr);
+
+  std::unique_ptr<tabs::TabModel> tab_model_with_foreground_false =
+      tabstrip->DetachTabAtForInsertion(2);
+  tabs::TabModel* tab_model_with_foreground_false_ptr =
+      tab_model_with_foreground_false.get();
+  ASSERT_EQ(2, tabstrip->count());
+  ASSERT_EQ(tab_model_with_foreground_false->owning_model(), nullptr);
+
+  // Add a 3rd tab using the foreground option. When the foreground option is
+  // used, the new tab should become active, and the previous tab should become
+  // the opener for the newly active tab.
+  tabstrip->AppendTab(std::move(tab_model_with_foreground_true),
+                      /*foreground=*/true);
+  EXPECT_TRUE(tabstrip->ContainsIndex(2));
+  EXPECT_EQ(2, tabstrip->active_index());
+  EXPECT_EQ(tabstrip->GetWebContentsAt(1),
+            tabstrip->GetTabHandleAt(2).Get()->opener());
+  EXPECT_EQ(tab_model_with_foreground_true_ptr->owning_model(), tabstrip.get());
+
+  // Add a 4th tab using the non foreground option. this is similar to using the
+  // AddType NONE, which should not set the active tab and should not inherit
+  // the opener.
+  tabstrip->AppendTab(std::move(tab_model_with_foreground_false),
+                      /*foreground=*/false);
+  EXPECT_TRUE(tabstrip->ContainsIndex(3));
+  EXPECT_EQ(2, tabstrip->active_index());
+  EXPECT_EQ(nullptr, tabstrip->GetTabHandleAt(3).Get()->opener());
+  EXPECT_EQ(tab_model_with_foreground_false_ptr->owning_model(),
+            tabstrip.get());
 }

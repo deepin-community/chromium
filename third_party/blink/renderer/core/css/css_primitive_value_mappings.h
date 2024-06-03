@@ -331,6 +331,10 @@ inline CSSIdentifierValue::CSSIdentifierValue(ControlPart e)
     case kTextAreaPart:
       value_id_ = CSSValueID::kTextarea;
       break;
+    case kBaseSelectPart:
+      CHECK(RuntimeEnabledFeatures::StylableSelectEnabled());
+      value_id_ = CSSValueID::kBaseSelect;
+      break;
   }
 }
 
@@ -389,6 +393,8 @@ inline ControlPart CSSIdentifierValue::ConvertTo() const {
       return kTextFieldPart;
     case CSSValueID::kTextarea:
       return kTextAreaPart;
+    case CSSValueID::kBaseSelect:
+      return kBaseSelectPart;
     default:
       NOTREACHED();
       return kNoControlPart;
@@ -2133,7 +2139,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(InsetAreaRegion region)
       value_id_ = CSSValueID::kNone;
       break;
     case InsetAreaRegion::kAll:
-      value_id_ = CSSValueID::kAll;
+      value_id_ = CSSValueID::kSpanAll;
       break;
     case InsetAreaRegion::kCenter:
       value_id_ = CSSValueID::kCenter;
@@ -2149,6 +2155,30 @@ inline CSSIdentifierValue::CSSIdentifierValue(InsetAreaRegion region)
       break;
     case InsetAreaRegion::kSelfEnd:
       value_id_ = CSSValueID::kSelfEnd;
+      break;
+    case InsetAreaRegion::kInlineStart:
+      value_id_ = CSSValueID::kInlineStart;
+      break;
+    case InsetAreaRegion::kInlineEnd:
+      value_id_ = CSSValueID::kInlineEnd;
+      break;
+    case InsetAreaRegion::kSelfInlineStart:
+      value_id_ = CSSValueID::kSelfInlineStart;
+      break;
+    case InsetAreaRegion::kSelfInlineEnd:
+      value_id_ = CSSValueID::kSelfInlineEnd;
+      break;
+    case InsetAreaRegion::kBlockStart:
+      value_id_ = CSSValueID::kBlockStart;
+      break;
+    case InsetAreaRegion::kBlockEnd:
+      value_id_ = CSSValueID::kBlockEnd;
+      break;
+    case InsetAreaRegion::kSelfBlockStart:
+      value_id_ = CSSValueID::kSelfBlockStart;
+      break;
+    case InsetAreaRegion::kSelfBlockEnd:
+      value_id_ = CSSValueID::kSelfBlockEnd;
       break;
     case InsetAreaRegion::kTop:
       value_id_ = CSSValueID::kTop;
@@ -2194,7 +2224,7 @@ inline InsetAreaRegion CSSIdentifierValue::ConvertTo() const {
   switch (GetValueID()) {
     case CSSValueID::kNone:
       return InsetAreaRegion::kNone;
-    case CSSValueID::kAll:
+    case CSSValueID::kSpanAll:
       return InsetAreaRegion::kAll;
     case CSSValueID::kCenter:
       return InsetAreaRegion::kCenter;
@@ -2206,6 +2236,22 @@ inline InsetAreaRegion CSSIdentifierValue::ConvertTo() const {
       return InsetAreaRegion::kSelfStart;
     case CSSValueID::kSelfEnd:
       return InsetAreaRegion::kSelfEnd;
+    case CSSValueID::kInlineStart:
+      return InsetAreaRegion::kInlineStart;
+    case CSSValueID::kInlineEnd:
+      return InsetAreaRegion::kInlineEnd;
+    case CSSValueID::kSelfInlineStart:
+      return InsetAreaRegion::kSelfInlineStart;
+    case CSSValueID::kSelfInlineEnd:
+      return InsetAreaRegion::kSelfInlineEnd;
+    case CSSValueID::kBlockStart:
+      return InsetAreaRegion::kBlockStart;
+    case CSSValueID::kBlockEnd:
+      return InsetAreaRegion::kBlockEnd;
+    case CSSValueID::kSelfBlockStart:
+      return InsetAreaRegion::kSelfBlockStart;
+    case CSSValueID::kSelfBlockEnd:
+      return InsetAreaRegion::kSelfBlockEnd;
     case CSSValueID::kTop:
       return InsetAreaRegion::kTop;
     case CSSValueID::kBottom:
@@ -2234,6 +2280,39 @@ inline InsetAreaRegion CSSIdentifierValue::ConvertTo() const {
       NOTREACHED();
       return InsetAreaRegion::kNone;
   };
+}
+
+template <>
+inline CSSIdentifierValue::CSSIdentifierValue(PositionVisibility visibility)
+    : CSSValue(kIdentifierClass) {
+  switch (visibility) {
+    case PositionVisibility::kAlways:
+      value_id_ = CSSValueID::kAlways;
+      break;
+    // TODO(crbug.com/332933527): Support kAnchorsValid.
+    case PositionVisibility::kAnchorsVisible:
+      value_id_ = CSSValueID::kAnchorsVisible;
+      break;
+    case PositionVisibility::kNoOverflow:
+      value_id_ = CSSValueID::kNoOverflow;
+      break;
+  }
+}
+
+template <>
+inline PositionVisibility CSSIdentifierValue::ConvertTo() const {
+  switch (GetValueID()) {
+    case CSSValueID::kAlways:
+      return PositionVisibility::kAlways;
+    // TODO(crbug.com/332933527): Support kAnchorsValid.
+    case CSSValueID::kAnchorsVisible:
+      return PositionVisibility::kAnchorsVisible;
+    case CSSValueID::kNoOverflow:
+      return PositionVisibility::kNoOverflow;
+    default:
+      NOTREACHED();
+      return PositionVisibility::kAlways;
+  }
 }
 
 }  // namespace blink

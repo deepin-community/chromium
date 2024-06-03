@@ -147,6 +147,19 @@ class AlpsFrameDecoder : public HttpDecoder::Visitor {
       WebTransportSessionId /*session_id*/) override {
     QUICHE_NOTREACHED();
   }
+  bool OnMetadataFrameStart(QuicByteCount /*header_length*/,
+                            QuicByteCount /*payload_length*/) override {
+    error_detail_ = "METADATA frame forbidden";
+    return false;
+  }
+  bool OnMetadataFramePayload(absl::string_view /*payload*/) override {
+    QUICHE_NOTREACHED();
+    return false;
+  }
+  bool OnMetadataFrameEnd() override {
+    QUICHE_NOTREACHED();
+    return false;
+  }
   bool OnUnknownFrameStart(uint64_t /*frame_type*/,
                            QuicByteCount
                            /*header_length*/,
@@ -853,7 +866,7 @@ void QuicSpdySession::SendInitialData() {
 }
 
 bool QuicSpdySession::CheckStreamWriteBlocked(QuicStream* stream) const {
-  if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data3) &&
+  if (GetQuicRestartFlag(quic_opport_bundle_qpack_decoder_data4) &&
       qpack_decoder_send_stream_ != nullptr &&
       stream->id() == qpack_decoder_send_stream_->id()) {
     // Decoder data is always bundled opportunistically.

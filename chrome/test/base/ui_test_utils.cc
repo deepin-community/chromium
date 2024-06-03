@@ -26,6 +26,7 @@
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -89,6 +90,7 @@
 #endif
 
 #if defined(TOOLKIT_VIEWS)
+#include "ui/views/test/widget_test_api.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #endif
@@ -291,8 +293,10 @@ NavigateToURLWithDispositionBlockUntilNavigationsComplete(
 
   AllBrowserTabAddedWaiter tab_added_waiter;
 
-  WebContents* web_contents = browser->OpenURL(OpenURLParams(
-      url, Referrer(), disposition, ui::PAGE_TRANSITION_TYPED, false));
+  WebContents* web_contents =
+      browser->OpenURL(OpenURLParams(url, Referrer(), disposition,
+                                     ui::PAGE_TRANSITION_TYPED, false),
+                       /*navigation_handle_callback=*/{});
   if (browser_test_flags & BROWSER_TEST_WAIT_FOR_BROWSER)
     browser = WaitForBrowserNotInSet(initial_browsers);
   if (browser_test_flags & BROWSER_TEST_WAIT_FOR_TAB)
@@ -484,14 +488,37 @@ bool WaitForMinimized(Browser* browser) {
   return minimize_waiter.Wait();
 }
 
+bool WaitForMaximized(Browser* browser) {
+  views::test::PropertyWaiter maximize_waiter(
+      base::BindRepeating(&BrowserWindow::IsMaximized,
+                          base::Unretained(browser->window())),
+      true);
+  return maximize_waiter.Wait();
+}
+
+views::AsyncWidgetRequestWaiter CreateAsyncWidgetRequestWaiter(
+    Browser& browser) {
+  auto* widget = views::Widget::GetWidgetForNativeWindow(
+      browser.window()->GetNativeWindow());
+  CHECK(widget);
+  return views::AsyncWidgetRequestWaiter(*widget);
+}
+
+void SetAndWaitForBounds(Browser& browser, const gfx::Rect& bounds) {
+  auto waiter = CreateAsyncWidgetRequestWaiter(browser);
+  auto* window = browser.window();
+  window->SetBounds(bounds);
+  waiter.Wait();
+}
+
 FullscreenWaiter::FullscreenWaiter(Browser* browser,
                                    FullscreenWaiter::Expectation expectation)
     : expectation_(std::move(expectation)),
       controller_(browser->exclusive_access_manager()->fullscreen_controller()),
       // Sometimes, the wait is called on a sequeunce, e.g.
       // as a part of interactive_ui_tests's RunTestSequence.
-      // To handle that case, we can process pending task posted to the sequence
-      // in nested RunLoop.
+      // To handle that case, we can process pending task posted to the
+      // sequence in nested RunLoop.
       run_loop_(base::RunLoop::Type::kNestableTasksAllowed),
       satisfied_(IsSatisfied()) {
   observation_.Observe(controller_);
@@ -594,6 +621,23 @@ void BrowserSetLastActiveWaiter::OnBrowserSetLastActive(Browser* browser) {
       run_loop_.Quit();
     }
   }
+}
+
+void WaitForBrowserSetLastActive(Browser* browser,
+                                 bool wait_for_set_last_active_observed) {
+  BrowserSetLastActiveWaiter waiter(browser, wait_for_set_last_active_observed);
+  waiter.Wait();
+}
+
+Browser* OpenNewEmptyWindowAndWaitUntilSetAsLastActive(
+    Profile* profile,
+    bool should_trigger_session_restore) {
+  BrowserChangeObserver new_browser_observer(
+      nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
+  chrome::NewEmptyWindow(profile, should_trigger_session_restore);
+  Browser* new_browser = new_browser_observer.Wait();
+  WaitForBrowserSetLastActive(new_browser);
+  return new_browser;
 }
 
 void SendToOmniboxAndSubmit(Browser* browser,

@@ -13,7 +13,9 @@
 #include "base/debug/debugging_buildflags.h"
 #include "base/debug/profiler.h"
 #include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "base/time/time.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -50,6 +52,7 @@
 #include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/singleton_tabs.h"
+#include "chrome/browser/ui/startup/default_browser_prompt_manager.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
@@ -74,7 +77,6 @@
 #include "components/performance_manager/public/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
-#include "components/services/screen_ai/buildflags/buildflags.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/signin/public/base/signin_buildflags.h"
@@ -93,6 +95,7 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/extension_urls.h"
 #include "printing/buildflags/buildflags.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 #include "ui/actions/actions.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -673,16 +676,16 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       ManagePasswordsForPage(browser_);
       break;
     case IDC_SEND_TAB_TO_SELF:
-      SendTabToSelfFromPageAction(browser_);
+      SendTabToSelf(browser_);
       break;
     case IDC_QRCODE_GENERATOR:
-      GenerateQRCodeFromPageAction(browser_);
+      GenerateQRCode(browser_);
       break;
     case IDC_SHARING_HUB:
-      SharingHubFromPageAction(browser_);
+      SharingHub(browser_);
       break;
     case IDC_SHARING_HUB_SCREENSHOT:
-      ScreenshotCaptureFromPageAction(browser_);
+      ScreenshotCapture(browser_);
       break;
     case IDC_FOLLOW:
       FollowSite(browser_->tab_strip_model()->GetActiveWebContents());
@@ -959,9 +962,6 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_SHOW_BETA_FORUM:
       ShowBetaForum(browser_);
       break;
-    case IDC_DISTILL_PAGE:
-      ToggleDistilledView(browser_);
-      break;
     case IDC_ROUTE_MEDIA:
       RouteMediaInvokedFromAppMenu(browser_);
       break;
@@ -973,6 +973,9 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       break;
     case IDC_WINDOW_GROUP_TAB:
       GroupTab(browser_);
+      break;
+    case IDC_CREATE_NEW_TAB_GROUP:
+      CreateNewTabGroup(browser_);
       break;
     case IDC_WINDOW_CLOSE_TABS_TO_RIGHT:
       CloseTabsToRight(browser_);
@@ -1098,6 +1101,31 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
           ProfilePicker::EntryPoint::kAppMenuProfileSubMenuManageProfiles));
       break;
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+    case IDC_SET_BROWSER_AS_DEFAULT:
+      base::MakeRefCounted<shell_integration::DefaultBrowserWorker>()
+          ->StartSetAsDefault(base::DoNothing());
+
+      // Log metrics before clearing prefs and closing prompts.
+      if (g_browser_process->local_state()->HasPrefPath(
+              prefs::kDefaultBrowserFirstShownTime)) {
+        base::UmaHistogramCounts100(
+            "DefaultBrowser.AppMenu.TimesShownBeforeAccept",
+            g_browser_process->local_state()->GetInteger(
+                prefs::kDefaultBrowserDeclinedCount) +
+                1);
+        base::UmaHistogramCustomTimes(
+            "DefaultBrowser.AppMenu.TimeToSetDefault",
+            base::Time::Now() - g_browser_process->local_state()->GetTime(
+                                    prefs::kDefaultBrowserFirstShownTime),
+            base::Milliseconds(1), base::Days(7), 50);
+      }
+      DefaultBrowserPromptManager::UpdatePrefsForDismissedPrompt(
+          browser_->profile());
+      DefaultBrowserPromptManager::GetInstance()->CloseAllPrompts(
+          DefaultBrowserPromptManager::CloseReason::kAccept);
+      break;
+#endif
     default:
       LOG(WARNING) << "Received Unimplemented Command: " << id;
       break;
@@ -1210,6 +1238,7 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_EXIT, true);
   command_updater_.UpdateCommandEnabled(IDC_NAME_WINDOW, true);
   command_updater_.UpdateCommandEnabled(IDC_ORGANIZE_TABS, true);
+  command_updater_.UpdateCommandEnabled(IDC_CREATE_NEW_TAB_GROUP, true);
 #if BUILDFLAG(IS_CHROMEOS)
   command_updater_.UpdateCommandEnabled(IDC_TOGGLE_MULTITASK_MENU, true);
 #endif
@@ -1370,6 +1399,7 @@ void BrowserCommandController::InitCommandState() {
 
   // These are always enabled; the menu determines their menu item visibility.
   command_updater_.UpdateCommandEnabled(IDC_UPGRADE_DIALOG, true);
+  command_updater_.UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   command_updater_.UpdateCommandEnabled(IDC_LACROS_DATA_MIGRATION, true);
 #endif
@@ -1377,10 +1407,6 @@ void BrowserCommandController::InitCommandState() {
   // Safety Hub commands.
   command_updater_.UpdateCommandEnabled(
       IDC_OPEN_SAFETY_HUB, base::FeatureList::IsEnabled(features::kSafetyHub));
-
-  // Distill current page.
-  command_updater_.UpdateCommandEnabled(IDC_DISTILL_PAGE,
-                                        dom_distiller::IsDomDistillerEnabled());
 
   command_updater_.UpdateCommandEnabled(IDC_WINDOW_MUTE_SITE, normal_window);
   command_updater_.UpdateCommandEnabled(IDC_WINDOW_PIN_TAB, normal_window);
@@ -1495,7 +1521,7 @@ void BrowserCommandController::UpdateCommandsForIncognitoAvailability() {
 }
 
 void BrowserCommandController::UpdateCommandsForExtensionsMenu() {
-  // TODO(crbug.com/401026): Talk with isandrk@chromium.org about whether this
+  // TODO(crbug.com/41124423): Talk with isandrk@chromium.org about whether this
   // is necessary for the experiment or not.
   if (is_locked_fullscreen_) {
     return;
@@ -1566,8 +1592,8 @@ void BrowserCommandController::UpdateCommandsForTabState() {
   }
 
   bool is_isolated_app = current_web_contents->GetPrimaryMainFrame()
-                             ->GetWebExposedIsolationLevel() >=
-                         WebExposedIsolationLevel::kMaybeIsolatedApplication;
+                             ->GetWebExposedIsolationLevel() ==
+                         WebExposedIsolationLevel::kIsolatedApplication;
   bool is_pinned_home_tab = web_app::IsPinnedHomeTab(
       browser_->tab_strip_model(), browser_->tab_strip_model()->active_index());
   command_updater_.UpdateCommandEnabled(
@@ -1801,7 +1827,7 @@ void BrowserCommandController::UpdateCommandsForLockedFullscreenMode() {
     // Update the state of allowlisted commands:
     // IDC_CUT/IDC_COPY/IDC_PASTE,
     UpdateCommandsForContentRestrictionState();
-    // TODO(crbug.com/904637): Re-enable Find and Zoom in locked fullscreen.
+    // TODO(crbug.com/41426009): Re-enable Find and Zoom in locked fullscreen.
     // All other commands will be disabled (there is an early return in their
     // corresponding UpdateCommandsFor* functions).
 #if DCHECK_IS_ON()
@@ -1822,9 +1848,11 @@ void BrowserCommandController::UpdatePrintingState() {
   bool print_enabled = CanPrint(browser_);
   command_updater_.UpdateCommandEnabled(IDC_PRINT, print_enabled);
   if (features::IsToolbarPinningEnabled()) {
-    actions::ActionManager::Get()
-        .FindAction(kActionPrint)
-        ->SetEnabled(print_enabled);
+    actions::ActionItem* const print_action =
+        actions::ActionManager::Get().FindAction(kActionPrint);
+    if (print_action) {
+      print_action->SetEnabled(print_enabled);
+    }
   }
 #if BUILDFLAG(ENABLE_PRINTING)
   command_updater_.UpdateCommandEnabled(IDC_BASIC_PRINT,

@@ -18,6 +18,7 @@
 #include "core/fpdfapi/parser/cpdf_number.h"
 #include "core/fpdfapi/parser/cpdf_stream.h"
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_system.h"
 #include "core/fxge/cfx_defaultrenderdevice.h"
@@ -35,7 +36,6 @@
 #include "testing/utils/file_util.h"
 #include "testing/utils/hash.h"
 #include "testing/utils/path_service.h"
-#include "third_party/base/check.h"
 
 using pdfium::HelloWorldChecksum;
 using testing::HasSubstr;
@@ -1003,7 +1003,7 @@ TEST_F(FPDFEditEmbedderTest, BUG_1574) {
   CloseSavedDocument();
 }
 
-TEST_F(FPDFEditEmbedderTest, BUG_1893) {
+TEST_F(FPDFEditEmbedderTest, Bug1893) {
   ASSERT_TRUE(OpenDocument("bug_1893.pdf"));
   FPDF_PAGE page = LoadPage(0);
   {
@@ -1061,31 +1061,10 @@ TEST_F(FPDFEditEmbedderTest, BUG_1893) {
   UnloadPage(page);
 
   {
-    // TODO(crbug.com/pdfium/1893): The saved result should match
-    // `removed_checksum`. But in the actual saved result, the remaining text
-    // objects were upside down. Remove `wrong_checksum` after fixing this
-    // issue.
-    const char* wrong_checksum = []() {
-      if (CFX_DefaultRenderDevice::UseSkiaRenderer()) {
-#if BUILDFLAG(IS_WIN)
-        return "441cada6218d4fd79dbe0ba95093524e";
-#elif BUILDFLAG(IS_APPLE)
-        return "627290533339e0ae493dc9385fac53e2";
-#else
-        return "57da26dcb24503403cadb27ed8bb46c6";
-#endif
-      }
-#if BUILDFLAG(IS_APPLE)
-      return "c3b6a8ecd863914044f5f79137c606b5";
-#else
-      return "cb19480a846e4efd36418cbd7412118e";
-#endif
-    }();
-
     ASSERT_TRUE(OpenSavedDocument());
     FPDF_PAGE saved_page = LoadSavedPage(0);
     ScopedFPDFBitmap bitmap = RenderSavedPageWithFlags(saved_page, FPDF_ANNOT);
-    CompareBitmap(bitmap.get(), 200, 300, wrong_checksum);
+    CompareBitmap(bitmap.get(), 200, 300, removed_checksum);
     CloseSavedPage(saved_page);
     CloseSavedDocument();
   }
@@ -5201,6 +5180,73 @@ TEST_F(FPDFEditEmbedderTest, MultipleGraphicsStates) {
   VerifySavedDocument(200, 300, checksum);
 
   UnloadPage(page);
+}
+
+TEST_F(FPDFEditEmbedderTest, GetAndSetMatrixForFormWithText) {
+  constexpr int kExpectedWidth = 200;
+  constexpr int kExpectedHeight = 200;
+
+  OpenDocument("form_object_with_text.pdf");
+  FPDF_PAGE page = LoadPage(0);
+  ASSERT_TRUE(page);
+
+  {
+    ScopedFPDFBitmap bitmap = RenderLoadedPage(page);
+    CompareBitmap(bitmap.get(), kExpectedWidth, kExpectedHeight,
+                  HelloWorldChecksum());
+  }
+
+  FPDF_PAGEOBJECT form = FPDFPage_GetObject(page, 0);
+  ASSERT_TRUE(form);
+  ASSERT_EQ(FPDF_PAGEOBJ_FORM, FPDFPageObj_GetType(form));
+
+  FS_MATRIX matrix;
+  ASSERT_TRUE(FPDFPageObj_GetMatrix(form, &matrix));
+  EXPECT_FLOAT_EQ(2.0f, matrix.a);
+  EXPECT_FLOAT_EQ(0.0f, matrix.b);
+  EXPECT_FLOAT_EQ(0.0f, matrix.c);
+  EXPECT_FLOAT_EQ(-1.0f, matrix.d);
+  EXPECT_FLOAT_EQ(0.0f, matrix.e);
+  EXPECT_FLOAT_EQ(200.0f, matrix.f);
+
+  ASSERT_TRUE(FPDFPageObj_SetMatrix(form, &matrix));
+  {
+    ScopedFPDFBitmap bitmap = RenderLoadedPage(page);
+    CompareBitmap(bitmap.get(), kExpectedWidth, kExpectedHeight,
+                  HelloWorldChecksum());
+  }
+
+  FPDF_PAGEOBJECT text = FPDFFormObj_GetObject(form, 0);
+  ASSERT_TRUE(text);
+  ASSERT_EQ(FPDF_PAGEOBJ_TEXT, FPDFPageObj_GetType(text));
+
+  ASSERT_TRUE(FPDFPageObj_GetMatrix(text, &matrix));
+  EXPECT_FLOAT_EQ(0.5f, matrix.a);
+  EXPECT_FLOAT_EQ(0.0f, matrix.b);
+  EXPECT_FLOAT_EQ(0.0f, matrix.c);
+  EXPECT_FLOAT_EQ(-1.0f, matrix.d);
+  EXPECT_FLOAT_EQ(10.0f, matrix.e);
+  EXPECT_FLOAT_EQ(150.0f, matrix.f);
+
+  ASSERT_TRUE(FPDFPageObj_SetMatrix(text, &matrix));
+  {
+    ScopedFPDFBitmap bitmap = RenderLoadedPage(page);
+    CompareBitmap(bitmap.get(), kExpectedWidth, kExpectedHeight,
+                  HelloWorldChecksum());
+  }
+
+  ASSERT_TRUE(FPDFPage_GenerateContent(page));
+  ASSERT_TRUE(FPDF_SaveAsCopy(document(), this, 0));
+
+  {
+    ScopedFPDFBitmap bitmap = RenderLoadedPage(page);
+    CompareBitmap(bitmap.get(), kExpectedWidth, kExpectedHeight,
+                  HelloWorldChecksum());
+  }
+
+  UnloadPage(page);
+
+  VerifySavedDocument(kExpectedWidth, kExpectedHeight, HelloWorldChecksum());
 }
 
 class FPDFEditMoveEmbedderTest : public EmbedderTest {

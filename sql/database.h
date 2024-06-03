@@ -9,12 +9,13 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/component_export.h"
 #include "base/containers/flat_map.h"
 #include "base/dcheck_is_on.h"
@@ -26,7 +27,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
+#include "base/thread_annotations.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/types/pass_key.h"
 #include "sql/internal_api_token.h"
@@ -52,7 +53,6 @@ class ChromeSqlDiagnostics;
 namespace sql {
 
 class DatabaseMemoryDumpProvider;
-class Recovery;
 class Statement;
 
 namespace test {
@@ -109,8 +109,7 @@ struct COMPONENT_EXPORT(SQL) DatabaseOptions {
   // If true, enables SQLite's Write-Ahead Logging (WAL).
   //
   // WAL integration is under development, and should not be used in shipping
-  // Chrome features yet. In particular, our custom database recovery code does
-  // not support the WAL log file.
+  // Chrome features yet.
   //
   // WAL mode is currently not fully supported on FuchsiaOS. It will only be
   // turned on if the database is also using exclusive locking mode.
@@ -260,8 +259,10 @@ struct COMPONENT_EXPORT(SQL) DatabaseDiagnostics {
 
 // Handle to an open SQLite database.
 //
-// Instances of this class are not thread-safe. After construction, a Database
-// instance should only be accessed from one sequence.
+// Instances of this class are not thread-safe. With few exceptions, Database
+// instances should only be accessed from one sequence. Database instances may
+// be constructed on one sequence and safely used/destroyed on another. Callers
+// may explicitly use `DetachFromSequence()` before moving to another sequence.
 //
 // When a Database instance goes out of scope, any uncommitted transactions are
 // rolled back.
@@ -390,16 +391,12 @@ class COMPONENT_EXPORT(SQL) Database {
   // is closed.
   [[nodiscard]] bool OpenInMemory();
 
-  // Alternative to Open() that creates a temporary on-disk database.
-  //
-  // Returns true in case of success, false in case of failure.
-  //
-  // The files associated with the temporary database will be deleted when the
-  // database is closed.
-  [[nodiscard]] bool OpenTemporary(base::PassKey<Recovery>);
-
   // Returns true if the database has been successfully opened.
   bool is_open() const;
+
+  // Detach from the currently-attached sequence. If already attached to a
+  // sequence, this method must be called from that sequence.
+  void DetachFromSequence();
 
   // Closes the database. This is automatically performed on destruction for
   // you, but this allows you to close the database early. You must not call
@@ -500,7 +497,7 @@ class COMPONENT_EXPORT(SQL) Database {
 
   bool HasActiveTransactions() const {
     DCHECK_GE(transaction_nesting_, 0);
-    return transaction_nesting_ > 0;
+    return is_open() && transaction_nesting_ > 0;
   }
 
   // Deprecated in favor of HasActiveTransactions().
@@ -515,15 +512,14 @@ class COMPONENT_EXPORT(SQL) Database {
   //
   // `attachment_point` must only contain lowercase letters.
   //
-  // Attachment APIs are only exposed for use in recovery. General use is
-  // discouraged in Chrome. The README has more details.
+  // Use is generally discouraged in production code. The README has more
+  // details.
   //
   // On the SQLite version shipped with Chrome (3.21+, Oct 2017), databases can
   // be attached while a transaction is opened. However, these databases cannot
   // be detached until the transaction is committed or aborted.
   bool AttachDatabase(const base::FilePath& other_db_path,
-                      base::StringPiece attachment_point,
-                      InternalApiToken);
+                      std::string_view attachment_point);
 
   // Detaches a database that was previously attached with AttachDatabase().
   //
@@ -532,7 +528,7 @@ class COMPONENT_EXPORT(SQL) Database {
   //
   // Attachment APIs are only exposed for use in recovery. General use is
   // discouraged in Chrome. The README has more details.
-  bool DetachDatabase(base::StringPiece attachment_point, InternalApiToken);
+  bool DetachDatabase(std::string_view attachment_point);
 
   // Statements ----------------------------------------------------------------
 
@@ -617,9 +613,9 @@ class COMPONENT_EXPORT(SQL) Database {
   // Returns true if the given structure exists.  Instead of test-then-create,
   // callers should almost always prefer the "IF NOT EXISTS" version of the
   // CREATE statement.
-  bool DoesIndexExist(base::StringPiece index_name);
-  bool DoesTableExist(base::StringPiece table_name);
-  bool DoesViewExist(base::StringPiece table_name);
+  bool DoesIndexExist(std::string_view index_name);
+  bool DoesTableExist(std::string_view table_name);
+  bool DoesViewExist(std::string_view table_name);
 
   // Returns true if a column with the given name exists in the given table.
   //
@@ -653,8 +649,7 @@ class COMPONENT_EXPORT(SQL) Database {
   // Returns the error code associated with the last sqlite operation.
   int GetErrorCode() const;
 
-  // Returns the errno associated with GetErrorCode().  See
-  // SQLITE_LAST_ERRNO in SQLite documentation.
+  // Returns the errno associated with GetErrorCode(). See <errno.h>.
   int GetLastErrno() const;
 
   // Returns a pointer to a statically allocated string associated with the
@@ -707,6 +702,7 @@ class COMPONENT_EXPORT(SQL) Database {
   static base::FilePath SharedMemoryFilePath(const base::FilePath& db_path);
 
   // Internal state accessed by other classes in //sql.
+  base::WeakPtr<Database> GetWeakPtr(InternalApiToken);
   sqlite3* db(InternalApiToken) const { return db_; }
   bool poisoned(InternalApiToken) const { return poisoned_; }
   base::FilePath DbPath(InternalApiToken) const { return DbPath(); }
@@ -732,24 +728,12 @@ class COMPONENT_EXPORT(SQL) Database {
   FRIEND_TEST_ALL_PREFIXES(SQLiteFeaturesTest, WALNoClose);
   FRIEND_TEST_ALL_PREFIXES(SQLEmptyPathDatabaseTest, EmptyPathTest);
 
-  // Enables a special behavior for OpenInternal().
-  enum class OpenMode {
-    // No special behavior.
-    kNone,
-
-    // Open an in-memory database. Used by OpenInMemory().
-    kInMemory,
-
-    // Open a temporary database. Used by OpenTemporary().
-    kTemporary,
-  };
-
-  // Implements Open(), OpenInMemory(), and OpenTemporary().
+  // Implements Open(), OpenInMemory().
   //
-  // `db_file_path` is a UTF-8 path to the file storing the database pages. The
-  // path must be empty if `mode` is kTemporary. The path must be the SQLite
-  // magic memory path string if `mode` is kMemory.
-  bool OpenInternal(const std::string& file_name, OpenMode mode);
+  // `db_file_path` is a UTF-8 path to the file storing the database pages. If
+  // `file_name` is the SQLite magic memory path :memory:, the database will be
+  // opened in-memory.
+  bool OpenInternal(const std::string& file_name);
 
   // Configures the underlying sqlite3* object via sqlite3_db_config().
   //
@@ -774,7 +758,7 @@ class COMPONENT_EXPORT(SQL) Database {
   }
 
   // Internal helper for Does*Exist() functions.
-  bool DoesSchemaItemExist(base::StringPiece name, base::StringPiece type);
+  bool DoesSchemaItemExist(std::string_view name, std::string_view type);
 
   // Used to implement the interface with sql::test::ScopedErrorExpecter.
   static ScopedErrorExpecterCallback* current_expecter_cb_;
@@ -948,9 +932,7 @@ class COMPONENT_EXPORT(SQL) Database {
   // Returns a SQLite VFS interface pointer to the file storing database pages.
   //
   // Returns null if the database is not backed by a VFS file. This is always
-  // the case for in-memory databases. Temporary databases (only used by sq
-  // ::Recovery) start without a backing VFS file, and only get a file when they
-  // outgrow their page cache.
+  // the case for in-memory databases.
   //
   // This method must only be called while the database is successfully opened.
   sqlite3_file* GetSqliteVfsFile();

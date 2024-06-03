@@ -20,9 +20,9 @@ try_.defaults.set(
     cores = 8,
     os = os.WINDOWS_DEFAULT,
     compilator_cores = 16,
-    compilator_reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CQ,
     execution_timeout = try_.DEFAULT_EXECUTION_TIMEOUT,
     orchestrator_cores = 2,
+    orchestrator_reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CQ,
     reclient_instance = reclient.instance.DEFAULT_UNTRUSTED,
     reclient_jobs = reclient.jobs.LOW_JOBS_FOR_CQ,
     service_account = try_.DEFAULT_SERVICE_ACCOUNT,
@@ -36,6 +36,21 @@ try_.defaults.set(
 consoles.list_view(
     name = "tryserver.chromium.win",
     branch_selector = branches.selector.WINDOWS_BRANCHES,
+)
+
+try_.builder(
+    name = "linux-win-cross-rel",
+    description_html = "Linux to Windows cross compile.",
+    mirrors = ["ci/linux-win-cross-rel"],
+    gn_args = gn_args.config(
+        configs = [
+            "ci/linux-win-cross-rel",
+            "dcheck_always_on",
+            "no_symbols",
+        ],
+    ),
+    os = os.LINUX_DEFAULT,
+    contact_team_email = "chrome-build-team@google.com",
 )
 
 try_.builder(
@@ -60,24 +75,6 @@ try_.builder(
     ssd = True,
     execution_timeout = 9 * time.hour,
     reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CQ,
-)
-
-try_.builder(
-    name = "win-celab-try-rel",
-    executable = "recipe:celab",
-    gn_args = gn_args.config(
-        configs = [
-            "release_builder",
-            "reclient",
-            "minimal_symbols",
-        ],
-    ),
-    properties = {
-        "exclude": "chrome_only",
-        "pool_name": "celab-chromium-try",
-        "pool_size": 20,
-        "tests": "*",
-    },
 )
 
 try_.builder(
@@ -187,7 +184,7 @@ try_.builder(
     mirrors = [
         "ci/Win Builder (dbg)",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         include_all_triggered_testers = True,
         is_compile_only = True,
     ),
@@ -214,7 +211,7 @@ try_.builder(
     mirrors = [
         "ci/Win Builder",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         include_all_triggered_testers = True,
         is_compile_only = True,
     ),
@@ -306,7 +303,8 @@ try_.builder(
 )
 
 try_.builder(
-    name = "win11-x64-fyi-rel",
+    name = "win11-rel",
+    description_html = "This builder run tests for Windows 11 release build.",
     mirrors = [
         "ci/Win x64 Builder",
         "ci/Win11 Tests x64",
@@ -323,10 +321,9 @@ try_.builder(
     ),
     builderless = True,
     os = os.WINDOWS_10,
+    contact_team_email = "chrome-desktop-engprod@google.com",
     coverage_test_types = ["unit", "overall"],
     tryjob = try_.job(
-        # TODO(https://crbug.com/1441206): Enable after resources verified.
-        experiment_percentage = 100,
         location_filters = [
             "sandbox/win/.+",
             "sandbox/policy/win/.+",
@@ -370,12 +367,48 @@ try_.orchestrator_builder(
     compilator = "win-arm64-rel-compilator",
     contact_team_email = "chrome-desktop-engprod@google.com",
     coverage_test_types = ["unit", "overall"],
-    use_clang_coverage = True,
-    # Enable when stable.
-    # main_list_view = "try",
+    main_list_view = "try",
     # TODO (crbug.com/1372179): Use orchestrator pool once overloaded test pools
     # are addressed
     #use_orchestrator_pool = True,
+    tryjob = try_.job(
+        location_filters = [
+            "sandbox/win/.+",
+            "sandbox/policy/win/.+",
+        ],
+    ),
+    use_clang_coverage = True,
+)
+
+try_.builder(
+    name = "win-arm64-compile-dbg",
+    branch_selector = branches.selector.WINDOWS_BRANCHES,
+    description_html = "Compile only builder for Windows ARM64 debug.",
+    mirrors = [
+        "ci/win-arm64-dbg",
+    ],
+    builder_config_settings = builder_config.try_settings(
+        include_all_triggered_testers = True,
+        is_compile_only = True,
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "ci/win-arm64-dbg",
+        ],
+    ),
+    builderless = False,
+    cores = None,
+    os = os.WINDOWS_10,
+    contact_team_email = "chrome-desktop-engprod@google.com",
+    main_list_view = "try",
+    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CQ,
+    tryjob = try_.job(
+        # TODO(crbug.com/1335555) Remove once cancelling doesn't wipe
+        # out builder cache
+        cancel_stale = False,
+        # TODO(crbug.com/328175907) Enable after resources verified.
+        experiment_percentage = 50,
+    ),
 )
 
 try_.builder(
@@ -449,7 +482,7 @@ try_.gpu.optional_tests_builder(
         ),
         build_gs_bucket = "chromium-gpu-fyi-archive",
     ),
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         retry_failed_shards = False,
     ),
     gn_args = gn_args.config(
@@ -462,6 +495,8 @@ try_.gpu.optional_tests_builder(
         ],
     ),
     os = os.WINDOWS_DEFAULT,
+    # default is 6 in _gpu_optional_tests_builder()
+    execution_timeout = 5 * time.hour,
     main_list_view = "try",
     tryjob = try_.job(
         location_filters = [

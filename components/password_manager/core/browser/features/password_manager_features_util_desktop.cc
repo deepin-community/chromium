@@ -15,6 +15,8 @@
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/public/base/gaia_id_hash.h"
+#include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/sync/base/pref_names.h"
 #include "components/sync/base/user_selectable_type.h"
@@ -98,6 +100,10 @@ class ScopedAccountStorageSettingsUpdate {
 
 bool ShouldShowAccountStorageOptIn(const PrefService* pref_service,
                                    const syncer::SyncService* sync_service) {
+  if (!AreAccountStorageOptInPromosAllowed()) {
+    return false;
+  }
+
   // Show the opt-in if the user is eligible, but not yet opted in.
   return internal::IsUserEligibleForAccountStorage(pref_service,
                                                    sync_service) &&
@@ -107,6 +113,10 @@ bool ShouldShowAccountStorageOptIn(const PrefService* pref_service,
 bool ShouldShowAccountStorageReSignin(const PrefService* pref_service,
                                       const syncer::SyncService* sync_service,
                                       const GURL& current_page_url) {
+  if (!AreAccountStorageOptInPromosAllowed()) {
+    return false;
+  }
+
   // Checks that the sync_service is not null and the feature is enabled.
   // IsUserEligibleForAccountStorage() doesn't fit because it's false for
   // signed-out users.
@@ -379,6 +389,29 @@ void MigrateDeclinedSaveOptInToExplicitOptOut(PrefService* pref_service) {
           ->Set(syncer::prefs::internal::kSyncPasswords, false);
     }
   }
+}
+
+bool ShouldShowAccountStorageSettingToggle(
+    const PrefService* pref_service,
+    const syncer::SyncService* sync_service) {
+  return AreAccountStorageOptInPromosAllowed()
+             ? (IsOptedInForAccountStorage(pref_service, sync_service) ||
+                ShouldShowAccountStorageOptIn(pref_service, sync_service))
+             : internal::IsUserEligibleForAccountStorage(pref_service,
+                                                         sync_service);
+}
+
+bool AreAccountStorageOptInPromosAllowed() {
+  // Disallow promos when kExplicitBrowserSigninUIOnDesktop is on.
+  // - For users who went through explicit sign-in, account storage is enabled
+  //   by default. If they bothered to disable this feature, they should not be
+  //   spammed into re-enabling it.
+  // - Users who went through implicit sign-in will be migrated to explicit
+  //   sign-in in the future, at which point the above applies. In the meantime,
+  //   it's not worth keeping the promos UI. Most users in this group have seen
+  //   the promo by now and have accepted *if* they want the feature.
+  return !switches::IsExplicitBrowserSigninUIOnDesktopEnabled(
+      switches::ExplicitBrowserSigninPhase::kFull);
 }
 
 // Note: See also password_manager_features_util_common.cc for shared

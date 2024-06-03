@@ -211,12 +211,14 @@ class RestrictedCookieManagerSync {
       const url::Origin& top_frame_origin,
       bool has_storage_access,
       mojom::CookieManagerGetOptionsPtr options,
-      bool is_ad_tagged = false) {
+      bool is_ad_tagged = false,
+      bool force_disable_third_party_cookies = false) {
     base::test::TestFuture<const std::vector<net::CookieWithAccessResult>&>
         future;
-    cookie_service_->GetAllForUrl(url, site_for_cookies, top_frame_origin,
-                                  has_storage_access, std::move(options),
-                                  is_ad_tagged, future.GetCallback());
+    cookie_service_->GetAllForUrl(
+        url, site_for_cookies, top_frame_origin, has_storage_access,
+        std::move(options), is_ad_tagged, force_disable_third_party_cookies,
+        future.GetCallback());
     return net::cookie_util::StripAccessResults(future.Take());
   }
 
@@ -587,14 +589,16 @@ TEST_P(RestrictedCookieManagerTest, CookieVersion) {
   EXPECT_TRUE(backend()->GetCookiesString(
       kDefaultUrlWithPath, kDefaultSiteForCookies, kDefaultOrigin,
       /*has_storage_access=*/false, /*get_version_shared_memory=*/false,
-      /*is_ad_tagged=*/false, &version, &mapped_region, &cookies_out));
+      /*is_ad_tagged=*/false, /*force_disable_third_party_cookies=*/false,
+      &version, &mapped_region, &cookies_out));
   // Version is at initial value on first query.
   EXPECT_EQ(version, mojom::kInitialCookieVersion);
 
   EXPECT_TRUE(backend()->GetCookiesString(
       kDefaultUrlWithPath, kDefaultSiteForCookies, kDefaultOrigin,
       /*has_storage_access=*/false, /*get_version_shared_memory=*/false,
-      /*is_ad_tagged=*/false, &version, &mapped_region, &cookies_out));
+      /*is_ad_tagged=*/false, /*force_disable_third_party_cookies=*/false,
+      &version, &mapped_region, &cookies_out));
   // Version is still at initial value since nothing modified the cookie.
   EXPECT_EQ(version, mojom::kInitialCookieVersion);
 
@@ -605,7 +609,8 @@ TEST_P(RestrictedCookieManagerTest, CookieVersion) {
   EXPECT_TRUE(backend()->GetCookiesString(
       kDefaultUrlWithPath, kDefaultSiteForCookies, kDefaultOrigin,
       /*has_storage_access=*/false, /*get_version_shared_memory=*/false,
-      /*is_ad_tagged=*/false, &version, &mapped_region, &cookies_out));
+      /*is_ad_tagged=*/false, /*force_disable_third_party_cookies=*/false,
+      &version, &mapped_region, &cookies_out));
   // Version has been incremented by the set operation.
   EXPECT_NE(version, mojom::kInitialCookieVersion);
 }
@@ -635,7 +640,8 @@ TEST_P(RestrictedCookieManagerTest, GetAllForUrlBlankFilter) {
   EXPECT_TRUE(backend()->GetCookiesString(
       kDefaultUrlWithPath, kDefaultSiteForCookies, kDefaultOrigin,
       /*has_storage_access=*/false, /*get_version_shared_memory=*/false,
-      /*is_ad_tagged=*/false, &version, &mapped_region, &cookies_out));
+      /*is_ad_tagged=*/false, /*force_disable_third_party_cookies=*/false,
+      &version, &mapped_region, &cookies_out));
   EXPECT_FALSE(mapped_region.IsValid());
   EXPECT_EQ("cookie-name=cookie-value; cookie-name-2=cookie-value-2",
             cookies_out);
@@ -643,8 +649,10 @@ TEST_P(RestrictedCookieManagerTest, GetAllForUrlBlankFilter) {
   // One more time but also requesting some shared memory.
   EXPECT_TRUE(backend()->GetCookiesString(
       kDefaultUrlWithPath, kDefaultSiteForCookies, kDefaultOrigin,
-      /*has_storage_access=*/false, /*get_version_shared_memory=*/true,
-      /*is_ad_tagged=*/false, &version, &mapped_region, &cookies_out));
+      /*has_storage_access=*/false,
+      /*get_version_shared_memory=*/true,
+      /*is_ad_tagged=*/false, /*force_disable_third_party_cookies=*/false,
+      &version, &mapped_region, &cookies_out));
   EXPECT_TRUE(mapped_region.IsValid());
   EXPECT_EQ("cookie-name=cookie-value; cookie-name-2=cookie-value-2",
             cookies_out);
@@ -798,7 +806,8 @@ TEST_P(RestrictedCookieManagerTest, GetCookieStringFromWrongOrigin) {
   EXPECT_TRUE(backend()->GetCookiesString(
       kOtherUrlWithPath, kDefaultSiteForCookies, kDefaultOrigin,
       /*has_storage_access=*/false, /*get_version_shared_memory=*/false,
-      /*is_ad_tagged=*/false, &version, &mapped_region, &cookies_out));
+      /*is_ad_tagged=*/false, /*force_disable_third_party_cookies=*/false,
+      &version, &mapped_region, &cookies_out));
   EXPECT_TRUE(received_bad_message());
   EXPECT_THAT(cookies_out, IsEmpty());
 
@@ -806,7 +815,8 @@ TEST_P(RestrictedCookieManagerTest, GetCookieStringFromWrongOrigin) {
   EXPECT_TRUE(backend()->GetCookiesString(
       kOtherUrlWithPath, kDefaultSiteForCookies, kDefaultOrigin,
       /*has_storage_access=*/false, /*get_version_shared_memory=*/true,
-      /*is_ad_tagged=*/false, &version, &mapped_region, &cookies_out));
+      /*is_ad_tagged=*/false, /*force_disable_third_party_cookies=*/false,
+      &version, &mapped_region, &cookies_out));
   EXPECT_TRUE(received_bad_message());
   EXPECT_THAT(cookies_out, IsEmpty());
 }
@@ -1199,7 +1209,7 @@ TEST_P(RestrictedCookieManagerTest, SetCanonicalCookiePolicy) {
   service_->OverrideIsolationInfoForTesting(kOtherIsolationInfo);
   {
     // With default settings object, setting a third-party cookie is OK.
-    auto cookie = net::CanonicalCookie::Create(
+    auto cookie = net::CanonicalCookie::CreateForTesting(
         kDefaultUrl, "A=B; SameSite=none; Secure", base::Time::Now(),
         std::nullopt /* server_time */,
         std::nullopt /* cookie_partition_key */);
@@ -1220,7 +1230,7 @@ TEST_P(RestrictedCookieManagerTest, SetCanonicalCookiePolicy) {
   {
     // Not if third-party cookies are disabled, though.
     cookie_settings_.set_block_third_party_cookies(true);
-    auto cookie = net::CanonicalCookie::Create(
+    auto cookie = net::CanonicalCookie::CreateForTesting(
         kDefaultUrl, "A2=B2; SameSite=none; Secure", base::Time::Now(),
         std::nullopt /* server_time */,
         std::nullopt /* cookie_partition_key */);
@@ -1265,7 +1275,7 @@ TEST_P(RestrictedCookieManagerTest, SetCanonicalCookiePolicy) {
 TEST_P(RestrictedCookieManagerTest, SetCanonicalCookiePolicyWarnActual) {
   service_->OverrideIsolationInfoForTesting(kOtherIsolationInfo);
 
-  auto cookie = net::CanonicalCookie::Create(
+  auto cookie = net::CanonicalCookie::CreateForTesting(
       kDefaultUrl, "A=B", base::Time::Now(), std::nullopt /* server_time */,
       std::nullopt /* cookie_partition_key */);
   EXPECT_FALSE(sync_service_->SetCanonicalCookie(
@@ -1562,7 +1572,7 @@ TEST_P(RestrictedCookieManagerTest, ChangeNotificationIncludesAccessSemantics) {
 
   ASSERT_THAT(listener->observed_changes(), IsEmpty());
 
-  auto cookie = net::CanonicalCookie::Create(
+  auto cookie = net::CanonicalCookie::CreateForTesting(
       kDefaultUrl, "cookie_with_no_samesite=unspecified", base::Time::Now(),
       std::nullopt, std::nullopt /* cookie_partition_key */);
 
@@ -1597,11 +1607,11 @@ TEST_P(RestrictedCookieManagerTest, NoChangeNotificationForNonlegacyCookie) {
 
   ASSERT_THAT(listener->observed_changes(), testing::SizeIs(0));
 
-  auto unspecified_cookie = net::CanonicalCookie::Create(
+  auto unspecified_cookie = net::CanonicalCookie::CreateForTesting(
       kDefaultUrl, "cookie_with_no_samesite=unspecified", base::Time::Now(),
       std::nullopt, std::nullopt /* cookie_partition_key */);
 
-  auto samesite_none_cookie = net::CanonicalCookie::Create(
+  auto samesite_none_cookie = net::CanonicalCookie::CreateForTesting(
       kDefaultUrl, "samesite_none_cookie=none; SameSite=None; Secure",
       base::Time::Now(), std::nullopt, std::nullopt /* cookie_partition_key */);
 
@@ -1637,6 +1647,13 @@ TEST_P(RestrictedCookieManagerTest, NoChangeNotificationForNonlegacyCookie) {
 
 // Test Partitioned cookie behavior when feature is enabled.
 TEST_P(RestrictedCookieManagerTest, PartitionedCookies) {
+  // TODO crbug.com/328043119 remove code associated with
+  // kAncestorChainBitEnabledInPartitionedCookies
+  // after it's enabled by default.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kAncestorChainBitEnabledInPartitionedCookies);
+
   const GURL kCookieURL("https://example.com");
   const GURL kTopFrameURL("https://sub.foo.com");
   const net::SiteForCookies kSiteForCookies =
@@ -1665,6 +1682,7 @@ TEST_P(RestrictedCookieManagerTest, PartitionedCookies) {
         net::CookiePartitionKey::FromURLForTesting(GURL("https://foo.com")),
         cookies[0].PartitionKey());
     EXPECT_EQ("__Host-foo", cookies[0].Name());
+    EXPECT_EQ(net::CookieSourceType::kScript, cookies[0].SourceType());
 
     auto listener =
         CreateCookieChangeListener(kCookieURL, kSiteForCookies, kTopFrameOrigin,
@@ -1672,13 +1690,15 @@ TEST_P(RestrictedCookieManagerTest, PartitionedCookies) {
 
     // Update partitioned cookie Max-Age: None -> 7200.
     EXPECT_TRUE(SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-foo=bar; Secure; SameSite=None; Path=/; Partitioned; "
             "Max-Age=7200",
             base::Time::Now(), std::nullopt /* server_time */,
             net::CookiePartitionKey::FromNetworkIsolationKey(
-                kIsolationInfo.network_isolation_key())),
+                kIsolationInfo.network_isolation_key(),
+                kIsolationInfo.site_for_cookies(),
+                net::SchemefulSite(kCookieURL))),
         "https", false /* can_modify_httponly */));
 
     // If Partitioned cookies are enabled, the change listener should see the
@@ -1721,13 +1741,15 @@ TEST_P(RestrictedCookieManagerTest, PartitionedCookies) {
 
     // Update partitioned cookie Max-Age: 7200 -> 3600.
     EXPECT_TRUE(SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-foo=bar; Secure; SameSite=None; Path=/; Partitioned; "
             "Max-Age=3600",
             base::Time::Now(), std::nullopt /* server_time */,
             net::CookiePartitionKey::FromNetworkIsolationKey(
-                kIsolationInfo.network_isolation_key())),
+                kIsolationInfo.network_isolation_key(),
+                kIsolationInfo.site_for_cookies(),
+                net::SchemefulSite(kCookieURL))),
         "https", false /* can_modify_httponly */));
 
     // If Partitioned cookies are enabled, the listener should not see cookie
@@ -1741,7 +1763,7 @@ TEST_P(RestrictedCookieManagerTest, PartitionedCookies) {
     service_->OverrideIsolationInfoForTesting(kIsolationInfo);
     ExpectBadMessage();
     EXPECT_FALSE(sync_service_->SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-foo=bar; Secure; SameSite=None; Path=/; Partitioned",
             base::Time::Now(), std::nullopt /* server_time */,
@@ -1763,7 +1785,7 @@ TEST_P(RestrictedCookieManagerTest, PartitionKeyFromScript) {
 
   service_->OverrideIsolationInfoForTesting(kIsolationInfo);
   EXPECT_TRUE(sync_service_->SetCanonicalCookie(
-      *net::CanonicalCookie::Create(
+      *net::CanonicalCookie::CreateForTesting(
           kCookieURL,
           "__Host-foo=bar; Secure; SameSite=None; Path=/; Partitioned",
           base::Time::Now(), std::nullopt /* server_time */,
@@ -1786,6 +1808,13 @@ TEST_P(RestrictedCookieManagerTest, PartitionKeyFromScript) {
 }
 
 TEST_P(RestrictedCookieManagerTest, PartitionKeyWithNonce) {
+  // TODO crbug.com/328043119 remove code associated with
+  // kAncestorChainBitEnabledInPartitionedCookies
+  // after it's enabled by default.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      net::features::kAncestorChainBitEnabledInPartitionedCookies);
+
   const GURL kCookieURL("https://example.com");
   const GURL kTopFrameURL("https://foo.com");
   const net::SiteForCookies kSiteForCookies =
@@ -1799,14 +1828,16 @@ TEST_P(RestrictedCookieManagerTest, PartitionKeyWithNonce) {
   const std::optional<net::CookiePartitionKey> kNoncedPartitionKey =
       net::CookiePartitionKey::FromNetworkIsolationKey(
           net::NetworkIsolationKey(net::SchemefulSite(kTopFrameURL),
-                                   net::SchemefulSite(kTopFrameURL), kNonce));
+                                   net::SchemefulSite(kTopFrameURL), kNonce),
+          kNoncedIsolationInfo.site_for_cookies(),
+          net::SchemefulSite(kTopFrameURL));
 
   const net::IsolationInfo kUnnoncedIsolationInfo =
       net::IsolationInfo::CreateForInternalRequest(kTopFrameOrigin);
 
   service_->OverrideIsolationInfoForTesting(kNoncedIsolationInfo);
   EXPECT_TRUE(sync_service_->SetCanonicalCookie(
-      *net::CanonicalCookie::Create(
+      *net::CanonicalCookie::CreateForTesting(
           kCookieURL, "__Host-foo=bar; Secure; SameSite=None; Path=/;",
           base::Time::Now(), std::nullopt /* server_time */,
           net::CookiePartitionKey::FromScript()),
@@ -1851,7 +1882,7 @@ TEST_P(RestrictedCookieManagerTest, PartitionKeyWithNonce) {
 
     // Update partitioned cookie Max-Age: None -> 7200.
     EXPECT_TRUE(SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-foo=bar; Secure; SameSite=None; Path=/; Max-Age=7200",
             base::Time::Now(), std::nullopt /* server_time */,
@@ -1867,14 +1898,14 @@ TEST_P(RestrictedCookieManagerTest, PartitionKeyWithNonce) {
     // Set an unpartitioned cookie.
     service_->OverrideIsolationInfoForTesting(kUnnoncedIsolationInfo);
     EXPECT_TRUE(SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-unpartitioned=123; Secure; SameSite=None; Path=/;",
-            base::Time::Now(), std::nullopt /* server_time */, std::nullopt),
+            base::Time::Now()),
         "https", false /* can_modify_httponly */));
     // Set a partitioned cookie in the unnonced partition.
     EXPECT_TRUE(sync_service_->SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-bar=baz; Secure; SameSite=None; Path=/; Partitioned;",
             base::Time::Now(), std::nullopt /* server_time */,
@@ -1908,11 +1939,11 @@ TEST_P(RestrictedCookieManagerTest, PartitionKeyWithNonce) {
 
     // Update unpartitioned cookie Max-Age: None -> 7200.
     EXPECT_TRUE(SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-unpartitioned=123; Secure; SameSite=None; Path=/; "
             "Max-Age=7200",
-            base::Time::Now(), std::nullopt /* server_time */, std::nullopt),
+            base::Time::Now()),
         "https", false /* can_modify_httponly */));
     // Test that the nonced partition cannot observe the change.
     second_listener->WaitForChange();
@@ -1920,11 +1951,11 @@ TEST_P(RestrictedCookieManagerTest, PartitionKeyWithNonce) {
 
     // Update unnonced partitioned cookie Max-Age: None -> 7200.
     EXPECT_TRUE(SetCanonicalCookie(
-        *net::CanonicalCookie::Create(
+        *net::CanonicalCookie::CreateForTesting(
             kCookieURL,
             "__Host-bar=baz; Secure; SameSite=None; Path=/; Partitioned; "
             "Max-Age=7200",
-            base::Time::Now(), std::nullopt /* server_time */, std::nullopt),
+            base::Time::Now()),
         "https", false /* can_modify_httponly */));
     // Test that the nonced partition cannot observe the change.
     second_listener->WaitForChange();

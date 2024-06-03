@@ -12,8 +12,8 @@
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "components/safe_browsing/content/browser/url_checker_on_sb.h"
-#include "components/safe_browsing/core/browser/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/browser/safe_browsing_url_checker_impl.h"
+#include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "third_party/blink/public/common/loader/url_loader_throttle.h"
@@ -147,9 +147,8 @@ class BrowserURLLoaderThrottle : public blink::URLLoaderThrottle {
   // Called when the URL is identified as dangerous.
   void BlockUrlLoader(bool showed_interstitial);
 
-  // Destroys all checkers on the IO thread, or UI thread if
-  // kSafeBrowsingOnUIThread is enabled.
-  void DeleteUrlCheckerOnSB();
+  // Destroys all checkers.
+  void DeleteUrlChecker();
 
   // If |sync_sb_checker_| has completed, but |async_sb_checker_| has not,
   // transfer the ownership of |async_sb_checker_| to |async_check_tracker_|.
@@ -214,6 +213,7 @@ class BrowserURLLoaderThrottle : public blink::URLLoaderThrottle {
   std::optional<int64_t> navigation_id_;
   UrlCheckerOnSB::GetDelegateCallback delegate_getter_;
   base::RepeatingCallback<content::WebContents*()> web_contents_getter_;
+  SessionID tab_id_ = SessionID::InvalidValue();
 
   // Checkers used to perform Safe Browsing checks. |sync_sb_checker_| may defer
   // the URL loader. |async_sb_checker_| doesn't defer the URL loader and may

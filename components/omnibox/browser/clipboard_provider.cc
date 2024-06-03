@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
@@ -144,10 +143,18 @@ ClipboardProvider::~ClipboardProvider() {}
 
 void ClipboardProvider::Start(const AutocompleteInput& input,
                               bool minimal_changes) {
+  using OEP = ::metrics::OmniboxEventProto;
+
   matches_.clear();
 
   // If the user started typing, do not offer clipboard based match.
   if (!input.IsZeroSuggest()) {
+    return;
+  }
+
+  auto page_class = input.current_page_classification();
+  if (page_class == OEP::OTHER_ON_CCT ||
+      page_class == OEP::SEARCH_RESULT_PAGE_ON_CCT) {
     return;
   }
 
@@ -206,7 +213,7 @@ void ClipboardProvider::DeleteMatch(const AutocompleteMatch& match) {
   const auto pred = [&match](const AutocompleteMatch& i) {
     return i.contents == match.contents && i.type == match.type;
   };
-  base::EraseIf(matches_, pred);
+  std::erase_if(matches_, pred);
 }
 
 void ClipboardProvider::AddProviderInfo(ProvidersInfo* provider_info) const {
@@ -243,8 +250,6 @@ void ClipboardProvider::AddCreatedMatchWithTracking(
                                            clipboard_contents_age);
 
   if (is_android &&
-      OmniboxFieldTrial::kOmniboxModernizeVisualUpdateMergeClipboardOnNTP
-          .Get() &&
       omnibox::IsNTPPage(input.current_page_classification())) {
     // Assign the Clipboard to the PZPS group on NTP pages to improve the use
     // of the suggest space.

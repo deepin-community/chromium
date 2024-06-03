@@ -6,22 +6,54 @@
 // CLCommandQueueVk.cpp: Implements the class methods for CLCommandQueueVk.
 
 #include "libANGLE/renderer/vulkan/CLCommandQueueVk.h"
+#include "libANGLE/renderer/vulkan/CLContextVk.h"
+#include "libANGLE/renderer/vulkan/CLDeviceVk.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 
+#include "libANGLE/CLCommandQueue.h"
+#include "libANGLE/CLContext.h"
 #include "libANGLE/cl_utils.h"
 
 namespace rx
 {
 
 CLCommandQueueVk::CLCommandQueueVk(const cl::CommandQueue &commandQueue)
-    : CLCommandQueueImpl(commandQueue)
+    : CLCommandQueueImpl(commandQueue),
+      mContext(&commandQueue.getContext().getImpl<CLContextVk>()),
+      mDevice(&commandQueue.getDevice().getImpl<CLDeviceVk>()),
+      mComputePassCommands(nullptr)
 {}
 
-CLCommandQueueVk::~CLCommandQueueVk() = default;
+CLCommandQueueVk::~CLCommandQueueVk()
+{
+    VkDevice vkDevice = mContext->getDevice();
+
+    // Recycle the current command buffers
+    mContext->getRenderer()->recycleOutsideRenderPassCommandBufferHelper(&mComputePassCommands);
+    mCommandPool.outsideRenderPassPool.destroy(vkDevice);
+}
+
+angle::Result CLCommandQueueVk::init()
+{
+    ANGLE_CL_IMPL_TRY_ERROR(
+        vk::OutsideRenderPassCommandBuffer::InitializeCommandPool(
+            mContext, &mCommandPool.outsideRenderPassPool,
+            mContext->getRenderer()->getDeviceQueueIndex(), getProtectionType()),
+        CL_OUT_OF_RESOURCES);
+
+    ANGLE_CL_IMPL_TRY_ERROR(mContext->getRenderer()->getOutsideRenderPassCommandBufferHelper(
+                                mContext, &mCommandPool.outsideRenderPassPool,
+                                &mOutsideRenderPassCommandsAllocator, &mComputePassCommands),
+                            CL_OUT_OF_RESOURCES);
+
+    return angle::Result::Continue;
+}
 
 angle::Result CLCommandQueueVk::setProperty(cl::CommandQueueProperties properties, cl_bool enable)
 {
-    UNIMPLEMENTED();
-    ANGLE_CL_RETURN_ERROR(CL_OUT_OF_RESOURCES);
+    // NOTE: "clSetCommandQueueProperty" has been deprecated as of OpenCL 1.1
+    // http://man.opencl.org/deprecated.html
+    return angle::Result::Continue;
 }
 
 angle::Result CLCommandQueueVk::enqueueReadBuffer(const cl::Buffer &buffer,
@@ -244,10 +276,7 @@ angle::Result CLCommandQueueVk::enqueueMigrateMemObjects(const cl::MemoryPtrs &m
 }
 
 angle::Result CLCommandQueueVk::enqueueNDRangeKernel(const cl::Kernel &kernel,
-                                                     cl_uint workDim,
-                                                     const size_t *globalWorkOffset,
-                                                     const size_t *globalWorkSize,
-                                                     const size_t *localWorkSize,
+                                                     const cl::NDRange &ndrange,
                                                      const cl::EventPtrs &waitEvents,
                                                      CLEventImpl::CreateFunc *eventCreateFunc)
 {

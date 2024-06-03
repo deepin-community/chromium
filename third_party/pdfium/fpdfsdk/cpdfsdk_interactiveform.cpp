@@ -25,6 +25,7 @@
 #include "core/fpdfdoc/cpdf_formcontrol.h"
 #include "core/fpdfdoc/cpdf_interactiveform.h"
 #include "core/fxcrt/autorestorer.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_string_wrappers.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxge/cfx_graphstatedata.h"
@@ -37,7 +38,6 @@
 #include "fpdfsdk/formfiller/cffl_formfield.h"
 #include "fxjs/ijs_event_context.h"
 #include "fxjs/ijs_runtime.h"
-#include "third_party/base/check.h"
 
 namespace {
 
@@ -73,7 +73,7 @@ bool IsFormFieldTypeXFA(FormFieldType fieldType) {
 
 ByteString FDFToURLEncodedData(ByteString buffer) {
   std::unique_ptr<CFDF_Document> pFDF =
-      CFDF_Document::ParseMemory(buffer.raw_span());
+      CFDF_Document::ParseMemory(buffer.unsigned_span());
   if (!pFDF)
     return buffer;
 
@@ -94,7 +94,7 @@ ByteString FDFToURLEncodedData(ByteString buffer) {
     WideString name = pField->GetUnicodeTextFor("T");
     ByteString name_b = name.ToDefANSI();
     ByteString csBValue = pField->GetByteStringFor("V");
-    WideString csWValue = PDF_DecodeText(csBValue.raw_span());
+    WideString csWValue = PDF_DecodeText(csBValue.unsigned_span());
     ByteString csValue_b = csWValue.ToDefANSI();
     encoded_data << name_b << "=" << csValue_b;
     if (i != pFields->size() - 1)
@@ -452,7 +452,7 @@ bool CPDFSDK_InteractiveForm::SubmitFields(
       return false;
   }
 
-  m_pFormFillEnv->SubmitForm(text_buf.raw_span(), csDestination);
+  m_pFormFillEnv->SubmitForm(text_buf.unsigned_span(), csDestination);
   return true;
 }
 
@@ -478,7 +478,7 @@ bool CPDFSDK_InteractiveForm::SubmitForm(const WideString& sDestination) {
   if (fdf_buffer.IsEmpty())
     return false;
 
-  m_pFormFillEnv->SubmitForm(fdf_buffer.raw_span(), sDestination);
+  m_pFormFillEnv->SubmitForm(fdf_buffer.unsigned_span(), sDestination);
   return true;
 }
 

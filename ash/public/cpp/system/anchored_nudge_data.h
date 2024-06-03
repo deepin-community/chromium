@@ -5,6 +5,7 @@
 #ifndef ASH_PUBLIC_CPP_SYSTEM_ANCHORED_NUDGE_DATA_H_
 #define ASH_PUBLIC_CPP_SYSTEM_ANCHORED_NUDGE_DATA_H_
 
+#include <optional>
 #include <string>
 
 #include "ash/constants/notifier_catalogs.h"
@@ -13,7 +14,6 @@
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/bubble/bubble_border.h"
@@ -81,8 +81,8 @@ struct ASH_PUBLIC_EXPORT AnchoredNudgeData {
   ui::ImageModel image_model;
   std::u16string title_text;
   std::vector<ui::KeyboardCode> keyboard_codes;
-  absl::optional<ui::ColorId> background_color_id;
-  absl::optional<ui::ColorId> image_background_color_id;
+  std::optional<ui::ColorId> background_color_id;
+  std::optional<ui::ColorId> image_background_color_id;
 
   // Callback for close button pressed.
   base::RepeatingClosure close_button_callback;
@@ -116,6 +116,12 @@ struct ASH_PUBLIC_EXPORT AnchoredNudgeData {
   // Whether the image will be set to the same size as its container view. This
   // is required for lottie images, which need their size to be set directly.
   bool fill_image_size = false;
+
+  // Highlight anchor button by default.
+  bool highlight_anchor_button = true;
+
+  // If true, set the `anchor_view` as parent.
+  bool set_anchor_view_as_parent = false;
 
   // Nudge action callbacks.
   HoverStateChangeCallback hover_state_change_callback;

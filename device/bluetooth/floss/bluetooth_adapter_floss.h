@@ -18,6 +18,7 @@
 #include "device/bluetooth/bluetooth_discovery_session.h"
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/bluetooth_gatt_service.h"
+#include "device/bluetooth/bluetooth_local_gatt_service.h"
 #include "device/bluetooth/bluetooth_socket_thread.h"
 #include "device/bluetooth/floss/bluetooth_low_energy_scan_session_floss.h"
 #include "device/bluetooth/floss/bluetooth_socket_floss.h"
@@ -54,7 +55,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
       public floss::FlossAdapterClient::Observer,
       public floss::FlossBatteryManagerClient::
           FlossBatteryManagerClientObserver,
-      public floss::FlossGattManagerClient::FlossGattServerObserver,
 #if BUILDFLAG(IS_CHROMEOS)
       public FlossAdminClientObserver,
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -137,6 +137,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
   device::BluetoothLocalGattService* GetGattService(
       const std::string& identifier) const override;
 
+  base::WeakPtr<device::BluetoothLocalGattService> CreateLocalGattService(
+      const device::BluetoothUUID& uuid,
+      bool is_primary,
+      device::BluetoothLocalGattService::Delegate* delegate) override;
+
   // Register a GATT service. The service must belong to this adapter.
   void RegisterGattService(BluetoothLocalGattServiceFloss* service);
 
@@ -164,10 +169,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterFloss final
   // this method will return false.
   bool SendValueChanged(BluetoothLocalGattCharacteristicFloss* characteristic,
                         const std::vector<uint8_t>& value);
-
-  // FlossGattServerObserver overrides
-  void GattServerNotificationSent(std::string address,
-                                  GattStatus status) override;
 
 #if BUILDFLAG(IS_CHROMEOS)
   void SetServiceAllowList(const UUIDList& uuids,

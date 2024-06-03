@@ -59,7 +59,7 @@ void SupervisedUserService::Init() {
 
   user_prefs_->SetInteger(prefs::kFirstTimeInterstitialBannerState,
                           static_cast<int>(banner_state));
-  SetActive(supervised_user::IsChildAccount(user_prefs_.get()));
+  SetActive(supervised_user::IsSubjectToParentalControls(user_prefs_.get()));
 }
 
 void SupervisedUserService::SetDelegate(Delegate* delegate) {
@@ -74,7 +74,7 @@ void SupervisedUserService::SetDelegate(Delegate* delegate) {
   delegate_ = delegate;
 }
 
-SupervisedUserURLFilter* SupervisedUserService::GetURLFilter() {
+SupervisedUserURLFilter* SupervisedUserService::GetURLFilter() const {
   return url_filter_.get();
 }
 
@@ -126,6 +126,11 @@ bool SupervisedUserService::HasACustodian() const {
          !GetSecondCustodianEmailAddress().empty();
 }
 
+bool SupervisedUserService::IsBlockedURL(GURL url) const {
+  return GetURLFilter()->GetFilteringBehaviorForURL(url) ==
+         supervised_user::FilteringBehavior::kBlock;
+}
+
 void SupervisedUserService::AddObserver(
     SupervisedUserServiceObserver* observer) {
   observer_list_.AddObserver(observer);
@@ -171,13 +176,11 @@ FirstTimeInterstitialBannerState SupervisedUserService::GetUpdatedBannerState(
   FirstTimeInterstitialBannerState target_state = original_state;
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_IOS)
-  if (supervised_user::CanDisplayFirstTimeInterstitialBanner()) {
-    if (original_state != FirstTimeInterstitialBannerState::kSetupComplete &&
-        can_show_first_time_interstitial_banner_) {
-      target_state = FirstTimeInterstitialBannerState::kNeedToShow;
-    } else {
-      target_state = FirstTimeInterstitialBannerState::kSetupComplete;
-    }
+  if (original_state != FirstTimeInterstitialBannerState::kSetupComplete &&
+      can_show_first_time_interstitial_banner_) {
+    target_state = FirstTimeInterstitialBannerState::kNeedToShow;
+  } else {
+    target_state = FirstTimeInterstitialBannerState::kSetupComplete;
   }
 #else
   target_state = FirstTimeInterstitialBannerState::kSetupComplete;
@@ -200,7 +203,7 @@ void SupervisedUserService::SetActive(bool active) {
   // Trigger a sync reconfig to enable/disable the right SU data types.
   // The logic to do this lives in the
   // SupervisedUserSettingsModelTypeController.
-  // TODO(crbug.com/946473): Get rid of this hack and instead call
+  // TODO(crbug.com/40620346): Get rid of this hack and instead call
   // DataTypePreconditionChanged from the controller.
   if (sync_service_ &&
       sync_service_->GetUserSettings()->IsInitialSyncFeatureSetupComplete()) {
@@ -268,7 +271,8 @@ void SupervisedUserService::OnCustodianInfoChanged() {
 }
 
 void SupervisedUserService::OnSupervisedUserIdChanged() {
-  bool is_child = supervised_user::IsChildAccount(user_prefs_.get());
+  bool is_child =
+      supervised_user::IsSubjectToParentalControls(user_prefs_.get());
   if (is_child) {
     // When supervision is enabled, close any incognito windows/tabs that may
     // be open for this profile. These windows cannot be created after the
@@ -351,7 +355,7 @@ void SupervisedUserService::Shutdown() {
   }
   DCHECK(!did_shutdown_);
   did_shutdown_ = true;
-  if (supervised_user::IsChildAccount(user_prefs_.get())) {
+  if (supervised_user::IsSubjectToParentalControls(user_prefs_.get())) {
     base::RecordAction(UserMetricsAction("ManagedUsers_QuitBrowser"));
   }
   SetActive(false);

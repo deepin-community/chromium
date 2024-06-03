@@ -89,6 +89,23 @@ void CopyDebuggee(Debuggee* dst, const Debuggee& src) {
   dst->target_id = src.target_id;
 }
 
+void DebuggerSessionFromDebugee(DebuggerSession& dst,
+                                const Debuggee& src,
+                                std::string* maybe_session_id) {
+  dst.tab_id = src.tab_id;
+  dst.extension_id = src.extension_id;
+  dst.target_id = src.target_id;
+  if (maybe_session_id) {
+    dst.session_id = *maybe_session_id;
+  }
+}
+
+void DebuggeeFromDebuggerSession(Debuggee& dst, const DebuggerSession& src) {
+  dst.tab_id = src.tab_id;
+  dst.extension_id = src.extension_id;
+  dst.target_id = src.target_id;
+}
+
 bool ExtensionMayAttachToTargetProfile(Profile* extension_profile,
                                        bool allow_incognito_access,
                                        DevToolsAgentHost& agent_host) {
@@ -117,12 +134,23 @@ bool ExtensionMayAttachToURL(const Extension& extension,
   // NOTE: The `debugger` permission implies all URLs access (and indicates
   // such to the user), so we don't check explicit page access. However, we
   // still need to check if it's an otherwise-restricted URL.
-  if (extension.permissions_data()->IsRestrictedUrl(url, error))
+  // NOTE: blob URLs are generally restricted but debugger should be able to
+  // attach if it has access to the origin that created the blob.
+  // See https://crbug.com/1492134.
+  const GURL& url_for_restriction_check =
+      url.SchemeIsBlob() ? url::Origin::Create(url).GetURL() : url;
+  if (extension.permissions_data()->IsRestrictedUrl(url_for_restriction_check,
+                                                    error)) {
     return false;
+  }
 
   // Policy blocked hosts supersede the `debugger` permission.
-  if (extension.permissions_data()->IsPolicyBlockedHost(url))
+  if (extension.permissions_data()->IsPolicyBlockedHost(url) ||
+      extension.permissions_data()->IsPolicyBlockedHost(
+          url_for_restriction_check)) {
+    *error = debugger_api_constants::kRestrictedError;
     return false;
+  }
 
   if (url.SchemeIsFile() &&
       !util::AllowFileAccess(extension.id(), extension_profile)) {
@@ -279,7 +307,8 @@ class ExtensionDevToolsClientHost : public content::DevToolsAgentHostClient,
   void Close();
   void SendMessageToBackend(DebuggerSendCommandFunction* function,
                             const std::string& method,
-                            SendCommand::Params::CommandParams* command_params);
+                            SendCommand::Params::CommandParams* command_params,
+                            std::optional<std::string> session_id);
 
   // Closes connection as terminated by the user.
   void InfoBarDestroyed();
@@ -430,7 +459,8 @@ void ExtensionDevToolsClientHost::Close() {
 void ExtensionDevToolsClientHost::SendMessageToBackend(
     DebuggerSendCommandFunction* function,
     const std::string& method,
-    SendCommand::Params::CommandParams* command_params) {
+    SendCommand::Params::CommandParams* command_params,
+    std::optional<std::string> session_id) {
   base::Value::Dict protocol_request;
   int request_id = ++last_request_id_;
   pending_requests_[request_id] = function;
@@ -439,6 +469,9 @@ void ExtensionDevToolsClientHost::SendMessageToBackend(
   if (command_params) {
     protocol_request.Set("params",
                          command_params->additional_properties.Clone());
+  }
+  if (session_id.has_value()) {
+    protocol_request.Set("sessionId", session_id.value());
   }
 
   std::string json;
@@ -513,7 +546,11 @@ void ExtensionDevToolsClientHost::DispatchProtocolMessage(
       params.additional_properties = std::move(*params_value);
     }
 
-    auto args(OnEvent::Create(debuggee_, *method_name, params));
+    DebuggerSession session;
+    DebuggerSessionFromDebugee(session, debuggee_,
+                               dictionary.FindString("sessionId"));
+
+    auto args(OnEvent::Create(session, *method_name, params));
     auto event =
         std::make_unique<Event>(events::DEBUGGER_ON_EVENT, OnEvent::kEventName,
                                 std::move(args), profile_);
@@ -766,13 +803,14 @@ ExtensionFunction::ResponseAction DebuggerSendCommandFunction::Run() {
       SendCommand::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  CopyDebuggee(&debuggee_, params->target);
+  DebuggeeFromDebuggerSession(debuggee_, params->target);
   std::string error;
   if (!InitClientHost(&error))
     return RespondNow(Error(std::move(error)));
 
   client_host_->SendMessageToBackend(
-      this, params->method, base::OptionalToPtr(params->command_params));
+      this, params->method, base::OptionalToPtr(params->command_params),
+      params->target.session_id);
   if (did_respond())
     return AlreadyResponded();
   return RespondLater();
@@ -861,7 +899,7 @@ ExtensionFunction::ResponseAction DebuggerGetTargetsFunction::Run() {
   base::Value::List result;
   Profile* profile = Profile::FromBrowserContext(browser_context());
   for (auto& host : list) {
-    // TODO(crbug.com/1348385): hide all Tab targets for now to avoid
+    // TODO(crbug.com/40233332): hide all Tab targets for now to avoid
     // compatibility problems. Consider exposing them later when they're fully
     // supported, and compatibility considerations are better understood.
     if (host->GetType() == DevToolsAgentHost::kTypeTab)

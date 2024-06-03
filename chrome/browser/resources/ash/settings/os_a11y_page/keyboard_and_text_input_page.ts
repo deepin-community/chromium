@@ -19,7 +19,7 @@ import '../controls/settings_toggle_button.js';
 import '../settings_shared.css.js';
 import './change_dictation_locale_dialog.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -69,6 +69,31 @@ export class SettingsKeyboardAndTextInputPageElement extends
         },
       },
 
+      caretBlinkIntervalMenuOptions_: {
+        type: Array,
+        value() {
+          return [
+            // TODO(b:259374492): Pick values based on UX, except for 500, which
+            // is the current default and should always be available and 0,
+            // which is the value meaning hold the cursor steady and do not
+            // blink.
+            {value: 0, name: loadTimeData.getString('caretBlinkIntervalOff')},
+            {
+              value: 800,
+              name: loadTimeData.getString('caretBlinkIntervalSlow'),
+            },
+            {
+              value: loadTimeData.getInteger('defaultCaretBlinkIntervalMs'),
+              name: loadTimeData.getString('caretBlinkIntervalNormal'),
+            },
+            {
+              value: 350,
+              name: loadTimeData.getString('caretBlinkIntervalFast'),
+            },
+          ];
+        },
+      },
+
       dictationLocaleMenuSubtitle_: {
         type: String,
         computed: 'computeDictationLocaleSubtitle_(' +
@@ -88,6 +113,14 @@ export class SettingsKeyboardAndTextInputPageElement extends
         type: Array,
         value() {
           return [];
+        },
+      },
+
+      isAccessibilityCaretBlinkIntervalSettingEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean(
+              'isAccessibilityCaretBlinkIntervalSettingEnabled');
         },
       },
 
@@ -117,6 +150,7 @@ export class SettingsKeyboardAndTextInputPageElement extends
           Setting.kHighlightKeyboardFocus,
           Setting.kHighlightTextCaret,
           Setting.kEnableSwitchAccess,
+          Setting.kCaretBlinkInterval,
         ]),
       },
 
@@ -141,6 +175,7 @@ export class SettingsKeyboardAndTextInputPageElement extends
   private dictationLocaleOptions_: LocaleInfo[];
   private dictationLocaleSubtitleOverride_: string;
   private dictationLocalesList_: LocaleInfo[];
+  private isAccessibilityCaretBlinkIntervalSettingEnabled_: boolean;
   private isKioskModeActive_: boolean;
   private focusHighlightEnabledPref_:
       chrome.settingsPrivate.PrefObject<boolean>;

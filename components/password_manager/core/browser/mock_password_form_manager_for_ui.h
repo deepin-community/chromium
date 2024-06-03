@@ -23,12 +23,11 @@ class MockPasswordFormManagerForUI : public PasswordFormManagerForUI {
   ~MockPasswordFormManagerForUI() override;
 
   MOCK_METHOD(const GURL&, GetURL, (), (const override));
-  MOCK_METHOD(
-      const std::vector<vector_experimental_raw_ptr<const PasswordForm>>&,
-      GetBestMatches,
-      (),
-      (const override));
-  MOCK_METHOD(std::vector<vector_experimental_raw_ptr<const PasswordForm>>,
+  MOCK_METHOD(base::span<const PasswordForm>,
+              GetBestMatches,
+              (),
+              (const override));
+  MOCK_METHOD((std::vector<raw_ptr<const PasswordForm, VectorExperimental>>),
               GetFederatedMatches,
               (),
               (const override));
@@ -42,7 +41,7 @@ class MockPasswordFormManagerForUI : public PasswordFormManagerForUI {
               GetInteractionsStats,
               (),
               (const override));
-  MOCK_METHOD(std::vector<vector_experimental_raw_ptr<const PasswordForm>>,
+  MOCK_METHOD((std::vector<raw_ptr<const PasswordForm, VectorExperimental>>),
               GetInsecureCredentials,
               (),
               (const override));
@@ -50,6 +49,10 @@ class MockPasswordFormManagerForUI : public PasswordFormManagerForUI {
   MOCK_METHOD(bool, IsMovableToAccountStore, (), (const override));
   MOCK_METHOD(void, Save, (), (override));
   MOCK_METHOD(void, Update, (const PasswordForm&), (override));
+  MOCK_METHOD(bool,
+              IsUpdateAffectingPasswordsStoredInTheGoogleAccount,
+              (),
+              (const override));
   MOCK_METHOD(void,
               OnUpdateUsernameFromPrompt,
               (const std::u16string&),

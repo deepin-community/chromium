@@ -2102,7 +2102,7 @@ static int hls_read_header(AVFormatContext *s)
             pls->audio_setup_info.codec_id != AV_CODEC_ID_NONE) {
             void *iter = NULL;
             while ((in_fmt = av_demuxer_iterate(&iter)))
-                if (in_fmt->raw_codec_id == pls->audio_setup_info.codec_id)
+                if (ffifmt(in_fmt)->raw_codec_id == pls->audio_setup_info.codec_id)
                     break;
         } else {
             pls->ctx->probesize = s->probesize > 0 ? s->probesize : 1024 * 4;
@@ -2589,16 +2589,17 @@ static const AVOption hls_options[] = {
 
 static const AVClass hls_class = {
     .class_name = "hls demuxer",
+    .item_name  = av_default_item_name,
     .option     = hls_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const AVInputFormat ff_hls_demuxer = {
-    .name           = "hls",
-    .long_name      = NULL_IF_CONFIG_SMALL("Apple HTTP Live Streaming"),
-    .priv_class     = &hls_class,
+const FFInputFormat ff_hls_demuxer = {
+    .p.name         = "hls",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Apple HTTP Live Streaming"),
+    .p.priv_class   = &hls_class,
+    .p.flags        = AVFMT_NOGENSEARCH | AVFMT_TS_DISCONT | AVFMT_NO_BYTE_SEEK,
     .priv_data_size = sizeof(HLSContext),
-    .flags          = AVFMT_NOGENSEARCH | AVFMT_TS_DISCONT | AVFMT_NO_BYTE_SEEK,
     .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = hls_probe,
     .read_header    = hls_read_header,

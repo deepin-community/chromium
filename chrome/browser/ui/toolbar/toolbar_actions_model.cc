@@ -7,9 +7,9 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_base.h"
@@ -85,11 +85,7 @@ void ToolbarActionsModel::OnExtensionActionUpdated(
     extensions::ExtensionAction* extension_action,
     content::WebContents* web_contents,
     content::BrowserContext* browser_context) {
-  // Notify observers if the extension exists and is in the model.
-  if (HasAction(extension_action->extension_id())) {
-    for (Observer& observer : observers_)
-      observer.OnToolbarActionUpdated(extension_action->extension_id());
-  }
+  NotifyToolbarActionUpdated(extension_action->extension_id());
 }
 
 void ToolbarActionsModel::OnExtensionLoaded(
@@ -131,10 +127,12 @@ void ToolbarActionsModel::OnExtensionPermissionsUpdated(
     const extensions::Extension& extension,
     const extensions::PermissionSet& permissions,
     extensions::PermissionsManager::UpdateReason reason) {
-  if (HasAction(extension.id())) {
-    for (Observer& observer : observers_)
-      observer.OnToolbarActionUpdated(extension.id());
-  }
+  NotifyToolbarActionUpdated(extension.id());
+}
+
+void ToolbarActionsModel::OnActiveTabPermissionGranted(
+    const extensions::Extension& extension) {
+  NotifyToolbarActionUpdated(extension.id());
 }
 
 void ToolbarActionsModel::Shutdown() {
@@ -480,7 +478,7 @@ void ToolbarActionsModel::SetActionVisibility(const ActionId& action_id,
   if (is_now_visible) {
     stored_pinned_action_ids.push_back(action_id);
   } else {
-    base::Erase(stored_pinned_action_ids, action_id);
+    std::erase(stored_pinned_action_ids, action_id);
   }
   extension_prefs_->SetPinnedExtensions(stored_pinned_action_ids);
   // The |pinned_action_ids_| should be updated as a result of updating the
@@ -526,4 +524,15 @@ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
       filtered_action_ids.push_back(action_id);
   }
   return filtered_action_ids;
+}
+
+void ToolbarActionsModel::NotifyToolbarActionUpdated(
+    const ActionId& action_id) {
+  if (!HasAction(action_id)) {
+    return;
+  }
+
+  for (Observer& observer : observers_) {
+    observer.OnToolbarActionUpdated(action_id);
+  }
 }

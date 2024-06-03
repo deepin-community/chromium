@@ -11,15 +11,18 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/protobuf_matchers.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_controller.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_observer.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_params.pb.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_params_util.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_refresh_cookie_fetcher.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_test_cookie_manager.h"
 #include "chrome/browser/signin/bound_session_credentials/fake_bound_session_refresh_cookie_fetcher.h"
+#include "chrome/browser/signin/bound_session_credentials/rotation_debug_info.pb.h"
 #include "chrome/browser/signin/bound_session_credentials/session_binding_helper.h"
 #include "chrome/common/renderer_configuration.mojom-shared.h"
 #include "components/unexportable_keys/service_error.h"
@@ -31,11 +34,13 @@
 #include "content/public/test/test_storage_partition.h"
 #include "crypto/scoped_mock_unexportable_key_provider.h"
 #include "crypto/signature_verifier.h"
+#include "crypto/unexportable_key.h"
 #include "net/cookies/canonical_cookie.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using bound_session_credentials::RotationDebugInfo;
 using chrome::mojom::ResumeBlockedRequestsTrigger;
 using unexportable_keys::ServiceErrorOr;
 using unexportable_keys::UnexportableKeyId;
@@ -61,6 +66,30 @@ bound_session_credentials::Credential CreateCookieCredential(
   cookie_credential->set_domain(".google.com");
   cookie_credential->set_path("/");
   return credential;
+}
+
+RotationDebugInfo::FailureInfo* AddFirstFailureInfo(
+    RotationDebugInfo& info,
+    base::Time timestamp,
+    RotationDebugInfo::FailureType type,
+    bool received_challenge) {
+  RotationDebugInfo::FailureInfo* first_failure =
+      info.mutable_first_failure_info();
+  *first_failure->mutable_failure_time() =
+      bound_session_credentials::TimeToTimestamp(timestamp);
+  first_failure->set_type(type);
+  first_failure->set_received_challenge(received_challenge);
+  return first_failure;
+}
+
+RotationDebugInfo::FailureCounter* AddFailureCounter(
+    RotationDebugInfo& info,
+    RotationDebugInfo::FailureType type) {
+  RotationDebugInfo::FailureCounter* counter =
+      info.add_errors_since_last_rotation();
+  counter->set_type(type);
+  counter->set_count(1);
+  return counter;
 }
 
 }  // namespace
@@ -177,6 +206,10 @@ class BoundSessionCookieControllerImplTest
     return bound_session_cookie_controller_->refresh_cookie_fetcher_.get();
   }
 
+  const RotationDebugInfo& debug_info() {
+    return bound_session_cookie_controller_->debug_info_;
+  }
+
   std::vector<std::unique_ptr<BoundSessionCookieObserver>>*
   bound_cookies_observers() {
     return &bound_session_cookie_controller()->bound_cookies_observers_;
@@ -281,7 +314,8 @@ class BoundSessionCookieControllerImplTest
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::HistogramTester histogram_tester_;
   crypto::ScopedMockUnexportableKeyProvider scoped_key_provider_;
-  unexportable_keys::UnexportableKeyTaskManager unexportable_key_task_manager_;
+  unexportable_keys::UnexportableKeyTaskManager unexportable_key_task_manager_{
+      crypto::UnexportableKeyProvider::Config()};
   unexportable_keys::UnexportableKeyServiceImpl unexportable_key_service_;
   BoundSessionTestCookieManager cookie_manager_;
   content::TestStoragePartition storage_partition_;
@@ -937,4 +971,66 @@ TEST_F(BoundSessionCookieControllerImplTest,
   MaybeRefreshCookie();
   EXPECT_FALSE(preemptive_cookie_refresh_timer()->IsRunning());
   CompletePendingRefreshRequestIfAny();
+}
+
+TEST_F(BoundSessionCookieControllerImplTest, UpdateDebugInfo) {
+  RotationDebugInfo expected_info;
+  // Debug info is empty on startup.
+  EXPECT_THAT(debug_info(), base::test::EqualsProto(expected_info));
+
+  auto trigger_rotation = [&]() {
+    EXPECT_FALSE(AreAllCookiesFresh());
+    task_environment()->FastForwardBy(base::Seconds(2));
+    bound_session_cookie_controller()->HandleRequestBlockedOnCookie(
+        base::DoNothing());
+  };
+
+  // CONNECTION_ERROR: 1
+  trigger_rotation();
+  SimulateCompleteRefreshRequest(
+      BoundSessionRefreshCookieFetcher::Result::kConnectionError, std::nullopt);
+  AddFirstFailureInfo(expected_info, base::Time::Now(),
+                      RotationDebugInfo::CONNECTION_ERROR,
+                      /*received_challenge=*/false);
+  RotationDebugInfo::FailureCounter* connection_error_counter =
+      AddFailureCounter(expected_info, RotationDebugInfo::CONNECTION_ERROR);
+  EXPECT_THAT(debug_info(), base::test::EqualsProto(expected_info));
+
+  // CONNECTION_ERROR: 2
+  trigger_rotation();
+  SimulateCompleteRefreshRequest(
+      BoundSessionRefreshCookieFetcher::Result::kConnectionError, std::nullopt);
+  connection_error_counter->set_count(2);
+  EXPECT_THAT(debug_info(), base::test::EqualsProto(expected_info));
+
+  // CONNECTION_ERROR: 2
+  // SERVER_ERROR: 1
+  trigger_rotation();
+  SimulateCompleteRefreshRequest(
+      BoundSessionRefreshCookieFetcher::Result::kServerTransientError,
+      std::nullopt);
+  AddFailureCounter(expected_info, RotationDebugInfo::SERVER_ERROR);
+  EXPECT_THAT(debug_info(), base::test::EqualsProto(expected_info));
+
+  // CONNECTION_ERROR: 2
+  // SERVER_ERROR: 1
+  // TIMEOUT: 1
+  trigger_rotation();
+  task_environment()->FastForwardBy(kResumeBlockedRequestTimeout);
+  AddFailureCounter(expected_info, RotationDebugInfo::TIMEOUT);
+  EXPECT_THAT(debug_info(), base::test::EqualsProto(expected_info));
+
+  // CONNECTION_ERROR: 3
+  // SERVER_ERROR: 1
+  // TIMEOUT: 1
+  trigger_rotation();
+  SimulateCompleteRefreshRequest(
+      BoundSessionRefreshCookieFetcher::Result::kConnectionError, std::nullopt);
+  connection_error_counter->set_count(3);
+  EXPECT_THAT(debug_info(), base::test::EqualsProto(expected_info));
+
+  // Debug info is cleared on success.
+  trigger_rotation();
+  EXPECT_TRUE(CompletePendingRefreshRequestIfAny());
+  EXPECT_THAT(debug_info(), base::test::EqualsProto(RotationDebugInfo()));
 }

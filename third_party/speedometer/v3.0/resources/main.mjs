@@ -338,11 +338,10 @@ class MainBenchmarkClient {
                 this._setLocationHash("#summary");
                 return;
             }
-        } else {
-            if (hash !== "" && hash !== "#home" && hash !== "#about") {
-                this._setLocationHash("#home");
-                return;
-            }
+        } else if (hash !== "#home" && hash !== "") {
+            // Redirect invalid views to #home directly.
+            this._setLocationHash("#home");
+            return;
         }
         this._setLocationHash(hash);
     }
@@ -356,7 +355,13 @@ class MainBenchmarkClient {
         } else {
             window.location.hash = hash;
         }
+        this._updateVisibleSectionAttribute(hash);
         this._updateDocumentTitle(hash);
+    }
+
+    _updateVisibleSectionAttribute(hash) {
+        const sectionId = hash.substring(1);
+        document.documentElement.setAttribute("data-visible-section", sectionId);
     }
 
     _updateDocumentTitle(hash) {

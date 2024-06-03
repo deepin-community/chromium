@@ -24,6 +24,7 @@
 #include "components/autofill/core/browser/data_model/credit_card.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/better_auth_metrics.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
 #include "components/autofill/core/browser/payments/payments_service_url.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
@@ -58,7 +59,8 @@ CreditCardFidoAuthenticator::CreditCardFidoAuthenticator(AutofillDriver* driver,
                                                          AutofillClient* client)
     : autofill_driver_(driver),
       autofill_client_(client),
-      payments_network_interface_(client->GetPaymentsNetworkInterface()),
+      payments_network_interface_(
+          client->GetPaymentsAutofillClient()->GetPaymentsNetworkInterface()),
       user_is_verifiable_callback_received_(
           base::WaitableEvent::ResetPolicy::AUTOMATIC,
           base::WaitableEvent::InitialState::NOT_SIGNALED) {
@@ -553,7 +555,8 @@ CreditCardFidoAuthenticator::ParseCreationOptions(
 
   const CoreAccountInfo account_info =
       autofill_client_->GetPersonalDataManager()
-          ->GetAccountInfoForPaymentsServer();
+          ->payments_data_manager()
+          .GetAccountInfoForPaymentsServer();
   options->user.id =
       std::vector<uint8_t>(account_info.gaia.begin(), account_info.gaia.end());
   options->user.name = account_info.email;
@@ -751,7 +754,9 @@ void CreditCardFidoAuthenticator::HandleGetAssertionSuccess(
       base::Value::Dict response =
           ParseAssertionResponse(std::move(assertion_response));
       full_card_request_ = std::make_unique<payments::FullCardRequest>(
-          autofill_client_, autofill_client_->GetPaymentsNetworkInterface(),
+          autofill_client_,
+          autofill_client_->GetPaymentsAutofillClient()
+              ->GetPaymentsNetworkInterface(),
           autofill_client_->GetPersonalDataManager());
 
       std::optional<GURL> last_committed_primary_main_frame_origin;
@@ -766,10 +771,11 @@ void CreditCardFidoAuthenticator::HandleGetAssertionSuccess(
               features::kAutofillEnableFIDOProgressDialog)) {
         // Open the progress dialog when authenticating and getting the full
         // card from FIDO.
-        autofill_client_->ShowAutofillProgressDialog(
-            AutofillProgressDialogType::kAndroidFIDOProgressDialog,
-            base::BindOnce(&CreditCardFidoAuthenticator::CancelVerification,
-                           weak_ptr_factory_.GetWeakPtr()));
+        autofill_client_->GetPaymentsAutofillClient()
+            ->ShowAutofillProgressDialog(
+                AutofillProgressDialogType::kAndroidFIDOProgressDialog,
+                base::BindOnce(&CreditCardFidoAuthenticator::CancelVerification,
+                               weak_ptr_factory_.GetWeakPtr()));
       }
 #endif
       full_card_request_->GetFullCardViaFIDO(

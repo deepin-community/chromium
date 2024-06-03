@@ -16,6 +16,7 @@
 namespace views {
 class ImageView;
 class Label;
+class StyledLabel;
 }  // namespace views
 
 // A view that contains basic layout for a container with controls.
@@ -35,6 +36,7 @@ class RichControlsContainerView : public views::FlexLayoutView {
   void SetIcon(const ui::ImageModel image);
   void SetTitle(std::u16string title);
   views::Label* AddSecondaryLabel(std::u16string text);
+  views::StyledLabel* AddSecondaryStyledLabel(std::u16string text);
   template <typename T>
   T* AddControl(std::unique_ptr<T> control_view) {
     control_view->SetProperty(views::kInternalPaddingKey,
@@ -48,7 +50,13 @@ class RichControlsContainerView : public views::FlexLayoutView {
                      const views::SizeBounds& maximum_size) const;
 
   // views::View:
+  // TODO(crbug.com/40232718): Remove this once we eliminate
+  // `View::GetPreferredSize()`.
   gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
+
+  views::Label* title() { return title_; }
 
   const std::u16string& GetTitleForTesting();
   const ui::ImageModel GetIconImageModelForTesting();

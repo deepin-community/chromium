@@ -107,7 +107,6 @@ PermissionRequest::GetDialogAnnotatedMessageText(
     case RequestType::kMicStream:
       message_id = IDS_MEDIA_CAPTURE_AUDIO_ONLY_INFOBAR_TEXT;
       break;
-    case RequestType::kMidi:
     case RequestType::kMidiSysex:
       message_id = IDS_MIDI_SYSEX_INFOBAR_TEXT;
       break;
@@ -126,8 +125,6 @@ PermissionRequest::GetDialogAnnotatedMessageText(
       break;
     case RequestType::kStorageAccess:
       // The SA prompt does not currently bold any part of its message.
-      if (base::FeatureList::IsEnabled(
-              permissions::features::kPermissionStorageAccessAPI)) {
         return AnnotatedMessageText(
             l10n_util::GetStringFUTF16(
                 IDS_CONCAT_TWO_STRINGS_WITH_PERIODS,
@@ -139,17 +136,14 @@ PermissionRequest::GetDialogAnnotatedMessageText(
                     requesting_origin_string_formatted,
                     embedding_origin_string_formatted)),
             /*bolded_ranges=*/{});
-      }
-      return AnnotatedMessageText(
-          l10n_util::GetStringFUTF16(IDS_STORAGE_ACCESS_INFOBAR_TEXT,
-                                     requesting_origin_string_formatted,
-                                     embedding_origin_string_formatted),
-          /*bolded_ranges=*/{});
     case RequestType::kTopLevelStorageAccess:
       NOTREACHED();
       break;
     case RequestType::kVrSession:
       message_id = IDS_VR_INFOBAR_TEXT;
+      break;
+    case RequestType::kIdentityProvider:
+      message_id = IDS_IDENTITY_PROVIDER_INFOBAR_TEXT;
       break;
   }
   DCHECK_NE(0, message_id);
@@ -188,6 +182,10 @@ bool PermissionRequest::IsEmbeddedPermissionElementInitiated() const {
   return data_.embedded_permission_element_initiated;
 }
 
+std::optional<gfx::Rect> PermissionRequest::GetAnchorElementPosition() const {
+  return data_.anchor_element_position;
+}
+
 #if !BUILDFLAG(IS_ANDROID)
 
 bool PermissionRequest::IsConfirmationChipSupported() {
@@ -215,6 +213,15 @@ std::optional<std::u16string> PermissionRequest::GetRequestChipText(
          IDS_PERMISSIONS_CAMERA_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT,
          IDS_PERMISSIONS_CAMERA_ALLOWED_ONCE_CONFIRMATION_SCREENREADER_ANNOUNCEMENT,
          IDS_PERMISSIONS_CAMERA_NOT_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT}},
+       {RequestType::kCapturedSurfaceControl,
+        {IDS_CAPTURED_SURFACE_CONTROL_PERMISSION_CHIP,
+         IDS_CAPTURED_SURFACE_CONTROL_PERMISSION_BLOCKED_CHIP,
+         IDS_PERMISSIONS_PERMISSION_ALLOWED_CONFIRMATION,
+         IDS_PERMISSIONS_PERMISSION_ALLOWED_ONCE_CONFIRMATION,
+         IDS_PERMISSIONS_PERMISSION_NOT_ALLOWED_CONFIRMATION,
+         IDS_PERMISSIONS_CAPTURED_SURFACE_CONTROL_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT,
+         IDS_PERMISSIONS_PERMISSION_ALLOWED_ONCE_CONFIRMATION,
+         IDS_PERMISSIONS_CAPTURED_SURFACE_CONTROL_NOT_ALLOWED_CONFIRMATION_SCREENREADER_ANNOUNCEMENT}},
        {RequestType::kClipboard,
         {IDS_CLIPBOARD_PERMISSION_CHIP, -1, -1, -1, -1, -1, -1, -1}},
        {RequestType::kGeolocation,
@@ -301,7 +308,6 @@ std::u16string PermissionRequest::GetMessageTextFragment() const {
     case RequestType::kMicStream:
       message_id = IDS_MEDIA_CAPTURE_AUDIO_ONLY_PERMISSION_FRAGMENT;
       break;
-    case RequestType::kMidi:
     case RequestType::kMidiSysex:
       message_id = IDS_MIDI_SYSEX_PERMISSION_FRAGMENT;
       break;
@@ -341,6 +347,9 @@ std::u16string PermissionRequest::GetMessageTextFragment() const {
     case RequestType::kWindowManagement:
       message_id = IDS_WINDOW_MANAGEMENT_PERMISSION_FRAGMENT;
       break;
+    case RequestType::kIdentityProvider:
+      message_id = IDS_IDENTITY_PROVIDER_PERMISSION_FRAGMENT;
+      break;
   }
   DCHECK_NE(0, message_id);
   return l10n_util::GetStringUTF16(message_id);
@@ -352,9 +361,7 @@ std::optional<std::u16string> PermissionRequest::GetAllowAlwaysText() const {
 }
 
 bool PermissionRequest::ShouldUseTwoOriginPrompt() const {
-  return request_type() == RequestType::kStorageAccess &&
-         base::FeatureList::IsEnabled(
-             permissions::features::kPermissionStorageAccessAPI);
+  return request_type() == RequestType::kStorageAccess;
 }
 
 void PermissionRequest::PermissionGranted(bool is_one_time) {

@@ -22,6 +22,7 @@
 #include "base/functional/overloaded.h"
 #include "base/memory/raw_ref.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "components/attribution_reporting/aggregation_keys.h"
@@ -45,6 +46,7 @@
 #include "content/browser/attribution_reporting/send_result.h"
 #include "content/browser/attribution_reporting/storable_source.h"
 #include "content/browser/attribution_reporting/stored_source.h"
+#include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/web_contents.h"
@@ -75,8 +77,9 @@ attribution_internals::mojom::WebUISourcePtr WebUISource(
     Attributability attributability) {
   const CommonSourceInfo& common_info = source.common_info();
   return attribution_internals::mojom::WebUISource::New(
-      source.source_event_id(), common_info.source_origin(),
-      source.destination_sites(), common_info.reporting_origin(),
+      *source.source_id(), source.source_event_id(),
+      common_info.source_origin(), source.destination_sites(),
+      common_info.reporting_origin(),
       source.source_time().InMillisecondsFSinceUnixEpoch(),
       source.expiry_time().InMillisecondsFSinceUnixEpoch(),
       SerializeAttributionJson(source.trigger_specs().ToJson(),
@@ -94,7 +97,7 @@ attribution_internals::mojom::WebUISourcePtr WebUISource(
           }),
       source.aggregatable_budget_consumed(), source.aggregatable_dedup_keys(),
       source.trigger_data_matching(), source.event_level_epsilon(),
-      source.debug_cookie_set(), attributability);
+      source.common_info().debug_cookie_set(), attributability);
 }
 
 void ForwardSourcesToWebUI(
@@ -165,8 +168,8 @@ attribution_internals::mojom::WebUIReportPtr WebUIReport(
                 [](const auto& contribution) {
                   return ai_mojom::AggregatableHistogramContribution::New(
                       attribution_reporting::HexEncodeAggregationKey(
-                          contribution.key()),
-                      contribution.value());
+                          contribution.bucket),
+                      base::checked_cast<uint32_t>(contribution.value));
                 });
 
             return ai_mojom::WebUIReportData::NewAggregatableAttributionData(
@@ -263,8 +266,9 @@ void AttributionInternalsHandlerImpl::IsAttributionReportingEnabled(
   bool debug_mode = base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kAttributionReportingDebugMode);
 
-  std::move(callback).Run(attribution_reporting_enabled, debug_mode,
-                          AttributionManager::GetAttributionSupport(contents));
+  std::move(callback).Run(
+      attribution_reporting_enabled, debug_mode,
+      static_cast<WebContentsImpl*>(contents)->GetAttributionSupport());
 }
 
 void AttributionInternalsHandlerImpl::GetActiveSources(
@@ -290,12 +294,12 @@ void AttributionInternalsHandlerImpl::GetReports(
   }
 }
 
-void AttributionInternalsHandlerImpl::SendReports(
-    const std::vector<AttributionReport::Id>& ids,
-    attribution_internals::mojom::Handler::SendReportsCallback callback) {
+void AttributionInternalsHandlerImpl::SendReport(
+    AttributionReport::Id id,
+    attribution_internals::mojom::Handler::SendReportCallback callback) {
   if (AttributionManager* manager =
           AttributionManager::FromWebContents(web_ui_->GetWebContents())) {
-    manager->SendReportsForWebUI(ids, std::move(callback));
+    manager->SendReportForWebUI(id, std::move(callback));
   } else {
     std::move(callback).Run();
   }
@@ -431,9 +435,9 @@ void AttributionInternalsHandlerImpl::OnOsRegistration(
 }
 
 void AttributionInternalsHandlerImpl::OnTriggerHandled(
-    const AttributionTrigger& trigger,
     const std::optional<uint64_t> cleared_debug_key,
     const CreateReportResult& result) {
+  const AttributionTrigger& trigger = result.trigger();
   const attribution_reporting::TriggerRegistration& registration =
       trigger.registration();
 

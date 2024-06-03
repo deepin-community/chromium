@@ -201,6 +201,8 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest, PopOutTabOnInstall) {
   // Install the site with the user display mode set to kTabbed.
   webapps::AppId app_id;
   {
+    ui_test_utils::BrowserChangeObserver app_browser_observer(
+        nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
     base::RunLoop run_loop;
     auto* provider = WebAppProvider::GetForTest(browser()->profile());
     DCHECK(provider);
@@ -223,8 +225,9 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest, PopOutTabOnInstall) {
               app_id = installed_app_id;
               run_loop.Quit();
             }),
-        /*use_fallback=*/true);
+        FallbackBehavior::kAllowFallbackDataAlways);
     run_loop.Run();
+    ui_test_utils::WaitForBrowserSetLastActive(app_browser_observer.Wait());
   }
 
   // After installing a tabbed display mode app the install page should pop out
@@ -581,7 +584,7 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest, DISABLED_NavigationThrottle) {
   EXPECT_EQ(tab_strip->active_index(), 0);
   EXPECT_EQ(tab_strip->GetWebContentsAt(0)->GetVisibleURL(), start_url);
 
-// TODO(crbug.com/1417525): Fix this test on Windows and Mac.
+// TODO(crbug.com/40257354): Fix this test on Windows and Mac.
 #if !(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC))
   // Navigate to a home tab URL via a target=_blank link.
   content::TestNavigationObserver nav_observer(
@@ -646,12 +649,16 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest, MoveTabsToNewWindow) {
       embedded_test_server()->GetURL("/web_apps/tab_strip_customizations.html");
   webapps::AppId app_id = InstallTestWebApp(start_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
+  ui_test_utils::WaitForBrowserSetLastActive(app_browser);
 
   chrome::NewTab(app_browser);
 
   size_t initial_browser_count = BrowserList::GetInstance()->size();
 
+  ui_test_utils::BrowserChangeObserver new_browser_observer(
+      nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
   chrome::MoveTabsToNewWindow(app_browser, {1});
+  ui_test_utils::WaitForBrowserSetLastActive(new_browser_observer.Wait());
 
   EXPECT_EQ(initial_browser_count + 1, BrowserList::GetInstance()->size());
 
@@ -675,10 +682,14 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest, MoveTabsToExistingWindow) {
       embedded_test_server()->GetURL("/web_apps/tab_strip_customizations.html");
   webapps::AppId app_id = InstallTestWebApp(start_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
+  ui_test_utils::WaitForBrowserSetLastActive(app_browser);
   chrome::NewTab(app_browser);
 
   // Open a second app browser window.
+  ui_test_utils::BrowserChangeObserver app_browser_observer(
+      nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
   chrome::MoveTabsToNewWindow(app_browser, {1});
+  ui_test_utils::WaitForBrowserSetLastActive(app_browser_observer.Wait());
   Browser* app_browser2 = BrowserList::GetInstance()->GetLastActive();
 
   EXPECT_EQ(app_browser->tab_strip_model()->count(), 1);
@@ -734,7 +745,8 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest,
   // Navigate to home tab using the same URL.
   app_browser->OpenURL(OpenURLParams(start_url, content::Referrer(),
                                      WindowOpenDisposition::CURRENT_TAB,
-                                     ui::PAGE_TRANSITION_TYPED, false));
+                                     ui::PAGE_TRANSITION_TYPED, false),
+                       /*navigation_handle_callback=*/{});
 
   // Expect the JS variable to still be set, meaning the page was not navigated.
   EXPECT_EQ(true, EvalJs(tab_strip->GetWebContentsAt(0), "test == 5"));
@@ -1196,7 +1208,8 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest, MiddleClickHomeTabLink) {
   // Middle click home tab link from the home tab.
   app_browser->OpenURL(OpenURLParams(start_url, content::Referrer(),
                                      WindowOpenDisposition::NEW_BACKGROUND_TAB,
-                                     ui::PAGE_TRANSITION_TYPED, false));
+                                     ui::PAGE_TRANSITION_TYPED, false),
+                       /*navigation_handle_callback=*/{});
 
   // Check we stayed in the home tab.
   EXPECT_EQ(tab_strip->count(), 1);
@@ -1209,7 +1222,8 @@ IN_PROC_BROWSER_TEST_F(WebAppTabStripBrowserTest, MiddleClickHomeTabLink) {
   // Middle click home tab link from a different tab.
   app_browser->OpenURL(OpenURLParams(start_url, content::Referrer(),
                                      WindowOpenDisposition::NEW_BACKGROUND_TAB,
-                                     ui::PAGE_TRANSITION_TYPED, false));
+                                     ui::PAGE_TRANSITION_TYPED, false),
+                       /*navigation_handle_callback=*/{});
 
   // Check it was opened in the home tab.
   EXPECT_EQ(tab_strip->count(), 2);

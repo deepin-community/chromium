@@ -187,10 +187,12 @@ source_set("policy_specific_browser_tests") {
   sources = [
     "policy_network_browsertest.cc",
     "site_isolation_policy_browsertest.cc",
+    "test/automatic_fullscreen_policy_browsertest.cc",
     "test/back_forward_cache_policy_browsertest.cc",
     "test/certificate_transparency_policy_browsertest.cc",
     "test/force_permission_policy_unload_default_enabled_policy_browsertest.cc",
     "test/hsts_policy_browsertest.cc",
+    "test/mutation_events_policy_browsertest.cc",
     "test/network_prediction_policy_browsertest.cc",
     "test/policy_statistics_collector_browsertest.cc",
     "test/proxy_policies_browsertest.cc",
@@ -199,7 +201,6 @@ source_set("policy_specific_browser_tests") {
     "test/ssl_error_overriding_allowed_policy_browsertest.cc",
     "test/url_keyed_anonymized_data_collection_enabled_browsertest.cc",
     "test/web_rtc_udp_port_range_policy_browsertest.cc",
-    "test/web_sql_access_policy_browsertest.cc",
   ]
   if (is_chromeos) {
     sources += [ "test/policy_certs_browsertest.cc" ]
@@ -301,6 +302,7 @@ source_set("browser_tests") {
     "cloud/cloud_policy_browsertest.cc",
     "cloud/cloud_policy_manager_browsertest.cc",
     "cloud/device_management_service_browsertest.cc",
+    "test/accessibility_policy_browsertest.cc",
   ]
 
   deps = [
@@ -359,11 +361,11 @@ source_set("browser_tests") {
 
   if (is_chromeos_ash) {
     sources += [
-      "test/accessibility_policy_browsertest.cc",
       "test/arc_policy_browsertest.cc",
       "test/assistant_policy_browsertest.cc",
       "test/audio_output_allowed_browsertest.cc",
       "test/note_taking_on_lock_screen_policy_browsertest.cc",
+      "test/orca_policy_browsertest.cc",
       "test/power_sounds_policy_browsertest.cc",
       "test/privacy_hub_policy_browsertest.cc",
       "test/screenshot_policy_browsertest.cc",

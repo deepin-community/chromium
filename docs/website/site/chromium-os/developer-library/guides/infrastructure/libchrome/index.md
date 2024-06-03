@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/guides
-  - Chromium OS > Developer Library > Guides
+  - ChromiumOS > Developer Library > Guides
 page_name: libchrome
 title: libchrome
 ---
@@ -328,7 +328,7 @@ the following.
 [libbase] on Google Git
 
 [libbase]: https://chromium.googlesource.com/chromium/src/base/
-[platform2]: ../platform2_primer.md
+[platform2]: /chromium-os/developer-library/guides/development/platform2-primer/
 [pkg-config]: https://www.freedesktop.org/wiki/Software/pkg-config/
 [linker script]: https://sourceware.org/binutils/docs/ld/Implicit-Linker-Scripts.html
 [chromium/src/base]: https://chromium.googlesource.com/chromium/src/base/

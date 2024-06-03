@@ -20,12 +20,11 @@
 #include "chrome/browser/ash/login/users/avatar/user_image_manager_registry.h"
 #include "chrome/browser/ash/login/users/chrome_user_manager_impl.h"
 #include "chrome/browser/ash/net/ash_proxy_monitor.h"
-#include "chrome/browser/ash/net/delay_network_call.h"
 #include "chrome/browser/ash/net/system_proxy_manager.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/scheduler_configuration_manager.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chrome/browser/ash/settings/cros_settings_holder.h"
 #include "chrome/browser/ash/system/automatic_reboot_manager.h"
 #include "chrome/browser/ash/system/device_disabling_manager.h"
 #include "chrome/browser/ash/system/device_disabling_manager_default_delegate.h"
@@ -39,6 +38,7 @@
 #include "chromeos/ash/components/browser_context_helper/browser_context_flusher.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
 #include "chromeos/ash/components/geolocation/simple_geolocation_provider.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/timezone/timezone_resolver.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
@@ -103,12 +103,16 @@ void BrowserProcessPlatformPart::ShutdownAutomaticRebootManager() {
 
 void BrowserProcessPlatformPart::InitializeUserManager() {
   DCHECK(!user_manager_);
+  CHECK(session_manager_);
   user_manager_ = ash::ChromeUserManagerImpl::CreateChromeUserManager();
   user_image_manager_registry_ =
       std::make_unique<ash::UserImageManagerRegistry>(user_manager_.get());
+  session_manager_->OnUserManagerCreated(user_manager_.get());
   // LoginState and DeviceCloudPolicyManager outlives UserManager, so on
   // their initialization, there's no way to start observing UserManager.
   // This is the earliest timing to do so.
+  // TODO(b/332481586): Consider move the initialization to the constructor
+  // of each class.
   if (auto* login_state = ash::LoginState::Get()) {
     login_state->OnUserManagerCreated(user_manager_.get());
   }
@@ -152,12 +156,22 @@ void BrowserProcessPlatformPart::ShutdownDeviceDisablingManager() {
 }
 
 void BrowserProcessPlatformPart::InitializeSessionManager() {
-  DCHECK(!session_manager_);
+  CHECK(!session_manager_);
   session_manager_ = std::make_unique<ash::ChromeSessionManager>();
 }
 
 void BrowserProcessPlatformPart::ShutdownSessionManager() {
   session_manager_.reset();
+}
+
+void BrowserProcessPlatformPart::InitializeCrosSettings() {
+  CHECK(!cros_settings_holder_);
+  cros_settings_holder_ = std::make_unique<ash::CrosSettingsHolder>(
+      ash::DeviceSettingsService::Get(), g_browser_process->local_state());
+}
+
+void BrowserProcessPlatformPart::ShutdownCrosSettings() {
+  cros_settings_holder_.reset();
 }
 
 void BrowserProcessPlatformPart::InitializeCrosComponentManager() {
@@ -264,29 +278,15 @@ BrowserProcessPlatformPart::GetTimezoneResolverManager() {
   if (!timezone_resolver_manager_.get()) {
     timezone_resolver_manager_ =
         std::make_unique<ash::system::TimeZoneResolverManager>(
-            ash::SimpleGeolocationProvider::GetInstance());
+            ash::SimpleGeolocationProvider::GetInstance(),
+            session_manager::SessionManager::Get());
   }
   return timezone_resolver_manager_.get();
 }
 
-ash::TimeZoneResolver* BrowserProcessPlatformPart::GetTimezoneResolver() {
-  if (!timezone_resolver_.get()) {
-    timezone_resolver_ = std::make_unique<ash::TimeZoneResolver>(
-        GetTimezoneResolverManager(),
-        ash::SimpleGeolocationProvider::GetInstance(),
-        g_browser_process->shared_url_loader_factory(),
-        base::BindRepeating(&ash::system::ApplyTimeZone),
-        base::BindRepeating(&ash::DelayNetworkCall),
-        g_browser_process->local_state());
-  }
-  return timezone_resolver_.get();
-}
-
 void BrowserProcessPlatformPart::StartTearDown() {
   // Some tests check for memory leaks before this object is
-  // destroyed.  So we need to destroy |timezone_resolver_| and
-  // |timezone_resolver_manager_| here.
-  timezone_resolver_.reset();
+  // destroyed.  So we need to destroy |timezone_resolver_manager_| here.
   timezone_resolver_manager_.reset();
   profile_helper_.reset();
   browser_context_flusher_.reset();

@@ -34,9 +34,10 @@ namespace {
 // lazily.
 class BlinkRootsHandler final : public v8::EmbedderRootsHandler {
  public:
-  BlinkRootsHandler()
+  explicit BlinkRootsHandler(v8::Isolate* isolate)
       : v8::EmbedderRootsHandler(v8::EmbedderRootsHandler::RootHandling::
-                                     kDontQueryEmbedderForAnyReference) {}
+                                     kDontQueryEmbedderForAnyReference),
+        isolate_(isolate) {}
 
   bool IsRoot(const v8::TracedReference<v8::Value>& handle) final {
     NOTREACHED_NORETURN();
@@ -47,18 +48,25 @@ class BlinkRootsHandler final : public v8::EmbedderRootsHandler {
   // generation garbage collections.
   void ResetRoot(const v8::TracedReference<v8::Value>& handle) final {
     const v8::TracedReference<v8::Object>& traced = handle.As<v8::Object>();
-    bool success = DOMDataStore::ClearWrapperInAnyWorldIfEqualTo(
-        ToScriptWrappable(traced), traced);
+    const bool success = DOMDataStore::ClearWrapperInAnyWorldIfEqualTo(
+        ToScriptWrappable(isolate_, traced), traced);
     // Since V8 found a handle, Blink needs to find it as well when trying to
-    // remove it.
+    // remove it. Note that this is even true for the case where a
+    // DOMWrapperWorld and DOMDataStore are already unreachable as the internal
+    // worldmap contains a weak ref that remains valid until the next full GC
+    // call. The weak ref is guaranteed to still be valid because it is only
+    // cleared on full GCs and the `BlinkRootsHandler` is used on minor V8 GCs.
     CHECK(success);
   }
 
   bool TryResetRoot(const v8::TracedReference<v8::Value>& handle) final {
     const v8::TracedReference<v8::Object>& traced = handle.As<v8::Object>();
     return DOMDataStore::ClearInlineStorageWrapperIfEqualTo(
-        ToScriptWrappable(traced), traced);
+        ToScriptWrappable(isolate_, traced), traced);
   }
+
+ private:
+  v8::Isolate* isolate_;
 };
 
 }  // namespace
@@ -114,7 +122,7 @@ void ThreadState::AttachToIsolate(v8::Isolate* isolate,
   isolate->AttachCppHeap(cpp_heap_.get());
   CHECK_EQ(cpp_heap_.get(), isolate->GetCppHeap());
   isolate_ = isolate;
-  embedder_roots_handler_ = std::make_unique<BlinkRootsHandler>();
+  embedder_roots_handler_ = std::make_unique<BlinkRootsHandler>(isolate);
   isolate_->SetEmbedderRootsHandler(embedder_roots_handler_.get());
 }
 
@@ -139,33 +147,6 @@ ThreadState::~ThreadState() {
   DCHECK(IsCreationThread());
   cpp_heap_->Terminate();
   ThreadStateStorage::DetachNonMainThread(*ThreadStateStorage::Current());
-}
-
-void ThreadState::SafePoint(StackState stack_state) {
-  DCHECK(IsCreationThread());
-  if (stack_state != ThreadState::StackState::kNoHeapPointers)
-    return;
-
-  if (forced_scheduled_gc_for_testing_) {
-    CollectAllGarbageForTesting(stack_state);
-    forced_scheduled_gc_for_testing_ = false;
-  }
-}
-
-void ThreadState::NotifyGarbageCollection(v8::GCType type,
-                                          v8::GCCallbackFlags flags) {
-  if (flags & v8::kGCCallbackFlagForced) {
-    // Forces a precise GC at the end of the current event loop. This is
-    // required for testing code that cannot use GC internals but rather has
-    // to rely on window.gc(). Only schedule additional GCs if the last GC was
-    // using conservative stack scanning.
-    if (type == v8::kGCTypeScavenge || type == v8::kGCTypeMinorMarkSweep) {
-      forced_scheduled_gc_for_testing_ = true;
-    } else if (type == v8::kGCTypeMarkSweepCompact) {
-      forced_scheduled_gc_for_testing_ =
-          cppgc::subtle::HeapState::PreviousGCWasConservative(heap_handle());
-    }
-  }
 }
 
 void ThreadState::CollectAllGarbageForTesting(StackState stack_state) {

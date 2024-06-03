@@ -133,7 +133,7 @@ TEST(RefBase, Detach) {
     Ref ref(tracker);
 
     events.clear();
-    { DAWN_UNUSED(ref.Detach()); }
+    { [[maybe_unused]] auto ptr = ref.Detach(); }
     EXPECT_THAT(events, testing::ElementsAre(Event{Action::kAssign, 1, 0}  // nullify ref
                                              ));
 }
@@ -314,6 +314,31 @@ TEST(RefBase, TCopyAssignmentAlternate) {
                                              Event{Action::kRelease, 2},    // release tracker2
                                              Event{Action::kAssign, 2, 1},  // copy tracker1
                                              Event{Action::kMarker, 30}));
+}
+
+// Regression test for an issue where RefBase<T*> comparison would end up using operator bool
+// depending on the order in which the compiler did implicit conversions.
+struct FakePtrRefTraits {
+    static constexpr int* kNullValue{nullptr};
+    static void Reference(int*) {}
+    static void Release(int*) {}
+};
+TEST(RefBase, MissingExplicitOnOperatorBool) {
+    using MyRef = RefBase<int*, FakePtrRefTraits>;
+    int a = 0;
+    int b = 1;
+    MyRef refA(&a);
+    MyRef refB(&b);
+
+    EXPECT_TRUE(refA == refA);
+    EXPECT_FALSE(refA != refA);
+    EXPECT_TRUE((refA) == (refA));
+    EXPECT_FALSE((refA) != (refA));
+
+    EXPECT_FALSE(refA == refB);
+    EXPECT_TRUE(refA != refB);
+    EXPECT_FALSE((refA) == (refB));
+    EXPECT_TRUE((refA) != (refB));
 }
 
 }  // anonymous namespace

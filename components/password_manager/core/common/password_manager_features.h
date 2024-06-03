@@ -26,7 +26,6 @@ BASE_DECLARE_FEATURE(kForgotPasswordFormSupport);
 #if BUILDFLAG(IS_IOS)
 BASE_DECLARE_FEATURE(kIOSPasswordBottomSheet);
 BASE_DECLARE_FEATURE(kIOSPasswordBottomSheetAutofocus);
-BASE_DECLARE_FEATURE(kIOSPasswordSettingsBulkUploadLocalPasswords);
 #endif  // IS_IOS
 BASE_DECLARE_FEATURE(kPasswordIssuesInSpecificsMetadata);
 BASE_DECLARE_FEATURE(kSendPasswords);
@@ -37,11 +36,9 @@ BASE_DECLARE_FEATURE(kRecoverFromNeverSaveAndroid);
 BASE_DECLARE_FEATURE(kNoPasswordSuggestionFiltering);
 
 #if BUILDFLAG(IS_ANDROID)
-BASE_DECLARE_FEATURE(kPasskeyManagementUsingAccountSettingsAndroid);
 BASE_DECLARE_FEATURE(kPasswordGenerationBottomSheet);
 BASE_DECLARE_FEATURE(kPasswordSuggestionBottomSheetV2);
 BASE_DECLARE_FEATURE(kUnifiedPasswordManagerLocalPasswordsMigrationWarning);
-BASE_DECLARE_FEATURE(kUnifiedPasswordManagerSyncUsingAndroidBackendOnly);
 #endif
 
 // All features parameters are in alphabetical order.
@@ -74,12 +71,6 @@ extern const char kGenerationRequirementsTimeout[];
 // Touch To Fill submission feature's variations.
 extern const char kTouchToFillPasswordSubmissionWithConservativeHeuristics[];
 #endif  // IS_ANDROID
-
-#if BUILDFLAG(IS_IOS)
-// Helper function returning the status of
-// `kIOSPasswordSettingsBulkUploadLocalPasswords`.
-bool IsBulkUploadLocalPasswordsEnabled();
-#endif  // IS_IOS
 
 }  // namespace password_manager::features
 

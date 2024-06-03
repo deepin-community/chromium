@@ -72,6 +72,11 @@ CoreAccountInfo SetPrimaryAccount(IdentityManager* identity_manager,
                                   const std::string& email,
                                   ConsentLevel consent_level);
 
+// When this is set for the given `identity_manager`, access token requests
+// will be automatically granted with an access token value of "access_token".
+void SetAutomaticIssueOfAccessTokens(IdentityManager* identity_manager,
+                                     bool grant);
+
 // Sets a refresh token for the primary account (which must already be set).
 // Blocks until the refresh token is set. If |token_value| is empty a default
 // value will be used instead.
@@ -83,7 +88,10 @@ void SetRefreshTokenForPrimaryAccount(
 // Sets a special invalid refresh token for the primary account (which must
 // already be set). Blocks until the refresh token is set.
 // NOTE: See disclaimer at top of file re: direct usage.
-void SetInvalidRefreshTokenForPrimaryAccount(IdentityManager* identity_manager);
+void SetInvalidRefreshTokenForPrimaryAccount(
+    IdentityManager* identity_manager,
+    signin_metrics::SourceForRefreshTokenOperation source =
+        signin_metrics::SourceForRefreshTokenOperation::kUnknown);
 
 // Removes any refresh token for the primary account, if present. Blocks until
 // the refresh token is removed.
@@ -159,7 +167,7 @@ struct AccountAvailabilityOptions {
       nullptr;
 
   const signin_metrics::AccessPoint access_point =
-      signin_metrics::AccessPoint::ACCESS_POINT_UNKNOWN;
+      signin_metrics::AccessPoint::ACCESS_POINT_SETTINGS;
 
   explicit AccountAvailabilityOptions(base::StringPiece email);
   ~AccountAvailabilityOptions();
@@ -230,7 +238,7 @@ class AccountAvailabilityOptionsBuilder {
   std::optional<std::string> refresh_token_ = std::string();
   bool with_cookie_ = false;
   signin_metrics::AccessPoint access_point_ =
-      signin_metrics::AccessPoint::ACCESS_POINT_UNKNOWN;
+      signin_metrics::AccessPoint::ACCESS_POINT_SETTINGS;
 };
 
 // Sets up an account identified by `email` according to options provided. See
@@ -265,8 +273,11 @@ void SetRefreshTokenForAccount(IdentityManager* identity_manager,
 // Sets a special invalid refresh token for the given account (which must
 // already be available). Blocks until the refresh token is set.
 // NOTE: See disclaimer at top of file re: direct usage.
-void SetInvalidRefreshTokenForAccount(IdentityManager* identity_manager,
-                                      const CoreAccountId& account_id);
+void SetInvalidRefreshTokenForAccount(
+    IdentityManager* identity_manager,
+    const CoreAccountId& account_id,
+    signin_metrics::SourceForRefreshTokenOperation source =
+        signin_metrics::SourceForRefreshTokenOperation::kUnknown);
 
 // Removes any refresh token that is present for the given account. Blocks until
 // the refresh token is removed. Is a no-op if no refresh token is present for

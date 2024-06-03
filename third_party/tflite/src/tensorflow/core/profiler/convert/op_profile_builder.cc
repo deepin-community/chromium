@@ -24,6 +24,7 @@ limitations under the License.
 // #include "perftools/accelerators/xprof/convert/device_type_utils.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
+#include "absl/log/log.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "tensorflow/core/lib/gtl/top_n.h"
@@ -169,7 +170,7 @@ void PopulateOpMetricsNode(
   // and memory_bandwidth = raw_bytes_accessed / raw_time. See:
   // https://github.com/tensorflow/profiler/blob/master/frontend/app/common/utils/utils.ts
   metrics->set_raw_time(op_metrics.time_ps());
-  metrics->set_raw_flops(op_metrics.flops());
+  metrics->set_raw_flops(op_metrics.model_flops());
   metrics->set_occurrences(op_metrics.occurrences());
   metrics->set_avg_time_ps(
       SafeDivide(op_metrics.time_ps(), op_metrics.occurrences()));
@@ -369,7 +370,10 @@ OpProfileBuilder::OpProfileBuilder(
     tensorflow::profiler::op_profile::Node* root,
     const tensorflow::protobuf::Map<uint64_t, std::string>* program_name_map)
     : options_(options), root_(root), program_name_map_(program_name_map) {
-  CHECK(root != nullptr);
+  if (root == nullptr) {
+    LOG(DFATAL) << "root is null.";
+    return;
+  }
   DCHECK(!options_.group_by_program || program_name_map_ != nullptr);
   root->set_name(options_.group_by_program ? "by_program" : "by_category");
 }

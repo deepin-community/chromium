@@ -110,6 +110,10 @@ OSStatus SecCodeSignerAddSignatureWithErrors(SecCodeSignerRef signer,
                                              SecStaticCodeRef code,
                                              SecCSFlags flags,
                                              CFErrorRef* errors);
+
+// Key used within CoreFoundation for loaded Info plists
+extern const CFStringRef _kCFBundleNumericVersionKey;
+
 }  // extern "C"
 
 // A TerminationObserver observes a NSRunningApplication for when it
@@ -803,9 +807,9 @@ bool UpdateAppShortcutsSubdirLocalizedName(
   std::string locale = l10n_util::NormalizeLocale(
       l10n_util::GetApplicationLocale(std::string()));
 
-  NSString* strings_path =
-      base::apple::FilePathToNSString(localized.Append(locale + ".strings"));
-  [strings_dict writeToFile:strings_path atomically:YES];
+  NSURL* strings_url =
+      base::apple::FilePathToNSURL(localized.Append(locale + ".strings"));
+  [strings_dict writeToURL:strings_url error:nil];
 
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&GetImageResourcesOnUIThread,
@@ -843,10 +847,17 @@ std::list<BundleInfoPlist> SearchForBundlesById(const std::string& bundle_id) {
   std::list<BundleInfoPlist> infos;
 
   // First search using LaunchServices.
-  NSArray* bundle_urls =
-      base::apple::CFToNSOwnershipCast(LSCopyApplicationURLsForBundleIdentifier(
-          base::SysUTF8ToCFStringRef(bundle_id).get(), /*outError=*/nullptr));
-  for (NSURL* url : bundle_urls) {
+  NSArray* bundle_urls;
+  if (@available(macOS 12.0, *)) {
+    bundle_urls = [NSWorkspace.sharedWorkspace
+        URLsForApplicationsWithBundleIdentifier:base::SysUTF8ToNSString(
+                                                    bundle_id)];
+  } else {
+    bundle_urls = base::apple::CFToNSOwnershipCast(
+        LSCopyApplicationURLsForBundleIdentifier(
+            base::SysUTF8ToCFStringRef(bundle_id).get(), /*outError=*/nullptr));
+  }
+  for (NSURL* url in bundle_urls) {
     base::FilePath bundle_path = base::apple::NSURLToFilePath(url);
     BundleInfoPlist info(bundle_path);
     if (!info.IsForCurrentUserDataDir())
@@ -1439,6 +1450,30 @@ bool CopyStagingBundleToDestination(base::FilePath staging_path,
   command_line.AppendArgPath(staging_path);
   command_line.AppendArgPath(dst_app_path);
 
+  // Pass NSBundle's cached copy of the app's Info.plist data to the helper tool
+  // for use in dynamic signature validation. The data is validated against a
+  // hash recorded in the code signature before being used during requirement
+  // validation. NSBundle's cached copy is used to ensure that any changes to
+  // Info.plist on disk due to pending updates do not result in a version of the
+  // data being used that doesn't match the code signature of the running app.
+  NSMutableDictionary* info_plist_dictionary =
+      [base::apple::OuterBundle().infoDictionary mutableCopy];
+  // NSBundle inserts CFBundleNumericVersion into its in-memory copy of the info
+  // dictionary despite it not being present on disk. Remove it so that the
+  // serialized dictionary matches the Info.plist that was present at signing
+  // time.
+  info_plist_dictionary[base::apple::CFToNSPtrCast(
+      _kCFBundleNumericVersionKey)] = nil;
+  NS_VALID_UNTIL_END_OF_SCOPE NSData* info_plist_xml_data =
+      [NSPropertyListSerialization
+          dataWithPropertyList:info_plist_dictionary
+                        format:NSPropertyListXMLFormat_v1_0
+                       options:0
+                         error:nullptr];
+  command_line.AppendArg(
+      base::StringPiece(static_cast<const char*>(info_plist_xml_data.bytes),
+                        info_plist_xml_data.length));
+
   // Synchronously wait for the copy to complete to match the semantics of
   // `base::CopyDirectory`.
   std::string command_output;
@@ -1778,9 +1813,9 @@ bool WebAppShortcutCreator::UpdateDisplayName(
     app_mode::kCFBundleDisplayNameKey : display_name
   };
 
-  NSString* localized_path = base::apple::FilePathToNSString(
-      localized_dir.Append("InfoPlist.strings"));
-  return [strings_plist writeToFile:localized_path atomically:YES];
+  NSURL* localized_url =
+      base::apple::FilePathToNSURL(localized_dir.Append("InfoPlist.strings"));
+  return [strings_plist writeToURL:localized_url error:nil];
 }
 
 bool WebAppShortcutCreator::UpdateIcon(const base::FilePath& app_path) const {

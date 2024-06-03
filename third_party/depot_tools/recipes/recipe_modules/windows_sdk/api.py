@@ -39,7 +39,7 @@ class WindowsSDKApi(recipe_api.RecipeApi):
       * version (str): CIPD version of the SDK
         (default is set via $infra/windows_sdk.version property)
       * enabled (bool): Whether the SDK should be used or not.
-      * target_arch (str): 'x86' or 'x64'.
+      * target_arch (str): 'x86', 'x64', or 'arm64'
 
     Yields:
       If enabled, yields SDKPaths object with paths to well-known roots within
@@ -53,7 +53,7 @@ class WindowsSDKApi(recipe_api.RecipeApi):
     """
     if enabled:
       sdk_dir = self._ensure_sdk(
-          path or self.m.path['cache'].join('windows_sdk'),
+          path or self.m.path.cache_dir.join('windows_sdk'),
           version or self._sdk_properties['version'])
       try:
         with self.m.context(**self._sdk_env(sdk_dir, target_arch)):
@@ -94,7 +94,7 @@ class WindowsSDKApi(recipe_api.RecipeApi):
 
     Args:
       * sdk_dir (path): Path to a directory containing the SDK.
-      * target_arch (str): 'x86' or 'x64'
+      * target_arch (str): 'x86', 'x64', or 'arm64'
     """
     env = {}
     env_prefixes = {}

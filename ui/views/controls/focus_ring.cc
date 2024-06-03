@@ -100,6 +100,7 @@ void FocusRing::Install(View* host) {
   ring->InvalidateLayout();
   ring->SchedulePaint();
   ring->SetProperty(kIsDecorativeViewKey, true);
+  ring->SetProperty(kViewIgnoredByLayoutKey, true);
   host->SetProperty(kFocusRingIdKey, host->AddChildView(std::move(ring)));
 }
 
@@ -309,12 +310,16 @@ void FocusRing::OnViewBlurred(View* view) {
   RefreshLayer();
 }
 
+void FocusRing::OnViewLayoutInvalidated(View* view) {
+  InvalidateLayout();
+}
+
 FocusRing::FocusRing() {
   // Don't allow the view to process events.
   SetCanProcessEventsWithinSubtree(false);
 
   // This should never be included in the accessibility tree.
-  GetViewAccessibility().OverrideIsIgnored(true);
+  GetViewAccessibility().SetIsIgnored(true);
 }
 
 void FocusRing::AdjustBounds(SkRect& rect) const {

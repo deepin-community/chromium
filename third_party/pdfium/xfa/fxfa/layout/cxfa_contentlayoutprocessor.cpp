@@ -10,12 +10,12 @@
 #include <utility>
 #include <vector>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/adapters.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/stl_util.h"
 #include "fxjs/gc/container_trace.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/adapters.h"
-#include "third_party/base/notreached.h"
 #include "xfa/fxfa/cxfa_ffdoc.h"
 #include "xfa/fxfa/cxfa_ffnotify.h"
 #include "xfa/fxfa/cxfa_ffwidget.h"
@@ -1189,7 +1189,7 @@ void CXFA_ContentLayoutProcessor::DoLayoutTableContainer(
       pLayoutNode->JSObject()->GetCData(XFA_Attribute::ColumnWidths);
   if (!wsColumnWidths.IsEmpty()) {
     for (auto& width : SeparateStringOnSpace(wsColumnWidths.span())) {
-      width.TrimLeft(L' ');
+      width.TrimFront(L' ');
       if (width.IsEmpty())
         continue;
 
@@ -1402,7 +1402,7 @@ float CXFA_ContentLayoutProcessor::InsertKeepLayoutItems() {
   }
 
   float fTotalHeight = 0;
-  for (const auto& item : pdfium::base::Reversed(m_ArrayKeepItems)) {
+  for (const auto& item : pdfium::Reversed(m_ArrayKeepItems)) {
     AddLeaderAfterSplit(item);
     fTotalHeight += item->m_sSize.height;
   }

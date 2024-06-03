@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -107,7 +106,8 @@ std::optional<apps::AppLaunchParams> CreateSystemWebAppLaunchParams(
   web_app::DisplayMode display_mode =
       provider->registrar_unsafe().GetAppEffectiveDisplayMode(app_id.value());
 
-  // TODO(crbug/1113502): Plumb through better launch sources from callsites.
+  // TODO(crbug.com/40143506): Plumb through better launch sources from
+  // callsites.
   apps::AppLaunchParams params = apps::CreateAppIdLaunchParamsWithEventFlags(
       app_id.value(), /*event_flags=*/0,
       apps::LaunchSource::kFromChromeInternal, display_id,
@@ -176,21 +176,17 @@ void LaunchSystemWebAppAsync(Profile* profile,
   // Callback is only supported when launching with an URL.
   DCHECK(!callback || params.url.has_value());
 
-  // TODO(https://crbug.com/1135863): Implement a confirmation dialog when
+  // TODO(crbug.com/40723875): Implement a confirmation dialog when
   // changing to a different profile.
   Profile* profile_for_launch = GetProfileForSystemWebAppLaunch(profile);
   if (profile_for_launch == nullptr) {
     // We can't find a suitable profile to launch. Complain about this so we
     // can identify the call site, and ask them to pick the right profile.
-    base::debug::DumpWithoutCrashing();
-
-    DVLOG(1)
+    // Note that this is fatal in developer builds.
+    DUMP_WILL_BE_NOTREACHED_NORETURN()
         << "LaunchSystemWebAppAsync is called on a profile that can't launch "
            "system web apps. The launch request is ignored. Please check the "
            "profile you are using is correct.";
-
-    // This will DCHECK in debug builds. But no-op in production builds.
-    NOTREACHED();
 
     // Early return if we can't find a profile to launch.
     return;

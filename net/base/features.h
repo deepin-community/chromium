@@ -97,6 +97,11 @@ NET_EXPORT BASE_DECLARE_FEATURE(kUseDnsHttpsSvcbAlpn);
 // transactions complete.
 NET_EXPORT BASE_DECLARE_FEATURE(kUseHostResolverCache);
 
+// Enables the DNS ServiceEndpointRequest API, which provides intermediate
+// service endpoints in the middle of a DNS transaction so that clients of this
+// API can attempt connections as soon as candidate endpoints are available.
+NET_EXPORT BASE_DECLARE_FEATURE(kUseServiceEndpointRequest);
+
 // If the `kUseAlternativePortForGloballyReachableCheck` flag is enabled, the
 // globally reachable check will use the port number specified by
 // `kAlternativePortForGloballyReachableCheck` flag. Otherwise, the globally
@@ -111,14 +116,6 @@ NET_EXPORT BASE_DECLARE_FEATURE(kEnableIPv6ReachabilityOverride);
 
 // Enables TLS 1.3 early data.
 NET_EXPORT BASE_DECLARE_FEATURE(kEnableTLS13EarlyData);
-
-// Enables checking the X.509 keyUsage extension in TLS 1.2 for RSA server
-// certificates that chain to a local trust anchor.
-//
-// Independent of the setting of this feature, keyUsage is always checked at TLS
-// 1.3, for ECDSA certificates, and for all certificates that chain to a known
-// root.
-NET_EXPORT BASE_DECLARE_FEATURE(kRSAKeyUsageForLocalAnchors);
 
 // Enables optimizing the network quality estimation algorithms in network
 // quality estimator (NQE).
@@ -212,11 +209,6 @@ NET_EXPORT BASE_DECLARE_FEATURE(kShortLaxAllowUnsafeThreshold);
 // This only has an effect if the cookie defaults to SameSite=Lax.
 NET_EXPORT BASE_DECLARE_FEATURE(kSameSiteDefaultChecksMethodRigorously);
 
-#if BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
-// When enabled, use the Chrome Root Store instead of the system root store
-NET_EXPORT BASE_DECLARE_FEATURE(kChromeRootStoreUsed);
-#endif  // BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
-
 // When enabled, bssl::TrustStore implementations will use TRUSTED_LEAF,
 // TRUSTED_ANCHOR_OR_LEAF, and TRUSTED_ANCHOR as appropriate. When disabled,
 // bssl::TrustStore implementation will only use TRUSTED_ANCHOR.
@@ -302,11 +294,9 @@ NET_EXPORT BASE_DECLARE_FEATURE(kWaitForFirstPartySetsInit);
 NET_EXPORT extern const base::FeatureParam<base::TimeDelta>
     kWaitForFirstPartySetsInitNavigationThrottleTimeout;
 
-// When enabled, sites can opt-in to having their cookies partitioned by
-// top-level site with the Partitioned attribute. Partitioned cookies will only
-// be sent when the browser is on the same top-level site that it was on when
-// the cookie was set.
-NET_EXPORT BASE_DECLARE_FEATURE(kPartitionedCookies);
+// When enabled, a cross-site ancestor chain bit is included in the partition
+// key in partitioned cookies.
+NET_EXPORT BASE_DECLARE_FEATURE(kAncestorChainBitEnabledInPartitionedCookies);
 
 // When enabled, cookie-related code will treat cookies containing '\0', '\r',
 // and '\n' as invalid and reject the cookie.
@@ -330,6 +320,9 @@ NET_EXPORT BASE_DECLARE_FEATURE(kTopLevelTpcdTrialSettings);
 // Whether to enable the use of 3PC based on 3PCD metadata grants delivered via
 // component updater.
 NET_EXPORT BASE_DECLARE_FEATURE(kTpcdMetadataGrants);
+
+// Whether to enable staged rollback of the TPCD Metadata Entries.
+NET_EXPORT BASE_DECLARE_FEATURE(kTpcdMetadataStagedRollback);
 
 // Whether ALPS parsing is on for any type of frame.
 NET_EXPORT BASE_DECLARE_FEATURE(kAlpsParsing);
@@ -448,6 +441,31 @@ NET_EXPORT extern const base::FeatureParam<bool>
 NET_EXPORT extern const base::FeatureParam<base::TimeDelta>
     kIpPrivacyExpirationFuzz;
 
+// If true, only proxy traffic when the top-level site uses the http:// or
+// https:// schemes. This prevents attempts to proxy from top-level sites with
+// chrome://, chrome-extension://, or other non-standard schemes, in addition to
+// top-level sites using less common schemes like blob:// and data://.
+NET_EXPORT extern const base::FeatureParam<bool>
+    kIpPrivacyRestrictTopLevelSiteSchemes;
+
+// If true, IP protection will attempt to use QUIC to connect to proxies,
+// falling back to HTTPS.  If false, it will only use HTTPs.
+NET_EXPORT extern const base::FeatureParam<bool> kIpPrivacyUseQuicProxies;
+
+// If true, IP protection will only use QUIC to connect to proxies, with no
+// fallback to HTTPS. This is intended for development of the QUIC
+// functionality.
+NET_EXPORT extern const base::FeatureParam<bool> kIpPrivacyUseQuicProxiesOnly;
+
+// Truncate IP protection proxy chains to a single proxy. This is intended for
+// development of the QUIC functionality.
+NET_EXPORT extern const base::FeatureParam<bool> kIpPrivacyUseSingleProxy;
+
+// Send all traffic to this host via IP Protection proxies, regardless of MDL,
+// 1P/3P, or token availability. This is intended for development of the QUIC
+// functionality.
+NET_EXPORT extern const base::FeatureParam<std::string> kIpPrivacyAlwaysProxy;
+
 // Whether QuicParams::migrate_sessions_on_network_change_v2 defaults to true or
 // false. This is needed as a workaround to set this value to true on Android
 // but not on WebView (until crbug.com/1430082 has been fixed).
@@ -504,8 +522,6 @@ NET_EXPORT BASE_DECLARE_FEATURE(kSpdyHeadersToHttpResponseUseBuilder);
 // Enables receiving ECN bit by sockets in Chrome.
 NET_EXPORT BASE_DECLARE_FEATURE(kReceiveEcn);
 
-NET_EXPORT BASE_DECLARE_FEATURE(kNewCertPathBuilderIterationLimit);
-
 // Enables using the new ALPS codepoint to negotiate application settings for
 // HTTP2.
 NET_EXPORT BASE_DECLARE_FEATURE(kUseNewAlpsCodepointHttp2);
@@ -522,6 +538,16 @@ NET_EXPORT BASE_DECLARE_FEATURE(kTreatHTTPExpiresHeaderValueZeroAsExpired);
 
 // Enables truncating the response body to the content length.
 NET_EXPORT BASE_DECLARE_FEATURE(kTruncateBodyToContentLength);
+
+#if BUILDFLAG(IS_MAC)
+// Reduces the frequency of IP address change notifications that result in
+// TCP and QUIC connection resets.
+NET_EXPORT BASE_DECLARE_FEATURE(kReduceIPAddressChangeNotification);
+#endif  // BUILDFLAG(IS_MAC)
+
+// This feature will enable the Device Bound Session Credentials protocol to let
+// the server assert sessions (and cookies) are bound to a specific device.
+NET_EXPORT BASE_DECLARE_FEATURE(kDeviceBoundSessions);
 
 }  // namespace net::features
 

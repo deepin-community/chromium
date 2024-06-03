@@ -218,7 +218,7 @@ TEST_P(ViewTransitionTest, LayoutShift) {
 
   MockFunctionScope funcs(script_state);
   auto* view_transition_callback =
-      V8ViewTransitionCallback::Create(funcs.ExpectCall());
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
 
   auto* transition = ViewTransitionSupplement::startViewTransition(
       script_state, GetDocument(), view_transition_callback, exception_state);
@@ -264,8 +264,10 @@ TEST_P(ViewTransitionTest, TransitionCreatesNewObject) {
   ExceptionState& exception_state = v8_scope.GetExceptionState();
 
   MockFunctionScope funcs(script_state);
-  auto* first_callback = V8ViewTransitionCallback::Create(funcs.ExpectCall());
-  auto* second_callback = V8ViewTransitionCallback::Create(funcs.ExpectCall());
+  auto* first_callback =
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
+  auto* second_callback =
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
 
   auto* first_transition = ViewTransitionSupplement::startViewTransition(
       script_state, GetDocument(), first_callback, exception_state);
@@ -288,7 +290,7 @@ TEST_P(ViewTransitionTest, TransitionReadyPromiseResolves) {
 
   MockFunctionScope funcs(script_state);
   auto* view_transition_callback =
-      V8ViewTransitionCallback::Create(funcs.ExpectCall());
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
 
   auto* transition = ViewTransitionSupplement::startViewTransition(
       script_state, GetDocument(), view_transition_callback, exception_state);
@@ -335,7 +337,7 @@ TEST_P(ViewTransitionTest, PrepareTransitionElementsWantToBeComposited) {
 
   MockFunctionScope funcs(script_state);
   auto* view_transition_callback =
-      V8ViewTransitionCallback::Create(funcs.ExpectCall());
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
 
   auto* transition = ViewTransitionSupplement::startViewTransition(
       script_state, GetDocument(), view_transition_callback, exception_state);
@@ -470,7 +472,7 @@ TEST_P(ViewTransitionTest, TransitionCleanedUpBeforePromiseResolution) {
 
   MockFunctionScope funcs(script_state);
   auto* view_transition_callback =
-      V8ViewTransitionCallback::Create(funcs.ExpectCall());
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
 
   auto* transition = ViewTransitionSupplement::startViewTransition(
       script_state, GetDocument(), view_transition_callback, exception_state);
@@ -501,7 +503,7 @@ TEST_P(ViewTransitionTest, RenderingPausedTest) {
 
   MockFunctionScope funcs(script_state);
   auto* view_transition_callback =
-      V8ViewTransitionCallback::Create(funcs.ExpectCall());
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
 
   auto* transition = ViewTransitionSupplement::startViewTransition(
       script_state, GetDocument(), view_transition_callback, exception_state);
@@ -541,7 +543,7 @@ TEST_P(ViewTransitionTest, Abandon) {
 
   MockFunctionScope funcs(script_state);
   auto* view_transition_callback =
-      V8ViewTransitionCallback::Create(funcs.ExpectCall());
+      V8ViewTransitionCallback::Create(funcs.ExpectCall()->V8Function());
 
   auto* transition = ViewTransitionSupplement::startViewTransition(
       script_state, GetDocument(), view_transition_callback, exception_state);
@@ -1312,12 +1314,12 @@ TEST_P(ViewTransitionTest, ScriptCallAfterNavigationTransition) {
   ScriptState* script_state = v8_scope.GetScriptState();
   ExceptionState& exception_state = v8_scope.GetExceptionState();
 
-  auto page_conceal_params = mojom::blink::PageConcealEventParams::New();
-  page_conceal_params->url = KURL("http://test.com");
-  page_conceal_params->navigation_type =
+  auto page_swap_params = mojom::blink::PageSwapEventParams::New();
+  page_swap_params->url = KURL("http://test.com");
+  page_swap_params->navigation_type =
       mojom::blink::NavigationTypeForNavigationApi::kPush;
   ViewTransitionSupplement::SnapshotDocumentForNavigation(
-      GetDocument(), std::move(page_conceal_params),
+      GetDocument(), viz::NavigationId::Create(), std::move(page_swap_params),
       base::BindOnce([](const ViewTransitionState&) {}));
 
   ASSERT_TRUE(ViewTransitionSupplement::From(GetDocument())->GetTransition());

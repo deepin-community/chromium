@@ -10,7 +10,9 @@
 #include <string>
 #include <string_view>
 
+#include "base/feature_list.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/types/cxx23_to_underlying.h"
 #include "base/types/strong_alias.h"
@@ -24,12 +26,19 @@
 namespace autofill {
 
 struct Suggestion {
+  struct PasswordSuggestionDetails {
+    friend bool operator==(const PasswordSuggestionDetails&,
+                           const PasswordSuggestionDetails&) = default;
+    std::u16string password;
+  };
+
   using IsLoading = base::StrongAlias<class IsLoadingTag, bool>;
   using Guid = base::StrongAlias<class GuidTag, std::string>;
   using InstrumentId = base::StrongAlias<class InstrumentIdTag, uint64_t>;
   using BackendId = absl::variant<Guid, InstrumentId>;
   using ValueToFill = base::StrongAlias<struct ValueToFill, std::u16string>;
-  using Payload = absl::variant<BackendId, GURL, ValueToFill>;
+  using Payload =
+      absl::variant<BackendId, GURL, ValueToFill, PasswordSuggestionDetails>;
 
   // The text information shown on the UI layer for a Suggestion.
   struct Text {
@@ -99,6 +108,10 @@ struct Suggestion {
     kCardVisa,
   };
 
+  // TODO(b/335194240): Consolidate expected param types for these constructors.
+  // Some expect UTF16 strings and others UTF8, while internally we only use
+  // UTF16. The ones expecting UTF8 are only used by tests and could be easily
+  // refactored.
   Suggestion();
   explicit Suggestion(std::u16string main_text);
   explicit Suggestion(PopupItemId popup_item_id);
@@ -141,6 +154,16 @@ struct Suggestion {
 #if DCHECK_IS_ON()
   bool Invariant() const {
     switch (popup_item_id) {
+      case PopupItemId::kPasswordEntry:
+        // Manual fallback password suggestions store the password to preview or
+        // fill in the suggestion's payload. Regular per-domain contain empty
+        // `BackendId`.
+        // TODO(b/333992198): Use `PasswordSuggestionDetails` for all
+        // suggestions with `PopupItemId::kPasswordEntry`.
+        return absl::holds_alternative<BackendId>(payload) ||
+               absl::holds_alternative<PasswordSuggestionDetails>(payload);
+      case PopupItemId::kFillPassword:
+        return absl::holds_alternative<PasswordSuggestionDetails>(payload);
       case PopupItemId::kSeePromoCodeDetails:
         return absl::holds_alternative<GURL>(payload);
       case PopupItemId::kIbanEntry:
@@ -216,8 +239,7 @@ struct Suggestion {
   IsLoading is_loading = IsLoading(false);
 
   // The In-Product-Help feature that should be shown for the suggestion.
-  // TODO(1432893): Consider making it `const Feature*`.
-  std::string feature_for_iph;
+  raw_ptr<const base::Feature> feature_for_iph = nullptr;
 
   // If specified, this text will be played back as voice over for a11y.
   std::optional<std::u16string> voice_over;
@@ -235,10 +257,10 @@ struct Suggestion {
   // accept it by clicking on it.
   bool is_acceptable = true;
 
-  // Denotes whether this suggestion was hidden prior to the effects caused by
-  // kAutofillUseAddressRewriterInProfileSubsetComparison.
-  // TODO(crbug.com/1439742): Remove when the feature launches.
-  bool hidden_prior_to_address_rewriter_usage = false;
+  // If true, the user will see the suggestion in a "disabled and grayed-out"
+  // form. This field should be true only when `is_acceptable` is false  which
+  // will make the suggestion deactivated and unclickable.
+  bool apply_deactivated_style = false;
 };
 
 std::string_view ConvertIconToPrintableString(Suggestion::Icon icon);

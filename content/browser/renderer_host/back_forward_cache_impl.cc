@@ -7,6 +7,7 @@
 #include <list>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/barrier_closure.h"
@@ -189,7 +190,6 @@ WebSchedulerTrackedFeatures GetDisallowedWebSchedulerTrackedFeatures() {
           WebSchedulerTrackedFeature::kLiveMediaStreamTrack,
           WebSchedulerTrackedFeature::kPaymentManager,
           WebSchedulerTrackedFeature::kPictureInPicture,
-          WebSchedulerTrackedFeature::kPortal,
           WebSchedulerTrackedFeature::kPrinting,
           WebSchedulerTrackedFeature::kRequestedAudioCapturePermission,
           WebSchedulerTrackedFeature::kRequestedBackForwardCacheBlockedSensors,
@@ -199,7 +199,6 @@ WebSchedulerTrackedFeatures GetDisallowedWebSchedulerTrackedFeatures() {
           WebSchedulerTrackedFeature::kSmartCard,
           WebSchedulerTrackedFeature::kSharedWorker,
           WebSchedulerTrackedFeature::kSpeechRecognizer,
-          WebSchedulerTrackedFeature::kSpeechSynthesis,
           WebSchedulerTrackedFeature::kUnloadHandler,
           WebSchedulerTrackedFeature::kWebDatabase,
           WebSchedulerTrackedFeature::kWebHID,
@@ -294,7 +293,7 @@ std::string GetBlockedCgiParams() {
 // Parses the “allowed_websites” and "blocked_websites" field trial parameters
 // and creates a map to represent hosts and corresponding path prefixes.
 base::flat_map<std::string, std::vector<std::string>> ParseCommaSeparatedURLs(
-    base::StringPiece comma_separated_urls) {
+    std::string_view comma_separated_urls) {
   base::flat_map<std::string, std::vector<std::string>> urls;
   for (auto& it :
        base::SplitString(comma_separated_urls, ",", base::TRIM_WHITESPACE,
@@ -307,7 +306,7 @@ base::flat_map<std::string, std::vector<std::string>> ParseCommaSeparatedURLs(
 
 // Parses the "cgi_params" field trial parameter into a set by splitting on "|".
 base::flat_set<std::string> ParseBlockedCgiParams(
-    base::StringPiece cgi_params_string) {
+    std::string_view cgi_params_string) {
   return base::SplitString(cgi_params_string, "|", base::TRIM_WHITESPACE,
                            base::SplitResult::SPLIT_WANT_NONEMPTY);
 }
@@ -451,9 +450,8 @@ void MarkNoWithMultipleFeatures(BackForwardCacheCanStoreDocumentResult* result,
   BackForwardCacheCanStoreDocumentResult::BlockingDetailsMap map;
   WebSchedulerTrackedFeatures features_added;
   for (const auto& details : rfh->GetBackForwardCacheBlockingDetails()) {
-    CHECK(details->feature.has_value());
     auto feature = static_cast<blink::scheduler::WebSchedulerTrackedFeature>(
-        details->feature.value());
+        details->feature);
     // Some features might be recorded but not banned. Do not save the details
     // in this case.
     if (!features.Has(feature)) {
@@ -915,15 +913,6 @@ void BackForwardCacheImpl::PopulateReasonsForMainDocument(
   if (rfh->last_http_method() != net::HttpRequestHeaders::kGetMethod)
     result.No(BackForwardCacheMetrics::NotRestoredReason::kHTTPMethodNotGET);
 
-  // Only store documents that have a valid network::mojom::URLResponseHead.
-  // We actually don't know the actual case this reason is solely set without
-  // kHTTPStatusNotOK and kSchemeNotHTTPOrHTTPS, but crash reports imply it
-  // happens.
-  // TODO(https://crbug.com/1216997): Understand the case and remove
-  // DebugScenario::kDebugNoResponseHeadForHTTPOrHTTPS.
-  if (!rfh->last_response_head())
-    result.No(BackForwardCacheMetrics::NotRestoredReason::kNoResponseHead);
-
   // Do not store main document with non HTTP/HTTPS URL scheme. Among other
   // things, this excludes the new tab page and all WebUI pages.
   if (!rfh->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
@@ -1036,7 +1025,7 @@ void BackForwardCacheImpl::NotRestoredReasonBuilder::
   // as well.
   if (!Intersection(banned_features,
                     GetDisallowedForCacheControlNoStoreFeatures())
-           .Empty()) {
+           .empty()) {
     banned_features.Put(
         WebSchedulerTrackedFeature::kMainResourceHasCacheControlNoStore);
     // Record the feature usage in `rfh`. This is needed because all
@@ -1049,7 +1038,7 @@ void BackForwardCacheImpl::NotRestoredReasonBuilder::
     rfh->RecordBackForwardCacheDisablingReason(
         WebSchedulerTrackedFeature::kMainResourceHasCacheControlNoStore);
   }
-  if (!banned_features.Empty()) {
+  if (!banned_features.empty()) {
     if (!ShouldIgnoreBlocklists()) {
       MarkNoWithMultipleFeatures(&result, rfh, banned_features);
     }
@@ -1073,7 +1062,7 @@ void BackForwardCacheImpl::NotRestoredReasonBuilder::
   WebSchedulerTrackedFeatures banned_features = Intersection(
       GetDisallowedFeatures(RequestedFeatures::kAll, kNotInCCNSContext),
       rfh->GetBackForwardCacheDisablingFeatures());
-  if (!banned_features.Empty() && !ShouldIgnoreBlocklists()) {
+  if (!banned_features.empty() && !ShouldIgnoreBlocklists()) {
     if (requested_features == RequestedFeatures::kAll ||
         (requested_features == RequestedFeatures::kAllIfAcked &&
          rfh->render_view_host()->DidReceiveBackForwardCacheAck())) {
@@ -1785,7 +1774,7 @@ BackForwardCacheCanStoreTreeResult::GetWebExposedNotRestoredReasonsInternal(
     // document.
     not_restored_reasons->same_origin_details =
         blink::mojom::SameOriginBfcacheNotRestoredDetails::New();
-    not_restored_reasons->same_origin_details->url = url_.spec();
+    not_restored_reasons->same_origin_details->url = url_;
     // Populate the reasons for same-origin frames.
     for (auto& name : GetDocumentResult().GetStringReasons()) {
       blink::mojom::BFCacheBlockingDetailedReasonPtr reason =

@@ -13,6 +13,7 @@
 using WarningSurface = DownloadItemWarningData::WarningSurface;
 using WarningAction = DownloadItemWarningData::WarningAction;
 using WarningActionEvent = DownloadItemWarningData::WarningActionEvent;
+using DeepScanTrigger = DownloadItemWarningData::DeepScanTrigger;
 
 class DownloadItemWarningDataTest : public testing::Test {
  public:
@@ -179,4 +180,30 @@ TEST_F(DownloadItemWarningDataTest, HasShownLocalDecryptionPrompt) {
   DownloadItemWarningData::SetHasShownLocalDecryptionPrompt(&download_, true);
   EXPECT_TRUE(
       DownloadItemWarningData::HasShownLocalDecryptionPrompt(&download_));
+}
+
+TEST_F(DownloadItemWarningDataTest, DeepScanTrigger) {
+  EXPECT_EQ(DownloadItemWarningData::DownloadDeepScanTrigger(&download_),
+            DeepScanTrigger::TRIGGER_UNKNOWN);
+  DownloadItemWarningData::SetDeepScanTrigger(
+      &download_, DeepScanTrigger::TRIGGER_CONSUMER_PROMPT);
+  EXPECT_EQ(DownloadItemWarningData::DownloadDeepScanTrigger(&download_),
+            DeepScanTrigger::TRIGGER_CONSUMER_PROMPT);
+}
+
+TEST_F(DownloadItemWarningDataTest, FirstShownTimeAndSurface) {
+  EXPECT_EQ(DownloadItemWarningData::WarningFirstShownSurface(&download_),
+            std::nullopt);
+  EXPECT_TRUE(
+      DownloadItemWarningData::WarningFirstShownTime(&download_).is_null());
+  base::Time now = base::Time::Now();
+  FastForwardAndAddEvent(base::Seconds(0),
+                         WarningSurface::DOWNLOAD_NOTIFICATION,
+                         WarningAction::SHOWN);
+  FastForwardAndAddEvent(base::Seconds(5), WarningSurface::BUBBLE_MAINPAGE,
+                         WarningAction::SHOWN);
+
+  EXPECT_EQ(*DownloadItemWarningData::WarningFirstShownSurface(&download_),
+            WarningSurface::DOWNLOAD_NOTIFICATION);
+  EXPECT_EQ(DownloadItemWarningData::WarningFirstShownTime(&download_), now);
 }

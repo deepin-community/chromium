@@ -718,6 +718,7 @@ void EventRouter::RenderProcessExited(
     RenderProcessHost* host,
     const content::ChildProcessTerminationInfo& info) {
   listeners_.RemoveListenersForProcess(host);
+  event_ack_data_.ClearUnackedEventsForRenderProcess(host->GetID());
   observed_process_set_.erase(host);
   rph_dispatcher_map_.erase(host);
   host->RemoveObserver(this);
@@ -725,6 +726,7 @@ void EventRouter::RenderProcessExited(
 
 void EventRouter::RenderProcessHostDestroyed(RenderProcessHost* host) {
   listeners_.RemoveListenersForProcess(host);
+  event_ack_data_.ClearUnackedEventsForRenderProcess(host->GetID());
   observed_process_set_.erase(host);
   rph_dispatcher_map_.erase(host);
   host->RemoveObserver(this);
@@ -1580,7 +1582,7 @@ Event::Event(events::HistogramValue histogram_value,
              std::string_view event_name,
              base::Value::List event_args,
              content::BrowserContext* restrict_to_browser_context,
-             absl::optional<mojom::ContextType> restrict_to_context_type)
+             std::optional<mojom::ContextType> restrict_to_context_type)
     : Event(histogram_value,
             event_name,
             std::move(event_args),
@@ -1594,7 +1596,7 @@ Event::Event(events::HistogramValue histogram_value,
              std::string_view event_name,
              base::Value::List event_args,
              content::BrowserContext* restrict_to_browser_context,
-             absl::optional<mojom::ContextType> restrict_to_context_type,
+             std::optional<mojom::ContextType> restrict_to_context_type,
              const GURL& event_url,
              EventRouter::UserGestureState user_gesture,
              mojom::EventFilteringInfoPtr info,

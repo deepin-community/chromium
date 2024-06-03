@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
@@ -21,6 +22,7 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_macros_local.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/pickle.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
@@ -472,7 +474,8 @@ bool HttpCache::ParseResponseInfo(const char* data,
                                   int len,
                                   HttpResponseInfo* response_info,
                                   bool* response_truncated) {
-  base::Pickle pickle(data, len);
+  base::Pickle pickle = base::Pickle::WithUnownedBuffer(
+      base::as_bytes(base::span(data, base::checked_cast<size_t>(len))));
   return response_info->InitFromPickle(pickle, response_truncated);
 }
 
@@ -1117,7 +1120,7 @@ void HttpCache::WritersDoneWritingToEntry(scoped_refptr<ActiveEntry> entry,
 
   if (success) {
     // Add any idle writers to readers.
-    for (auto* reader : make_readers) {
+    for (Transaction* reader : make_readers) {
       reader->WriteModeTransactionAboutToBecomeReader();
       entry->readers().insert(reader);
     }
@@ -1144,7 +1147,7 @@ void HttpCache::DoomEntryValidationNoMatch(scoped_refptr<ActiveEntry> entry) {
   // and the add_to_entry_queue transactions. Reset the queued transaction's
   // cache pending state so that in case it's destructor is invoked, it's ok
   // for the transaction to not be found in this entry.
-  for (auto* transaction : entry->add_to_entry_queue()) {
+  for (net::HttpCache::Transaction* transaction : entry->add_to_entry_queue()) {
     transaction->ResetCachePendingState();
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
@@ -1166,7 +1169,7 @@ void HttpCache::ProcessEntryFailure(ActiveEntry* entry) {
   DoomActiveEntry(entry->GetEntry()->GetKey());
 
   // ERR_CACHE_RACE causes the transaction to restart the whole process.
-  for (auto* queued_transaction : list) {
+  for (Transaction* queued_transaction : list) {
     queued_transaction->cache_io_callback().Run(net::ERR_CACHE_RACE);
   }
 }

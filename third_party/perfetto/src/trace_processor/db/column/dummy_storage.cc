@@ -31,12 +31,6 @@ SingleSearchResult DummyStorage::ChainImpl::SingleSearch(FilterOp,
   PERFETTO_FATAL("Shouldn't be called");
 }
 
-UniqueSearchResult DummyStorage::ChainImpl::UniqueSearch(FilterOp,
-                                                         SqlValue,
-                                                         uint32_t*) const {
-  PERFETTO_FATAL("Shouldn't be called");
-}
-
 SearchValidationResult DummyStorage::ChainImpl::ValidateSearchConstraints(
     FilterOp,
     SqlValue) const {
@@ -49,15 +43,16 @@ RangeOrBitVector DummyStorage::ChainImpl::SearchValidated(FilterOp,
   PERFETTO_FATAL("Shouldn't be called");
 }
 
-RangeOrBitVector DummyStorage::ChainImpl::IndexSearchValidated(FilterOp,
-                                                               SqlValue,
-                                                               Indices) const {
+void DummyStorage::ChainImpl::IndexSearchValidated(FilterOp,
+                                                   SqlValue,
+                                                   Indices&) const {
   PERFETTO_FATAL("Shouldn't be called");
 }
 
-Range DummyStorage::ChainImpl::OrderedIndexSearchValidated(FilterOp,
-                                                           SqlValue,
-                                                           Indices) const {
+Range DummyStorage::ChainImpl::OrderedIndexSearchValidated(
+    FilterOp,
+    SqlValue,
+    const OrderedIndices&) const {
   PERFETTO_FATAL("Shouldn't be called");
 }
 

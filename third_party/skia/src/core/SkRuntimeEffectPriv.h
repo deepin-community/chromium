@@ -78,6 +78,10 @@ public:
         return effect.hash();
     }
 
+    static uint32_t StableKey(const SkRuntimeEffect& effect) {
+        return effect.fStableKey;
+    }
+
     static const SkSL::Program& Program(const SkRuntimeEffect& effect) {
         return *effect.fBaseProgram;
     }
@@ -90,6 +94,10 @@ public:
 
     static void AllowPrivateAccess(SkRuntimeEffect::Options* options) {
         options->allowPrivateAccess = true;
+    }
+
+    static void SetStableKey(SkRuntimeEffect::Options* options, uint32_t stableKey) {
+        options->fStableKey = stableKey;
     }
 
     static SkRuntimeEffect::Uniform VarAsUniform(const SkSL::Variable&,
@@ -124,6 +132,10 @@ public:
                                  skia_private::TArray<SkRuntimeEffect::ChildPtr>* children);
     static void WriteChildEffects(SkWriteBuffer& buffer,
                                   SkSpan<const SkRuntimeEffect::ChildPtr> children);
+
+    static bool UsesColorTransform(const SkRuntimeEffect* effect) {
+        return effect->usesColorTransform();
+    }
 };
 
 // These internal APIs for creating runtime effects vary from the public API in two ways:

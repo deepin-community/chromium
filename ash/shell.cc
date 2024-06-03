@@ -30,6 +30,7 @@
 #include "ash/accessibility/magnifier/docked_magnifier_controller.h"
 #include "ash/accessibility/magnifier/fullscreen_magnifier_controller.h"
 #include "ash/accessibility/magnifier/partial_magnifier_controller.h"
+#include "ash/accessibility/mouse_keys/mouse_keys_controller.h"
 #include "ash/accessibility/sticky_keys/sticky_keys_controller.h"
 #include "ash/accessibility/ui/accessibility_focus_ring_controller_impl.h"
 #include "ash/ambient/ambient_controller.h"
@@ -63,6 +64,7 @@
 #include "ash/display/display_configuration_observer.h"
 #include "ash/display/display_error_observer.h"
 #include "ash/display/display_highlight_controller.h"
+#include "ash/display/display_performance_mode_controller.h"
 #include "ash/display/display_prefs.h"
 #include "ash/display/display_shutdown_observer.h"
 #include "ash/display/event_transformation_handler.h"
@@ -195,6 +197,7 @@
 #include "ash/tray_action/tray_action.h"
 #include "ash/user_education/user_education_controller.h"
 #include "ash/user_education/user_education_delegate.h"
+#include "ash/utility/forest_util.h"
 #include "ash/utility/occlusion_tracker_pauser.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "ash/wm/ash_focus_rules.h"
@@ -261,6 +264,7 @@
 #include "dbus/bus.h"
 #include "media/capture/video/chromeos/video_capture_features_chromeos.h"
 #include "services/video_capture/public/mojom/multi_capture_service.mojom.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/aura/layout_manager.h"
@@ -670,9 +674,7 @@ DeskProfilesDelegate* Shell::GetDeskProfilesDelegate() {
 // Shell, private:
 
 Shell::Shell(std::unique_ptr<ShellDelegate> shell_delegate)
-    : brightness_control_delegate_(
-          std::make_unique<system::BrightnessControllerChromeos>()),
-      focus_cycler_(std::make_unique<FocusCycler>()),
+    : focus_cycler_(std::make_unique<FocusCycler>()),
       ime_controller_(std::make_unique<ImeControllerImpl>()),
       immersive_context_(std::make_unique<ImmersiveContextAsh>()),
       webauthn_dialog_controller_(
@@ -775,6 +777,9 @@ Shell::~Shell() {
     RemovePreTargetHandler(shortcut_input_handler_.get());
   }
   RemovePreTargetHandler(modality_filter_.get());
+  if (::features::IsAccessibilityMouseKeysEnabled()) {
+    RemovePreTargetHandler(mouse_keys_controller_.get());
+  }
   RemovePreTargetHandler(tooltip_controller_.get());
 
   // Resets the implementation of clipboard history utility functions.
@@ -880,6 +885,8 @@ Shell::~Shell() {
 
   display_highlight_controller_.reset();
 
+  display_performance_mode_controller_.reset();
+
   // VideoActivityNotifier must be deleted before |video_detector_| is
   // deleted because it's observing video activity through
   // VideoDetector::Observer interface.
@@ -919,6 +926,9 @@ Shell::~Shell() {
 
   // Relies on `overview_controller`.
   post_login_glanceables_metrics_reporter_.reset();
+
+  // Has to happen before `~OverviewController` since it's an observer.
+  pine_controller_.reset();
 
   // Has to happen before `~MruWindowTracker` and after
   // `~GameDashboardController`.
@@ -963,6 +973,7 @@ Shell::~Shell() {
   // These need a valid Shell instance to clean up properly, so explicitly
   // delete them before invalidating the instance.
   // Alphabetical. TODO(oshima): sort.
+  mouse_keys_controller_.reset();
   autoclick_controller_.reset();
   fullscreen_magnifier_controller_.reset();
   tooltip_controller_.reset();
@@ -977,7 +988,6 @@ Shell::~Shell() {
   backlights_forced_off_setter_.reset();
 
   float_controller_.reset();
-  pine_controller_.reset();
   pip_controller_.reset();
   screen_pinning_controller_.reset();
 
@@ -1153,6 +1163,7 @@ Shell::~Shell() {
 
   // Observes `SessionController` and must be destroyed before it.
   federated_service_controller_.reset();
+  brightness_control_delegate_.reset();
 
   UsbguardClient::Shutdown();
 
@@ -1213,6 +1224,11 @@ void Shell::Init(
 
   // Initialized early since it is used by some other objects.
   keyboard_capability_ = std::make_unique<ui::KeyboardCapability>();
+
+  // This needs to be initialized after SessionController.
+  brightness_control_delegate_ =
+      std::make_unique<system::BrightnessControllerChromeos>(
+          local_state_, session_controller_.get());
 
   // These controllers call Shell::Get() in their constructors, so they cannot
   // be in the member initialization list.
@@ -1482,10 +1498,6 @@ void Shell::Init(
 
   // The order in which event filters are added is significant.
 
-  // ui::UserActivityDetector passes events to observers, so let them get
-  // rewritten first.
-  user_activity_detector_ = std::make_unique<ui::UserActivityDetector>();
-
   control_v_histogram_recorder_ = std::make_unique<ControlVHistogramRecorder>();
   AddPreTargetHandler(control_v_histogram_recorder_.get(),
                       ui::EventTarget::Priority::kAccessibility);
@@ -1581,11 +1593,16 @@ void Shell::Init(
   // used in its constructor.
   app_list_controller_ = std::make_unique<AppListControllerImpl>();
 
-  if (features::IsForestFeatureEnabled()) {
+  if (IsForestFeatureFlagEnabled()) {
     birch_model_ = std::make_unique<BirchModel>();
   }
 
   autoclick_controller_ = std::make_unique<AutoclickController>();
+
+  if (::features::IsAccessibilityMouseKeysEnabled()) {
+    mouse_keys_controller_ = std::make_unique<MouseKeysController>();
+    AddPreTargetHandler(mouse_keys_controller_.get());
+  }
 
   color_enhancement_controller_ =
       std::make_unique<ColorEnhancementController>();
@@ -1653,8 +1670,8 @@ void Shell::Init(
   // `SystemNotificationController` is created, because
   // `SystemNotificationController` ctor will creat an instance of
   // `PowerSoundsController`, which will access and play the initialized sounds.
-    system_sounds_delegate_ = shell_delegate_->CreateSystemSoundsDelegate();
-    system_sounds_delegate_->Init();
+  system_sounds_delegate_ = shell_delegate_->CreateSystemSoundsDelegate();
+  system_sounds_delegate_->Init();
 
   privacy_hub_controller_ = PrivacyHubController::CreatePrivacyHubController();
 
@@ -1701,7 +1718,7 @@ void Shell::Init(
       fingerprint.InitWithNewPipeAndPassReceiver());
   user_activity_notifier_ =
       std::make_unique<ui::UserActivityPowerManagerNotifier>(
-          user_activity_detector_.get(), std::move(fingerprint));
+          ui::UserActivityDetector::Get(), std::move(fingerprint));
   video_activity_notifier_ =
       std::make_unique<VideoActivityNotifier>(video_detector_.get());
   bluetooth_state_cache_ = std::make_unique<BluetoothStateCache>();
@@ -1730,13 +1747,15 @@ void Shell::Init(
   display_highlight_controller_ =
       std::make_unique<DisplayHighlightController>();
 
+  display_performance_mode_controller_ =
+      std::make_unique<DisplayPerformanceModeController>();
+
   if (features::IsDisplayAlignmentAssistanceEnabled()) {
     display_alignment_controller_ =
         std::make_unique<DisplayAlignmentController>();
   }
 
   if (features::AreGlanceablesV2Enabled() ||
-      features::AreGlanceablesV2EnabledForTrustedTesters() ||
       features::AreAnyGlanceablesTimeManagementViewsEnabled()) {
     glanceables_controller_ = std::make_unique<GlanceablesController>();
   }
@@ -1751,7 +1770,7 @@ void Shell::Init(
   projector_controller_ = std::make_unique<ProjectorControllerImpl>();
 
   float_controller_ = std::make_unique<FloatController>();
-  if (features::IsForestFeatureEnabled()) {
+  if (IsForestFeatureFlagEnabled()) {
     pine_controller_ = std::make_unique<PineController>();
   }
   pip_controller_ = std::make_unique<PipController>();
@@ -2006,7 +2025,8 @@ void Shell::OnSessionStateChanged(session_manager::SessionState state) {
     firmware_update_notification_controller_ =
         std::make_unique<FirmwareUpdateNotificationController>(
             message_center::MessageCenter::Get());
-    firmware_update_manager_->RequestAllUpdates();
+    firmware_update_manager_->RequestAllUpdates(
+        FirmwareUpdateManager::Source::kStartup);
   }
 
   // Disable drag-and-drop during OOBE and GAIA login screens by only enabling

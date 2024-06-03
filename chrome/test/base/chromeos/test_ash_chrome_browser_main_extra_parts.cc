@@ -25,8 +25,8 @@ namespace test {
 // ash is ready for testing, the file will be created.
 constexpr char kAshReadyFilePathFlag[] = "ash-ready-file-path";
 
-TestAshChromeBrowserMainExtraParts::TestAshChromeBrowserMainExtraParts()
-    : test_controller_ash_(std::make_unique<crosapi::TestControllerAsh>()) {}
+TestAshChromeBrowserMainExtraParts::TestAshChromeBrowserMainExtraParts() =
+    default;
 
 TestAshChromeBrowserMainExtraParts::
     ~TestAshChromeBrowserMainExtraParts() = default;
@@ -47,6 +47,7 @@ void AshIsReadyForTesting() {
           kAshReadyFilePathFlag);
   CHECK(!base::PathExists(path));
   CHECK(base::WriteFile(path, "ash is ready"));
+  LOG(INFO) << "ash is ready for testing";
 }
 
 void TestAshChromeBrowserMainExtraParts::PreProfileInit() {
@@ -74,7 +75,7 @@ void TestAshChromeBrowserMainExtraParts::PostBrowserStart() {
       UseFakeServiceConnectionForTesting(fake_service_connection);
 
   crosapi::CrosapiManager::Get()->crosapi_ash()->SetTestControllerForTesting(
-      test_controller_ash_.get());
+      std::make_unique<crosapi::TestControllerAsh>());
 
   ignore_signin_errors_ =
       ash::SigninErrorNotifier::IgnoreSyncErrorsForTesting();

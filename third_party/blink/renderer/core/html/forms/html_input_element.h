@@ -29,12 +29,12 @@
 #include "build/build_config.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_regexp.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/create_element_flags.h"
 #include "third_party/blink/renderer/core/dom/events/simulated_click_options.h"
 #include "third_party/blink/renderer/core/html/forms/step_range.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
+#include "third_party/blink/renderer/platform/bindings/script_regexp.h"
 #include "third_party/blink/renderer/platform/theme_types.h"
 
 namespace blink {
@@ -103,6 +103,8 @@ class CORE_EXPORT HTMLInputElement
   // stepUp()/stepDown() for user-interaction.
   bool IsSteppable() const;
 
+  // Returns true if the type is button, reset, submit, or image.
+  bool IsButton() const;
   // Returns true if the type is button, reset, or submit.
   bool IsTextButton() const;
   // Returns true if the type is email, number, password, search, tel, text,
@@ -385,11 +387,12 @@ class CORE_EXPORT HTMLInputElement
 
   ShadowRoot* EnsureShadowSubtree();
 
-  bool HandleInvokeInternal(HTMLElement& invoker,
-                            AtomicString& action) override;
+  bool IsValidInvokeAction(HTMLElement& invoker, InvokeAction action) override;
+  bool HandleInvokeInternal(HTMLElement& invoker, InvokeAction action) override;
 
  protected:
   void DefaultEventHandler(Event&) override;
+  bool IsInnerEditorValueEmpty() const final;
 
  private:
   enum AutoCompleteSetting { kUninitialized, kOn, kOff };
@@ -509,6 +512,7 @@ class CORE_EXPORT HTMLInputElement
   unsigned is_placeholder_visible_ : 1;
   unsigned has_been_password_field_ : 1;
   unsigned should_show_strong_password_label_ : 1;
+  unsigned scheduled_create_shadow_tree_ : 1;
   Member<InputType> input_type_;
   Member<InputTypeView> input_type_view_;
   // The ImageLoader must be owned by this element because the loader code

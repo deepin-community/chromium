@@ -110,7 +110,8 @@ class FindBarMatchCountLabel : public views::Label {
       return;
 
     last_result_ = result;
-    // TODO(1499078): Get NO_RESULTS to be announced under Orca and ChromeVox.
+    // TODO(crbug.com/40939931): Get NO_RESULTS to be announced under Orca and
+    // ChromeVox.
     SetText(l10n_util::GetStringFUTF16(
         IDS_FIND_IN_PAGE_COUNT,
         base::FormatNumber(last_result_->active_match_ordinal()),
@@ -156,7 +157,7 @@ FindBarView::FindBarView(FindBarHost* host) {
   ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
   const auto horizontal_margin =
       gfx::Insets::VH(0, layout_provider->GetDistanceMetric(
-                             DISTANCE_UNRELATED_CONTROL_HORIZONTAL) /
+                             views::DISTANCE_UNRELATED_CONTROL_HORIZONTAL) /
                              2);
   const gfx::Insets vector_button =
       layout_provider->GetInsetsMetric(views::INSETS_VECTOR_IMAGE_BUTTON);

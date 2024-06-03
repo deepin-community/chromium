@@ -66,9 +66,11 @@ MaybeError Queue::Initialize() {
 MaybeError Queue::InitializePendingContext() {
     // Initialize mPendingCommands. After this, calls to the use the command context
     // are thread safe.
-    CommandRecordingContext commands;
-    DAWN_TRY(commands.Initialize(ToBackend(GetDevice())));
-    mPendingCommands.Use([&](auto pendingCommands) { *pendingCommands = std::move(commands); });
+    CommandRecordingContext commandContext;
+    DAWN_TRY(commandContext.Initialize(ToBackend(GetDevice())));
+
+    mPendingCommands.Use(
+        [&](auto pendingCommandContext) { *pendingCommandContext = std::move(commandContext); });
 
     // Configure the command context's uniform buffer. This is used to emulate builtins.
     // Creating the buffer is done outside of Initialize because it requires mPendingCommands
@@ -77,6 +79,7 @@ MaybeError Queue::InitializePendingContext() {
     DAWN_TRY_ASSIGN(uniformBuffer,
                     CommandRecordingContext::CreateInternalUniformBuffer(GetDevice()));
     mPendingCommands->SetInternalUniformBuffer(std::move(uniformBuffer));
+
     return {};
 }
 
@@ -153,6 +156,19 @@ MaybeError Queue::SubmitImpl(uint32_t commandCount, CommandBufferBase* const* co
     return {};
 }
 
+MaybeError Queue::CheckAndMapReadyBuffers(ExecutionSerial completedSerial) {
+    auto commandContext = GetScopedPendingCommandContext(QueueBase::SubmitMode::Passive);
+    for (auto buffer : mPendingMapBuffers.IterateUpTo(completedSerial)) {
+        DAWN_TRY(buffer->FinalizeMap(&commandContext, completedSerial));
+    }
+    mPendingMapBuffers.ClearUpTo(completedSerial);
+    return {};
+}
+
+void Queue::TrackPendingMapBuffer(Ref<Buffer>&& buffer, ExecutionSerial readySerial) {
+    mPendingMapBuffers.Enqueue(buffer, readySerial);
+}
+
 MaybeError Queue::WriteBufferImpl(BufferBase* buffer,
                                   uint64_t bufferOffset,
                                   const void* data,
@@ -211,6 +227,8 @@ ResultOrError<ExecutionSerial> Queue::CheckAndUpdateCompletedSerials() {
     if (completedSerial <= GetCompletedCommandSerial()) {
         return ExecutionSerial(0);
     }
+
+    DAWN_TRY(CheckAndMapReadyBuffers(completedSerial));
 
     return completedSerial;
 }

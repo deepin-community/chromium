@@ -29,6 +29,9 @@ class TrackingProtectionSettings
       bool is_incognito);
   ~TrackingProtectionSettings() override;
 
+  // KeyedService:
+  void Shutdown() override;
+
   virtual void AddObserver(TrackingProtectionSettingsObserver* observer);
   virtual void RemoveObserver(TrackingProtectionSettingsObserver* observer);
 
@@ -41,6 +44,9 @@ class TrackingProtectionSettings
   // Returns whether tracking protection 3PCD is enabled and all 3PC are blocked
   // (i.e. without mitigations).
   bool AreAllThirdPartyCookiesBlocked() const;
+
+  // Returns whether anti-fingerprinting is enabled.
+  bool IsFingerprintingProtectionEnabled() const;
 
   // Returns whether IP protection is enabled.
   bool IsIpProtectionEnabled() const;
@@ -58,6 +64,7 @@ class TrackingProtectionSettings
   void OnBlockAllThirdPartyCookiesPrefChanged();
   void OnTrackingProtection3pcdPrefChanged();
   void OnIpProtectionPrefChanged();
+  void OnFingerprintingProtectionPrefChanged();
 
   base::ObserverList<TrackingProtectionSettingsObserver>::Unchecked observers_;
   PrefChangeRegistrar pref_change_registrar_;

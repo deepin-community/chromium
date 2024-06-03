@@ -271,12 +271,11 @@ VideoCodecType GetRuntimeCodecType(rtclog2::FrameDecodedEvents::Codec codec) {
     case rtclog2::FrameDecodedEvents::CODEC_H265:
       return VideoCodecType::kVideoCodecH265;
     case rtclog2::FrameDecodedEvents::CODEC_UNKNOWN:
-      RTC_LOG(LS_ERROR) << "Unknown codec type. Assuming "
-                           "VideoCodecType::kVideoCodecMultiplex";
-      return VideoCodecType::kVideoCodecMultiplex;
+      RTC_LOG(LS_ERROR) << "Unknown codec type. Returning generic.";
+      return VideoCodecType::kVideoCodecGeneric;
   }
   RTC_DCHECK_NOTREACHED();
-  return VideoCodecType::kVideoCodecMultiplex;
+  return VideoCodecType::kVideoCodecGeneric;
 }
 
 ParsedRtcEventLog::ParseStatus GetHeaderExtensions(
@@ -359,13 +358,10 @@ ParsedRtcEventLog::ParseStatus StoreRtpPackets(
     }
     if (proto.has_audio_level()) {
       RTC_PARSE_CHECK_OR_RETURN(proto.has_voice_activity());
-      header.extension.hasAudioLevel = true;
-      header.extension.voiceActivity =
-          rtc::checked_cast<bool>(proto.voice_activity());
-      const uint8_t audio_level =
-          rtc::checked_cast<uint8_t>(proto.audio_level());
-      RTC_PARSE_CHECK_OR_RETURN_LE(audio_level, 0x7Fu);
-      header.extension.audioLevel = audio_level;
+      bool voice_activity = rtc::checked_cast<bool>(proto.voice_activity());
+      int audio_level = rtc::checked_cast<int>(proto.audio_level());
+      RTC_PARSE_CHECK_OR_RETURN_LE(audio_level, 0x7F);
+      header.extension.set_audio_level(AudioLevel(voice_activity, audio_level));
     } else {
       RTC_PARSE_CHECK_OR_RETURN(!proto.has_voice_activity());
     }
@@ -563,13 +559,11 @@ ParsedRtcEventLog::ParseStatus StoreRtpPackets(
     if (audio_level_values.size() > i && audio_level_values[i].has_value()) {
       RTC_PARSE_CHECK_OR_RETURN(voice_activity_values.size() > i &&
                                 voice_activity_values[i].has_value());
-      header.extension.hasAudioLevel = true;
-      header.extension.voiceActivity =
+      bool voice_activity =
           rtc::checked_cast<bool>(voice_activity_values[i].value());
-      const uint8_t audio_level =
-          rtc::checked_cast<uint8_t>(audio_level_values[i].value());
-      RTC_PARSE_CHECK_OR_RETURN_LE(audio_level, 0x7Fu);
-      header.extension.audioLevel = audio_level;
+      int audio_level = rtc::checked_cast<int>(audio_level_values[i].value());
+      RTC_PARSE_CHECK_OR_RETURN_LE(audio_level, 0x7F);
+      header.extension.set_audio_level(AudioLevel(voice_activity, audio_level));
     } else {
       RTC_PARSE_CHECK_OR_RETURN(voice_activity_values.size() <= i ||
                                 !voice_activity_values[i].has_value());
@@ -1036,7 +1030,7 @@ ParsedRtcEventLog::GetDefaultHeaderExtensionMap() {
   constexpr int kDependencyDescriptorDefaultId = 9;
 
   webrtc::RtpHeaderExtensionMap default_map(/*extmap_allow_mixed=*/true);
-  default_map.Register<AudioLevel>(kAudioLevelDefaultId);
+  default_map.Register<AudioLevelExtension>(kAudioLevelDefaultId);
   default_map.Register<TransmissionOffset>(kTimestampOffsetDefaultId);
   default_map.Register<AbsoluteSendTime>(kAbsSendTimeDefaultId);
   default_map.Register<VideoOrientation>(kVideoRotationDefaultId);

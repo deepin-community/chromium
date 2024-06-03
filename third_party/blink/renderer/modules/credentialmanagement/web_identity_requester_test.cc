@@ -32,8 +32,9 @@ TEST(WebIdentityRequesterTest, StartDelayTimerBeforeOnload) {
 
   ScriptState* script_state = scope.GetScriptState();
   ExecutionContext* context = ExecutionContext::From(script_state);
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
   WebIdentityRequester* web_identity_requester =
       MakeGarbageCollected<WebIdentityRequester>(
           context, MediationRequirement::kOptional);
@@ -50,7 +51,8 @@ TEST(WebIdentityRequesterTest, StartDelayTimerBeforeOnload) {
   histogram_tester.ExpectTotalCount("Blink.FedCm.IsAfterWindowOnload", 0);
 
   // Start the window onload event.
-  resolver->DomWindow()->DispatchWindowLoadEvent();
+  To<LocalDOMWindow>(resolver->GetExecutionContext())
+      ->DispatchWindowLoadEvent();
   EXPECT_TRUE(scope.GetDocument().LoadEventFinished());
 
   // Since stopping the delay timer is done by posting a task, we wait for all
@@ -74,8 +76,9 @@ TEST(WebIdentityRequesterTest, StartDelayTimerAfterOnload) {
 
   ScriptState* script_state = scope.GetScriptState();
   ExecutionContext* context = ExecutionContext::From(script_state);
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
   WebIdentityRequester* web_identity_requester =
       MakeGarbageCollected<WebIdentityRequester>(
           context, MediationRequirement::kOptional);
@@ -89,7 +92,8 @@ TEST(WebIdentityRequesterTest, StartDelayTimerAfterOnload) {
   histogram_tester.ExpectTotalCount("Blink.FedCm.IsAfterWindowOnload", 0);
 
   // Start delay timer after the start of the window onload event.
-  resolver->DomWindow()->DispatchWindowLoadEvent();
+  To<LocalDOMWindow>(resolver->GetExecutionContext())
+      ->DispatchWindowLoadEvent();
   EXPECT_TRUE(scope.GetDocument().LoadEventFinished());
   web_identity_requester->StartDelayTimer(resolver);
 
@@ -116,8 +120,9 @@ TEST(WebIdentityRequesterTest, OnRequestTokenToSecondIdp) {
 
   ScriptState* script_state = scope.GetScriptState();
   ExecutionContext* context = ExecutionContext::From(script_state);
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLNullable<Credential>>>(
+          script_state);
   WebIdentityRequester* web_identity_requester =
       MakeGarbageCollected<WebIdentityRequester>(
           context, MediationRequirement::kOptional);

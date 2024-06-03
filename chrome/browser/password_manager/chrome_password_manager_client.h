@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -23,6 +24,7 @@
 #include "components/password_manager/core/browser/http_auth_manager.h"
 #include "components/password_manager/core/browser/http_auth_manager_impl.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
+#include "components/password_manager/core/browser/password_cross_domain_confirmation_popup_controller.h"
 #include "components/password_manager/core/browser/password_feature_manager_impl.h"
 #include "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_manager.h"
@@ -149,6 +151,8 @@ class ChromePasswordManagerClient
       bool is_webauthn_form) override;
 #endif
 
+  bool CanUseBiometricAuthForFilling(
+      device_reauth::DeviceAuthenticator* authenticator) override;
   // Returns a pointer to the DeviceAuthenticator which is created on demand.
   // This is currently only implemented for Android, Mac and Windows. On all
   // other platforms this will always be null.
@@ -174,16 +178,14 @@ class ChromePasswordManagerClient
 #endif
   void UpdateCredentialCache(
       const url::Origin& origin,
-      const std::vector<raw_ptr<const password_manager::PasswordForm,
-                                VectorExperimental>>& best_matches,
+      base::span<const password_manager::PasswordForm> best_matches,
       bool is_blocklisted) override;
   void AutomaticPasswordSave(
       std::unique_ptr<password_manager::PasswordFormManagerForUI>
           saved_form_manager,
       bool is_update_confirmation) override;
   void PasswordWasAutofilled(
-      const std::vector<raw_ptr<const password_manager::PasswordForm,
-                                VectorExperimental>>& best_matches,
+      base::span<const password_manager::PasswordForm> best_matches,
       const url::Origin& origin,
       const std::vector<raw_ptr<const password_manager::PasswordForm,
                                 VectorExperimental>>* federated_matches,
@@ -284,6 +286,16 @@ class ChromePasswordManagerClient
 #endif  // BUILDFLAG(IS_ANDROID)
   version_info::Channel GetChannel() const override;
   void RefreshPasswordManagerSettingsIfNeeded() const override;
+#if !BUILDFLAG(IS_ANDROID)
+  std::unique_ptr<
+      password_manager::PasswordCrossDomainConfirmationPopupController>
+  ShowCrossDomainConfirmationPopup(
+      const gfx::RectF& element_bounds,
+      base::i18n::TextDirection text_direction,
+      const GURL& domain,
+      const std::u16string& password_origin,
+      base::OnceClosure confirmation_callback) override;
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   // autofill::mojom::PasswordGenerationDriver overrides.
   void AutomaticGenerationAvailable(
@@ -326,6 +338,15 @@ class ChromePasswordManagerClient
         render_frame_host);
   }
 #endif
+
+#if !BUILDFLAG(IS_ANDROID)
+  void set_cross_domain_confirmation_popup_factory_for_testing(
+      base::RepeatingCallback<std::unique_ptr<
+          password_manager::PasswordCrossDomainConfirmationPopupController>()>
+          factory) {
+    cross_domain_confirmation_popup_factory_for_testing_ = std::move(factory);
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID)
   PasswordAccessoryController* GetOrCreatePasswordAccessory();
@@ -396,6 +417,10 @@ class ChromePasswordManagerClient
   // it calls the launcher to do so. This results in passwords being fetched
   // from the store as that is a prerequisite for showing the warning.
   void TryToShowLocalPasswordMigrationWarning();
+
+  // Called on startup. It will show the post password migration sheet if
+  // needed.
+  void TryToShowPostPasswordMigrationSheet();
 
   password_manager::CredManController* GetOrCreateCredManController();
 
@@ -491,6 +516,14 @@ class ChromePasswordManagerClient
   // Observes `AutofillManager`s of the `WebContents` that `this` belongs to.
   autofill::ScopedAutofillManagersObservation autofill_managers_observation_{
       this};
+
+#if !BUILDFLAG(IS_ANDROID)
+  // The cross domain confirmation popup view factory, used for testing to mock
+  // some views specific initializations.
+  base::RepeatingCallback<std::unique_ptr<
+      password_manager::PasswordCrossDomainConfirmationPopupController>()>
+      cross_domain_confirmation_popup_factory_for_testing_;
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <set>
 #include <utility>
@@ -39,6 +40,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -58,10 +60,12 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
+#include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
+#include "chromeos/ash/components/dbus/patchpanel/patchpanel_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/dbus/common/dbus_method_call_status.h"
 #include "chromeos/system/core_scheduling.h"
@@ -88,6 +92,9 @@ constexpr base::TimeDelta kConnectSleepDurationInitial =
     base::Milliseconds(100);
 
 constexpr const char kEmptyDiskPath[] = "/dev/null";
+
+// Value of vm_tools::GetEncodedName("arcvm").
+constexpr const char kArcvmEncodedName[] = "YXJjdm0=";
 
 std::optional<base::TimeDelta> g_connect_timeout_limit_for_testing;
 std::optional<base::TimeDelta> g_connect_sleep_duration_initial_for_testing;
@@ -175,12 +182,6 @@ std::vector<std::string> GenerateUpgradeProps(
   if (upgrade_params.enable_lmk_perceptible_min_state_update) {
     result.push_back(base::StringPrintf(
         "%s.arc.lmk.perceptible_min_state_update=1", prefix.c_str()));
-  }
-
-  if (GetArcAndroidSdkVersionAsInt() >= kArcVersionT &&
-      upgrade_params.force_post_boot_dex_opt) {
-    result.push_back(
-        base::StringPrintf("%s.force_post_boot_dexopt=1", prefix.c_str()));
   }
 
   if (GetArcAndroidSdkVersionAsInt() == kArcVersionT &&
@@ -355,6 +356,24 @@ vm_tools::concierge::StartArcVmRequest CreateStartArcVmRequest(
     disk_image->set_path(kEmptyDiskPath);
     // Ensure to set writable to false, otherwise crosvm will exit with
     // "failed to lock disk image" error.
+    disk_image->set_writable(false);
+  }
+
+  // For U+, add the metadata disk path as /dev/block/vdf for mounting Android
+  // /metadata. If the disk doesn't exist, concierge::StartArcVm will create
+  // an empty one at this path. (go/arcvm-metadata).
+  const bool add_metadata_disk = GetArcAndroidSdkVersionAsInt() > kArcVersionT;
+  const std::string metadata_disk_path =
+      base::StringPrintf("/run/daemon-store/crosvm/%s/%s.metadata.img",
+                         user_id_hash.c_str(), kArcvmEncodedName);
+  disk_image = request.add_disks();
+  disk_image->set_image_type(vm_tools::concierge::DISK_IMAGE_AUTO);
+  disk_image->set_do_mount(true);
+  if (add_metadata_disk) {
+    disk_image->set_path(metadata_disk_path);
+    disk_image->set_writable(true);
+  } else {
+    disk_image->set_path(kEmptyDiskPath);
     disk_image->set_writable(false);
   }
 
@@ -837,9 +856,6 @@ class ArcVmClientAdapter : public ArcClientAdapter,
     }
 
     std::vector<std::string> environment;
-    if (start_params_.disable_ureadahead) {
-      environment.emplace_back("DISABLE_UREADAHEAD=1");
-    }
     std::deque<JobDesc> jobs{
         // Note: the first Upstart job is a task, and the callback for the start
         // request won't be called until the task finishes. When the callback is
@@ -1012,6 +1028,36 @@ class ArcVmClientAdapter : public ArcClientAdapter,
         user_id_hash_, cpus, demo_session_apps_path, data_disk_path,
         file_system_status, use_per_vm_core_scheduling, start_params_,
         delegate_.get());
+
+    // ARCVM startup will fail if patchpanel DBus service is not available. The
+    // startup of patchpanel is slow on some low-end devices. According to
+    // b/325850116 the interval between ARCVM startup and patchpanel getting
+    // ready was 2s in that case. So let's wait 5s here before suspecting the
+    // startup to be blocked by patchpanel and printing the log.
+    patchpanel_timer_ = std::make_unique<base::OneShotTimer>();
+    patchpanel_timer_->Start(
+        FROM_HERE, base::Seconds(5), base::BindOnce([]() {
+          LOG(WARNING) << "Still waiting for patchpanel before starting ARCVM.";
+        }));
+    ash::PatchPanelClient::Get()->WaitForServiceToBeAvailable(
+        base::BindOnce(&ArcVmClientAdapter::OnPatchPanelServiceAvailable,
+                       weak_factory_.GetWeakPtr(), std::move(start_request),
+                       std::move(callback)));
+  }
+
+  void OnPatchPanelServiceAvailable(
+      vm_tools::concierge::StartArcVmRequest start_request,
+      chromeos::VoidDBusMethodCallback callback,
+      bool service_is_available) {
+    patchpanel_timer_->Stop();
+    patchpanel_timer_.reset();
+
+    if (!service_is_available) {
+      LOG(ERROR)
+          << "Failed to start arcvm. Patchpanel service is not available.";
+      std::move(callback).Run(false);
+      return;
+    }
 
     VLOG(1) << "Sending request to start ARCVM";
     GetConciergeClient()->StartArcVm(
@@ -1207,6 +1253,10 @@ class ArcVmClientAdapter : public ArcClientAdapter,
   StartParams start_params_;
   bool should_notify_observers_ = false;
   int64_t current_cid_ = kInvalidCid;
+
+  // A timer that fires after ARCVM startup is suspected to be blocked by
+  // patchpanel service startup.
+  std::unique_ptr<base::OneShotTimer> patchpanel_timer_;
 
   FileSystemStatusRewriter file_system_status_rewriter_for_testing_;
 

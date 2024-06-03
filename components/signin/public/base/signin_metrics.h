@@ -109,8 +109,14 @@ enum class ProfileSignout {
   kIdleTimeoutPolicyTriggeredSignOut = 31,
   // User adds the primary account through the sync flow then aborts.
   kCancelSyncConfirmationRemoveAccount = 32,
+  // Move primary account to another profile on sign in interception or sync
+  // merge data confirmation.
+  kMovePrimaryAccount = 33,
+  // Signout as part of the profile deletion procedure, to avoid that deletion
+  // of data propagates via sync.
+  kSignoutDuringProfileDeletion = 34,
   // Keep this as the last enum.
-  kMaxValue = kCancelSyncConfirmationRemoveAccount
+  kMaxValue = kSignoutDuringProfileDeletion
 };
 
 // Enum values which enumerates all access points where sign in could be
@@ -200,6 +206,13 @@ enum class AccessPoint : int {
   ACCESS_POINT_TIPS_NOTIFICATION = 58,
   // Access point for the Notifications Opt-In Screen.
   ACCESS_POINT_NOTIFICATIONS_OPT_IN_SCREEN_CONTENT_TOGGLE = 59,
+  // Access point for a web sign with an explicit signin choice remembered.
+  ACCESS_POINT_SIGNIN_CHOICE_REMEMBERED = 60,
+  // Confirmation prompt shown when the user tries to sign out from the profile
+  // menu or settings. The signout prompt may have a "Verify it's you" button
+  // allowing the user to reauth.
+  ACCESS_POINT_PROFILE_MENU_SIGNOUT_CONFIRMATION_PROMPT = 61,
+  ACCESS_POINT_SETTINGS_SIGNOUT_CONFIRMATION_PROMPT = 62,
 
   // Add values above this line with a corresponding label to the
   // "SigninAccessPoint" enum in tools/metrics/histograms/enums.xml
@@ -315,17 +328,25 @@ enum class AccountConsistencyPromoAction : int {
   // User started with the bottom sheet without a device-account, and signed in
   // to chrome by finishing the add-account and sign-in flows.
   SIGNED_IN_WITH_NO_DEVICE_ACCOUNT = 23,
-  kMaxValue = SIGNED_IN_WITH_NO_DEVICE_ACCOUNT,
+  // User was shown the confirm management screen on signin.
+  CONFIRM_MANAGEMENT_SHOWN = 24,
+  // User accepted management on signin.
+  CONFIRM_MANAGEMENT_ACCEPTED = 25,
+  kMaxValue = CONFIRM_MANAGEMENT_ACCEPTED,
 };
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
 // Enum values which enumerates all reasons to start sign in process.
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
-// Please keep in Sync with "SigninReason" in
+// Please keep in sync with "SigninReason" in
 // src/tools/metrics/histograms/enums.xml.
 enum class Reason : int {
+  // Used only for the Sync flows, i.e. the user will be proposed to enable Sync
+  // after sign-in.
   kSigninPrimaryAccount = 0,
+  // Used for signing in without enabling Sync. This might also be used for
+  // adding a new primary account without enabling Sync.
   kAddSecondaryAccount = 1,
   kReauthentication = 2,
   // REASON_UNLOCK = 3,  // DEPRECATED, profile unlocking was removed.
@@ -333,7 +354,7 @@ enum class Reason : int {
   kUnknownReason = 4,
   kForcedSigninPrimaryAccount = 5,
   // Used to simply login and acquire a login scope token without actually
-  // signing into any profiles on Chrome. This allows the chrome signin page to
+  // signing into any profiles on Chrome. This allows the Chrome sign-in page to
   // work in incognito mode.
   kFetchLstOnly = 6,
   kMaxValue = kFetchLstOnly,
@@ -356,27 +377,6 @@ enum class AccountReconcilorState {
 
   // Always the last enumerated type.
   kMaxValue = kInactive,
-};
-
-// Values of Signin.AccountType histogram. This histogram records if the user
-// uses a gmail account or a managed account when signing in.
-enum class SigninAccountType : int {
-  // Gmail account.
-  kRegular = 0,
-  // Managed account.
-  kManaged = 1,
-  // Always the last enumerated type.
-  kMaxValue = kManaged,
-};
-
-// When the user is give a choice of deleting their profile or not when signing
-// out, the |kDeleted| or |kKeeping| metric should be used. If the user is not
-// given any option, then use the |kIgnoreMetric| value should be used.
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.signin.metrics
-enum class SignoutDelete : int {
-  kDeleted = 0,
-  kKeeping,
-  kIgnoreMetric,
 };
 
 // This is the relationship between the account used to sign into chrome, and
@@ -476,6 +476,34 @@ enum class FetchAccountCapabilitiesFromSystemLibraryResult {
   kMaxValue = kErrorUnexpectedValue
 };
 
+// Tracks type of the button that was presented to the user.
+enum class SyncButtonsType : int {
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  kSyncEqualWeighted = 0,
+  kSyncNotEqualWeighted = 1,
+  kHistorySyncEqualWeighted = 2,
+  kHistorySyncNotEqualWeighted = 3,
+  kMaxValue = kHistorySyncNotEqualWeighted,
+};
+
+// Tracks type of the button that was clicked by the user.
+enum class SyncButtonClicked : int {
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  kSyncOptInEqualWeighted = 0,
+  kSyncCancelEqualWeighted = 1,
+  kSyncSettingsEqualWeighted = 2,
+  kSyncOptInNotEqualWeighted = 3,
+  kSyncCancelNotEqualWeighted = 4,
+  kSyncSettingsNotEqualWeighted = 5,
+  kHistorySyncOptInEqualWeighted = 6,
+  kHistorySyncCancelEqualWeighted = 7,
+  kHistorySyncOptInNotEqualWeighted = 8,
+  kHistorySyncCancelNotEqualWeighted = 9,
+  kMaxValue = kHistorySyncCancelNotEqualWeighted,
+};
+
 // -----------------------------------------------------------------------------
 // Histograms
 // -----------------------------------------------------------------------------
@@ -516,7 +544,7 @@ void LogSigninAccountReconciliationDuration(base::TimeDelta duration,
                                             bool successful);
 
 // Track a profile signout.
-void LogSignout(ProfileSignout source_metric, SignoutDelete delete_metric);
+void LogSignout(ProfileSignout source_metric);
 
 // Tracks whether the external connection results were all fetched before
 // the gaia cookie manager service tried to use them with merge session.
@@ -566,12 +594,6 @@ void RecordRefreshTokenUpdatedFromSource(bool refresh_token_is_valid,
 
 // Records the source that revoked a refresh token.
 void RecordRefreshTokenRevokedFromSource(SourceForRefreshTokenOperation source);
-
-#if BUILDFLAG(IS_IOS)
-// Records the account type when the user signs in.
-void RecordSigninAccountType(signin::ConsentLevel consent_level,
-                             bool is_managed_account);
-#endif
 
 // -----------------------------------------------------------------------------
 // User actions

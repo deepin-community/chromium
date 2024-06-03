@@ -52,6 +52,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
 #include "chrome/browser/ui/ash/auth/cryptohome_pin_engine.h"
+#include "chrome/browser/ui/ash/system_tray_client_impl.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/webui/ash/diagnostics_dialog.h"
 #include "chrome/browser/ui/webui/ash/login/family_link_notice_screen_handler.h"
@@ -69,6 +70,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/attestation/attestation_flow_adaptive.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/login/auth/auth_performer.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -172,12 +174,6 @@ int ErrorToMessageId(SigninError error) {
       return IDS_LOGIN_FATAL_ERROR_NO_AUTH_TOKEN;
     case SigninError::kFailedToFetchSamlRedirect:
       return IDS_FAILED_TO_FETCH_SAML_REDIRECT;
-    case SigninError::kActiveDirectoryNetworkProblem:
-      return IDS_AD_AUTH_NETWORK_ERROR;
-    case SigninError::kActiveDirectoryNotSupportedEncryption:
-      return IDS_AD_AUTH_NOT_SUPPORTED_ENCRYPTION;
-    case SigninError::kActiveDirectoryUnknownError:
-      return IDS_AD_AUTH_UNKNOWN_ERROR;
   }
 }
 
@@ -198,8 +194,8 @@ class AccessibilityManagerWrapper
   AccessibilityManagerWrapper& operator=(AccessibilityManagerWrapper&) = delete;
   ~AccessibilityManagerWrapper() override = default;
 
-  bool IsSpokenFeedbackEnabled() const override {
-    return ash::AccessibilityManager::Get()->IsSpokenFeedbackEnabled();
+  bool AllowQRCodeUX() const override {
+    return ash::AccessibilityManager::Get()->AllowQRCodeUX();
   }
 };
 
@@ -306,7 +302,7 @@ void LoginDisplayHostCommon::StartSignInScreen() {
 
   // Enable status area after starting sign-in screen, as it may depend on the
   // UI being visible.
-  SetStatusAreaVisible(true);
+  SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(/*visible=*/true);
 }
 
 void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
@@ -316,7 +312,7 @@ void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
 
   SetKioskLaunchStateCrashKey(KioskLaunchState::kAttemptToLaunch);
 
-  SetStatusAreaVisible(false);
+  SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(/*visible=*/false);
 
   // Wait for the `CrosSettings` to become either trusted or permanently
   // untrusted.
@@ -332,7 +328,7 @@ void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
     // If the `CrosSettings` are permanently untrusted, refuse to launch a
     // single-app kiosk mode session.
     LOG(ERROR) << "Login >> Refusing to launch single-app kiosk mode.";
-    SetStatusAreaVisible(true);
+    SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(/*visible=*/true);
     return;
   }
 
@@ -392,9 +388,7 @@ void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
 }
 
 void LoginDisplayHostCommon::AttemptShowEnableConsumerKioskScreen() {
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
-  if (!connector->IsDeviceEnterpriseManaged() &&
+  if (!ash::InstallAttributes::Get()->IsEnterpriseManaged() &&
       KioskChromeAppManager::IsConsumerKioskEnabled()) {
     ShowEnableConsumerKioskScreen();
   }

@@ -9,19 +9,25 @@
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
 #include "chromeos/startup/browser_params_proxy.h"
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
 namespace chromeos::features {
 
 namespace {
+
 bool g_app_install_service_uri_enabled_for_testing = false;
-}
+
+#if !BUILDFLAG(IS_CHROMEOS_LACROS)
+bool g_ignore_container_app_preinstall_key_for_testing = false;
+#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
+
+}  // namespace
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 // Enables triggering app installs from a specific URI.
 BASE_FEATURE(kAppInstallServiceUri,
              "AppInstallServiceUri",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 // Enables or disables more filtering out of phones from the Bluetooth UI.
@@ -32,7 +38,7 @@ BASE_FEATURE(kBluetoothPhoneFilter,
 // Enables show captive portal signin in a specially flagged popup window.
 BASE_FEATURE(kCaptivePortalPopupWindow,
              "CaptivePortalPopupWindow",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables updated UI for the clipboard history menu and new system behavior
 // related to clipboard history.
@@ -45,6 +51,11 @@ BASE_FEATURE(kClipboardHistoryRefresh,
 // non-cloud-gaming devices.
 BASE_FEATURE(kCloudGamingDevice,
              "CloudGamingDevice",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables MPS to push payload to chrome devices.
+BASE_FEATURE(kAlmanacLauncherPayload,
+             "AlmanacLauncherPayload",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables ChromeOS Apps APIs.
@@ -62,6 +73,11 @@ BASE_FEATURE(kBlinkExtensionKiosk,
              "BlinkExtensionKiosk",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// Feature flag used to gate preinstallation of the container app.
+BASE_FEATURE(kContainerAppPreinstall,
+             "ContainerAppPreinstall",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // Enables handling of key press event in background.
 BASE_FEATURE(kCrosAppsBackgroundEventHandling,
              "CrosAppsBackgroundEventHandling",
@@ -72,6 +88,10 @@ BASE_FEATURE(kCrosAppsBackgroundEventHandling,
 BASE_FEATURE(kCrosComponents,
              "CrosComponents",
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables an app to discover and install other apps. This flag will be enabled
+// with Finch.
+BASE_FEATURE(kCrosMall, "CrosMall", base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables the behaviour difference between web apps and browser created
 // shortcut backed by the web app system on Chrome OS.
@@ -88,7 +108,7 @@ BASE_FEATURE(kCrosOmniboxInstallDialog,
 // Enables the more detailed, OS-level dialog for web app installs.
 BASE_FEATURE(kCrosWebAppInstallDialog,
              "CrosWebAppInstallDialog",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 // With this feature enabled, the shortcut app badge is painted in the UI
@@ -152,11 +172,6 @@ BASE_FEATURE(kExperimentalWebAppStoragePartitionIsolation,
              "ExperimentalWebAppStoragePartitionIsolation",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enable IWA support for Telemetry Extension API.
-BASE_FEATURE(kIWAForTelemetryExtensionAPI,
-             "IWAForTelemetryExtensionAPI",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 // Enables Jelly features. go/jelly-flags
 BASE_FEATURE(kJelly, "Jelly", base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -169,16 +184,34 @@ BASE_FEATURE(kJellyroll, "Jellyroll", base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kKioskHeartbeatsViaERP,
              "KioskHeartbeatsViaERP",
              base::FEATURE_DISABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 // Controls enabling / disabling the mahi feature.
 BASE_FEATURE(kMahi, "Mahi", base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+// Controls enabling / disabling the mahi debugging.
+BASE_FEATURE(kMahiDebugging,
+             "MahiDebugging",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Controls enabling / disabling the orca feature.
-BASE_FEATURE(kOrca, "Orca", base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kOrca, "Orca", base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls enabling / disabling the orca feature for dogfood population.
 BASE_FEATURE(kOrcaDogfood, "OrcaDogfood", base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Controls enabling / disabling orca l10n strings.
+BASE_FEATURE(kOrcaUseL10nStrings,
+             "OrcaUseL10nStrings",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if !BUILDFLAG(IS_CHROMEOS_LACROS)
+// Feature management flag used to gate preinstallation of the container app.
+// This flag is meant to be enabled by the feature management module.
+BASE_FEATURE(kFeatureManagementContainerAppPreinstall,
+             "FeatureManagementContainerAppPreinstall",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
 
 // Controls enabling / disabling the orca feature from the feature management
 // module.
@@ -199,6 +232,11 @@ BASE_FEATURE(kQuickAnswersV2SettingsSubToggle,
 // Controls whether to enable Quick Answers Rich card.
 BASE_FEATURE(kQuickAnswersRichCard,
              "QuickAnswersRichCard",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Controls whether to enable Material Next UI for Quick Answers.
+BASE_FEATURE(kQuickAnswersMaterialNextUI,
+             "QuickAnswersMaterialNextUI",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables the Office files upload workflow to improve Office files support.
@@ -246,7 +284,12 @@ bool IsAppInstallServiceUriEnabled() {
 }
 
 bool IsCaptivePortalPopupWindowEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()
+      ->IsCaptivePortalPopupWindowEnabled();
+#else
   return base::FeatureList::IsEnabled(kCaptivePortalPopupWindow);
+#endif
 }
 
 bool IsClipboardHistoryRefreshEnabled() {
@@ -266,6 +309,10 @@ bool IsCloudGamingDeviceEnabled() {
 #endif
 }
 
+bool IsAlmanacLauncherPayloadEnabled() {
+  return base::FeatureList::IsEnabled(kAlmanacLauncherPayload);
+}
+
 bool IsBlinkExtensionEnabled() {
   return base::FeatureList::IsEnabled(kBlinkExtension);
 }
@@ -275,8 +322,26 @@ bool IsBlinkExtensionDiagnosticsEnabled() {
          base::FeatureList::IsEnabled(kBlinkExtensionDiagnostics);
 }
 
+bool IsContainerAppPreinstallEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()->IsContainerAppPreinstallEnabled();
+#else  // BUILDFLAG(IS_CHROMEOS_LACROS)
+  return base::FeatureList::IsEnabled(
+             kFeatureManagementContainerAppPreinstall) &&
+         base::FeatureList::IsEnabled(kContainerAppPreinstall);
+#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
+}
+
 bool IsCrosComponentsEnabled() {
   return base::FeatureList::IsEnabled(kCrosComponents) && IsJellyEnabled();
+}
+
+bool IsCrosMallEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()->IsCrosMallEnabled();
+#else
+  return base::FeatureList::IsEnabled(kCrosMall);
+#endif
 }
 
 bool IsCrosShortstandEnabled() {
@@ -284,6 +349,15 @@ bool IsCrosShortstandEnabled() {
   return chromeos::BrowserParamsProxy::Get()->IsCrosShortstandEnabled();
 #else
   return base::FeatureList::IsEnabled(kCrosShortstand);
+#endif
+}
+
+bool IsCrosWebAppInstallDialogEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()
+      ->IsCrosWebAppInstallDialogEnabled();
+#else
+  return base::FeatureList::IsEnabled(kCrosWebAppInstallDialog);
 #endif
 }
 
@@ -320,7 +394,12 @@ bool IsEssentialSearchEnabled() {
 }
 
 bool IsFileSystemProviderCloudFileSystemEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()
+      ->IsFileSystemProviderCloudFileSystemEnabled();
+#else
   return base::FeatureList::IsEnabled(kFileSystemProviderCloudFileSystem);
+#endif
 }
 
 bool IsFileSystemProviderContentCacheEnabled() {
@@ -328,10 +407,6 @@ bool IsFileSystemProviderContentCacheEnabled() {
   // `FileSystemProviderCloudFileSystem` flag has to be enabled too.
   return IsFileSystemProviderCloudFileSystemEnabled() &&
          base::FeatureList::IsEnabled(kFileSystemProviderContentCache);
-}
-
-bool IsIWAForTelemetryExtensionAPIEnabled() {
-  return base::FeatureList::IsEnabled(kIWAForTelemetryExtensionAPI);
 }
 
 bool IsJellyEnabled() {
@@ -345,13 +420,33 @@ bool IsJellyrollEnabled() {
 }
 
 bool IsMahiEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()->IsMahiEnabled();
+#else
   return base::FeatureList::IsEnabled(kMahi);
+#endif
+}
+
+bool IsMahiDebuggingEnabled() {
+  return base::FeatureList::IsEnabled(kMahiDebugging);
 }
 
 bool IsOrcaEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()->IsOrcaEnabled();
+#else
   return base::FeatureList::IsEnabled(chromeos::features::kOrcaDogfood) ||
          (base::FeatureList::IsEnabled(chromeos::features::kOrca) &&
           base::FeatureList::IsEnabled(kFeatureManagementOrca));
+#endif
+}
+
+bool IsOrcaUseL10nStringsEnabled() {
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  return chromeos::BrowserParamsProxy::Get()->IsOrcaUseL10nStringsEnabled();
+#else
+  return base::FeatureList::IsEnabled(chromeos::features::kOrcaUseL10nStrings);
+#endif
 }
 
 bool ShouldDisableChromeComposeOnChromeOS() {
@@ -422,5 +517,11 @@ int RoundedWindowsRadius() {
 base::AutoReset<bool> SetAppInstallServiceUriEnabledForTesting() {
   return {&g_app_install_service_uri_enabled_for_testing, true};
 }
+
+#if !BUILDFLAG(IS_CHROMEOS_LACROS)
+base::AutoReset<bool> SetIgnoreContainerAppPreinstallKeyForTesting() {
+  return {&g_ignore_container_app_preinstall_key_for_testing, true};
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
 
 }  // namespace chromeos::features

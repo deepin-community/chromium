@@ -11,6 +11,7 @@
 
 #include "base/containers/contains.h"
 #include "base/logging.h"
+#include "base/memory/stack_allocated.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -65,6 +66,8 @@ bool operator<(const std::unique_ptr<SharedImageBacking>& lhs,
 }
 
 class SCOPED_LOCKABLE SharedImageManager::AutoLock {
+  STACK_ALLOCATED();
+
  public:
   explicit AutoLock(SharedImageManager* manager)
       EXCLUSIVE_LOCK_FUNCTION(manager->lock_)
@@ -127,6 +130,7 @@ SharedImageManager::Register(std::unique_ptr<SharedImageBacking> backing,
   if (base::Contains(images_, backing->mailbox())) {
     LOG(ERROR) << "SharedImageManager::Register: Trying to register an "
                   "already registered mailbox.";
+    backing->MarkForDestruction();
     return nullptr;
   }
 

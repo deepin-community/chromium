@@ -37,7 +37,6 @@
 #include "components/autofill/core/browser/data_model/autofill_wallet_usage_data.h"
 #include "components/autofill/core/browser/data_model/bank_account.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
-#include "components/autofill/core/browser/data_model/credit_card_benefit.h"
 #include "components/autofill/core/browser/data_model/credit_card_cloud_token_data.h"
 #include "components/autofill/core/browser/data_model/iban.h"
 #include "components/autofill/core/browser/field_type_utils.h"
@@ -769,28 +768,22 @@ bool PaymentsAutofillTable::RemoveCreditCard(const std::string& guid) {
   return DeleteWhereColumnEq(db_, kCreditCardsTable, kGuid, guid);
 }
 
-bool PaymentsAutofillTable::AddFullServerCreditCard(const CreditCard& credit_card) {
-  // TODO(crbug.com/1497734): Remove this method entirely.
-  DCHECK_EQ(CreditCard::RecordType::kFullServerCard, credit_card.record_type());
+bool PaymentsAutofillTable::AddServerCreditCardForTesting(
+    const CreditCard& credit_card) {
+  DCHECK_EQ(CreditCard::RecordType::kMaskedServerCard,
+            credit_card.record_type());
   DCHECK(!credit_card.number().empty());
   DCHECK(!credit_card.server_id().empty());
+  DCHECK(!credit_card.network().empty());
 
   sql::Transaction transaction(db_);
   if (!transaction.Begin())
     return false;
 
   // Make sure there aren't duplicates for this card.
-  DeleteFromUnmaskedCreditCards(credit_card.server_id());
   DeleteFromMaskedCreditCards(credit_card.server_id());
 
-  CreditCard masked(credit_card);
-  masked.set_record_type(CreditCard::RecordType::kMaskedServerCard);
-  masked.SetNumber(credit_card.LastFourDigits());
-  masked.RecordAndLogUse();
-  DCHECK(!masked.network().empty());
-  AddMaskedCreditCards({masked});
-
-  AddUnmaskedCreditCard(credit_card.server_id(), credit_card.number());
+  AddMaskedCreditCards({credit_card});
 
   transaction.Commit();
 
@@ -928,32 +921,6 @@ void PaymentsAutofillTable::SetServerCreditCards(
   transaction.Commit();
 }
 
-bool PaymentsAutofillTable::UnmaskServerCreditCard(const CreditCard& masked,
-                                           const std::u16string& full_number) {
-  sql::Transaction transaction(db_);
-  if (!transaction.Begin())
-    return false;
-
-  // Make sure there aren't duplicates for this card.
-  DeleteFromUnmaskedCreditCards(masked.server_id());
-
-  AddUnmaskedCreditCard(masked.server_id(), full_number);
-
-  CreditCard unmasked = masked;
-  unmasked.set_record_type(CreditCard::RecordType::kFullServerCard);
-  unmasked.SetNumber(full_number);
-  unmasked.RecordAndLogUse();
-  UpdateServerCardMetadata(unmasked);
-
-  transaction.Commit();
-
-  return db_->GetLastChangeCount() > 0;
-}
-
-bool PaymentsAutofillTable::MaskServerCreditCard(const std::string& id) {
-  return DeleteFromUnmaskedCreditCards(id);
-}
-
 bool PaymentsAutofillTable::AddServerCvc(const ServerCvc& server_cvc) {
   if (server_cvc.cvc.empty()) {
     return false;
@@ -987,14 +954,19 @@ bool PaymentsAutofillTable::ClearServerCvcs() {
   return db_->GetLastChangeCount() > 0;
 }
 
-bool PaymentsAutofillTable::ReconcileServerCvcs() {
+std::vector<std::unique_ptr<ServerCvc>>
+PaymentsAutofillTable::DeleteOrphanedServerCvcs() {
+  std::vector<std::unique_ptr<ServerCvc>> cvcs_to_be_deleted;
   sql::Statement s(db_->GetUniqueStatement(
       base::StrCat({"DELETE FROM ", kServerStoredCvcTable, " WHERE ",
                     kInstrumentId, " NOT IN (SELECT ", kInstrumentId, " FROM ",
-                    kMaskedCreditCardsTable, ")"})
+                    kMaskedCreditCardsTable, ") RETURNING *"})
           .c_str()));
-  s.Run();
-  return db_->GetLastChangeCount() > 0;
+  while (s.Step()) {
+    cvcs_to_be_deleted.push_back(
+        ServerCvcFromStatement(s, *autofill_table_encryptor_));
+  }
+  return cvcs_to_be_deleted;
 }
 
 std::vector<std::unique_ptr<ServerCvc>> PaymentsAutofillTable::GetAllServerCvcs()
@@ -1552,18 +1524,6 @@ bool PaymentsAutofillTable::ClearAllServerData() {
   return changed;
 }
 
-bool PaymentsAutofillTable::ClearAllLocalData() {
-  sql::Transaction transaction(db_);
-  if (!transaction.Begin())
-    return false;  // Some error, nothing was changed.
-
-  ClearLocalPaymentMethodsData();
-  bool changed = db_->GetLastChangeCount() > 0;
-
-  transaction.Commit();
-  return changed;
-}
-
 bool PaymentsAutofillTable::RemoveAutofillDataModifiedBetween(
     const base::Time& delete_begin,
     const base::Time& delete_end,
@@ -1643,12 +1603,6 @@ bool PaymentsAutofillTable::RemoveOriginURLsModifiedBetween(
   return true;
 }
 
-void PaymentsAutofillTable::ClearLocalPaymentMethodsData() {
-  Delete(db_, kLocalStoredCvcTable);
-  Delete(db_, kCreditCardsTable);
-  Delete(db_, kLocalIbansTable);
-}
-
 bool PaymentsAutofillTable::SetCreditCardBenefits(
     const std::vector<CreditCardBenefit>& credit_card_benefits) {
   sql::Transaction transaction(db_);
@@ -1662,7 +1616,7 @@ bool PaymentsAutofillTable::SetCreditCardBenefits(
   }
 
   for (const CreditCardBenefit& credit_card_benefit : credit_card_benefits) {
-    if (!absl::visit([](const auto& a) { return a.IsValid(); },
+    if (!absl::visit([](const auto& a) { return a.IsValidForWriteFromSync(); },
                      credit_card_benefit)) {
       continue;
     }
@@ -1731,11 +1685,23 @@ bool PaymentsAutofillTable::SetCreditCardBenefits(
 }
 
 bool PaymentsAutofillTable::GetAllCreditCardBenefits(
-    std::vector<CreditCardBenefit>* credit_card_benefits) {
+    std::vector<CreditCardBenefit>& credit_card_benefits) {
+  return GetCreditCardBenefitsForInstrumentId(std::nullopt,
+                                              credit_card_benefits);
+}
+
+bool PaymentsAutofillTable::GetCreditCardBenefitsForInstrumentId(
+    const std::optional<int64_t> instrument_id,
+    std::vector<CreditCardBenefit>& credit_card_benefits) {
   sql::Statement get_benefits;
+  std::string statement_modifiers =
+      instrument_id ? base::StrCat({"WHERE instrument_id = ",
+                                    base::NumberToString(*instrument_id)})
+                    : "";
   SelectBuilder(db_, get_benefits, kMaskedCreditCardBenefitsTable,
                 {kBenefitId, kInstrumentId, kBenefitType, kBenefitDescription,
-                 kStartTime, kEndTime, kBenefitCategory});
+                 kStartTime, kEndTime, kBenefitCategory},
+                statement_modifiers);
 
   while (get_benefits.Step()) {
     int index = 0;
@@ -1753,17 +1719,17 @@ bool PaymentsAutofillTable::GetAllCreditCardBenefits(
 
     switch (benefit_type) {
       case 0:
-        credit_card_benefits->push_back(CreditCardFlatRateBenefit(
+        credit_card_benefits.push_back(CreditCardFlatRateBenefit(
             benefit_id, linked_card_instrument_id, benefit_description,
             start_time, expiry_time));
         break;
       case 1:
-        credit_card_benefits->push_back(CreditCardCategoryBenefit(
+        credit_card_benefits.push_back(CreditCardCategoryBenefit(
             benefit_id, linked_card_instrument_id, benefit_category,
             benefit_description, start_time, expiry_time));
         break;
       case 2:
-        credit_card_benefits->push_back(CreditCardMerchantBenefit(
+        credit_card_benefits.push_back(CreditCardMerchantBenefit(
             benefit_id, linked_card_instrument_id, benefit_description,
             GetMerchantDomainsForBenefitId(benefit_id), start_time,
             expiry_time));
@@ -2086,24 +2052,14 @@ void PaymentsAutofillTable::AddMaskedCreditCards(
   }
 }
 
-void PaymentsAutofillTable::AddUnmaskedCreditCard(const std::string& id,
-                                          const std::u16string& full_number) {
-  // TODO(crbug.com/1497734): Remove this method entirely.
-}
-
 bool PaymentsAutofillTable::DeleteFromMaskedCreditCards(const std::string& id) {
   DeleteWhereColumnEq(db_, kMaskedCreditCardsTable, kId, id);
   return db_->GetLastChangeCount() > 0;
 }
 
-bool PaymentsAutofillTable::DeleteFromUnmaskedCreditCards(const std::string& id) {
-  // TODO(crbug.com/1497734): Remove this method entirely.
-  return false;
-}
-
 base::flat_set<url::Origin>
 PaymentsAutofillTable::GetMerchantDomainsForBenefitId(
-    const CreditCardBenefitBase::BenefitId benefit_id) {
+    const CreditCardBenefitBase::BenefitId& benefit_id) {
   base::flat_set<url::Origin> merchant_domains;
   sql::Statement s;
   SelectBuilder(db_, s, kBenefitMerchantDomainsTable, {kMerchantDomain},

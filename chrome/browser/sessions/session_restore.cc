@@ -53,7 +53,6 @@
 #include "chrome/browser/sessions/session_service_log.h"
 #include "chrome/browser/sessions/session_service_lookup.h"
 #include "chrome/browser/sessions/session_service_utils.h"
-#include "chrome/browser/sessions/tab_loader.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -105,10 +104,6 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "components/app_restore/window_properties.h"
 #include "ui/compositor/layer.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/constants/chromeos_features.h"
 #endif
 
 using content::NavigationController;
@@ -653,17 +648,21 @@ class SessionRestoreImpl : public BrowserListObserver {
     bool has_visible_browser = false;
     for (const auto& window : *windows) {
       if (window->show_state != ui::SHOW_STATE_MINIMIZED ||
-          window->window_id == active_window_id)
+          window->window_id == active_window_id) {
         has_visible_browser = true;
+      }
     }
 
-    for (auto i = windows->begin(); i != windows->end(); ++i) {
+    for (const std::unique_ptr<sessions::SessionWindow>& window : *windows) {
       ++(*window_count);
       // 1. Choose between restoring tabs in an existing browser or in a newly
       //    created browser.
       Browser* browser = nullptr;
-      if (i == windows->begin() &&
-          (*i)->type == sessions::SessionWindow::TYPE_NORMAL &&
+      const bool is_first_window = window.get() == windows->begin()->get();
+      const bool is_normal_window =
+          window->type == sessions::SessionWindow::TYPE_NORMAL;
+
+      if (is_first_window && is_normal_window &&
           ShouldRestoreToExistingBrowser()) {
         // The first set of tabs is added to the existing browser.
         browser = browser_;
@@ -674,15 +673,16 @@ class SessionRestoreImpl : public BrowserListObserver {
 #endif
         // Change the initial show state of the created browser to
         // SHOW_STATE_NORMAL if there are no visible browsers.
-        ui::WindowShowState show_state = (*i)->show_state;
+        ui::WindowShowState show_state = window->show_state;
         if (!has_visible_browser) {
           show_state = ui::SHOW_STATE_NORMAL;
           has_visible_browser = true;
         }
         browser = CreateRestoredBrowser(
-            BrowserTypeForWindowType((*i)->type), (*i)->bounds, (*i)->workspace,
-            (*i)->visible_on_all_workspaces, show_state, (*i)->app_name,
-            (*i)->user_title, (*i)->extra_data, (*i)->window_id.id());
+            BrowserTypeForWindowType(window->type), window->bounds,
+            window->workspace, window->visible_on_all_workspaces, show_state,
+            window->app_name, window->user_title, window->extra_data,
+            window->window_id.id());
 #if BUILDFLAG(IS_CHROMEOS_ASH)
         ash::BootTimesRecorder::Get()->AddLoginTimeMarker(
             "SessionRestore-CreateRestoredBrowser-End", false);
@@ -691,14 +691,14 @@ class SessionRestoreImpl : public BrowserListObserver {
       }
 
       // 2. Track TYPE_NORMAL browsers.
-      if ((*i)->type == sessions::SessionWindow::TYPE_NORMAL) {
+      if (is_normal_window) {
         has_normal_browser = true;
         last_normal_browser = browser;
-        browser->SetWindowUserTitle((*i)->user_title);
+        browser->SetWindowUserTitle(window->user_title);
       }
 
       // Track TYPE_APP browsers.
-      if ((*i)->type == sessions::SessionWindow::TYPE_APP) {
+      if (window->type == sessions::SessionWindow::TYPE_APP) {
         last_app_browser = browser;
       }
 
@@ -706,14 +706,16 @@ class SessionRestoreImpl : public BrowserListObserver {
       WebContents* active_tab =
           browser->tab_strip_model()->GetActiveWebContents();
       int initial_tab_count = browser->tab_strip_model()->count();
-      bool close_active_tab =
-          clobber_existing_tab_ && i == windows->begin() &&
-          (*i)->type == sessions::SessionWindow::TYPE_NORMAL && active_tab &&
-          browser == browser_ && !(*i)->tabs.empty();
-      if (close_active_tab)
+      bool close_active_tab = clobber_existing_tab_ && is_first_window &&
+                              is_normal_window && active_tab &&
+                              browser == browser_ && !window->tabs.empty();
+      if (close_active_tab) {
         --initial_tab_count;
-      if ((*i)->window_id == active_window_id)
+      }
+
+      if (window->window_id == active_window_id) {
         browser_to_activate = browser;
+      }
 
       // 5. Restore tabs in |browser|. This will also call Show() on |browser|
       //    if its initial show state is not mimimized.
@@ -723,18 +725,19 @@ class SessionRestoreImpl : public BrowserListObserver {
       base::flat_map<tab_groups::TabGroupId, tab_groups::TabGroupId>
           new_group_ids;
       bool did_show_browser = false;
-      RestoreTabsToBrowser(*(*i), browser, initial_tab_count, created_contents,
-                           &new_group_ids, did_show_browser);
+      RestoreTabsToBrowser(*window, browser, initial_tab_count,
+                           created_contents, &new_group_ids, did_show_browser);
       // Newly created browsers should be shown by RestoreTabsToBrowser. If they
       // aren't shown, they are likely to be never shown.
-      if (browser != browser_)
+      if (browser != browser_) {
         DCHECK(did_show_browser);
-      (*tab_count) += (static_cast<int>(browser->tab_strip_model()->count()) -
-                       initial_tab_count);
+      }
+
+      (*tab_count) += (browser->tab_strip_model()->count() - initial_tab_count);
 
       // 6. Tabs will be grouped appropriately in RestoreTabsToBrowser. Now
       //    restore the groups' visual data.
-      RestoreTabGroupMetadata(browser, new_group_ids, (*i)->tab_groups);
+      RestoreTabGroupMetadata(browser, new_group_ids, window->tab_groups);
 
       // 7. Notify SessionService of restored tabs, so they can be saved to the
       //    current session.
@@ -745,8 +748,9 @@ class SessionRestoreImpl : public BrowserListObserver {
 
       // 8. Close the tab that was active in the window prior to session
       //    restore, if needed.
-      if (close_active_tab)
+      if (close_active_tab) {
         chrome::CloseWebContents(browser, active_tab, true);
+      }
 
       // Sanity check: A restored browser should have an active tab.
       // TODO(https://crbug.com/1032348): Change to DCHECK once we understand
@@ -754,11 +758,14 @@ class SessionRestoreImpl : public BrowserListObserver {
       CHECK(browser->tab_strip_model()->GetActiveWebContents());
     }
 
-    if (browser_to_activate && browser_to_activate->is_type_normal())
+    if (browser_to_activate && browser_to_activate->is_type_normal()) {
       last_normal_browser = browser_to_activate;
+    }
 
-    if (last_normal_browser && !startup_tabs_.empty())
+    if (last_normal_browser && !startup_tabs_.empty()) {
       browser_to_activate = OpenStartupUrls(last_normal_browser, startup_tabs_);
+    }
+
 #if BUILDFLAG(IS_CHROMEOS_ASH)
     ash::BootTimesRecorder::Get()->AddLoginTimeMarker(
         "SessionRestore-CreatingTabs-End", false);
@@ -769,10 +776,11 @@ class SessionRestoreImpl : public BrowserListObserver {
     // If last_normal_browser is NULL and startup_tabs_ is non-empty,
     // FinishedTabCreation will create a new TabbedBrowser and add the urls to
     // it.
-    Browser* finished_browser =
+    Browser* const finished_browser =
         FinishedTabCreation(true, has_normal_browser, created_contents);
-    if (finished_browser)
+    if (finished_browser) {
       last_normal_browser = finished_browser;
+    }
 
     // sessionStorages needed for the session restore have now been recreated
     // by RestoreTab. Now it's safe for the DOM storage system to start
@@ -851,10 +859,9 @@ class SessionRestoreImpl : public BrowserListObserver {
   }
 
   // |tab_index| is ignored for pinned tabs which will always be pushed behind
-  // the last existing pinned tab.
-  // |tab_loader_| will schedule this tab for loading if |is_selected_tab| is
-  // false. |last_active_time| is the value to use to set the last time the
-  // WebContents was made active.
+  // the last existing pinned tab. If |is_selected_tab| is true the tab will be
+  // shown after loading, otherwise it's loaded hidden. |last_active_time| is
+  // the value to use to set the last time the WebContents was made active.
   void RestoreTab(const sessions::SessionTab& tab,
                   Browser* browser,
                   std::vector<RestoredTab>* created_contents,
@@ -932,10 +939,9 @@ class SessionRestoreImpl : public BrowserListObserver {
     }
 
     TabGroupModel* group_model = browser->tab_strip_model()->group_model();
-    SavedTabGroupKeyedService* const saved_tab_group_keyed_service =
-        base::FeatureList::IsEnabled(features::kTabGroupsSave)
-            ? SavedTabGroupServiceFactory::GetForProfile(browser->profile())
-            : nullptr;
+    tab_groups::SavedTabGroupKeyedService* const saved_tab_group_keyed_service =
+        tab_groups::SavedTabGroupServiceFactory::GetForProfile(
+            browser->profile());
 
     for (const std::unique_ptr<sessions::SessionTabGroup>& session_tab_group :
          tab_groups) {
@@ -985,17 +991,7 @@ class SessionRestoreImpl : public BrowserListObserver {
 #endif
 
     params.initial_show_state = show_state;
-
-    // Do not restore workspace if lacros and Desk Profiles are enabled, i.e. it
-    // uses the profile from the current desk, and should always stay within
-    // that desk.
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    params.initial_workspace =
-        chromeos::features::IsDeskProfilesEnabled() ? std::string() : workspace;
-#else
     params.initial_workspace = workspace;
-#endif
-
     params.initial_visible_on_all_workspaces_state = visible_on_all_workspaces;
     params.creation_source = Browser::CreationSource::kSessionRestore;
     Browser* browser = Browser::Create(params);
@@ -1136,9 +1132,6 @@ class SessionRestoreImpl : public BrowserListObserver {
 
   // Set of URLs to open in addition to those restored from the session.
   StartupTabs startup_tabs_;
-
-  // Responsible for loading the tabs.
-  scoped_refptr<TabLoader> tab_loader_;
 
   // When synchronous we run a nested run loop. To avoid creating windows
   // from the nested run loop (which can make exiting the nested message

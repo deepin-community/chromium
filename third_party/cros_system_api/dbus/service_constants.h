@@ -19,7 +19,6 @@
 #include "cfm/dbus-constants.h"
 #include "chunneld/dbus-constants.h"
 #include "cros-disks/dbus-constants.h"
-#include "cros_healthd/dbus-constants.h"
 #include "cryptohome/dbus-constants.h"
 #include "dcad/dbus-constants.h"
 #include "debugd/dbus-constants.h"
@@ -31,7 +30,6 @@
 #include "fusebox/dbus-constants.h"
 #include "hammerd/dbus-constants.h"
 #include "hermes/dbus-constants.h"
-#include "hiberman/dbus-constants.h"
 #include "hps/dbus-constants.h"
 #include "ip_peripheral/dbus-constants.h"
 #include "login_manager/dbus-constants.h"
@@ -46,6 +44,7 @@
 #include "power_manager/dbus-constants.h"
 #include "printscanmgr/dbus-constants.h"
 #include "privacy_screen/dbus-constants.h"
+#include "regmon/dbus-constants.h"
 #include "resource_manager/dbus-constants.h"
 #include "rgbkbd/dbus-constants.h"
 #include "rmad/dbus-constants.h"
@@ -68,6 +67,10 @@ namespace dbus {
 const char kDBusInterface[] = "org.freedesktop.DBus";
 const char kDBusServiceName[] = "org.freedesktop.DBus";
 const char kDBusServicePath[] = "/org/freedesktop/DBus";
+
+// Debug Stats Interface
+const char kDBusDebugStatsInterface[] = "org.freedesktop.DBus.Debug.Stats";
+const char kDBusDebugStatsGetConnectionStats[] = "GetConnectionStats";
 
 // Object Manager interface
 const char kDBusObjectManagerInterface[] = "org.freedesktop.DBus.ObjectManager";
@@ -526,8 +529,6 @@ constexpr char kMojoConnectionServiceInterface[] =
 // Methods
 constexpr char kBootstrapMojoConnectionForRollbackNetworkConfigMethod[] =
     "BootstrapMojoConnectionForRollbackNetworkConfigService";
-constexpr char kBootstrapForCrosHealthdInternalServiceFactoryMethod[] =
-    "kBootstrapForCrosHealthdInternalServiceFactoryMethod";
 }  // namespace mojo_connection_service
 
 namespace virtual_file_provider {

@@ -38,7 +38,7 @@ WireResult Server::DoInstanceRequestAdapter(Known<WGPUInstance> instance,
                                             WGPUFuture future,
                                             ObjectHandle adapterHandle,
                                             const WGPURequestAdapterOptions* options) {
-    Known<WGPUAdapter> adapter;
+    Reserved<WGPUAdapter> adapter;
     WIRE_TRY(AdapterObjects().Allocate(&adapter, adapterHandle, AllocationState::Reserved));
 
     auto userdata = MakeUserdata<RequestAdapterUserdata>();
@@ -103,6 +103,14 @@ void Server::OnRequestAdapterCallback(RequestAdapterUserdata* data,
     d3dProperties.chain.sType = WGPUSType_AdapterPropertiesD3D;
     if (mProcs.adapterHasFeature(adapter, WGPUFeatureName_AdapterPropertiesD3D)) {
         *propertiesChain = &d3dProperties.chain;
+        propertiesChain = &(*propertiesChain)->next;
+    }
+
+    // Query AdapterPropertiesVk if the feature is supported.
+    WGPUAdapterPropertiesVk vkProperties = {};
+    vkProperties.chain.sType = WGPUSType_AdapterPropertiesVk;
+    if (mProcs.adapterHasFeature(adapter, WGPUFeatureName_AdapterPropertiesVk)) {
+        *propertiesChain = &vkProperties.chain;
         propertiesChain = &(*propertiesChain)->next;
     }
 

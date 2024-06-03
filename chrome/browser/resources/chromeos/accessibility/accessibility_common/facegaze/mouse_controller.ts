@@ -3,13 +3,14 @@
 // found in the LICENSE file.
 
 import {AsyncUtil} from '/common/async_util.js';
+import {EventGenerator} from '/common/event_generator.js';
 import {EventHandler} from '/common/event_handler.js';
 import {TestImportManager} from '/common/testing/test_import_manager.js';
-
-import {FaceLandmarkerResult} from '../third_party/mediapipe/task_vision/vision.js';
+import type {FaceLandmarkerResult} from '/third_party/mediapipe/vision.js';
 
 import ScreenRect = chrome.accessibilityPrivate.ScreenRect;
 import ScreenPoint = chrome.accessibilityPrivate.ScreenPoint;
+
 type PrefObject = chrome.settingsPrivate.PrefObject;
 
 // A ScreenPoint represents an integer screen coordinate, whereas
@@ -198,6 +199,8 @@ export class MouseController {
     // touched their physical mouse or trackpad.
     if (new Date().getTime() - this.lastMouseMovedTime_ >
         MouseController.IGNORE_UPDATES_AFTER_MOUSE_MOVE_MS) {
+      EventGenerator.sendMouseMove(
+          this.mouseLocation_.x, this.mouseLocation_.y);
       chrome.accessibilityPrivate.setCursorPosition(this.mouseLocation_);
     }
   }

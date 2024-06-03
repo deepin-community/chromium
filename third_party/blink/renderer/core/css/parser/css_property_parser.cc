@@ -58,8 +58,8 @@ bool IsPropertyAllowedInRule(const CSSProperty& property,
       return true;
     case StyleRule::kKeyframe:
       return property.IsValidForKeyframe();
-    case StyleRule::kTry:
-      return property.IsValidForPositionFallback();
+    case StyleRule::kPositionTry:
+      return property.IsValidForPositionTry();
     default:
       NOTREACHED();
       return false;
@@ -191,7 +191,8 @@ bool CSSPropertyParser::ParseValueStart(CSSPropertyID unresolved_property,
   }
 #endif
 
-  if (CSSVariableParser::ContainsValidVariableReferences(original_range)) {
+  if (CSSVariableParser::ContainsValidVariableReferences(
+          original_range, context_->GetExecutionContext())) {
     StringView text =
         CSSVariableParser::StripTrailingWhitespaceAndComments(value_.text);
     if (text.length() > CSSVariableData::kMaxVariableBytes) {
@@ -402,13 +403,6 @@ bool CSSPropertyParser::ConsumeCSSWideKeyword(CSSPropertyID unresolved_property,
   const CSSValue* value = MaybeConsumeCSSWideKeyword(range_copy);
   if (!value) {
     return false;
-  }
-
-  if (value->IsRevertValue() || value->IsRevertLayerValue()) {
-    // Declarations in @try are not cascaded and cannot be reverted.
-    if (rule_type == StyleRule::kTry) {
-      return false;
-    }
   }
 
   CSSPropertyID property = ResolveCSSPropertyID(unresolved_property);

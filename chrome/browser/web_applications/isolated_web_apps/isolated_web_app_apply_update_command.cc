@@ -9,6 +9,7 @@
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
@@ -19,19 +20,16 @@
 #include "base/memory/ptr_util.h"
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
-#include "base/strings/stringprintf.h"
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/callback_utils.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_install_command_helper.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_storage_location.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_version.h"
 #include "chrome/browser/web_applications/isolated_web_apps/pending_install_info.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
-#include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -39,9 +37,9 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
 #include "components/webapps/browser/install_result_code.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
@@ -124,43 +122,46 @@ void IsolatedWebAppApplyUpdateCommand::CheckIfUpdateIsStillPending(
     base::OnceClosure next_step_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  installed_app_ = lock_->registrar().GetAppById(url_info_.app_id());
-  if (installed_app_ == nullptr) {
+  const WebApp* installed_app =
+      lock_->registrar().GetAppById(url_info_.app_id());
+  if (installed_app == nullptr) {
     ReportFailure("App is no longer installed.");
     return;
   }
-  if (!installed_app_->isolation_data().has_value()) {
+  if (!installed_app->isolation_data().has_value()) {
     ReportFailure("Installed app is not an Isolated Web App.");
     return;
   }
   const WebApp::IsolationData& isolation_data =
-      *installed_app_->isolation_data();
+      *installed_app->isolation_data();
 
   if (!isolation_data.pending_update_info().has_value()) {
     ReportFailure("Installed app does not have a pending update.");
     return;
   }
-  const WebApp::IsolationData::PendingUpdateInfo& update_info =
-      *isolation_data.pending_update_info();
+  pending_update_info_ = *isolation_data.pending_update_info();
 
-  GetMutableDebugValue().Set("update_info", update_info.AsDebugValue());
+  GetMutableDebugValue().Set("pending_update_info",
+                             pending_update_info_->AsDebugValue());
 
-  if (isolation_data.version >= update_info.version) {
+  if (isolation_data.version >= pending_update_info_->version) {
     ReportFailure(base::StrCat({"Installed app is already on version ",
                                 isolation_data.version.GetString(),
                                 ". Cannot update to version ",
-                                update_info.version.GetString()}));
+                                pending_update_info_->version.GetString()}));
     return;
   }
-  if (isolation_data.location.index() != update_info.location.index()) {
-    ReportFailure(base::StringPrintf(
-        "Unable to update between different "
-        "IsolatedWebAppLocation types (%zu to %zu).",
-        isolation_data.location.index(), update_info.location.index()));
+  if (isolation_data.location.dev_mode() !=
+      pending_update_info_->location.dev_mode()) {
+    std::stringstream s;
+    s << "Unable to update between dev-mode and non-dev-mode storage location "
+         "types ("
+      << isolation_data.location << " to " << pending_update_info_->location
+      << ").";
+    ReportFailure(s.str());
     return;
   }
 
-  update_location_ = update_info.location;
   std::move(next_step_callback).Run();
 }
 
@@ -169,7 +170,9 @@ void IsolatedWebAppApplyUpdateCommand::CheckTrustAndSignatures(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   command_helper_->CheckTrustAndSignatures(
-      update_info().location, &profile(),
+      IwaSourceWithMode::FromStorageLocation(profile().GetPath(),
+                                             pending_update_info_->location),
+      &profile(),
       base::BindOnce(
           &IsolatedWebAppApplyUpdateCommand::RunNextStepOnSuccess<void>,
           weak_factory_.GetWeakPtr(), std::move(next_step_callback)));
@@ -189,7 +192,9 @@ void IsolatedWebAppApplyUpdateCommand::LoadInstallUrl(
     base::OnceClosure next_step_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   command_helper_->LoadInstallUrl(
-      update_info().location, *web_contents_.get(), *url_loader_.get(),
+      IwaSourceWithMode::FromStorageLocation(profile().GetPath(),
+                                             pending_update_info_->location),
+      *web_contents_.get(), *url_loader_.get(),
       base::BindOnce(
           &IsolatedWebAppApplyUpdateCommand::RunNextStepOnSuccess<void>,
           weak_factory_.GetWeakPtr(), std::move(next_step_callback)));
@@ -213,7 +218,7 @@ void IsolatedWebAppApplyUpdateCommand::ValidateManifestAndCreateInstallInfo(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   base::expected<WebAppInstallInfo, std::string> install_info =
       command_helper_->ValidateManifestAndCreateInstallInfo(
-          update_info().version, manifest_and_url);
+          pending_update_info_->version, manifest_and_url);
   RunNextStepOnSuccess(std::move(next_step_callback), std::move(install_info));
 }
 
@@ -240,8 +245,7 @@ void IsolatedWebAppApplyUpdateCommand::Finalize(WebAppInstallInfo info) {
 
 void IsolatedWebAppApplyUpdateCommand::OnFinalized(
     const webapps::AppId& app_id,
-    webapps::InstallResultCode update_result_code,
-    OsHooksErrors unused_os_hooks_errors) {
+    webapps::InstallResultCode update_result_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK_EQ(app_id, url_info_.app_id());
 
@@ -255,8 +259,7 @@ void IsolatedWebAppApplyUpdateCommand::OnFinalized(
   }
 }
 
-void IsolatedWebAppApplyUpdateCommand::ReportFailure(
-    base::StringPiece message) {
+void IsolatedWebAppApplyUpdateCommand::ReportFailure(std::string_view message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   IsolatedWebAppApplyUpdateCommandError error{.message = std::string(message)};
@@ -278,9 +281,9 @@ void IsolatedWebAppApplyUpdateCommand::ReportFailure(
 void IsolatedWebAppApplyUpdateCommand::CleanupOnFailure(
     base::OnceClosure next_step_callback) {
   base::OnceClosure update_callback =
-      update_location_.has_value()
+      pending_update_info_.has_value()
           ? base::BindOnce(CleanupLocationIfOwned, profile().GetPath(),
-                           update_location_.value(),
+                           pending_update_info_->location,
                            std::move(next_step_callback))
           : std::move(next_step_callback);
 

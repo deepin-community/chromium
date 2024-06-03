@@ -16,6 +16,8 @@
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_xr_image_tracking_score.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_xr_light_probe_init.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
@@ -39,7 +41,6 @@ class Element;
 class ExceptionState;
 class HTMLCanvasElement;
 class ResizeObserver;
-class ScriptPromiseResolver;
 class V8XRFrameRequestCallback;
 class XRAnchor;
 class XRAnchorSet;
@@ -150,6 +151,8 @@ class XRSession final : public EventTarget,
 
   const FrozenArray<IDLString>& enabledFeatures() const;
 
+  bool isSystemKeyboardSupported() const { return false; }
+
   XRSpace* viewerSpace() const;
 
   XRAnchorSet* TrackedAnchors() const;
@@ -174,12 +177,13 @@ class XRSession final : public EventTarget,
   const String& depthUsage(ExceptionState& exception_state);
   const String& depthDataFormat(ExceptionState& exception_state);
 
-  ScriptPromise updateTargetFrameRate(float rate,
-                                      ExceptionState&);
+  ScriptPromise<IDLUndefined> updateTargetFrameRate(float rate,
+                                                    ExceptionState&);
 
-  ScriptPromise requestReferenceSpace(ScriptState* script_state,
-                                      const String& type,
-                                      ExceptionState&);
+  ScriptPromise<XRReferenceSpace> requestReferenceSpace(
+      ScriptState* script_state,
+      const String& type,
+      ExceptionState&);
 
   // Helper, not IDL-exposed
   // |native_origin_from_anchor| is a matrix describing transform between native
@@ -189,7 +193,7 @@ class XRSession final : public EventTarget,
   // |maybe_plane_id| is an ID of the plane to which the anchor should be
   // attached - set to std::nullopt if the plane is not to be attached to any
   // plane.
-  ScriptPromise CreateAnchorHelper(
+  ScriptPromise<XRAnchor> CreateAnchorHelper(
       ScriptState* script_state,
       const gfx::Transform& native_origin_from_anchor,
       const device::mojom::blink::XRNativeOriginInformationPtr&
@@ -217,23 +221,26 @@ class XRSession final : public EventTarget,
 
   XRInputSourceArray* inputSources(ScriptState*) const;
 
-  ScriptPromise requestHitTestSource(ScriptState* script_state,
-                                     XRHitTestOptionsInit* options,
-                                     ExceptionState& exception_state);
-  ScriptPromise requestHitTestSourceForTransientInput(
+  ScriptPromise<XRHitTestSource> requestHitTestSource(
+      ScriptState* script_state,
+      XRHitTestOptionsInit* options,
+      ExceptionState& exception_state);
+  ScriptPromise<XRTransientInputHitTestSource>
+  requestHitTestSourceForTransientInput(
       ScriptState* script_state,
       XRTransientInputHitTestOptionsInit* options_init,
       ExceptionState& exception_state);
 
-  ScriptPromise requestLightProbe(ScriptState* script_state,
-                                  XRLightProbeInit*,
-                                  ExceptionState&);
+  ScriptPromise<XRLightProbe> requestLightProbe(ScriptState* script_state,
+                                                XRLightProbeInit*,
+                                                ExceptionState&);
 
-  ScriptPromise getTrackedImageScores(ScriptState* script_state,
-                                      ExceptionState&);
+  ScriptPromise<IDLArray<V8XRImageTrackingScore>> getTrackedImageScores(
+      ScriptState* script_state,
+      ExceptionState&);
 
   // Called by JavaScript to manually end the session.
-  ScriptPromise end(ScriptState* script_state, ExceptionState&);
+  ScriptPromise<IDLUndefined> end(ScriptState* script_state, ExceptionState&);
 
   bool ended() const { return ended_; }
 
@@ -429,16 +436,16 @@ class XRSession final : public EventTarget,
   void UpdateVisibilityState();
 
   void OnSubscribeToHitTestResult(
-      ScriptPromiseResolver* resolver,
+      ScriptPromiseResolver<XRHitTestSource>* resolver,
       device::mojom::SubscribeToHitTestResult result,
       uint64_t subscription_id);
 
   void OnSubscribeToHitTestForTransientInputResult(
-      ScriptPromiseResolver* resolver,
+      ScriptPromiseResolver<XRTransientInputHitTestSource>* resolver,
       device::mojom::SubscribeToHitTestResult result,
       uint64_t subscription_id);
 
-  void OnCreateAnchorResult(ScriptPromiseResolver* resolver,
+  void OnCreateAnchorResult(ScriptPromiseResolver<XRAnchor>* resolver,
                             device::mojom::CreateAnchorResult result,
                             uint64_t id);
 
@@ -459,8 +466,10 @@ class XRSession final : public EventTarget,
       const device::mojom::blink::XRTrackedImagesData*);
   Member<FrozenArray<XRImageTrackingResult>> frame_tracked_images_;
   bool tracked_image_scores_available_ = false;
-  Vector<String> tracked_image_scores_;
-  HeapVector<Member<ScriptPromiseResolver>> image_scores_resolvers_;
+  Vector<V8XRImageTrackingScore> tracked_image_scores_;
+  using ImageScoreResolverType =
+      ScriptPromiseResolver<IDLArray<V8XRImageTrackingScore>>;
+  HeapVector<Member<ImageScoreResolverType>> image_scores_resolvers_;
 
   void HandleShutdown();
 
@@ -491,7 +500,7 @@ class XRSession final : public EventTarget,
   // OnExitPresent is complete. If the session end was initiated from the device
   // side, or in case of connection errors, proceed to shutdown_complete_ state
   // immediately.
-  Member<ScriptPromiseResolver> end_session_resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> end_session_resolver_;
   // "ended_" becomes true as soon as session shutdown is initiated.
   bool ended_ = false;
   bool waiting_for_shutdown_ = false;
@@ -524,12 +533,12 @@ class XRSession final : public EventTarget,
   // Set of promises returned from CreateAnchor that are still in-flight to the
   // device. Once the device calls us back with the newly created anchor id, the
   // resolver will be moved to |anchor_ids_to_pending_anchor_promises_|.
-  HeapHashSet<Member<ScriptPromiseResolver>> create_anchor_promises_;
+  HeapHashSet<Member<ScriptPromiseResolverBase>> create_anchor_promises_;
   // Promises for which anchors have already been created on the device side but
   // have not yet been resolved as their data is not yet available to blink.
   // Next frame update should contain the necessary data - the promise will be
   // resolved then.
-  HeapHashMap<uint64_t, Member<ScriptPromiseResolver>>
+  HeapHashMap<uint64_t, Member<ScriptPromiseResolverBase>>
       anchor_ids_to_pending_anchor_promises_;
 
   // Mapping of hit test source ids (aka hit test subscription ids) to hit test
@@ -575,7 +584,8 @@ class XRSession final : public EventTarget,
   bool environment_error_handler_subscribed_ = false;
   // Set of promises returned from requestHitTestSource and
   // requestHitTestSourceForTransientInput that are still in-flight.
-  HeapHashSet<Member<ScriptPromiseResolver>> request_hit_test_source_promises_;
+  HeapHashSet<Member<ScriptPromiseResolverBase>>
+      request_hit_test_source_promises_;
   HeapVector<Member<XRReferenceSpace>> reference_spaces_;
 
   uint32_t stage_parameters_id_ = 0;

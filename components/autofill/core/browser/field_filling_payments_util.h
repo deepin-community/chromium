@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FIELD_FILLING_PAYMENTS_UTIL_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FIELD_FILLING_PAYMENTS_UTIL_H_
 
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,9 +35,9 @@ std::u16string GetFillingValueForCreditCard(
 // is still present in the form on the renderer side.
 // TODO(crbug.com/1331312): Remove FormFieldData parameter.
 bool WillFillCreditCardNumber(
-    base::span<const FormFieldData> form_fields,
+    base::span<const FormFieldData> fields,
     base::span<const std::unique_ptr<AutofillField>> autofill_fields,
-    const AutofillField& triggered_autofill_field);
+    const AutofillField& trigger_autofill_field);
 
 }  // namespace autofill
 

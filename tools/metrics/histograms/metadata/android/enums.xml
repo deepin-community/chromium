@@ -44,6 +44,8 @@ chromium-metrics-reviews@google.com.
   <int value="8" label="Auto with translate"/>
   <int value="9" label="Add to bookmarks"/>
   <int value="10" label="Auto with add to bookmarks"/>
+  <int value="11" label="Read Aloud (Listen to this page)"/>
+  <int value="12" label="Auto with Read Aloud (Listen to this page)"/>
 </enum>
 
 <enum name="Android.MemoryPressureNotification">
@@ -172,7 +174,10 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Failed: Chrome already run locally"/>
   <int value="3" label="Failed: Chrome startup failed"/>
   <int value="4" label="Failed: Cannot sign in as previous user"/>
-  <int value="5" label="Failed: Sign-in timed-out or interrupted"/>
+  <int value="5" label="DEPRECATED: Failed: Sign-in timed-out or interrupted"/>
+  <int value="6"
+      label="DEPRECATED: Restore status histogram sent (never recorded)"/>
+  <int value="7" label="Failed: Sign-in timed-out or interrupted"/>
 </enum>
 
 <enum name="AndroidSearchEngineChoiceEvents">
@@ -194,6 +199,7 @@ chromium-metrics-reviews@google.com.
   <int value="6"
       label="Previous attempt to persist search engine metadata failed"/>
   <int value="7" label="Request success"/>
+  <int value="8" label="Choice was already applied"/>
 </enum>
 
 <enum name="AndroidSearchEngineLogoEvents">
@@ -704,25 +710,12 @@ chromium-metrics-reviews@google.com.
     WebViewCompat#setAudioMuted(boolean)
   </int>
   <int value="101" label="IS_AUDIO_MUTED">WebViewCompat#isAudioMuted()</int>
-</enum>
-
-<enum name="AppPackageNameAllowlistParseStatus">
-  <int value="0" label="Allowlist is loaded successfully"/>
-  <int value="1" label="Used allowlist from cache"/>
-  <int value="2" label="Manifest is missing fileds"/>
-  <int value="3" label="Allowlist is expired"/>
-  <int value="4" label="Allowlist file is missing"/>
-  <int value="5" label="IO error"/>
-  <int value="6" label="Allowlist bloomfilter is malformatted"/>
-</enum>
-
-<enum name="AppPackageNameLoggingRuleStatus">
-  <int value="0" label="Not loaded and no cache"/>
-  <int value="1" label="Not loaded and using cached"/>
-  <int value="2" label="Loading new version failed and no cache"/>
-  <int value="3" label="Loading new version failed and using cached"/>
-  <int value="4" label="New version is loaded"/>
-  <int value="5" label="New version is the same as cached"/>
+  <int value="102" label="SET_WEBAUTHN_SUPPORT">
+    WebSettingsCompat#setWebauthnSupport(int)
+  </int>
+  <int value="103" label="GET_WEBAUTHN_SUPPORT">
+    WebSettingsCompat#getWebauthnSupport()
+  </int>
 </enum>
 
 <enum name="ArmCpuPart">
@@ -793,6 +786,8 @@ chromium-metrics-reviews@google.com.
   <int value="28" label="Attribution Provider flush task"/>
   <int value="29" label="Download auto-resumption unmetered task"/>
   <int value="30" label="Download auto-resumption any network task"/>
+  <int value="31" label="Notification pre-unsubscribe action"/>
+  <int value="32" label="Safety Hub fetch task"/>
 </enum>
 
 <enum name="BackPressConsumer">
@@ -946,6 +941,7 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="IGNORED_TAB_SWITCHER"/>
   <int value="4" label="IGNORED_SAME_INSTANCE"/>
   <int value="5" label="ERROR_TAB_NOT_FOUND"/>
+  <int value="6" label="IGNORED_MAX_INSTANCES"/>
 </enum>
 
 <enum name="DragDropType">
@@ -1097,7 +1093,7 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Toggled on"/>
 </enum>
 
-<enum name="IneligibityReason">
+<enum name="IneligibilityReason">
   <int value="0" label="OS version"/>
   <int value="1" label="Form factor (e.g. tablet)"/>
   <int value="2" label="Navigation mode (e.g. 3-button mode)"/>
@@ -1270,6 +1266,16 @@ chromium-metrics-reviews@google.com.
   <int value="10" label="QUERY_TILES"/>
 </enum>
 
+<enum name="PageSummaryShareSheetVisibility">
+  <int value="0" label="Shown"/>
+  <int value="1" label="Not shown, model not available"/>
+  <int value="2" label="Not shown, model session already running"/>
+  <int value="3" label="Not shown, tab is not valid"/>
+  <int value="4" label="Not shown, URL is not http/https"/>
+  <int value="5" label="Not shown, profile does not support summarization"/>
+  <int value="6" label="Not shown, tab does not support summarization"/>
+</enum>
+
 <enum name="PartnerCustomizationProviderDelegate">
   <int value="0" label="None: default delegate inValid"/>
   <int value="1" label="Phenotype config"/>
@@ -1289,16 +1295,6 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Homepage"/>
   <int value="1" label="Bookmarks"/>
   <int value="2" label="Incognito"/>
-</enum>
-
-<enum name="PartnerDelegateUnusedReason">
-  <int value="0" label="Phenotype: before Android Pie"/>
-  <int value="1" label="Phenotype: flag can't commit"/>
-  <int value="2" label="Phenotype: config empty"/>
-  <int value="3" label="GServices: get timestamp exception"/>
-  <int value="4" label="GServices: timestamp missing"/>
-  <int value="5" label="PreloadApk: can't resolve provider"/>
-  <int value="6" label="PreloadApk: not system provider"/>
 </enum>
 
 <enum name="PartnerTaskCompletion">
@@ -1383,6 +1379,8 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="LightWeightFirstRun"/>
   <int value="4" label="History"/>
   <int value="5" label="Settings"/>
+  <int value="6" label="BookmarkFolderPicker"/>
+  <int value="7" label="SigninAndHistoryOptIn"/>
 </enum>
 
 <enum name="SecureCookieAction">
@@ -1550,6 +1548,24 @@ chromium-metrics-reviews@google.com.
   <summary>The edge from which the gesture is swiped from.</summary>
   <int value="0" label="LeftEdge"/>
   <int value="1" label="RightEdge"/>
+</enum>
+
+<enum name="TabGroupColorChangeActionType">
+  <int value="0" label="VIA_COLOR_ICON"/>
+  <int value="1" label="VIA_OVERFLOW_MENU"/>
+</enum>
+
+<enum name="TabGroupCreationDialogResultAction">
+  <int value="0" label="ACCEPTED"/>
+  <int value="1" label="DISMISSED_SCRIM_OR_BACKPRESS"/>
+  <int value="2" label="DISMISSED_OTHER"/>
+</enum>
+
+<enum name="TabGroupCreationFinalSelections">
+  <int value="0" label="DEFAULT_COLOR_AND_TITLE"/>
+  <int value="1" label="CHANGED_COLOR"/>
+  <int value="2" label="CHANGED_TITLE"/>
+  <int value="3" label="CHANGED_COLOR_AND_TITLE"/>
 </enum>
 
 <enum name="TabListEditorShareActionState">

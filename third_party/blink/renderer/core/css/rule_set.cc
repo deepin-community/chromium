@@ -287,6 +287,7 @@ static void ExtractSelectorValues(const CSSSelector* selector,
         case CSSSelector::kPseudoHost:
         case CSSSelector::kPseudoHostContext:
         case CSSSelector::kPseudoSlotted:
+        case CSSSelector::kPseudoSelectDatalist:
         case CSSSelector::kPseudoSelectorFragmentAnchor:
         case CSSSelector::kPseudoRoot:
           pseudo_type = selector->GetPseudoType();
@@ -518,14 +519,27 @@ void RuleSet::FindBestRuleSetAndAdd(CSSSelector& component,
       return;
     case CSSSelector::kPseudoPlaceholder:
     case CSSSelector::kPseudoFileSelectorButton:
+    case CSSSelector::kPseudoSelectDatalist:
       if (it->FollowsPart()) {
         AddToRuleSet(part_pseudo_rules_, rule_data);
       } else if (it->FollowsSlotted()) {
         AddToRuleSet(slotted_pseudo_element_rules_, rule_data);
       } else {
-        const auto& name = pseudo_type == CSSSelector::kPseudoFileSelectorButton
-                               ? shadow_element_names::kPseudoFileUploadButton
-                               : shadow_element_names::kPseudoInputPlaceholder;
+        AtomicString name;
+        switch (pseudo_type) {
+          case CSSSelector::kPseudoPlaceholder:
+            name = shadow_element_names::kPseudoInputPlaceholder;
+            break;
+          case CSSSelector::kPseudoFileSelectorButton:
+            name = shadow_element_names::kPseudoFileUploadButton;
+            break;
+          case CSSSelector::kPseudoSelectDatalist:
+            name = shadow_element_names::kSelectFallbackDatalist;
+            break;
+          default:
+            NOTREACHED();
+            break;
+        }
         AddToRuleSet(name, ua_shadow_pseudo_element_rules_, rule_data);
       }
       return;
@@ -568,7 +582,14 @@ void RuleSet::FindBestRuleSetAndAdd(CSSSelector& component,
   // relation=kScopeActivation to any compound that contains :scope
   // or the parent pseudo-class (&).
   if (component.Relation() == CSSSelector::kScopeActivation) {
-    may_have_scope_in_universal_bucket_ = true;
+    must_check_universal_bucket_for_shadow_host_ = true;
+  }
+
+  // Normally, rules involving :host would be stuck in their own bucket
+  // above; if we came here, it is because we have something like :is(:host,
+  // .foo). Mark that we have this case.
+  if (component.IsOrContainsHostPseudoClass()) {
+    must_check_universal_bucket_for_shadow_host_ = true;
   }
 
   // If we didn't find a specialized map to stick it in, file under universal
@@ -692,9 +713,9 @@ void RuleSet::AddFontFeatureValuesRule(StyleRuleFontFeatureValues* rule) {
   font_feature_values_rules_.push_back(rule);
 }
 
-void RuleSet::AddPositionFallbackRule(StyleRulePositionFallback* rule) {
+void RuleSet::AddPositionTryRule(StyleRulePositionTry* rule) {
   need_compaction_ = true;
-  position_fallback_rules_.push_back(rule);
+  position_try_rules_.push_back(rule);
 }
 
 void RuleSet::AddFunctionRule(StyleRuleFunction* rule) {
@@ -752,10 +773,10 @@ void RuleSet::AddChildRules(const HeapVector<Member<StyleRuleBase>>& rules,
                    DynamicTo<StyleRuleViewTransition>(rule)) {
       view_transition_rule->SetCascadeLayer(cascade_layer);
       AddViewTransitionRule(view_transition_rule);
-    } else if (auto* position_fallback_rule =
-                   DynamicTo<StyleRulePositionFallback>(rule)) {
-      position_fallback_rule->SetCascadeLayer(cascade_layer);
-      AddPositionFallbackRule(position_fallback_rule);
+    } else if (auto* position_try_rule =
+                   DynamicTo<StyleRulePositionTry>(rule)) {
+      position_try_rule->SetCascadeLayer(cascade_layer);
+      AddPositionTryRule(position_try_rule);
     } else if (auto* function_rule = DynamicTo<StyleRuleFunction>(rule)) {
       // TODO(sesse): Set the cascade layer here?
       AddFunctionRule(function_rule);
@@ -1283,7 +1304,7 @@ void RuleSet::CompactRules() {
   keyframes_rules_.shrink_to_fit();
   property_rules_.shrink_to_fit();
   counter_style_rules_.shrink_to_fit();
-  position_fallback_rules_.shrink_to_fit();
+  position_try_rules_.shrink_to_fit();
   layer_intervals_.shrink_to_fit();
   view_transition_rules_.shrink_to_fit();
   bloom_hash_backing_.shrink_to_fit();
@@ -1402,7 +1423,7 @@ void RuleSet::Trace(Visitor* visitor) const {
   visitor->Trace(keyframes_rules_);
   visitor->Trace(property_rules_);
   visitor->Trace(counter_style_rules_);
-  visitor->Trace(position_fallback_rules_);
+  visitor->Trace(position_try_rules_);
   visitor->Trace(function_rules_);
   visitor->Trace(root_element_rules_);
   visitor->Trace(media_query_set_results_);

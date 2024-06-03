@@ -141,6 +141,7 @@ export class MenuItem extends LitElement implements MenuItemType {
   /** @nocollapse */
   static override properties = {
     ariaHasPopup: {type: String, reflect: true, attribute: 'aria-haspopup'},
+    ariaLabel: {type: String, reflect: true, attribute: 'aria-label'},
     headline: {type: String},
     itemStart: {type: String},
     itemEnd: {type: String},
@@ -228,6 +229,7 @@ export class MenuItem extends LitElement implements MenuItemType {
     super();
 
     this.ariaHasPopup = 'false';
+    this.ariaLabel = '';
     this.headline = '';
     this.itemStart = '';
     this.itemEnd = '';
@@ -324,6 +326,15 @@ export class MenuItem extends LitElement implements MenuItemType {
     } else {
       crosSwitch.selected = value;
     }
+  }
+
+  override connectedCallback() {
+    super.connectedCallback();
+    // All aria properties on button just get proxied down to the real <button>
+    // element, as such we set role to presentation so screenreaders ignore
+    // this component and instead only read aria attributes off the inner
+    // interactive element.
+    this.setAttribute('role', 'presentation');
   }
 
   override disconnectedCallback() {
@@ -434,6 +445,7 @@ export class MenuItem extends LitElement implements MenuItemType {
     return html`
       <md-menu-item
           aria-haspopup=${(this.ariaHasPopup || 'false') as AriaHasPopupValue}
+          aria-label=${this.ariaLabel ?? ''}
           @close-menu=${(e: CloseMenuEvent) => void this.fireTriggerEvent(e)}
           .keepOpen=${keepOpen}
           .disabled=${this.disabled}

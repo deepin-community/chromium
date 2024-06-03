@@ -38,6 +38,10 @@
 #include "ui/views/view_observer.h"
 #include "ui/views/view_utils.h"
 
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
 class ExtensionsMenuTestUtil::MenuViewObserver : public views::ViewObserver {
  public:
   explicit MenuViewObserver(ExtensionsMenuView** menu_view_ptr)
@@ -134,15 +138,6 @@ int ExtensionsMenuTestUtil::NumberOfBrowserActions() {
   return extensions_container_->GetNumberOfActionsForTesting();
 }
 
-int ExtensionsMenuTestUtil::VisibleBrowserActions() {
-  int visible_icons = 0;
-  for (const auto& id_and_view : extensions_container_->icons_for_testing()) {
-    if (id_and_view.second->GetVisible())
-      ++visible_icons;
-  }
-  return visible_icons;
-}
-
 bool ExtensionsMenuTestUtil::HasAction(const extensions::ExtensionId& id) {
   return GetMenuItemViewForId(id) != nullptr;
 }
@@ -178,15 +173,6 @@ void ExtensionsMenuTestUtil::Press(const extensions::ExtensionId& id) {
   ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
                        ui::EventTimeForNow(), 0, 0);
   views::test::ButtonTestApi(primary_button).NotifyClick(event);
-}
-
-std::string ExtensionsMenuTestUtil::GetTooltip(
-    const extensions::ExtensionId& id) {
-  ExtensionMenuItemView* view = GetMenuItemViewForId(id);
-  DCHECK(view);
-  ExtensionsMenuButton* primary_button =
-      view->primary_action_button_for_testing();
-  return base::UTF16ToUTF8(primary_button->GetTooltipText(gfx::Point()));
 }
 
 gfx::NativeView ExtensionsMenuTestUtil::GetPopupNativeView() {
@@ -229,6 +215,13 @@ gfx::Size ExtensionsMenuTestUtil::GetToolbarActionSize() {
 
 gfx::Size ExtensionsMenuTestUtil::GetMaxAvailableSizeToFitBubbleOnScreen(
     const extensions::ExtensionId& id) {
+#if BUILDFLAG(IS_OZONE)
+  if (!ui::OzonePlatform::GetInstance()
+           ->GetPlatformProperties()
+           .supports_global_screen_coordinates) {
+    return ExtensionPopup::kMaxSize;
+  }
+#endif
   auto* view_delegate = static_cast<ToolbarActionViewDelegateViews*>(
       static_cast<ExtensionActionViewController*>(
           extensions_container_->GetActionForId(id))
@@ -242,7 +235,7 @@ gfx::Size ExtensionsMenuTestUtil::GetMaxAvailableSizeToFitBubbleOnScreen(
 
 ExtensionMenuItemView* ExtensionsMenuTestUtil::GetMenuItemViewForId(
     const extensions::ExtensionId& id) {
-  base::flat_set<ExtensionMenuItemView*> menu_items;
+  base::flat_set<raw_ptr<ExtensionMenuItemView, CtnExperimental>> menu_items;
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
     ExtensionsMenuMainPageView* main_page =
@@ -250,7 +243,8 @@ ExtensionMenuItemView* ExtensionsMenuTestUtil::GetMenuItemViewForId(
             ->GetControllerForTesting()
             ->GetMainPageViewForTesting();
     DCHECK(main_page);
-    menu_items = main_page->GetMenuItems();
+    auto items = main_page->GetMenuItems();
+    menu_items = {items.begin(), items.end()};
 
   } else {
     menu_items = menu_view_->extensions_menu_items_for_testing();

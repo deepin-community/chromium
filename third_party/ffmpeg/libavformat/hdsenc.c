@@ -112,11 +112,7 @@ static int parse_header(OutputStream *os, const uint8_t *buf, int buf_size)
     return 0;
 }
 
-#if FF_API_AVIO_WRITE_NONCONST
-static int hds_write(void *opaque, uint8_t *buf, int buf_size)
-#else
 static int hds_write(void *opaque, const uint8_t *buf, int buf_size)
-#endif
 {
     OutputStream *os = opaque;
     if (os->out) {
@@ -563,6 +559,7 @@ static const AVOption options[] = {
 
 static const AVClass hds_class = {
     .class_name = "HDS muxer",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };

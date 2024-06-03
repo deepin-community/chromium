@@ -18,10 +18,13 @@
 #include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/display/win/screen_win.h"
 
+namespace ui {
+class AXPlatformTreeManagerDelegate;
+}
+
 namespace content {
 
 class BrowserAccessibilityWin;
-class WebAXPlatformTreeManagerDelegate;
 
 using UiaRaiseActiveTextPositionChangedEventFunction =
     HRESULT(WINAPI*)(IRawElementProviderSimple*, ITextRangeProvider*);
@@ -31,7 +34,7 @@ class CONTENT_EXPORT BrowserAccessibilityManagerWin
     : public BrowserAccessibilityManager {
  public:
   BrowserAccessibilityManagerWin(const ui::AXTreeUpdate& initial_tree,
-                                 WebAXPlatformTreeManagerDelegate* delegate);
+                                 ui::AXPlatformTreeManagerDelegate* delegate);
 
   BrowserAccessibilityManagerWin(const BrowserAccessibilityManagerWin&) =
       delete;
@@ -51,6 +54,13 @@ class CONTENT_EXPORT BrowserAccessibilityManagerWin
   bool IsIgnoredChangedNode(const BrowserAccessibility* node) const;
   bool CanFireEvents() const override;
 
+  void FireAriaNotificationEvent(
+      BrowserAccessibility* node,
+      const std::string& announcement,
+      const std::string& notification_id,
+      ax::mojom::AriaNotificationInterrupt interrupt_property,
+      ax::mojom::AriaNotificationPriority priority_property) override;
+
   void FireFocusEvent(ui::AXNode* node) override;
   void FireBlinkEvent(ax::mojom::Event event_type,
                       BrowserAccessibility* node,
@@ -60,11 +70,11 @@ class CONTENT_EXPORT BrowserAccessibilityManagerWin
 
   void FireWinAccessibilityEvent(LONG win_event, BrowserAccessibility* node);
   void FireUiaAccessibilityEvent(LONG uia_event, BrowserAccessibility* node);
+  void FireUiaActiveTextPositionChangedEvent(BrowserAccessibility* node);
   void FireUiaPropertyChangedEvent(LONG uia_property,
                                    BrowserAccessibility* node);
   void FireUiaStructureChangedEvent(StructureChangeType change_type,
                                     BrowserAccessibility* node);
-  void FireUiaActiveTextPositionChangedEvent(BrowserAccessibility* node);
 
   gfx::Rect GetViewBoundsInScreenCoordinates() const override;
 

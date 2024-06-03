@@ -11,23 +11,22 @@
 #include <utility>
 
 #include "core/fxcrt/byteorder.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
+#include "core/fxcrt/raw_span.h"
 #include "core/fxcrt/span.h"
+#include "core/fxcrt/win/scoped_select_object.h"
+#include "core/fxcrt/win/win_util.h"
 #include "core/fxge/cfx_folderfontinfo.h"
 #include "core/fxge/cfx_gemodule.h"
-#include "third_party/base/check.h"
-#include "third_party/base/numerics/safe_conversions.h"
-#include "third_party/base/win/scoped_select_object.h"
-#include "third_party/base/win/win_util.h"
 
 namespace {
 
-using ScopedSelectObject = pdfium::base::win::ScopedSelectObject;
-
 struct Variant {
   const char* m_pFaceName;
-  pdfium::span<const char> m_pVariantName;
+  pdfium::raw_span<const char> m_pVariantName;
 };
 
 constexpr Variant kVariantNames[] = {
@@ -420,15 +419,15 @@ void CFX_Win32FontInfo::DeleteFont(void* hFont) {
 size_t CFX_Win32FontInfo::GetFontData(void* hFont,
                                       uint32_t table,
                                       pdfium::span<uint8_t> buffer) {
-  ScopedSelectObject select_object(m_hDC, static_cast<HFONT>(hFont));
+  pdfium::ScopedSelectObject select_object(m_hDC, static_cast<HFONT>(hFont));
   table = fxcrt::FromBE32(table);
   size_t size = ::GetFontData(m_hDC, table, 0, buffer.data(),
-                              pdfium::base::checked_cast<DWORD>(buffer.size()));
+                              pdfium::checked_cast<DWORD>(buffer.size()));
   return size != GDI_ERROR ? size : 0;
 }
 
 bool CFX_Win32FontInfo::GetFaceName(void* hFont, ByteString* name) {
-  ScopedSelectObject select_object(m_hDC, static_cast<HFONT>(hFont));
+  pdfium::ScopedSelectObject select_object(m_hDC, static_cast<HFONT>(hFont));
   char facebuf[100];
   if (::GetTextFaceA(m_hDC, std::size(facebuf), facebuf) == 0)
     return false;
@@ -438,7 +437,7 @@ bool CFX_Win32FontInfo::GetFaceName(void* hFont, ByteString* name) {
 }
 
 bool CFX_Win32FontInfo::GetFontCharset(void* hFont, FX_Charset* charset) {
-  ScopedSelectObject select_object(m_hDC, static_cast<HFONT>(hFont));
+  pdfium::ScopedSelectObject select_object(m_hDC, static_cast<HFONT>(hFont));
   TEXTMETRIC tm;
   ::GetTextMetrics(m_hDC, &tm);
   *charset = FX_GetCharsetFromInt(tm.tmCharSet);
@@ -452,8 +451,9 @@ CWin32Platform::CWin32Platform() = default;
 CWin32Platform::~CWin32Platform() = default;
 
 void CWin32Platform::Init() {
-  if (pdfium::base::win::IsUser32AndGdi32Available())
+  if (pdfium::IsUser32AndGdi32Available()) {
     m_GdiplusExt.Load();
+  }
 }
 
 std::unique_ptr<SystemFontInfoIface>
@@ -463,11 +463,12 @@ CWin32Platform::CreateDefaultSystemFontInfo() {
     auto font_info = std::make_unique<CFX_Win32FallbackFontInfo>();
     for (; *user_paths; user_paths++)
       font_info->AddPath(*user_paths);
-    return std::move(font_info);
+    return font_info;
   }
 
-  if (pdfium::base::win::IsUser32AndGdi32Available())
+  if (pdfium::IsUser32AndGdi32Available()) {
     return std::make_unique<CFX_Win32FontInfo>();
+  }
 
   // Select the fallback font information class if GDI is disabled.
   auto fallback_info = std::make_unique<CFX_Win32FallbackFontInfo>();

@@ -17,8 +17,8 @@
 #include "src/trace_processor/db/column/null_overlay.h"
 
 #include <cstdint>
-#include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "perfetto/trace_processor/basic_types.h"
@@ -35,6 +35,9 @@ namespace {
 
 using testing::ElementsAre;
 using testing::IsEmpty;
+
+using Indices = DataLayerChain::Indices;
+using OrderedIndices = DataLayerChain::OrderedIndices;
 
 TEST(NullOverlay, SingleSearch) {
   BitVector bv{0, 1, 0, 1, 1, 1};
@@ -72,29 +75,6 @@ TEST(NullOverlay, SingleSearchIsNotNull) {
             SingleSearchResult::kMatch);
   ASSERT_EQ(chain->SingleSearch(FilterOp::kIsNotNull, SqlValue(), 0),
             SingleSearchResult::kNoMatch);
-}
-
-TEST(NullOverlay, UniqueSearch) {
-  BitVector bv{0, 0, 0, 1, 1};
-  NullOverlay storage(&bv);
-  auto fake = FakeStorageChain::SearchSubset(5, Range(1, 2));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kMatch);
-  ASSERT_EQ(row, 4u);
-}
-
-TEST(NullOverlay, UniqueSearchOutOfBounds) {
-  BitVector bv{0, 0, 0, 1, 1};
-  NullOverlay storage(&bv);
-  auto fake = FakeStorageChain::SearchSubset(5, Range(4, 5));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kNoMatch);
 }
 
 TEST(NullOverlay, SearchInputInsideBoundary) {
@@ -163,12 +143,10 @@ TEST(NullOverlay, IndexSearchAllElements) {
   NullOverlay storage(&bv);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{1, 5, 2};
-  auto res =
-      chain->IndexSearch(FilterOp::kGt, SqlValue::Long(0),
-                         Indices{table_idx.data(), uint32_t(table_idx.size()),
-                                 Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), ElementsAre(0, 1, 2));
+  Indices indices = Indices::CreateWithIndexPayloadForTesting(
+      {1, 5, 2}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kGt, SqlValue::Long(0), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), ElementsAre(0, 1, 2));
 }
 
 TEST(NullOverlay, IndexSearchPartialElements) {
@@ -177,12 +155,10 @@ TEST(NullOverlay, IndexSearchPartialElements) {
   NullOverlay storage(&bv);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{1, 4, 2};
-  auto res =
-      chain->IndexSearch(FilterOp::kGt, SqlValue::Long(0),
-                         Indices{table_idx.data(), uint32_t(table_idx.size()),
-                                 Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), ElementsAre(0, 2));
+  Indices indices = Indices::CreateWithIndexPayloadForTesting(
+      {1, 4, 2}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kGt, SqlValue::Long(0), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), ElementsAre(0, 2));
 }
 
 TEST(NullOverlay, IndexSearchIsNullOpEmptyRes) {
@@ -191,12 +167,10 @@ TEST(NullOverlay, IndexSearchIsNullOpEmptyRes) {
   NullOverlay storage(&bv);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{0, 3, 5, 4, 2};
-  auto res =
-      chain->IndexSearch(FilterOp::kIsNull, SqlValue(),
-                         Indices{table_idx.data(), uint32_t(table_idx.size()),
-                                 Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), ElementsAre(0, 1, 3));
+  Indices indices = Indices::CreateWithIndexPayloadForTesting(
+      {0, 3, 5, 4, 2}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kIsNull, SqlValue(), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), ElementsAre(0, 1, 3));
 }
 
 TEST(NullOverlay, IndexSearchIsNullOp) {
@@ -205,12 +179,11 @@ TEST(NullOverlay, IndexSearchIsNullOp) {
   NullOverlay storage(&bv);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{0, 3, 2, 4, 5};
-  auto res =
-      chain->IndexSearch(FilterOp::kIsNull, SqlValue(),
-                         Indices{table_idx.data(), uint32_t(table_idx.size()),
-                                 Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), ElementsAre(0, 1, 3, 4));
+  Indices indices = Indices::CreateWithIndexPayloadForTesting(
+      {0, 3, 2, 4, 5}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kIsNull, SqlValue(), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices),
+              ElementsAre(0, 1, 3, 4));
 }
 
 TEST(NullOverlay, IndexSearchIsNotNullOp) {
@@ -219,12 +192,10 @@ TEST(NullOverlay, IndexSearchIsNotNullOp) {
   NullOverlay storage(&bv);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{0, 3, 4};
-  auto res =
-      chain->IndexSearch(FilterOp::kIsNotNull, SqlValue(),
-                         Indices{table_idx.data(), uint32_t(table_idx.size()),
-                                 Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), IsEmpty());
+  Indices indices = Indices::CreateWithIndexPayloadForTesting(
+      {0, 3, 4}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kIsNotNull, SqlValue(), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), IsEmpty());
 }
 
 TEST(NullOverlay, OrderedIndexSearch) {
@@ -238,8 +209,8 @@ TEST(NullOverlay, OrderedIndexSearch) {
   // Passing values on final data
   // NULL, NULL, 0, 1, 1
   std::vector<uint32_t> table_idx{0, 4, 5, 1, 3};
-  Indices indices{table_idx.data(), uint32_t(table_idx.size()),
-                  Indices::State::kNonmonotonic};
+  OrderedIndices indices{table_idx.data(), uint32_t(table_idx.size()),
+                         Indices::State::kNonmonotonic};
 
   Range res = chain->OrderedIndexSearch(FilterOp::kIsNull, SqlValue(), indices);
   ASSERT_EQ(res.start, 0u);

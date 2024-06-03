@@ -243,11 +243,23 @@ void TestClipboard::ReadPng(ClipboardBuffer buffer,
   std::move(callback).Run(store.png);
 }
 
-// TODO(crbug.com/1103215): |data_dst| should be supported.
 void TestClipboard::ReadCustomData(ClipboardBuffer buffer,
                                    const std::u16string& type,
                                    const DataTransferEndpoint* data_dst,
-                                   std::u16string* result) const {}
+                                   std::u16string* result) const {
+  const DataStore& store = GetStore(buffer);
+  if (!MaybeRetrieveSyncedSourceAndCheckIfReadIsAllowed(buffer, store.data_src,
+                                                        data_dst)) {
+    return;
+  }
+
+  auto it = store.data.find(ClipboardFormatType::WebCustomDataType());
+  if (it != store.data.end()) {
+    result->clear();
+    *result = ReadCustomDataForType(base::as_byte_span(it->second), type)
+                  .value_or(u"");
+  }
+}
 
 void TestClipboard::ReadFilenames(ClipboardBuffer buffer,
                                   const DataTransferEndpoint* data_dst,
@@ -313,7 +325,8 @@ void TestClipboard::WritePortableAndPlatformRepresentations(
     ClipboardBuffer buffer,
     const ObjectMap& objects,
     std::vector<Clipboard::PlatformRepresentation> platform_representations,
-    std::unique_ptr<DataTransferEndpoint> data_src) {
+    std::unique_ptr<DataTransferEndpoint> data_src,
+    uint32_t privacy_types) {
   Clear(buffer);
   default_store_buffer_ = buffer;
 
@@ -344,10 +357,12 @@ void TestClipboard::WriteHTML(base::StringPiece markup,
                               std::optional<base::StringPiece> source_url) {
   GetDefaultStore().data[ClipboardFormatType::HtmlType()] = markup;
   GetDefaultStore().html_src_url = source_url.value_or("");
+  ClipboardMonitor::GetInstance()->NotifyClipboardDataChanged();
 }
 
 void TestClipboard::WriteSvg(base::StringPiece markup) {
   GetDefaultStore().data[ClipboardFormatType::SvgType()] = markup;
+  ClipboardMonitor::GetInstance()->NotifyClipboardDataChanged();
 }
 
 void TestClipboard::WriteRTF(base::StringPiece rtf) {
@@ -388,6 +403,19 @@ void TestClipboard::WriteData(const ClipboardFormatType& format,
                               base::span<const uint8_t> data) {
   GetDefaultStore().data[format] =
       std::string(reinterpret_cast<const char*>(data.data()), data.size());
+  ClipboardMonitor::GetInstance()->NotifyClipboardDataChanged();
+}
+
+void TestClipboard::WriteClipboardHistory() {
+  // TODO(crbug.com/40945200): Add support for this.
+}
+
+void TestClipboard::WriteUploadCloudClipboard() {
+  // TODO(crbug.com/40945200): Add support for this.
+}
+
+void TestClipboard::WriteConfidentialDataForPassword() {
+  // TODO(crbug.com/40945200): Add support for this.
 }
 
 TestClipboard::DataStore::DataStore() = default;

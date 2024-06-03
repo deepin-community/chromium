@@ -4,11 +4,11 @@
 """Definitions of builders in the chromium.memory.fyi builder group."""
 
 load("//lib/builder_config.star", "builder_config")
-load("//lib/builders.star", "os", "reclient")
+load("//lib/builders.star", "os", "reclient", "siso")
 load("//lib/ci.star", "ci")
 load("//lib/consoles.star", "consoles")
 load("//lib/gn_args.star", "gn_args")
-load("//lib/builder_health_indicators.star", "health_spec")
+load("//lib/builder_health_indicators.star", "blank_low_value_thresholds", "health_spec", "modified_default")
 
 ci.defaults.set(
     executable = ci.DEFAULT_EXECUTABLE,
@@ -23,6 +23,12 @@ ci.defaults.set(
     reclient_jobs = reclient.jobs.LOW_JOBS_FOR_CI,
     service_account = ci.DEFAULT_SERVICE_ACCOUNT,
     shadow_service_account = ci.DEFAULT_SHADOW_SERVICE_ACCOUNT,
+    siso_configs = ["builder"],
+    siso_enable_cloud_profiler = True,
+    siso_enable_cloud_trace = True,
+    siso_enabled = True,
+    siso_project = siso.project.DEFAULT_TRUSTED,
+    siso_remote_jobs = reclient.jobs.LOW_JOBS_FOR_CI,
 )
 
 consoles.console_view(
@@ -67,41 +73,9 @@ ci.builder(
         short_name = "msan",
     ),
     execution_timeout = 6 * time.hour,
-    reclient_jobs = reclient.jobs.DEFAULT,
-)
-
-# TODO(crbug.com/1442587): Remove this builder after burning down failures
-# found when we now post-process stdout.
-ci.builder(
-    name = "linux-exp-tsan-fyi-rel",
-    schedule = "with 6h interval",
-    triggered_by = [],
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium_tsan2",
-            apply_configs = ["mb"],
-            build_config = builder_config.build_config.RELEASE,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.LINUX,
-        ),
-    ),
-    gn_args = gn_args.config(
-        configs = [
-            "tsan",
-            "fail_on_san_warnings",
-            "release_builder",
-            "reclient",
-        ],
-    ),
-    builderless = 1,
-    console_view_entry = consoles.console_view_entry(
-        category = "experimental|linux",
-        short_name = "tsan",
-    ),
-    execution_timeout = 4 * time.hour,
+    health_spec = modified_default({
+        "Low Value": blank_low_value_thresholds,
+    }),
     reclient_jobs = reclient.jobs.DEFAULT,
 )
 
@@ -136,6 +110,9 @@ ci.builder(
         short_name = "fyi",
     ),
     execution_timeout = 6 * time.hour,
+    health_spec = modified_default({
+        "Low Value": blank_low_value_thresholds,
+    }),
     reclient_jobs = reclient.jobs.DEFAULT,
 )
 
@@ -176,6 +153,9 @@ ci.builder(
         short_name = "lsan",
     ),
     execution_timeout = 12 * time.hour,
+    health_spec = modified_default({
+        "Low Value": blank_low_value_thresholds,
+    }),
     reclient_jobs = reclient.jobs.DEFAULT,
 )
 
@@ -213,5 +193,8 @@ ci.builder(
         short_name = "ubsan",
     ),
     execution_timeout = 12 * time.hour,
+    health_spec = modified_default({
+        "Low Value": blank_low_value_thresholds,
+    }),
     reclient_jobs = reclient.jobs.DEFAULT,
 )

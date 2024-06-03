@@ -276,10 +276,9 @@ void SafetyCheckHandler::HandleGetParentRanDisplayString(
 }
 
 void SafetyCheckHandler::CheckUpdates() {
-  // Usage of base::Unretained(this) is safe, because we own `version_updater_`.
   version_updater_->CheckForUpdate(
       base::BindRepeating(&SafetyCheckHandler::OnVersionUpdaterResult,
-                          base::Unretained(this)),
+                          weak_ptr_factory_.GetWeakPtr()),
       VersionUpdater::PromoteCallback());
 }
 
@@ -626,7 +625,7 @@ std::u16string SafetyCheckHandler::GetStringForTimePassed(
     return l10n_util::GetStringUTF16(yesterday_message_id);
   } else {
     // The timestamp is longer ago than yesterday.
-    // TODO(crbug.com/1015841): While a minor issue, this is not be the ideal
+    // TODO(crbug.com/40103878): While a minor issue, this is not be the ideal
     // way to calculate the days passed since the timestamp. For example,
     // <48 h might still be 2 days ago.
     const int time_diff_in_days = time_diff.InDays();

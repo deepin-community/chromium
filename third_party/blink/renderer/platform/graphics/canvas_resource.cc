@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/platform/graphics/canvas_resource.h"
 
+#include <string>
 #include <utility>
 
 #include "base/functional/callback_helpers.h"
@@ -52,14 +53,6 @@
 #include "ui/gfx/color_space.h"
 
 namespace blink {
-
-namespace {
-
-BASE_FEATURE(kAddSharedImageRasterUsageWithNonOOPR,
-             "CanvasAddSharedImageRasterUsageWithNonOOPR",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-}  // namespace
 
 CanvasResource::CanvasResource(base::WeakPtr<CanvasResourceProvider> provider,
                                cc::PaintFlags::FilterQuality filter_quality,
@@ -413,11 +406,8 @@ CanvasResourceRasterSharedImage::CanvasResourceRasterSharedImage(
       is_origin_top_left_(is_origin_top_left),
       is_accelerated_(is_accelerated),
 #if BUILDFLAG(IS_MAC)
-      // On Mac, WebGPU usage is always backed by an IOSurface which should
-      // should also use the GL_TEXTURE_RECTANGLE target instead of
-      // GL_TEXTURE_2D. Setting |is_overlay_candidate_| both allows overlays,
-      // and causes |texture_target_| to take the value returned from
-      // gpu::GetBufferTextureTarget.
+      // On Mac, WebGPU usage is always backed by an IOSurface, meaning that the
+      // SI created will be an overlay candidate.
       is_overlay_candidate_(shared_image_usage_flags &
                             (gpu::SHARED_IMAGE_USAGE_SCANOUT |
                              gpu::SHARED_IMAGE_USAGE_WEBGPU_READ |
@@ -428,13 +418,6 @@ CanvasResourceRasterSharedImage::CanvasResourceRasterSharedImage(
 #endif
       supports_display_compositing_(shared_image_usage_flags &
                                     gpu::SHARED_IMAGE_USAGE_DISPLAY_READ),
-      texture_target_(is_overlay_candidate_
-                          ? gpu::GetBufferTextureTarget(
-                                gfx::BufferUsage::SCANOUT,
-                                GetBufferFormat(),
-                                context_provider_wrapper_->ContextProvider()
-                                    ->GetCapabilities())
-                          : GL_TEXTURE_2D),
       use_oop_rasterization_(is_accelerated &&
                              context_provider_wrapper_->ContextProvider()
                                  ->GetCapabilities()
@@ -450,32 +433,20 @@ CanvasResourceRasterSharedImage::CanvasResourceRasterSharedImage(
   // textures by WebGL (via AcceleratedStaticBitmapImage::CopyToTexture()).
   // Hence, GLES2_READ usage is necessary regardless of whether raster is over
   // GLES.
+  // TODO(crbug.com/1518735): Determine whether FRAMEBUFFER_HINT can be
+  // eliminated.
+  shared_image_usage_flags = shared_image_usage_flags |
+                             gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+                             gpu::SHARED_IMAGE_USAGE_RASTER_WRITE |
+                             gpu::SHARED_IMAGE_USAGE_GLES2_READ |
+                             gpu::SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT;
   if (use_oop_rasterization_) {
-    // TODO(crbug.com/1518735): Determine whether FRAMEBUFFER_HINT can be
-    // eliminated.
-    shared_image_usage_flags = shared_image_usage_flags |
-                               gpu::SHARED_IMAGE_USAGE_RASTER_READ |
-                               gpu::SHARED_IMAGE_USAGE_RASTER_WRITE |
-                               gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION |
-                               gpu::SHARED_IMAGE_USAGE_GLES2_READ |
-                               gpu::SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT;
+    shared_image_usage_flags =
+        shared_image_usage_flags | gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION;
   } else {
     // The GLES2_WRITE flag is needed due to raster being over GL.
-    // TODO(crbug.com/1518735): Determine whether FRAMEBUFFER_HINT can be
-    // eliminated.
-    shared_image_usage_flags = shared_image_usage_flags |
-                               gpu::SHARED_IMAGE_USAGE_GLES2_READ |
-                               gpu::SHARED_IMAGE_USAGE_GLES2_WRITE |
-                               gpu::SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT;
-    // RASTER_{READ, WRITE} usages should be included as these SharedImages are
-    // both read and written via raster, but historically these usages were not
-    // included. Currently in the process of adding with a killswitch.
-    // TODO(crbug.com/1518427): Remove this killswitch post-safe rollout.
-    if (base::FeatureList::IsEnabled(kAddSharedImageRasterUsageWithNonOOPR)) {
-      shared_image_usage_flags = shared_image_usage_flags |
-                                 gpu::SHARED_IMAGE_USAGE_RASTER_READ |
-                                 gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
-    }
+    shared_image_usage_flags =
+        shared_image_usage_flags | gpu::SHARED_IMAGE_USAGE_GLES2_WRITE;
   }
 
   GrSurfaceOrigin surface_origin = is_origin_top_left_
@@ -493,19 +464,23 @@ CanvasResourceRasterSharedImage::CanvasResourceRasterSharedImage(
     // resolved.
 
     client_shared_image = shared_image_interface->CreateSharedImage(
-        GetSharedImageFormat(), Size(), GetColorSpace(), surface_origin,
-        surface_alpha_type, shared_image_usage_flags, "CanvasResourceRasterGmb",
+        {GetSharedImageFormat(), Size(), GetColorSpace(), surface_origin,
+         surface_alpha_type, shared_image_usage_flags,
+         "CanvasResourceRasterGmb"},
         gpu::kNullSurfaceHandle, gfx::BufferUsage::SCANOUT_CPU_READ_WRITE);
     if (!client_shared_image) {
       return;
     }
   } else {
     client_shared_image = shared_image_interface->CreateSharedImage(
-        GetSharedImageFormat(), Size(), GetColorSpace(), surface_origin,
-        surface_alpha_type, shared_image_usage_flags, "CanvasResourceRaster",
+        {GetSharedImageFormat(), Size(), GetColorSpace(), surface_origin,
+         surface_alpha_type, shared_image_usage_flags, "CanvasResourceRaster"},
         gpu::kNullSurfaceHandle);
     CHECK(client_shared_image);
   }
+
+  texture_target_ =
+      client_shared_image->GetTextureTarget(gfx::BufferUsage::SCANOUT);
 
   // Wait for the mailbox to be ready to be used.
   WaitSyncToken(shared_image_interface->GenUnverifiedSyncToken());
@@ -850,12 +825,13 @@ CanvasResourceRasterSharedImage::ContextProviderWrapper() const {
 
 void CanvasResourceRasterSharedImage::OnMemoryDump(
     base::trace_event::ProcessMemoryDump* pmd,
+    const std::string& parent_path,
     size_t bytes_per_pixel) const {
   if (!IsValid())
     return;
 
   std::string dump_name =
-      base::StringPrintf("canvas/ResourceProvider/CanvasResource/0x%" PRIXPTR,
+      base::StringPrintf("%s/CanvasResource_0x%" PRIXPTR, parent_path.c_str(),
                          reinterpret_cast<uintptr_t>(this));
   auto* dump = pmd->CreateAllocatorDump(dump_name);
   size_t memory_size = Size().height() * Size().width() * bytes_per_pixel;
@@ -1188,23 +1164,14 @@ CanvasResourceSwapChain::CanvasResourceSwapChain(
   uint32_t usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
                    gpu::SHARED_IMAGE_USAGE_GLES2_READ |
                    gpu::SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT |
-                   gpu::SHARED_IMAGE_USAGE_SCANOUT;
-
+                   gpu::SHARED_IMAGE_USAGE_SCANOUT |
+                   gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+                   gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
   if (use_oop_rasterization_) {
-    usage = usage | gpu::SHARED_IMAGE_USAGE_RASTER_READ |
-            gpu::SHARED_IMAGE_USAGE_RASTER_WRITE |
-            gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION;
+    usage = usage | gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION;
   } else {
     // The GLES2_WRITE flag is needed due to raster being over GL.
     usage = usage | gpu::SHARED_IMAGE_USAGE_GLES2_WRITE;
-    // RASTER_{READ, WRITE} usages should be included as these SharedImages are
-    // both read and written via raster, but historically these usages were not
-    // included. Currently in the process of adding with a killswitch.
-    // TODO(crbug.com/1518427): Remove this killswitch post-safe rollout.
-    if (base::FeatureList::IsEnabled(kAddSharedImageRasterUsageWithNonOOPR)) {
-      usage = usage | gpu::SHARED_IMAGE_USAGE_RASTER_READ |
-              gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
-    }
   }
 
   auto* sii =

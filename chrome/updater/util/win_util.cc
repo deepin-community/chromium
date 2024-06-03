@@ -4,15 +4,17 @@
 
 #include "chrome/updater/util/win_util.h"
 
+#include <windows.h>
+
 #include <aclapi.h>
 #include <combaseapi.h>
 #include <objidl.h>
 #include <regstr.h>
 #include <shellapi.h>
 #include <shlobj.h>
-#include <windows.h>
 #include <winhttp.h>
 #include <wrl/client.h>
+#include <wtsapi32.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -1107,11 +1109,27 @@ bool WrongUser(UpdaterScope scope) {
                                 : ::IsUserAnAdmin() && IsUACOn();
 }
 
+bool EulaAccepted(const std::vector<std::string>& app_ids) {
+  for (const auto& app_id : app_ids) {
+    DWORD eula_accepted = 0;
+    if (base::win::RegKey(
+            HKEY_LOCAL_MACHINE,
+            base::StrCat({CLIENT_STATE_MEDIUM_KEY, base::ASCIIToWide(app_id)})
+                .c_str(),
+            Wow6432(KEY_READ))
+                .ReadValueDW(L"eulaaccepted", &eula_accepted) ==
+            ERROR_SUCCESS &&
+        eula_accepted == 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void LogClsidEntries(REFCLSID clsid) {
-  const std::wstring local_server32_reg_path(
-      base::StrCat({base::StrCat({L"Software\\Classes\\CLSID\\",
-                                  base::win::WStringFromGUID(clsid)}),
-                    L"\\LocalServer32"}));
+  const std::wstring local_server32_reg_path(base::StrCat(
+      {base::StrCat({L"Software\\Classes\\CLSID\\", StringFromGuid(clsid)}),
+       L"\\LocalServer32"}));
   for (const HKEY root : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER}) {
     for (const REGSAM key_flag : {KEY_WOW64_32KEY, KEY_WOW64_64KEY}) {
       base::win::RegKey key;
@@ -1245,6 +1263,12 @@ bool MigrateLegacyUpdaters(
         registration.dlrc = DaynumFromDWORD(date_last_rollcall);
       }
 
+      DWORD install_date = 0;
+      if (client_state_key.ReadValueDW(kRegValueDayOfInstall, &install_date) ==
+          ERROR_SUCCESS) {
+        registration.install_date = DaynumFromDWORD(install_date);
+      }
+
       base::win::RegKey cohort_key;
       if (cohort_key.Open(root, GetAppCohortKey(app_id).c_str(),
                           Wow6432(KEY_READ)) == ERROR_SUCCESS) {
@@ -1274,6 +1298,210 @@ bool MigrateLegacyUpdaters(
   }
 
   return true;
+}
+
+namespace {
+
+struct ScopedWtsConnectStateCloseTraits {
+  static WTS_CONNECTSTATE_CLASS* InvalidValue() { return nullptr; }
+  static void Free(WTS_CONNECTSTATE_CLASS* memory) { ::WTSFreeMemory(memory); }
+};
+
+struct ScopedWtsSessionInfoCloseTraits {
+  static PWTS_SESSION_INFO InvalidValue() { return nullptr; }
+  static void Free(PWTS_SESSION_INFO memory) { ::WTSFreeMemory(memory); }
+};
+
+using ScopedWtsConnectState =
+    base::ScopedGeneric<WTS_CONNECTSTATE_CLASS*,
+                        ScopedWtsConnectStateCloseTraits>;
+using ScopedWtsSessionInfo =
+    base::ScopedGeneric<PWTS_SESSION_INFO, ScopedWtsSessionInfoCloseTraits>;
+
+// Returns `true` if there is a user logged on and active in the specified
+// session.
+bool IsSessionActive(std::optional<DWORD> session_id) {
+  if (!session_id) {
+    return false;
+  }
+
+  ScopedWtsConnectState wts_connect_state;
+  DWORD bytes_returned = 0;
+  if (::WTSQuerySessionInformation(
+          WTS_CURRENT_SERVER_HANDLE, *session_id, WTSConnectState,
+          reinterpret_cast<LPTSTR*>(
+              ScopedWtsConnectState::Receiver(wts_connect_state).get()),
+          &bytes_returned)) {
+    CHECK_EQ(bytes_returned, sizeof(WTS_CONNECTSTATE_CLASS));
+    return *wts_connect_state.get() == WTSActive;
+  }
+
+  return false;
+}
+
+// Returns the currently active session.
+// `WTSGetActiveConsoleSessionId` retrieves the Terminal Services session
+// currently attached to the physical console, so that is attempted first.
+// `WTSGetActiveConsoleSessionId` does not work for terminal servers where the
+// current active session is always the console. For those, an active session
+// is found by enumerating all the sessions that are present on the system, and
+// the first active session is returned.
+std::optional<DWORD> GetActiveSessionId() {
+  if (DWORD active_session_id = ::WTSGetActiveConsoleSessionId();
+      IsSessionActive(active_session_id)) {
+    return active_session_id;
+  }
+
+  ScopedWtsSessionInfo session_info;
+  DWORD num_sessions = 0;
+  if (::WTSEnumerateSessions(WTS_CURRENT_SERVER_HANDLE, 0, 1,
+                             ScopedWtsSessionInfo::Receiver(session_info).get(),
+                             &num_sessions)) {
+    for (size_t i = 0; i < num_sessions; ++i) {
+      if (session_info.get()[i].State == WTSActive) {
+        return session_info.get()[i].SessionId;
+      }
+    }
+  }
+
+  return {};
+}
+
+std::vector<DWORD> FindProcesses(const std::wstring& process_name) {
+  base::NamedProcessIterator iter(process_name, nullptr);
+  std::vector<DWORD> pids;
+  while (const base::ProcessEntry* process_entry = iter.NextProcessEntry()) {
+    pids.push_back(process_entry->pid());
+  }
+  return pids;
+}
+
+// Returns processes running under `session_id`.
+std::vector<DWORD> FindProcessesInSession(const std::wstring& process_name,
+                                          std::optional<DWORD> session_id) {
+  if (!session_id) {
+    return {};
+  }
+  std::vector<DWORD> pids;
+  for (const auto pid : FindProcesses(process_name)) {
+    DWORD process_session = 0;
+    if (::ProcessIdToSessionId(pid, &process_session) &&
+        (process_session == *session_id)) {
+      pids.push_back(pid);
+    }
+  }
+  return pids;
+}
+
+// Returns the first instance found of explorer.exe.
+std::optional<DWORD> GetExplorerPid() {
+  std::vector<DWORD> pids =
+      FindProcessesInSession(L"EXPLORER.EXE", GetActiveSessionId());
+  if (pids.empty()) {
+    return {};
+  }
+  return pids[0];
+}
+
+// Returns an impersonation token for the user running process_id.
+HResultOr<ScopedKernelHANDLE> GetImpersonationToken(
+    std::optional<DWORD> process_id) {
+  if (!process_id) {
+    return base::unexpected(E_UNEXPECTED);
+  }
+  base::win::ScopedHandle process(::OpenProcess(
+      PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION, TRUE, *process_id));
+  if (!process.IsValid()) {
+    return base::unexpected(HRESULTFromLastError());
+  }
+  ScopedKernelHANDLE process_token;
+  if (!::OpenProcessToken(process.Get(), TOKEN_DUPLICATE | TOKEN_QUERY,
+                          ScopedKernelHANDLE::Receiver(process_token).get())) {
+    return base::unexpected(HRESULTFromLastError());
+  }
+  ScopedKernelHANDLE user_token;
+  if (!::DuplicateTokenEx(process_token.get(),
+                          TOKEN_IMPERSONATE | TOKEN_QUERY |
+                              TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE,
+                          NULL, SecurityImpersonation, TokenPrimary,
+                          ScopedKernelHANDLE::Receiver(user_token).get())) {
+    return base::unexpected(HRESULTFromLastError());
+  }
+  return user_token;
+}
+
+}  // namespace
+
+HResultOr<ScopedKernelHANDLE> GetLoggedOnUserToken() {
+  return GetImpersonationToken(GetExplorerPid());
+}
+
+bool IsAuditMode() {
+  base::win::RegKey setup_state_key;
+  std::wstring state;
+  return setup_state_key.Open(HKEY_LOCAL_MACHINE, kSetupStateKey,
+                              KEY_QUERY_VALUE) == ERROR_SUCCESS &&
+         setup_state_key.ReadValue(kImageStateValueName, &state) ==
+             ERROR_SUCCESS &&
+         (base::EqualsCaseInsensitiveASCII(state, kImageStateUnuseableValue) ||
+          base::EqualsCaseInsensitiveASCII(state,
+                                           kImageStateGeneralAuditValue) ||
+          base::EqualsCaseInsensitiveASCII(state,
+                                           kImageStateSpecialAuditValue));
+}
+
+bool SetOemInstallState() {
+  if (!::IsUserAnAdmin() || !IsAuditMode()) {
+    return false;
+  }
+
+  const base::Time now = base::Time::Now();
+  VLOG(1) << "OEM install time set: " << now;
+  return base::win::RegKey(HKEY_LOCAL_MACHINE, CLIENTS_KEY,
+                           Wow6432(KEY_SET_VALUE))
+             .WriteValue(kRegValueOemInstallTimeMin,
+                         now.ToDeltaSinceWindowsEpoch().InMinutes()) ==
+         ERROR_SUCCESS;
+}
+
+bool ResetOemInstallState() {
+  VLOG(1) << "OEM install reset at time: " << base::Time::Now();
+  const LONG result =
+      base::win::RegKey(HKEY_LOCAL_MACHINE, CLIENTS_KEY, Wow6432(KEY_SET_VALUE))
+          .DeleteValue(kRegValueOemInstallTimeMin);
+  return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND;
+}
+
+bool IsOemInstalling() {
+  DWORD oem_install_time_minutes = 0;
+  if (base::win::RegKey(HKEY_LOCAL_MACHINE, CLIENTS_KEY,
+                        Wow6432(KEY_QUERY_VALUE))
+          .ReadValueDW(kRegValueOemInstallTimeMin, &oem_install_time_minutes) !=
+      ERROR_SUCCESS) {
+    VLOG(2) << "OemInstallTime not found";
+    return false;
+  }
+  const base::Time now = base::Time::Now();
+  const base::Time oem_install_time = base::Time::FromDeltaSinceWindowsEpoch(
+      base::Minutes(oem_install_time_minutes));
+  const base::TimeDelta time_in_oem_mode = now - oem_install_time;
+  const bool is_oem_installing = time_in_oem_mode < kMinOemModeTime;
+  if (!is_oem_installing) {
+    ResetOemInstallState();
+  }
+  VLOG(1) << "now: " << now << ", OEM install time: " << oem_install_time
+          << ", time_in_oem_mode: " << time_in_oem_mode
+          << ", is_oem_installing: " << is_oem_installing;
+  return is_oem_installing;
+}
+
+std::wstring StringFromGuid(const GUID& guid) {
+  // {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}
+  constexpr int kGuidStringCharacters =
+      1 + 8 + 1 + 4 + 1 + 4 + 1 + 4 + 1 + 12 + 1 + 1;
+  wchar_t guid_string[kGuidStringCharacters] = {0};
+  CHECK_NE(::StringFromGUID2(guid, guid_string, kGuidStringCharacters), 0);
+  return guid_string;
 }
 
 }  // namespace updater

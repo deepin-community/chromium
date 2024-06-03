@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
@@ -104,6 +105,14 @@ PrintBackendServiceManager::PrintBackendServiceManager() = default;
 PrintBackendServiceManager::~PrintBackendServiceManager() = default;
 
 // static
+void PrintBackendServiceManager::LaunchPersistentService() {
+  PrintBackendServiceManager& service_mgr = GetInstance();
+  // Registering a query client causes a service to be launched.
+  service_mgr.persistent_service_ = true;
+  std::ignore = service_mgr.RegisterQueryClient();
+}
+
+// static
 std::string PrintBackendServiceManager::ClientTypeToString(
     ClientType client_type) {
   switch (client_type) {
@@ -118,7 +127,7 @@ std::string PrintBackendServiceManager::ClientTypeToString(
 
 // static
 void PrintBackendServiceManager::LogCallToRemote(
-    base::StringPiece name,
+    std::string_view name,
     const CallbackContext& context) {
   DVLOG(1) << "Sending " << name << " on remote `" << context.remote_id
            << "`, saved callback ID of " << context.saved_callback_id;
@@ -126,7 +135,7 @@ void PrintBackendServiceManager::LogCallToRemote(
 
 // static
 void PrintBackendServiceManager::LogCallbackFromRemote(
-    base::StringPiece name,
+    std::string_view name,
     const CallbackContext& context) {
   DVLOG(1) << name << " completed for remote `" << context.remote_id
            << "` saved callback ID " << context.saved_callback_id;
@@ -891,9 +900,13 @@ PrintBackendServiceManager::GetServiceFromBundle(
   return service;
 }
 
-// static
 constexpr base::TimeDelta PrintBackendServiceManager::GetClientTypeIdleTimeout(
-    ClientType client_type) {
+    ClientType client_type) const {
+  if (persistent_service_) {
+    // Intentionally keep service around indefinitely.
+    return base::TimeDelta::Max();
+  }
+
   switch (client_type) {
     case ClientType::kQuery:
       // Want a long timeout so that the service is available across typical

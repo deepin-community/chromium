@@ -180,11 +180,13 @@ class TabHoverCardController : public views::ViewObserver,
       base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE;
   std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
 
+  // Ensure that an instance of the TabResourceUsageCollector exists so
+  // resources are up to date when we eventually show the hover card.
+  raw_ptr<TabResourceUsageCollector> tab_resource_usage_collector_;
+
   // Tracks changes to the hover card image previews preferences
   PrefChangeRegistrar pref_change_registrar_;
   bool hover_card_image_previews_enabled_ = false;
-
-  bool hover_card_tab_memory_usage_enabled_ = false;
 
   // Ensure that this timer is destroyed before anything else is cleaned up.
   base::OneShotTimer delayed_show_timer_;

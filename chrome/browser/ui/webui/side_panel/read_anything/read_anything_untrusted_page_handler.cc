@@ -17,16 +17,21 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
+#include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/views/side_panel/read_anything/read_anything_controller.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_prefs.h"
 #include "chrome/common/accessibility/read_anything_constants.h"
-#include "chrome/common/pdf_util.h"
 #include "components/language/core/common/locale_util.h"
+#include "components/pdf/common/pdf_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/translate/core/browser/language_state.h"
+#include "components/translate/core/browser/translate_driver.h"
+#include "components/translate/core/common/translate_constants.h"
 #include "content/public/browser/browser_accessibility_state.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/scoped_accessibility_mode.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/web_ui.h"
@@ -112,30 +117,31 @@ ReadAnythingWebContentsObserver::ReadAnythingWebContentsObserver(
   // Enable accessibility for the top level render frame and all descendants.
   // This causes AXTreeSerializer to reset and send accessibility events of
   // the AXTree when it is re-serialized.
-  if (web_contents) {
-    // Force a reset if web accessibility is already enabled to ensure that new
-    // observers of accessibility events get the full accessibility tree from
-    // scratch.
-    const bool need_reset =
-        web_contents->GetAccessibilityMode().has_mode(ui::AXMode::kWebContents);
+  if (!web_contents) {
+    return;
+  }
+  // Force a reset if web accessibility is already enabled to ensure that new
+  // observers of accessibility events get the full accessibility tree from
+  // scratch.
+  const bool need_reset =
+      web_contents->GetAccessibilityMode().has_mode(ui::AXMode::kWebContents);
 
-    scoped_accessibility_mode_ =
-        content::BrowserAccessibilityState::GetInstance()
-            ->CreateScopedModeForWebContents(web_contents, accessibility_mode);
+  scoped_accessibility_mode_ =
+      content::BrowserAccessibilityState::GetInstance()
+          ->CreateScopedModeForWebContents(web_contents, accessibility_mode);
 
-    if (base::FeatureList::IsEnabled(
-            features::kReadAnythingPermanentAccessibility)) {
-      // If permanent accessibility for Read Anything is enabled, give ownership
-      // of the scoper to the WebContents. This ensures that those modes are
-      // kept active even when RA is no longer handling events from the WC.
-      // This codepath is to be deleted at the conclusion of the study.
-      PersistentAccessibilityHelper::PersistForWebContents(
-          *web_contents, std::move(scoped_accessibility_mode_));
-    }
+  if (base::FeatureList::IsEnabled(
+          features::kReadAnythingPermanentAccessibility)) {
+    // If permanent accessibility for Read Anything is enabled, give ownership
+    // of the scoper to the WebContents. This ensures that those modes are kept
+    // active even when RA is no longer handling events from the WC. This
+    // codepath is to be deleted at the conclusion of the study.
+    PersistentAccessibilityHelper::PersistForWebContents(
+        *web_contents, std::move(scoped_accessibility_mode_));
+  }
 
-    if (need_reset) {
-      web_contents->ResetAccessibility();
-    }
+  if (need_reset) {
+    web_contents->ResetAccessibility();
   }
 }
 
@@ -148,6 +154,10 @@ void ReadAnythingWebContentsObserver::AccessibilityEventReceived(
 
 void ReadAnythingWebContentsObserver::PrimaryPageChanged(content::Page& page) {
   page_handler_->PrimaryPageChanged();
+}
+
+void ReadAnythingWebContentsObserver::WebContentsDestroyed() {
+  page_handler_->WebContentsDestroyed();
 }
 
 ReadAnythingUntrustedPageHandler::ReadAnythingUntrustedPageHandler(
@@ -219,6 +229,7 @@ ReadAnythingUntrustedPageHandler::ReadAnythingUntrustedPageHandler(
 
 ReadAnythingUntrustedPageHandler::~ReadAnythingUntrustedPageHandler() {
   TabStripModelObserver::StopObservingAll(this);
+  translate_observation_.Reset();
   main_observer_.reset();
   pdf_observer_.reset();
   LogTextStyle();
@@ -238,7 +249,12 @@ ReadAnythingUntrustedPageHandler::~ReadAnythingUntrustedPageHandler() {
 }
 
 void ReadAnythingUntrustedPageHandler::PrimaryPageChanged() {
+  SetUpPdfObserver();
   OnActiveAXTreeIDChanged();
+}
+
+void ReadAnythingUntrustedPageHandler::WebContentsDestroyed() {
+  translate_observation_.Reset();
 }
 
 void ReadAnythingUntrustedPageHandler::AccessibilityEventReceived(
@@ -430,7 +446,8 @@ void ReadAnythingUntrustedPageHandler::OnReadAnythingThemeChanged(
 
 void ReadAnythingUntrustedPageHandler::SetDefaultLanguageCode(
     const std::string& code) {
-  page_->SetDefaultLanguageCode(code);
+  default_language_code_ = code;
+  page_->SetLanguageCode(code);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -500,28 +517,114 @@ void ReadAnythingUntrustedPageHandler::OnActiveWebContentsChanged() {
   // the AXTree when it is re-serialized.
   main_observer_ = std::make_unique<ReadAnythingWebContentsObserver>(
       weak_factory_.GetSafeRef(), web_contents, kReadAnythingAXMode);
-  pdf_observer_.reset();
-
+  SetUpPdfObserver();
   OnActiveAXTreeIDChanged();
 }
 
-void ReadAnythingUntrustedPageHandler::OnActiveAXTreeIDChanged(
-    bool force_update_state) {
-  ui::AXTreeID tree_id = ui::AXTreeIDUnknown();
-  ukm::SourceId ukm_source_id = ukm::kInvalidSourceId;
-  GURL visible_url;
-  if (active_ && main_observer_ && main_observer_->web_contents()) {
-    visible_url = main_observer_->web_contents()->GetVisibleURL();
-    content::RenderFrameHost* render_frame_host =
-        main_observer_->web_contents()->GetPrimaryMainFrame();
-    if (render_frame_host) {
-      tree_id = render_frame_host->GetAXTreeID();
-      ukm_source_id = render_frame_host->GetPageUkmSourceId();
+void ReadAnythingUntrustedPageHandler::SetUpPdfObserver() {
+  pdf_observer_.reset();
+  content::WebContents* main_contents = main_observer_->web_contents();
+  std::vector<content::WebContents*> inner_contents =
+      main_contents ? main_contents->GetInnerWebContents()
+                    : std::vector<content::WebContents*>();
+  // Check if this is a pdf.
+  if (inner_contents.size() == 1 &&
+      IsPdfExtensionOrigin(
+          inner_contents[0]->GetPrimaryMainFrame()->GetLastCommittedOrigin())) {
+    // TODO(crbug.com/41485800): Improve PDF OCR support for Reading Mode. Maybe
+    // it would make it easy to read and maintain the code if setting the AXMode
+    // for PDF OCR (i.e. `ui::AXMode::kPDFOcr`) is handled by
+    // `PdfOcrController`. Enable accessibility to receive events (data) from
+    // PDF. Set kPDFOcr only when the PDF OCR feature flag is enabled to support
+    // inaccessible PDFs. Reset accessibility to get the new updated trees.
+    ui::AXMode ax_mode = kReadAnythingAXMode;
+    if (features::IsPdfOcrEnabled()) {
+      ax_mode |= ui::AXMode::kPDFOcr;
+    }
+    pdf_observer_ = std::make_unique<ReadAnythingWebContentsObserver>(
+        weak_factory_.GetSafeRef(), inner_contents[0], ax_mode);
+  }
+}
+
+void ReadAnythingUntrustedPageHandler::OnActiveAXTreeIDChanged() {
+  bool is_pdf = !!pdf_observer_;
+  if (!main_observer_ || !active_) {
+    page_->OnActiveAXTreeIDChanged(ui::AXTreeIDUnknown(), ukm::kInvalidSourceId,
+                                   is_pdf);
+    return;
+  }
+
+  content::WebContents* contents =
+      is_pdf ? pdf_observer_->web_contents() : main_observer_->web_contents();
+  if (!contents) {
+    page_->OnActiveAXTreeIDChanged(ui::AXTreeIDUnknown(), ukm::kInvalidSourceId,
+                                   is_pdf);
+    return;
+  }
+
+  // Observe the new contents so we can get the page language once it's
+  // determined.
+  if (ChromeTranslateClient* translate_client =
+          ChromeTranslateClient::FromWebContents(contents)) {
+    translate::TranslateDriver* driver = translate_client->GetTranslateDriver();
+    const std::string& source_language =
+        translate_client->GetLanguageState().source_language();
+    // If the language is empty and we're not already observing these web
+    // contents, then observe them so we can get a callback when the language is
+    // determined. If we are already observing them, then the language couldn't
+    // be determined, so pass the empty code to SetLanguageCode. If the language
+    // is not empty then the language was already determined so we pass that to
+    // SetLanguageCode.
+    if (source_language.empty() &&
+        !translate_observation_.IsObservingSource(driver)) {
+      translate_observation_.Reset();
+      translate_observation_.Observe(driver);
+    } else {
+      SetLanguageCode(source_language);
     }
   }
 
-  page_->OnActiveAXTreeIDChanged(tree_id, ukm_source_id, visible_url,
-                                 force_update_state);
+  if (is_pdf) {
+    // What happens if there are multiple such `rfhs`?
+    contents->ForEachRenderFrameHost([this](content::RenderFrameHost* rfh) {
+      if (rfh->GetProcess()->IsPdf()) {
+        page_->OnActiveAXTreeIDChanged(rfh->GetAXTreeID(),
+                                       rfh->GetPageUkmSourceId(),
+                                       /*is_pdf=*/true);
+      }
+    });
+    return;
+  }
+
+  content::RenderFrameHost* rfh = contents->GetPrimaryMainFrame();
+  if (!rfh) {
+    // THis case doesn't seem possible.
+    page_->OnActiveAXTreeIDChanged(ui::AXTreeIDUnknown(), ukm::kInvalidSourceId,
+                                   /*is_pdf=*/false);
+    return;
+  }
+
+  page_->OnActiveAXTreeIDChanged(rfh->GetAXTreeID(), rfh->GetPageUkmSourceId(),
+                                 /*is_pdf=*/false);
+}
+
+void ReadAnythingUntrustedPageHandler::SetLanguageCode(
+    const std::string& code) {
+  if (code.empty() || code == translate::kUnknownLanguageCode) {
+    page_->SetLanguageCode(default_language_code_);
+  } else {
+    page_->SetLanguageCode(code);
+  }
+}
+
+void ReadAnythingUntrustedPageHandler::OnLanguageDetermined(
+    const translate::LanguageDetectionDetails& details) {
+  SetLanguageCode(details.adopted_language);
+}
+
+void ReadAnythingUntrustedPageHandler::OnTranslateDriverDestroyed(
+    translate::TranslateDriver* driver) {
+  translate_observation_.Reset();
 }
 
 void ReadAnythingUntrustedPageHandler::LogTextStyle() {
@@ -560,40 +663,6 @@ void ReadAnythingUntrustedPageHandler::LogTextStyle() {
           prefs->GetInteger(prefs::kAccessibilityReadAnythingLetterSpacing));
   base::UmaHistogramEnumeration(string_constants::kLetterSpacingHistogramName,
                                 letter_spacing);
-}
-
-void ReadAnythingUntrustedPageHandler::EnablePDFContentAccessibility(
-    const ui::AXTreeID& ax_tree_id) {
-  content::RenderFrameHost* render_frame_host =
-      content::RenderFrameHost::FromAXTreeID(ax_tree_id);
-  if (!render_frame_host) {
-    return;
-  }
-
-  content::WebContents* contents =
-      content::WebContents::FromRenderFrameHost(render_frame_host);
-  if (contents == main_observer_->web_contents()) {
-    return;
-  }
-
-  CHECK(IsPdfExtensionOrigin(
-      contents->GetPrimaryMainFrame()->GetLastCommittedOrigin()));
-
-  // TODO(crbug.com/1513227): Improve PDF OCR support for Reading Mode. Maybe
-  // it would make it easy to read and maintain the code if setting the AXMode
-  // for PDF OCR (i.e. `ui::AXMode::kPDFOcr`) is handled by `PdfOcrController`.
-  // Enable accessibility to receive events (data) from PDF. Set kPDFOcr only
-  // when the PDF OCR feature flag is enabled to support inaccessible PDFs.
-  // Reset accessibility to get the new updated trees.
-  ui::AXMode ax_mode = kReadAnythingAXMode;
-  if (features::IsPdfOcrEnabled()) {
-    ax_mode |= ui::AXMode::kPDFOcr;
-  }
-  pdf_observer_ = std::make_unique<ReadAnythingWebContentsObserver>(
-      weak_factory_.GetSafeRef(), contents, ax_mode);
-
-  // Trigger distillation.
-  OnActiveAXTreeIDChanged(true);
 }
 
 void ReadAnythingUntrustedPageHandler::ObserveWebContentsSidePanelController(

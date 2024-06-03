@@ -4,6 +4,9 @@
 
 #include "ash/system/focus_mode/focus_mode_controller.h"
 
+#include <memory>
+
+#include "ash/accessibility/accessibility_controller.h"
 #include "ash/api/tasks/tasks_types.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/system/anchored_nudge_data.h"
@@ -15,6 +18,7 @@
 #include "ash/system/focus_mode/focus_mode_session.h"
 #include "ash/system/focus_mode/focus_mode_tray.h"
 #include "ash/system/focus_mode/focus_mode_util.h"
+#include "ash/system/focus_mode/sounds/focus_mode_sounds_controller.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/toast/anchored_nudge_manager_impl.h"
 #include "ash/system/unified/unified_system_tray.h"
@@ -29,9 +33,6 @@
 namespace ash {
 
 namespace {
-
-constexpr char kFocusModeEndingMomentNudgeId[] =
-    "focus_mode_ending_moment_nudge";
 
 FocusModeController* g_instance = nullptr;
 
@@ -85,7 +86,7 @@ void ShowEndingMomentNudge() {
   // NOTE: we anchor to `tray->image_view()` in order to center the nudge
   // properly because there is extra spacing on the actual `FocusModeTray` view.
   AnchoredNudgeData nudge_data(
-      kFocusModeEndingMomentNudgeId,
+      focus_mode_util::kFocusModeEndingMomentNudgeId,
       NudgeCatalogName::kFocusModeEndingMomentNudge,
       l10n_util::GetStringUTF16(
           IDS_ASH_STATUS_TRAY_FOCUS_MODE_ENDING_MOMENT_NUDGE),
@@ -96,11 +97,22 @@ void ShowEndingMomentNudge() {
   nudge_data.click_callback =
       base::BindRepeating(&FocusModeTray::ShowBubble, base::Unretained(tray));
   AnchoredNudgeManager::Get()->Show(nudge_data);
+
+  auto current_session = FocusModeController::Get()->current_session();
+  CHECK(current_session);
+  const std::u16string duration_string =
+      focus_mode_util::GetDurationString(current_session->session_duration(),
+                                         /*digital_format=*/false);
+  Shell::Get()
+      ->accessibility_controller()
+      ->TriggerAccessibilityAlertWithMessage(l10n_util::GetStringFUTF8(
+          IDS_ASH_STATUS_TRAY_FOCUS_MODE_ENDING_MOMENT_NUDGE_ALERT,
+          duration_string));
 }
 
 void HideEndingMomentNudge() {
   if (AnchoredNudgeManager* nudge_manager = AnchoredNudgeManager::Get()) {
-    nudge_manager->Cancel(kFocusModeEndingMomentNudgeId);
+    nudge_manager->Cancel(focus_mode_util::kFocusModeEndingMomentNudgeId);
   }
 }
 
@@ -140,6 +152,7 @@ FocusModeController::FocusModeController()
   CHECK_EQ(g_instance, nullptr);
   g_instance = this;
 
+  focus_mode_sounds_controller_ = std::make_unique<FocusModeSoundsController>();
   Shell::Get()->session_controller()->AddObserver(this);
 }
 
@@ -204,10 +217,27 @@ void FocusModeController::OnActiveUserSessionChanged(
 
 void FocusModeController::ExtendSessionDuration() {
   CHECK(current_session_);
+
+  const bool was_in_ending_moment = in_ending_moment();
   const base::Time now = base::Time::Now();
   // We call this with `now` to make sure that all the actions taken are synced
   // to the same time, since the state depends on `now`.
   current_session_->ExtendSession(now);
+
+  std::string message;
+  if (was_in_ending_moment) {
+    message = l10n_util::GetStringUTF8(
+        IDS_ASH_STATUS_TRAY_FOCUS_MODE_EXTEND_TEN_MINUTES_BUTTON_ALERT);
+  } else {
+    const std::u16string duration_string = focus_mode_util::GetDurationString(
+        current_session_->GetTimeRemaining(now), /*digital_format=*/false);
+    message = l10n_util::GetStringFUTF8(
+        IDS_ASH_STATUS_TRAY_FOCUS_MODE_INCREASE_TEN_MINUTES_BUTTON_ALERT,
+        duration_string);
+  }
+  Shell::Get()
+      ->accessibility_controller()
+      ->TriggerAccessibilityAlertWithMessage(message);
 
   const auto session_snapshot = current_session_->GetSnapshot(now);
   for (auto& observer : observers_) {
@@ -341,6 +371,22 @@ void FocusModeController::CompleteTask() {
   SetSelectedTask(nullptr);
 }
 
+void FocusModeController::MaybeShowEndingMomentNudge() {
+  // Do not show the nudge if there is a persistent tray bubble open during the
+  // ending moment.
+  if (!in_ending_moment() || current_session_->persistent_ending()) {
+    return;
+  }
+
+  if (auto* anchored_nudge_manager = AnchoredNudgeManager::Get();
+      anchored_nudge_manager->IsNudgeShown(
+          focus_mode_util::kFocusModeEndingMomentNudgeId)) {
+    return;
+  }
+
+  ShowEndingMomentNudge();
+}
+
 void FocusModeController::TriggerEndingMomentImmediately() {
   if (!in_focus_session()) {
     return;
@@ -415,7 +461,6 @@ void FocusModeController::OnTimerTick() {
                      &FocusModeController::ResetFocusSession,
                      base::TimeTicks::Now());
         MaybeUpdateDndNotification();
-        ShowEndingMomentNudge();
       } else {
         current_session_->set_persistent_ending();
       }

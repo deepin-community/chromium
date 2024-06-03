@@ -5,6 +5,7 @@
 #include "chrome/browser/net/profile_network_context_service.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/base64.h"
 #include "base/check_op.h"
@@ -19,6 +20,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
@@ -37,6 +39,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/sct_reporting_service.h"
 #include "chrome/browser/ssl/sct_reporting_service_factory.h"
+#include "chrome/browser/webid/federated_identity_permission_context.h"
+#include "chrome/browser/webid/federated_identity_permission_context_factory.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_content_client.h"
@@ -129,6 +133,13 @@
 #include "chrome/browser/lacros/cert/client_cert_store_lacros.h"
 #include "chrome/browser/profiles/incognito_helpers.h"
 #include "chromeos/startup/browser_params_proxy.h"
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#include "chrome/browser/enterprise/client_certificates/certificate_provisioning_service_factory.h"
+#include "components/enterprise/client_certificates/core/certificate_provisioning_service.h"
+#include "components/enterprise/client_certificates/core/client_certificates_service.h"
+#include "components/enterprise/client_certificates/core/features.h"
 #endif
 
 namespace {
@@ -245,15 +256,52 @@ void UpdateCookieSettings(Profile* profile, ContentSettingsType type) {
   if (!IsContentSettingsTypeEnabled(type)) {
     return;
   }
-  ContentSettingsForOneType settings =
-      HostContentSettingsMapFactory::GetForProfile(profile)
-          ->GetSettingsForOneType(type);
+
+  ContentSettingsForOneType settings;
+  if (type == ContentSettingsType::FEDERATED_IDENTITY_SHARING) {
+    // Note: FederatedIdentityPermissionContext also syncs the permissions
+    // directly, in order to avoid a race condition. (Namely,
+    // FederatedIdentityPermissionContext must guarantee that the permissions
+    // have propagated before it calls its callback. However, the syncing that
+    // occurs in this class is unsynchronized, so it would be racy to rely on
+    // this update finishing before calling the context's callback.) This
+    // unfortunately triggers a double-update here.
+    if (FederatedIdentityPermissionContext* fedcm_context =
+            FederatedIdentityPermissionContextFactory::GetForProfile(profile);
+        fedcm_context) {
+      settings = fedcm_context->GetSharingPermissionGrantsAsContentSettings();
+    }
+  } else {
+    settings = HostContentSettingsMapFactory::GetForProfile(profile)
+                   ->GetSettingsForOneType(type);
+  }
   profile->ForEachLoadedStoragePartition(
       [&](content::StoragePartition* storage_partition) {
         storage_partition->GetCookieManagerForBrowserProcess()
             ->SetContentSettings(type, settings, base::NullCallback());
       });
 }
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+std::unique_ptr<net::ClientCertStore> GetWrappedCertStore(
+    Profile* profile,
+    std::unique_ptr<net::ClientCertStore> platform_store) {
+  if (!profile || !client_certificates::features::
+                      IsManagedClientCertificateForUserEnabled()) {
+    return platform_store;
+  }
+
+  auto* provisioning_service =
+      client_certificates::CertificateProvisioningServiceFactory::GetForProfile(
+          profile);
+  if (!provisioning_service) {
+    return platform_store;
+  }
+
+  return client_certificates::ClientCertificatesService::Create(
+      provisioning_service, std::move(platform_store));
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 }  // namespace
 
@@ -306,6 +354,8 @@ ProfileNetworkContextService::ProfileNetworkContextService(Profile* profile)
       &ProfileNetworkContextService::ScheduleUpdateCertificatePolicy,
       base::Unretained(this));
   pref_change_registrar_.Add(prefs::kCACertificates,
+                             schedule_update_cert_policy);
+  pref_change_registrar_.Add(prefs::kCACertificatesWithConstraints,
                              schedule_update_cert_policy);
   pref_change_registrar_.Add(prefs::kCADistrustedCertificates,
                              schedule_update_cert_policy);
@@ -386,6 +436,7 @@ void ProfileNetworkContextService::RegisterProfilePrefs(
   registry->RegisterListPref(prefs::kHSTSPolicyBypassList);
 #if BUILDFLAG(CHROME_CERTIFICATE_POLICIES_SUPPORTED)
   registry->RegisterListPref(prefs::kCACertificates);
+  registry->RegisterListPref(prefs::kCACertificatesWithConstraints);
   registry->RegisterListPref(prefs::kCADistrustedCertificates);
   registry->RegisterListPref(prefs::kCAHintCertificates);
   // Include user added platform certs by default.
@@ -543,31 +594,131 @@ void ProfileNetworkContextService::ScheduleUpdateCTPolicy() {
 #if BUILDFLAG(CHROME_CERTIFICATE_POLICIES_SUPPORTED)
 cert_verifier::mojom::AdditionalCertificatesPtr
 ProfileNetworkContextService::GetCertificatePolicy() {
-  std::vector<std::vector<uint8_t>> additional_untrusted_certificates;
-  std::vector<std::vector<uint8_t>> additional_trust_anchors;
-  std::vector<std::vector<uint8_t>>
-      additional_trust_anchors_enforced_constraints;
-  std::vector<std::vector<uint8_t>> additional_distrusted_spkis;
   auto* prefs = profile_->GetPrefs();
+  auto additional_certificates =
+      cert_verifier::mojom::AdditionalCertificates::New();
 
   for (const base::Value& cert_b64 :
        prefs->GetList(prefs::kCAHintCertificates)) {
-    absl::optional<std::vector<uint8_t>> decoded_opt =
+    std::optional<std::vector<uint8_t>> decoded_opt =
         base::Base64Decode(cert_b64.GetString());
 
     if (decoded_opt.has_value()) {
-      additional_untrusted_certificates.push_back(std::move(*decoded_opt));
+      additional_certificates->all_certificates.push_back(
+          std::move(*decoded_opt));
     }
   }
 
   for (const base::Value& cert_b64 : prefs->GetList(prefs::kCACertificates)) {
-    absl::optional<std::vector<uint8_t>> decoded_opt =
+    std::optional<std::vector<uint8_t>> decoded_opt =
         base::Base64Decode(cert_b64.GetString());
 
     if (decoded_opt.has_value()) {
-      additional_trust_anchors_enforced_constraints.push_back(
-          std::move(*decoded_opt));
+      additional_certificates->trust_anchors_with_enforced_constraints
+          .push_back(std::move(*decoded_opt));
     }
+  }
+
+  // Add trust anchors with constraints outside the cert
+  for (const base::Value& cert_with_constraints :
+       prefs->GetList(prefs::kCACertificatesWithConstraints)) {
+    const base::Value::Dict* cert_with_constraints_dict =
+        cert_with_constraints.GetIfDict();
+    if (!cert_with_constraints_dict) {
+      continue;
+    }
+
+    const std::string* cert_b64 =
+        cert_with_constraints_dict->FindString("certificate");
+    const base::Value::Dict* constraints_dict =
+        cert_with_constraints_dict->FindDict("constraints");
+    if (!constraints_dict) {
+      continue;
+    }
+    const base::Value::List* permitted_cidrs =
+        constraints_dict->FindList("permitted_cidrs");
+    const base::Value::List* permitted_dns_names =
+        constraints_dict->FindList("permitted_dns_names");
+
+    // Need to have a cert, and at least one set of restrictions.
+    if (!cert_b64) {
+      continue;
+    }
+
+    if (!((permitted_cidrs && permitted_cidrs->size() > 0) ||
+          (permitted_dns_names && permitted_dns_names->size() > 0))) {
+      continue;
+    }
+
+    std::optional<std::vector<uint8_t>> decoded_cert_opt =
+        base::Base64Decode(*cert_b64);
+    if (!decoded_cert_opt.has_value()) {
+      // Cert isn't valid b64, continue.
+      continue;
+    }
+
+    bool invalid_constraint = false;
+    auto cert_with_constraints_mojo =
+        cert_verifier::mojom::CertWithConstraints::New();
+    cert_with_constraints_mojo->certificate = std::move(*decoded_cert_opt);
+    if (permitted_dns_names) {
+      for (const base::Value& dns_name : *permitted_dns_names) {
+        if (dns_name.is_string() && base::IsStringASCII(dns_name.GetString()) &&
+            dns_name.GetString().length() <= 255) {
+          cert_with_constraints_mojo->permitted_dns_names.push_back(
+              dns_name.GetString());
+        } else {
+          invalid_constraint = true;
+          break;
+        }
+      }
+    }
+    if (invalid_constraint) {
+      continue;
+    }
+
+    if (permitted_cidrs) {
+      for (const base::Value& cidr : *permitted_cidrs) {
+        if (!cidr.is_string()) {
+          invalid_constraint = true;
+          break;
+        }
+        net::IPAddress parsed_cidr;
+        net::IPAddress mask;
+        size_t prefix_length;
+        if (!net::ParseCIDRBlock(cidr.GetString(), &parsed_cidr,
+                                 &prefix_length)) {
+          // Don't add trust for cert if CIDR block doesn't parse.
+          invalid_constraint = true;
+          break;
+        }
+        if (parsed_cidr.IsIPv4()) {
+          if (!net::IPAddress::CreateIPv4Mask(&mask, prefix_length)) {
+            // Error in mask creation.
+            invalid_constraint = true;
+            break;
+          }
+        } else if (parsed_cidr.IsIPv6()) {
+          if (!net::IPAddress::CreateIPv6Mask(&mask, prefix_length)) {
+            // Error in mask creation.
+            invalid_constraint = true;
+            break;
+          }
+        } else {
+          // Somehow got an IP address that isn't ipv4 or ipv6?
+          invalid_constraint = true;
+          break;
+        }
+        cert_with_constraints_mojo->permitted_cidrs.push_back(
+            cert_verifier::mojom::CIDR::New(/*ip=*/parsed_cidr, /*mask=*/mask));
+      }
+    }
+    if (invalid_constraint) {
+      continue;
+    }
+
+    additional_certificates->trust_anchors_with_additional_constraints
+        .push_back(std::move(cert_with_constraints_mojo));
   }
 
   for (const base::Value& cert_b64 :
@@ -576,22 +727,18 @@ ProfileNetworkContextService::GetCertificatePolicy() {
     if (!base::Base64Decode(cert_b64.GetString(), &decoded)) {
       continue;
     }
-    base::StringPiece spki_piece;
+    std::string_view spki_piece;
     bool success = net::asn1::ExtractSPKIFromDERCert(decoded, &spki_piece);
     if (success) {
-      additional_distrusted_spkis.push_back(
-          std::vector<uint8_t>(spki_piece.begin(), spki_piece.end()));
+      additional_certificates->distrusted_spkis.emplace_back(spki_piece.begin(),
+                                                             spki_piece.end());
     }
   }
 
-  bool include_system_trust_store =
+  additional_certificates->include_system_trust_store =
       prefs->GetBoolean(prefs::kCAPlatformIntegrationEnabled);
 
-  return cert_verifier::mojom::AdditionalCertificates::New(
-      std::move(additional_untrusted_certificates),
-      std::move(additional_trust_anchors),
-      std::move(additional_trust_anchors_enforced_constraints),
-      std::move(additional_distrusted_spkis), include_system_trust_store);
+  return additional_certificates;
 }
 
 void ProfileNetworkContextService::UpdateCertificatePolicy() {
@@ -678,8 +825,19 @@ ProfileNetworkContextService::CreateCookieManagerParams(
     if (!IsContentSettingsTypeEnabled(type)) {
       continue;
     }
-    out->content_settings[type] =
-        host_content_settings_map->GetSettingsForOneType(type);
+    if (type == ContentSettingsType::FEDERATED_IDENTITY_SHARING) {
+      if (FederatedIdentityPermissionContext* fedcm_context =
+              FederatedIdentityPermissionContextFactory::GetForProfile(profile);
+          fedcm_context) {
+        out->content_settings[type] =
+            fedcm_context->GetSharingPermissionGrantsAsContentSettings();
+      } else {
+        out->content_settings[type] = ContentSettingsForOneType();
+      }
+    } else {
+      out->content_settings[type] =
+          host_content_settings_map->GetSettingsForOneType(type);
+    }
   }
 
   out->cookie_access_delegate_type =
@@ -704,6 +862,15 @@ void ProfileNetworkContextService::FlushCachedClientCertIfNeeded(
       [&](content::StoragePartition* storage_partition) {
         storage_partition->GetNetworkContext()->FlushCachedClientCertIfNeeded(
             host, certificate);
+      });
+}
+
+void ProfileNetworkContextService::FlushMatchingCachedClientCert(
+    const scoped_refptr<net::X509Certificate>& certificate) {
+  profile_->ForEachLoadedStoragePartition(
+      [&](content::StoragePartition* storage_partition) {
+        storage_partition->GetNetworkContext()->FlushMatchingCachedClientCert(
+            certificate);
       });
 }
 
@@ -786,9 +953,11 @@ ProfileNetworkContextService::CreateClientCertStore() {
 
   return store;
 #elif BUILDFLAG(IS_WIN)
-  return std::make_unique<net::ClientCertStoreWin>();
+  return GetWrappedCertStore(profile_,
+                             std::make_unique<net::ClientCertStoreWin>());
 #elif BUILDFLAG(IS_MAC)
-  return std::make_unique<net::ClientCertStoreMac>();
+  return GetWrappedCertStore(profile_,
+                             std::make_unique<net::ClientCertStoreMac>());
 #elif BUILDFLAG(IS_ANDROID)
   // Android does not use the ClientCertStore infrastructure. On Android client
   // cert matching is done by the OS as part of the call to show the cert
@@ -1137,17 +1306,8 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
         ipp_config_provider->IsIpProtectionEnabled();
   }
 
-  network_context_params->afp_block_list_experiment_enabled =
-      (base::FeatureList::IsEnabled(
-           features::
-               kEnableNetworkServiceResourceBlockListIfThirdPartyCookiesBlocked) &&
-       cookie_settings_->ShouldBlockThirdPartyCookies()) ||
-      (!profile_->IsOffTheRecord() &&
-       base::FeatureList::IsEnabled(
-           features::kEnableNetworkServiceResourceBlockList)) ||
-      (profile_->IsOffTheRecord() &&
-       base::FeatureList::IsEnabled(
-           features::kEnableNetworkServiceResourceBlockListInOtrSessions));
+  network_context_params->device_bound_sessions_enabled =
+      base::FeatureList::IsEnabled(net::features::kDeviceBoundSessions);
 }
 
 base::FilePath ProfileNetworkContextService::GetPartitionPath(

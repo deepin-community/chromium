@@ -16,12 +16,16 @@
 #include "build/build_config.h"
 #include "core/fxcrt/byteorder.h"
 #include "core/fxcrt/cfx_read_only_vector_stream.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/compiler_specific.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fixed_size_data_vector.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_memory_wrappers.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxge/cfx_font.h"
@@ -30,11 +34,12 @@
 #include "core/fxge/cfx_gemodule.h"
 #include "core/fxge/fx_font.h"
 #include "core/fxge/fx_fontencoding.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/numerics/safe_conversions.h"
 #include "xfa/fgas/font/cfgas_gefont.h"
 #include "xfa/fgas/font/fgas_fontutils.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "core/fxcrt/win/win_util.h"
+#endif
 
 namespace {
 
@@ -191,6 +196,12 @@ int32_t CALLBACK GdiFontEnumProc(ENUMLOGFONTEX* lpelfe,
 std::deque<FX_FONTDESCRIPTOR> EnumGdiFonts(const wchar_t* pwsFaceName,
                                            wchar_t wUnicode) {
   std::deque<FX_FONTDESCRIPTOR> fonts;
+  if (!pdfium::IsUser32AndGdi32Available()) {
+    // Without GDI32 and User32, GetDC / EnumFontFamiliesExW / ReleaseDC all
+    // fail.
+    return fonts;
+  }
+
   LOGFONTW lfFind;
   memset(&lfFind, 0, sizeof(lfFind));
   lfFind.lfCharSet = DEFAULT_CHARSET;
@@ -385,9 +396,12 @@ unsigned long ftStreamRead(FXFT_StreamRec* stream,
 
   IFX_SeekableReadStream* pFile =
       static_cast<IFX_SeekableReadStream*>(stream->descriptor.pointer);
-  if (!pFile->ReadBlockAtOffset({buffer, count}, offset))
-    return 0;
 
+  // SAFETY: required from caller.
+  if (!pFile->ReadBlockAtOffset(
+          UNSAFE_BUFFERS(pdfium::make_span(buffer, count), offset))) {
+    return 0;
+  }
   return count;
 }
 
@@ -756,7 +770,7 @@ void CFGAS_FontMgr::RegisterFace(RetainPtr<CFX_Face> pFace,
       WideString::FromUTF8(pFace->GetRec()->family_name));
   pFont->m_wsFaceName = wsFaceName;
   pFont->m_nFaceIndex =
-      pdfium::base::checked_cast<int32_t>(pFace->GetRec()->face_index);
+      pdfium::checked_cast<int32_t>(pFace->GetRec()->face_index);
   m_InstalledFonts.push_back(std::move(pFont));
 }
 
@@ -771,8 +785,7 @@ void CFGAS_FontMgr::RegisterFaces(
       continue;
     // All faces keep number of faces. It can be retrieved from any one face.
     if (num_faces == 0) {
-      num_faces =
-          pdfium::base::checked_cast<int32_t>(pFace->GetRec()->num_faces);
+      num_faces = pdfium::checked_cast<int32_t>(pFace->GetRec()->num_faces);
     }
     RegisterFace(pFace, wsFaceName);
     pFace->ClearExternalStream();

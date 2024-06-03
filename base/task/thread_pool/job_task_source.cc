@@ -132,7 +132,7 @@ bool JobTaskSource::WillJoin() {
   TRACE_EVENT0("base", "Job.WaitForParticipationOpportunity");
   CheckedAutoLock auto_lock(worker_lock_);
   DCHECK(!worker_released_condition_);  // This may only be called once.
-  worker_released_condition_ = worker_lock_.CreateConditionVariable();
+  worker_lock_.CreateConditionVariableAndEmplace(worker_released_condition_);
   // Prevent wait from triggering a ScopedBlockingCall as this would cause
   // |ThreadGroup::lock_| to be acquired, causing lock inversion.
   worker_released_condition_->declare_only_used_while_idle();
@@ -407,14 +407,13 @@ bool JobTaskSource::HasReadyTasks(TimeTicks now) const {
   return true;
 }
 
-absl::optional<Task> JobTaskSource::Clear(
-    TaskSource::Transaction* transaction) {
+std::optional<Task> JobTaskSource::Clear(TaskSource::Transaction* transaction) {
   Cancel();
 
   // Nothing is cleared since other workers might still racily run tasks. For
   // simplicity, the destructor will take care of it once all references are
   // released.
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 }  // namespace internal

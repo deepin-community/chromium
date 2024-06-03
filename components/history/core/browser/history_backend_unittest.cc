@@ -193,7 +193,7 @@ class HistoryBackendTestDelegate : public HistoryBackend::Delegate {
                         const VisitRow& visit_row,
                         std::optional<int64_t> local_navigation_id) override;
   void NotifyURLsModified(const URLRows& changed_urls) override;
-  void NotifyURLsDeleted(DeletionInfo deletion_info) override;
+  void NotifyDeletions(DeletionInfo deletion_info) override;
   void NotifyKeywordSearchTermUpdated(const URLRow& row,
                                       KeywordID keyword_id,
                                       const std::u16string& term) override;
@@ -298,8 +298,8 @@ class HistoryBackendTestBase : public testing::Test {
     urls_modified_notifications_.push_back(changed_urls);
   }
 
-  void NotifyURLsDeleted(DeletionInfo deletion_info) {
-    mem_backend_->OnURLsDeleted(nullptr, deletion_info);
+  void NotifyDeletions(DeletionInfo deletion_info) {
+    mem_backend_->OnHistoryDeletions(nullptr, deletion_info);
     urls_deleted_notifications_.push_back(std::move(deletion_info));
   }
 
@@ -402,8 +402,8 @@ void HistoryBackendTestDelegate::NotifyURLsModified(
   test_->NotifyURLsModified(changed_urls);
 }
 
-void HistoryBackendTestDelegate::NotifyURLsDeleted(DeletionInfo deletion_info) {
-  test_->NotifyURLsDeleted(std::move(deletion_info));
+void HistoryBackendTestDelegate::NotifyDeletions(DeletionInfo deletion_info) {
+  test_->NotifyDeletions(std::move(deletion_info));
 }
 
 void HistoryBackendTestDelegate::NotifyKeywordSearchTermUpdated(
@@ -674,7 +674,7 @@ class InMemoryHistoryBackendTest : public HistoryBackendTestBase {
     if (row2) rows.push_back(*row2);
     if (row3) rows.push_back(*row3);
 
-    NotifyURLsDeleted(DeletionInfo::ForUrls(rows, std::set<GURL>()));
+    NotifyDeletions(DeletionInfo::ForUrls(rows, std::set<GURL>()));
   }
 
   size_t GetNumberOfMatchingSearchTerms(const int keyword_id,
@@ -2373,7 +2373,7 @@ TEST_F(HistoryBackendTest, RemoveVisitsTransitions) {
   ASSERT_EQ(0, backend_->db()->GetRowForURL(url1, &row));
 
   // Ensure delete notifications were propagated with the correct reason.
-  EXPECT_EQ(2u, urls_deleted_notifications().size());
+  EXPECT_EQ(4u, urls_deleted_notifications().size());
   for (const DeletionInfo& info : urls_deleted_notifications()) {
     EXPECT_EQ(DeletionInfo::Reason::kOther, info.deletion_reason());
   }
@@ -3569,7 +3569,7 @@ TEST_F(InMemoryHistoryBackendTest, OnURLsDeletedEnMasse) {
   SimulateNotificationURLsModified(mem_backend_.get(), &row1, &row2, &row3);
 
   // Now notify the in-memory database that all history has been deleted.
-  mem_backend_->OnURLsDeleted(nullptr, DeletionInfo::ForAllHistory());
+  mem_backend_->OnHistoryDeletions(nullptr, DeletionInfo::ForAllHistory());
 
   // Expect that everything goes away.
   EXPECT_EQ(0, mem_backend_->db()->GetRowForURL(row1.url(), nullptr));
@@ -4327,11 +4327,9 @@ TEST_F(HistoryBackendTest, AddClusters_GetCluster) {
   visit_3.annotated_visit.visit_row.visit_id = 3;
 
   ClusterKeywordData keyword_data_1 = {
-      ClusterKeywordData::ClusterKeywordType::kEntityAlias,
-      .4,
-      {"entity1", "entity2"}};
+      ClusterKeywordData::ClusterKeywordType::kEntityAlias, .4};
   ClusterKeywordData keyword_data_2 = {
-      ClusterKeywordData::ClusterKeywordType::kEntityCategory, .6, {}};
+      ClusterKeywordData::ClusterKeywordType::kEntityCategory, .6};
 
   backend_->db_->AddClusters(
       {{0,
@@ -4352,13 +4350,9 @@ TEST_F(HistoryBackendTest, AddClusters_GetCluster) {
             ClusterKeywordData::ClusterKeywordType::kEntityAlias);
   EXPECT_EQ(cluster.keyword_to_data_map[u"keyword1"].score, .4f);
   // Only the 1st keyword entity should be preserved.
-  EXPECT_THAT(cluster.keyword_to_data_map[u"keyword1"].entity_collections,
-              UnorderedElementsAre("entity1"));
   EXPECT_EQ(cluster.keyword_to_data_map[u"keyword2"].type,
             ClusterKeywordData::ClusterKeywordType::kEntityCategory);
   EXPECT_EQ(cluster.keyword_to_data_map[u"keyword2"].score, .6f);
-  EXPECT_TRUE(
-      cluster.keyword_to_data_map[u"keyword2"].entity_collections.empty());
   // Verify duplicate visits.
   ASSERT_EQ(cluster.visits[0].duplicate_visits.size(), 1u);
   EXPECT_EQ(cluster.visits[0].duplicate_visits[0].visit_id, 2);
@@ -5251,7 +5245,7 @@ TEST_F(HistoryBackendTest, DeleteAllForeignVisitsWorksInBatches) {
   task_environment_.RunUntilIdle();
 
   // Ensure delete notifications were propagated with the correct reason.
-  ASSERT_EQ(1u, urls_deleted_notifications().size());
+  ASSERT_EQ(2u, urls_deleted_notifications().size());
   EXPECT_EQ(DeletionInfo::Reason::kDeleteAllForeignVisits,
             urls_deleted_notifications()[0].deletion_reason());
 
@@ -5477,6 +5471,35 @@ TEST_F(HistoryBackendTest, QueryURLs) {
   EXPECT_EQ(1U, results.size());
   ASSERT_TRUE(results[0].success);
   EXPECT_EQ(url, results[0].row.url());
+}
+
+TEST_F(HistoryBackendTest, GetMostRecentVisitForEachURL) {
+  ASSERT_TRUE(backend_.get());
+
+  GURL url("http://www.testquery.com");
+
+  // Clear all history.
+  backend_->DeleteAllHistory();
+
+  // Visit the url after typing it with a past date.
+  backend_->AddPageVisit(
+      url, base::Time::Now() - base::Days(1), /*referring_visit=*/0,
+      /*external_referrer_url=*/GURL(), ui::PAGE_TRANSITION_TYPED, false,
+      SOURCE_BROWSED, true, false, true);
+
+  base::Time curr_time = base::Time::Now();
+
+  // Visit the url after typing it.
+  backend_->AddPageVisit(url, curr_time, /*referring_visit=*/0,
+                         /*external_referrer_url=*/GURL(),
+                         ui::PAGE_TRANSITION_TYPED, false, SOURCE_BROWSED, true,
+                         false, true);
+
+  std::map<GURL, VisitRow> visits =
+      backend_->GetMostRecentVisitForEachURL({url});
+
+  EXPECT_EQ(1U, visits.size());
+  EXPECT_EQ(curr_time, visits[url].visit_time);
 }
 
 // We want to test with the VisitedLinkDatabase enabled and disabled.

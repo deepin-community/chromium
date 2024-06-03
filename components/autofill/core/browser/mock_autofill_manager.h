@@ -24,13 +24,12 @@ struct FormData;
 struct FormFieldData;
 class FormStructure;
 class AutofillDriver;
-class AutofillClient;
 
 // Reusable mock of AutofillManager. Note that only the pure virtual methods are
 // mocked here; non-virtual methods still rely on their default implementation.
 class MockAutofillManager : public AutofillManager {
  public:
-  MockAutofillManager(AutofillDriver* driver, AutofillClient* client);
+  explicit MockAutofillManager(AutofillDriver* driver);
   MockAutofillManager(const MockAutofillManager&) = delete;
   MockAutofillManager& operator=(const MockAutofillManager&) = delete;
   ~MockAutofillManager() override;
@@ -101,17 +100,8 @@ class MockAutofillManager : public AutofillManager {
               (const FormData& form_data, const FormStructure& form_structure),
               (override));
   MOCK_METHOD(void,
-              OnAfterProcessParsedForms,
-              (const DenseSet<FormType>& form_types),
-              (override));
-  MOCK_METHOD(void,
               ReportAutofillWebOTPMetrics,
               (bool used_web_otp),
-              (override));
-  MOCK_METHOD(void,
-              OnContextMenuShownInField,
-              (const FormGlobalId& form_global_id,
-               const FieldGlobalId& field_global_id),
               (override));
 
   base::WeakPtr<AutofillManager> GetWeakPtr() override;

@@ -56,9 +56,6 @@ class IOSurfaceImageBackingFactoryTest : public SharedImageTestBase {
  public:
   void SetUp() override {
     ASSERT_TRUE(gpu_preferences_.use_passthrough_cmd_decoder);
-    gpu_preferences_.texture_target_exception_list.push_back(
-        gfx::BufferUsageAndFormat(gfx::BufferUsage::SCANOUT,
-                                  gfx::BufferFormat::RGBA_8888));
 
     ASSERT_NO_FATAL_FAILURE(InitializeContext(GrContextType::kGL));
 
@@ -68,7 +65,12 @@ class IOSurfaceImageBackingFactoryTest : public SharedImageTestBase {
 
     backing_factory_ = std::make_unique<IOSurfaceImageBackingFactory>(
         context_state_->gr_context_type(), context_state_->GetMaxTextureSize(),
-        context_state_->feature_info(), /*progress_reporter=*/nullptr);
+        context_state_->feature_info(), /*progress_reporter=*/nullptr,
+#if BUILDFLAG(IS_MAC)
+        GetMacOSSpecificTextureTargetForCurrentGLImplementation());
+#else
+        GL_TEXTURE_2D);
+#endif
   }
 
  protected:
@@ -137,7 +139,12 @@ TEST_F(IOSurfaceImageBackingFactoryTest, GL_SkiaGL) {
   EXPECT_TRUE(backing);
   backing->SetCleared();
 
-  GLenum expected_target = gpu::GetPlatformSpecificTextureTarget();
+  GLenum expected_target =
+#if BUILDFLAG(IS_MAC)
+      GetMacOSSpecificTextureTargetForCurrentGLImplementation();
+#else
+      GL_TEXTURE_2D;
+#endif
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
       shared_image_manager_.Register(std::move(backing), &memory_type_tracker_);
 
@@ -340,6 +347,35 @@ class IOSurfaceImageBackingFactoryDawnTest
   wgpu::Adapter adapter_;
 };
 
+// Test to verify that different representations created via the same Device get
+// different wgpu::Textures.
+TEST_P(IOSurfaceImageBackingFactoryDawnTest,
+       Dawn_MultipleRepresentationsFromSingleDevice) {
+  wgpu::Device device = CreateDevice();
+
+  gfx::Size size(1, 1);
+  uint32_t usage = SHARED_IMAGE_USAGE_WEBGPU_WRITE |
+                   SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_SCANOUT;
+  auto factory_ref = CreateSharedImage(size, usage);
+
+  auto rep_0 = shared_image_representation_factory_.ProduceDawn(
+      factory_ref->mailbox(), device, backend_type(), {}, context_state_);
+  auto scoped_access_0 = rep_0->BeginScopedAccess(
+      wgpu::TextureUsage::CopySrc,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  auto rep_1 = shared_image_representation_factory_.ProduceDawn(
+      factory_ref->mailbox(), device, backend_type(), {}, context_state_);
+  auto scoped_access_1 = rep_1->BeginScopedAccess(
+      wgpu::TextureUsage::CopySrc,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  wgpu::Texture texture_0(scoped_access_0->texture());
+  wgpu::Texture texture_1(scoped_access_1->texture());
+
+  EXPECT_NE(texture_0.Get(), texture_1.Get());
+}
+
 // Test to check interaction between Dawn and skia GL representations.
 TEST_P(IOSurfaceImageBackingFactoryDawnTest, Dawn_SkiaGL) {
   // Create a Dawn device
@@ -347,8 +383,8 @@ TEST_P(IOSurfaceImageBackingFactoryDawnTest, Dawn_SkiaGL) {
   ASSERT_NE(device, nullptr);
 
   gfx::Size size(1, 1);
-  uint32_t usage = SHARED_IMAGE_USAGE_WEBGPU_READ |
-                   SHARED_IMAGE_USAGE_WEBGPU_WRITE | SHARED_IMAGE_USAGE_SCANOUT;
+  uint32_t usage = SHARED_IMAGE_USAGE_WEBGPU_WRITE |
+                   SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_SCANOUT;
   auto factory_ref = CreateSharedImage(size, usage);
 
   // Clear the shared image to green using Dawn.
@@ -406,7 +442,7 @@ TEST_P(IOSurfaceImageBackingFactoryDawnTest, GL_Dawn_Skia_UnclearTexture) {
   gfx::Size size(1, 1);
   const uint32_t usage =
       SHARED_IMAGE_USAGE_GLES2_WRITE | SHARED_IMAGE_USAGE_SCANOUT |
-      SHARED_IMAGE_USAGE_WEBGPU_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE;
+      SHARED_IMAGE_USAGE_WEBGPU_WRITE | SHARED_IMAGE_USAGE_DISPLAY_READ;
   auto factory_ref = CreateSharedImage(size, usage);
 
   {
@@ -414,7 +450,12 @@ TEST_P(IOSurfaceImageBackingFactoryDawnTest, GL_Dawn_Skia_UnclearTexture) {
     auto gl_representation =
         shared_image_representation_factory_.ProduceGLTexturePassthrough(
             factory_ref->mailbox());
-    GLenum expected_target = GetPlatformSpecificTextureTarget();
+    GLenum expected_target =
+#if BUILDFLAG(IS_MAC)
+        GetMacOSSpecificTextureTargetForCurrentGLImplementation();
+#else
+        GL_TEXTURE_2D;
+#endif
     EXPECT_TRUE(gl_representation);
     EXPECT_EQ(expected_target,
               gl_representation->GetTexturePassthrough()->target());
@@ -498,7 +539,6 @@ TEST_P(IOSurfaceImageBackingFactoryDawnTest, GL_Dawn_Skia_UnclearTexture) {
 TEST_P(IOSurfaceImageBackingFactoryDawnTest, UnclearDawn_SkiaFails) {
   gfx::Size size(1, 1);
   const uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT |
-                         SHARED_IMAGE_USAGE_WEBGPU_READ |
                          SHARED_IMAGE_USAGE_WEBGPU_WRITE;
   auto factory_ref = CreateSharedImage(size, usage);
 
@@ -582,9 +622,8 @@ TEST_P(IOSurfaceImageBackingFactoryDawnTest, Dawn_SamplingVideoTexture) {
   const auto color_space = gfx::ColorSpace::CreateSRGB();
   GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
   SkAlphaType alpha_type = kPremul_SkAlphaType;
-  const uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT |
-                         SHARED_IMAGE_USAGE_WEBGPU_READ |
-                         SHARED_IMAGE_USAGE_WEBGPU_WRITE;
+  const uint32_t usage =
+      SHARED_IMAGE_USAGE_SCANOUT | SHARED_IMAGE_USAGE_WEBGPU_READ;
   const gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, format, surface_handle, size, color_space, surface_origin,
@@ -720,7 +759,12 @@ class IOSurfaceImageBackingFactoryParameterizedTestBase
 
     backing_factory_ = std::make_unique<IOSurfaceImageBackingFactory>(
         context_state_->gr_context_type(), context_state_->GetMaxTextureSize(),
-        context_state_->feature_info(), &progress_reporter_);
+        context_state_->feature_info(), &progress_reporter_,
+#if BUILDFLAG(IS_MAC)
+        GetMacOSSpecificTextureTargetForCurrentGLImplementation());
+#else
+        GL_TEXTURE_2D);
+#endif
   }
 
   viz::SharedImageFormat get_format() { return std::get<0>(GetParam()); }
@@ -942,7 +986,7 @@ TEST_P(IOSurfaceImageBackingFactoryScanoutTest, InitialData) {
 
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", initial_data);
+      "TestLabel", /*is_thread_safe=*/false, initial_data);
   ::testing::Mock::VerifyAndClearExpectations(&progress_reporter_);
   if (!should_succeed) {
     EXPECT_FALSE(backing);
@@ -955,7 +999,12 @@ TEST_P(IOSurfaceImageBackingFactoryScanoutTest, InitialData) {
   std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
       shared_image_manager_.Register(std::move(backing), &memory_type_tracker_);
   EXPECT_TRUE(shared_image);
-  GLenum expected_target = gpu::GetPlatformSpecificTextureTarget();
+  GLenum expected_target =
+#if BUILDFLAG(IS_MAC)
+      GetMacOSSpecificTextureTargetForCurrentGLImplementation();
+#else
+      GL_TEXTURE_2D;
+#endif
 
   if (get_gr_context_type() == GrContextType::kGL) {
     // First, validate a GLTexturePassthroughImageRepresentation.
@@ -1015,7 +1064,7 @@ TEST_P(IOSurfaceImageBackingFactoryScanoutTest, InitialDataImage) {
   std::vector<uint8_t> initial_data(256 * 256 * 4);
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", initial_data);
+      "TestLabel", /*is_thread_safe=*/false, initial_data);
   if (!should_succeed) {
     EXPECT_FALSE(backing);
     return;
@@ -1079,11 +1128,11 @@ TEST_P(IOSurfaceImageBackingFactoryScanoutTest, InitialDataWrongSize) {
   std::vector<uint8_t> initial_data_large(256 * 512 * 4);
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", initial_data_small);
+      "TestLabel", /*is_thread_safe=*/false, initial_data_small);
   EXPECT_FALSE(backing);
   backing = backing_factory_->CreateSharedImage(
       mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", initial_data_large);
+      "TestLabel", /*is_thread_safe=*/false, initial_data_large);
   EXPECT_FALSE(backing);
 }
 
@@ -1117,7 +1166,7 @@ TEST_P(IOSurfaceImageBackingFactoryScanoutTest,
   std::vector<uint8_t> initial_data(256 * 256 * 4);
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", initial_data);
+      "TestLabel", /*is_thread_safe=*/false, initial_data);
   EXPECT_FALSE(backing);
 }
 
@@ -1243,47 +1292,61 @@ class IOSurfaceImageBackingFactoryGMBTest
     }
     return true;
   }
+
+  std::unique_ptr<SharedImageRepresentationFactoryRef> CreateSharedImage(
+      gfx::Size size,
+      viz::SharedImageFormat format,
+      uint32_t usage,
+      gfx::ColorSpace color_space) {
+    const bool should_succeed = can_create_gmb_shared_image(get_format());
+    auto mailbox = Mailbox::GenerateForSharedImage();
+    GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
+    SkAlphaType alpha_type = kPremul_SkAlphaType;
+    bool override_rgba_to_bgra = get_gr_context_type() == GrContextType::kGL;
+
+    gfx::BufferFormat buffer_format = gpu::ToBufferFormat(format);
+    gfx::GpuMemoryBufferHandle handle;
+    gfx::GpuMemoryBufferId kBufferId(1);
+    handle.type = gfx::IO_SURFACE_BUFFER;
+    handle.id = kBufferId;
+    handle.io_surface = gfx::CreateIOSurface(
+        size, buffer_format, /*should_clear=*/true, override_rgba_to_bgra);
+    DCHECK(handle.io_surface);
+
+    auto backing = backing_factory_->CreateSharedImage(
+        mailbox, format, size, color_space, surface_origin, alpha_type, usage,
+        "TestLabel", std::move(handle));
+
+    if (!should_succeed) {
+      return nullptr;
+    }
+
+    // Check clearing.
+    if (!backing->IsCleared()) {
+      backing->SetCleared();
+      EXPECT_TRUE(backing->IsCleared());
+    }
+
+    return shared_image_manager_.Register(std::move(backing),
+                                          &memory_type_tracker_);
+  }
 };
 
 TEST_P(IOSurfaceImageBackingFactoryGMBTest, Basic) {
-  const bool should_succeed = can_create_gmb_shared_image(get_format());
-  auto mailbox = Mailbox::GenerateForSharedImage();
   auto format = get_format();
   gfx::Size size(256, 256);
-  auto color_space = gfx::ColorSpace::CreateSRGB();
-  GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
-  SkAlphaType alpha_type = kPremul_SkAlphaType;
   uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT;
-  bool override_rgba_to_bgra = get_gr_context_type() == GrContextType::kGL;
+  auto color_space = gfx::ColorSpace::CreateSRGB();
 
-  gfx::BufferFormat buffer_format = gpu::ToBufferFormat(format);
-  gfx::GpuMemoryBufferHandle handle;
-  gfx::GpuMemoryBufferId kBufferId(1);
-  handle.type = gfx::IO_SURFACE_BUFFER;
-  handle.id = kBufferId;
-  handle.io_surface = gfx::CreateIOSurface(
-      size, buffer_format, /*should_clear=*/true, override_rgba_to_bgra);
-  DCHECK(handle.io_surface);
-
-  auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", std::move(handle));
-
+  const bool should_succeed = can_create_gmb_shared_image(get_format());
+  auto shared_image = CreateSharedImage(size, format, usage, color_space);
   if (!should_succeed) {
-    EXPECT_FALSE(backing);
+    EXPECT_FALSE(shared_image);
     return;
   }
-  ASSERT_TRUE(backing);
+  ASSERT_TRUE(shared_image);
+  auto mailbox = shared_image->mailbox();
 
-  // Check clearing.
-  if (!backing->IsCleared()) {
-    backing->SetCleared();
-    EXPECT_TRUE(backing->IsCleared());
-  }
-
-  std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
-      shared_image_manager_.Register(std::move(backing), &memory_type_tracker_);
-  EXPECT_TRUE(shared_image);
   if (get_gr_context_type() == GrContextType::kGL) {
     // First, validate a GLTexturePassthroughImageRepresentation.
     auto gl_representation =
@@ -1397,6 +1460,301 @@ TEST_P(IOSurfaceImageBackingFactoryGMBTest, Basic) {
   skia_representation.reset();
 
   shared_image.reset();
+}
+
+// Tests that multiple representations created from Graphite's Dawn device use
+// the same wgpu::Texture for accesses created with the same usage.
+TEST_P(IOSurfaceImageBackingFactoryGMBTest,
+       Dawn_MultipleRepresentationsWithSameUsageFromGraphiteDevice) {
+  if ((get_gr_context_type() != GrContextType::kGraphiteDawn) ||
+      GetDawnBackendType() != wgpu::BackendType::Metal) {
+    GTEST_SKIP();
+  }
+
+  auto format = get_format();
+  gfx::Size size(256, 256);
+  uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT;
+  auto color_space = gfx::ColorSpace::CreateSRGB();
+
+  const bool should_succeed = can_create_gmb_shared_image(get_format());
+  auto shared_image = CreateSharedImage(size, format, usage, color_space);
+  if (!should_succeed) {
+    EXPECT_FALSE(shared_image);
+    return;
+  }
+  ASSERT_TRUE(shared_image);
+  auto mailbox = shared_image->mailbox();
+
+  auto* context_provider = context_state_->dawn_context_provider();
+  auto device = context_provider->GetDevice();
+
+  auto dawn_representation_0 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_0 = dawn_representation_0->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  auto dawn_representation_1 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_1 = dawn_representation_1->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  wgpu::Texture texture_0(dawn_scoped_access_0->texture());
+  wgpu::Texture texture_1(dawn_scoped_access_1->texture());
+
+  // The texture created for the first access should be cached and reused by the
+  // second access.
+  EXPECT_EQ(texture_0.Get(), texture_1.Get());
+}
+
+// Tests that multiple representations created from Graphite's Dawn device use
+// different wgpu::Textures for accesses created with different usages.
+TEST_P(IOSurfaceImageBackingFactoryGMBTest,
+       Dawn_MultipleRepresentationsWithDifferentUsagesFromGraphiteDevice) {
+  if ((get_gr_context_type() != GrContextType::kGraphiteDawn) ||
+      GetDawnBackendType() != wgpu::BackendType::Metal) {
+    GTEST_SKIP();
+  }
+
+  auto format = get_format();
+  gfx::Size size(256, 256);
+  uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT;
+  auto color_space = gfx::ColorSpace::CreateSRGB();
+
+  const bool should_succeed = can_create_gmb_shared_image(get_format());
+  auto shared_image = CreateSharedImage(size, format, usage, color_space);
+  if (!should_succeed) {
+    EXPECT_FALSE(shared_image);
+    return;
+  }
+  ASSERT_TRUE(shared_image);
+  auto mailbox = shared_image->mailbox();
+
+  auto* context_provider = context_state_->dawn_context_provider();
+  auto device = context_provider->GetDevice();
+
+  auto dawn_representation_0 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_0 = dawn_representation_0->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  auto dawn_representation_1 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_1 = dawn_representation_1->BeginScopedAccess(
+      wgpu::TextureUsage::CopySrc,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  wgpu::Texture texture_0(dawn_scoped_access_0->texture());
+  wgpu::Texture texture_1(dawn_scoped_access_1->texture());
+
+  // The texture created for the first access should be distinct from that of
+  // the second access.
+  EXPECT_NE(texture_0.Get(), texture_1.Get());
+}
+
+// Tests that sequential accesses to a Dawn representation created from the
+// Graphite device use the same wgpu::Texture iff the usage is the same.
+TEST_P(IOSurfaceImageBackingFactoryGMBTest,
+       Dawn_SequentialAccessesOnSingleRepresentationFromGraphiteDevice) {
+  if ((get_gr_context_type() != GrContextType::kGraphiteDawn) ||
+      GetDawnBackendType() != wgpu::BackendType::Metal) {
+    GTEST_SKIP();
+  }
+
+  auto format = get_format();
+  gfx::Size size(256, 256);
+  uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT;
+  auto color_space = gfx::ColorSpace::CreateSRGB();
+
+  const bool should_succeed = can_create_gmb_shared_image(get_format());
+  auto shared_image = CreateSharedImage(size, format, usage, color_space);
+  if (!should_succeed) {
+    EXPECT_FALSE(shared_image);
+    return;
+  }
+  ASSERT_TRUE(shared_image);
+  auto mailbox = shared_image->mailbox();
+
+  auto* context_provider = context_state_->dawn_context_provider();
+  auto device = context_provider->GetDevice();
+
+  auto dawn_representation = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_0 = dawn_representation->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  wgpu::Texture texture_0(dawn_scoped_access_0->texture());
+
+  // The texture created for the first access should be reused for a new
+  // access with the same usage.
+  dawn_scoped_access_0.reset();
+  auto dawn_scoped_access_1 = dawn_representation->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  wgpu::Texture texture_1(dawn_scoped_access_1->texture());
+  EXPECT_EQ(texture_0.Get(), texture_1.Get());
+
+  // The texture created for the first access should not be reused for a new
+  // access with different usage.
+  dawn_scoped_access_1.reset();
+  auto dawn_scoped_access_2 = dawn_representation->BeginScopedAccess(
+      wgpu::TextureUsage::CopySrc,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  wgpu::Texture texture_2(dawn_scoped_access_2->texture());
+  EXPECT_NE(texture_0.Get(), texture_2.Get());
+}
+
+// Tests that sequential accesses to distinct Dawn representations created from
+// the Graphite device use the same wgpu::Texture iff the usage is the same.
+TEST_P(IOSurfaceImageBackingFactoryGMBTest,
+       Dawn_SequentialAccessesOnDifferentRepresentationsFromGraphiteDevice) {
+  if ((get_gr_context_type() != GrContextType::kGraphiteDawn) ||
+      GetDawnBackendType() != wgpu::BackendType::Metal) {
+    GTEST_SKIP();
+  }
+
+  auto format = get_format();
+  gfx::Size size(256, 256);
+  uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT;
+  auto color_space = gfx::ColorSpace::CreateSRGB();
+
+  const bool should_succeed = can_create_gmb_shared_image(get_format());
+  auto shared_image = CreateSharedImage(size, format, usage, color_space);
+  if (!should_succeed) {
+    EXPECT_FALSE(shared_image);
+    return;
+  }
+  ASSERT_TRUE(shared_image);
+  auto mailbox = shared_image->mailbox();
+
+  auto* context_provider = context_state_->dawn_context_provider();
+  auto device = context_provider->GetDevice();
+
+  auto dawn_representation_0 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_0 = dawn_representation_0->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  wgpu::Texture texture_0(dawn_scoped_access_0->texture());
+
+  // The texture created for the first access should be reused for a new
+  // access created from a new Dawn representation but with the same usage.
+  dawn_scoped_access_0.reset();
+  dawn_representation_0.reset();
+  auto dawn_representation_1 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_1 = dawn_representation_1->BeginScopedAccess(
+      wgpu::TextureUsage::TextureBinding,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  wgpu::Texture texture_1(dawn_scoped_access_1->texture());
+  EXPECT_EQ(texture_0.Get(), texture_1.Get());
+
+  // The texture created for the first access should not be reused for a new
+  // access from a new representation with different usage.
+  dawn_scoped_access_1.reset();
+  dawn_representation_1.reset();
+  auto dawn_representation_2 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_2 = dawn_representation_2->BeginScopedAccess(
+      wgpu::TextureUsage::CopySrc,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  wgpu::Texture texture_2(dawn_scoped_access_2->texture());
+  EXPECT_NE(texture_0.Get(), texture_2.Get());
+}
+
+// Tests that destroying an access/representation from the Graphite device does
+// not end the underlying access on Dawn's SharedTextureMemory if there is a
+// second access still open with the same usage.
+TEST_P(IOSurfaceImageBackingFactoryGMBTest,
+       Dawn_SecondAccessFromGraphiteDeviceStaysOpenWhenFirstDestroyed) {
+  if ((get_gr_context_type() != GrContextType::kGraphiteDawn) ||
+      GetDawnBackendType() != wgpu::BackendType::Metal) {
+    GTEST_SKIP();
+  }
+
+  auto format = get_format();
+  if (format.is_multi_plane()) {
+    // This test does a copy from one Dawn texture to another, which is not
+    // supported with a multiplanar texture as the source texture.
+    GTEST_SKIP();
+  }
+
+  gfx::Size size(256, 256);
+  uint32_t usage = SHARED_IMAGE_USAGE_SCANOUT;
+  auto color_space = gfx::ColorSpace::CreateSRGB();
+
+  const bool should_succeed = can_create_gmb_shared_image(get_format());
+  auto shared_image = CreateSharedImage(size, format, usage, color_space);
+  if (!should_succeed) {
+    EXPECT_FALSE(shared_image);
+    return;
+  }
+  ASSERT_TRUE(shared_image);
+  auto mailbox = shared_image->mailbox();
+
+  auto* context_provider = context_state_->dawn_context_provider();
+  auto device = context_provider->GetDevice();
+
+  auto dawn_representation_0 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_0 = dawn_representation_0->BeginScopedAccess(
+      wgpu::TextureUsage::CopySrc,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  auto dawn_representation_1 = shared_image_representation_factory_.ProduceDawn(
+      mailbox, device, context_provider->backend_type(), {}, context_state_);
+  auto dawn_scoped_access_1 = dawn_representation_1->BeginScopedAccess(
+      wgpu::TextureUsage::CopySrc,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+
+  wgpu::Texture texture_0(dawn_scoped_access_0->texture());
+  wgpu::Texture texture_1(dawn_scoped_access_1->texture());
+
+  // The texture created for the first access should be cached and reused by the
+  // second access.
+  EXPECT_EQ(texture_0.Get(), texture_1.Get());
+
+  // Destroy the first access and representation.
+  dawn_scoped_access_0.reset();
+  dawn_representation_0.reset();
+
+  // Do a Dawn submit using the texture to verify that the the destruction of
+  // the first access and representation should not have resulted in
+  // SharedTextureMemory::EndAccess() being called.
+  auto dst = CreateSharedImage(size, format, usage, color_space);
+  auto dst_rep = shared_image_representation_factory_.ProduceDawn(
+      dst->mailbox(), device, context_provider->backend_type(), {},
+      context_state_);
+  auto dst_scoped_access = dst_rep->BeginScopedAccess(
+      wgpu::TextureUsage::CopyDst,
+      SharedImageRepresentation::AllowUnclearedAccess::kYes);
+  wgpu::Texture dst_texture(dst_scoped_access->texture());
+
+  wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+
+  wgpu::ImageCopyTexture copy_src;
+  copy_src.texture = texture_1;
+  wgpu::ImageCopyTexture copy_dst;
+  copy_dst.texture = dst_texture;
+  wgpu::Extent3D copy_size;
+  copy_size.width = size.width();
+  copy_size.height = size.height();
+
+  encoder.CopyTextureToTexture(&copy_src, &copy_dst, &copy_size);
+  wgpu::CommandBuffer commands = encoder.Finish();
+
+  // There should have been no errors signaled by Dawn before the submit.
+  ASSERT_FALSE(context_provider->GetResetStatus());
+
+  // Do the submit and verify that it did not result in a Dawn validation error
+  // (which it will if the destruction of the first scoped access representation
+  // has resulted in SharedTextureMemory::EndAccess() being called on the
+  // texture).
+  wgpu::Queue queue = device.GetQueue();
+  queue.Submit(1, &commands);
+  EXPECT_FALSE(context_provider->GetResetStatus());
 }
 
 const auto kScanoutFormats =

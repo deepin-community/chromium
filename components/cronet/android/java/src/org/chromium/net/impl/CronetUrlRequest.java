@@ -859,8 +859,8 @@ public final class CronetUrlRequest extends UrlRequestBase {
     }
 
     /**
-     * Called by the native code on the network thread to report metrics. Happens before
-     * onSucceeded, onError and onCanceled.
+     * Called by the native code on the network thread to report metrics. The native code will call
+     * onSucceeded, onError and onCanceled immediately after this method returns.
      */
     @SuppressWarnings("unused")
     @CalledByNative
@@ -883,31 +883,29 @@ public final class CronetUrlRequest extends UrlRequestBase {
             long receivedByteCount,
             boolean quicConnectionMigrationAttempted,
             boolean quicConnectionMigrationSuccessful) {
-        synchronized (mUrlRequestAdapterLock) {
-            if (mMetrics != null) {
-                throw new IllegalStateException("Metrics collection should only happen once.");
-            }
-            mMetrics =
-                    new CronetMetrics(
-                            requestStartMs,
-                            dnsStartMs,
-                            dnsEndMs,
-                            connectStartMs,
-                            connectEndMs,
-                            sslStartMs,
-                            sslEndMs,
-                            sendingStartMs,
-                            sendingEndMs,
-                            pushStartMs,
-                            pushEndMs,
-                            responseStartMs,
-                            requestEndMs,
-                            socketReused,
-                            sentByteCount,
-                            receivedByteCount);
-            mQuicConnectionMigrationAttempted = quicConnectionMigrationAttempted;
-            mQuicConnectionMigrationSuccessful = quicConnectionMigrationSuccessful;
+        if (mMetrics != null) {
+            throw new IllegalStateException("Metrics collection should only happen once.");
         }
+        mMetrics =
+                new CronetMetrics(
+                        requestStartMs,
+                        dnsStartMs,
+                        dnsEndMs,
+                        connectStartMs,
+                        connectEndMs,
+                        sslStartMs,
+                        sslEndMs,
+                        sendingStartMs,
+                        sendingEndMs,
+                        pushStartMs,
+                        pushEndMs,
+                        responseStartMs,
+                        requestEndMs,
+                        socketReused,
+                        sentByteCount,
+                        receivedByteCount);
+        mQuicConnectionMigrationAttempted = quicConnectionMigrationAttempted;
+        mQuicConnectionMigrationSuccessful = quicConnectionMigrationSuccessful;
         // Metrics are reported to RequestFinishedListener when the final UrlRequest.Callback has
         // been invoked.
     }
@@ -1067,6 +1065,24 @@ public final class CronetUrlRequest extends UrlRequestBase {
             totalLatency = Duration.ofSeconds(0);
         }
 
+        CronetTrafficInfo.RequestTerminalState requestTerminalState;
+        switch (mFinishedReason) {
+            case RequestFinishedInfo.SUCCEEDED:
+                requestTerminalState = CronetTrafficInfo.RequestTerminalState.SUCCEEDED;
+                break;
+            case RequestFinishedInfo.FAILED:
+                requestTerminalState = CronetTrafficInfo.RequestTerminalState.ERROR;
+                break;
+            case RequestFinishedInfo.CANCELED:
+                requestTerminalState = CronetTrafficInfo.RequestTerminalState.CANCELLED;
+                break;
+            default:
+                throw new IllegalStateException(
+                        "Internal Cronet error: attempted to report "
+                                + "metrics with invalid finished reason: "
+                                + mFinishedReason);
+        }
+
         return new CronetTrafficInfo(
                 requestHeaderSizeInBytes,
                 requestBodySizeInBytes,
@@ -1077,7 +1093,8 @@ public final class CronetUrlRequest extends UrlRequestBase {
                 totalLatency,
                 negotiatedProtocol,
                 mQuicConnectionMigrationAttempted,
-                mQuicConnectionMigrationSuccessful);
+                mQuicConnectionMigrationSuccessful,
+                requestTerminalState);
     }
 
     // Maybe report metrics. This method should only be called on Callback's executor thread and
@@ -1086,6 +1103,11 @@ public final class CronetUrlRequest extends UrlRequestBase {
         final RefCountDelegate inflightCallbackCount =
                 new RefCountDelegate(() -> mRequestContext.onRequestFinished());
         try {
+            // If the native adapter was never started, onMetricsCollected() was not called and so
+            // we have no metrics to report.
+            // TODO: https://issuetracker.google.com/328065446 - we should really prevent this from
+            // happening because we will end up not logging the metrics, and the user may end up
+            // waiting forever for a request finished callback that will never come.
             if (mMetrics == null) return;
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

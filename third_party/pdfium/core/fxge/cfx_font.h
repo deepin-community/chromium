@@ -17,6 +17,7 @@
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_codepage_forward.h"
 #include "core/fxcrt/fx_coordinates.h"
+#include "core/fxcrt/raw_span.h"
 #include "core/fxcrt/retain_ptr.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/unowned_ptr_exclusion.h"
@@ -121,11 +122,10 @@ class CFX_Font {
   // Bounding box adjusted for font units.
   std::optional<FX_RECT> GetBBox() const;
 
-  bool IsEmbedded() const { return m_bEmbedded; }
   FontType GetFontType() const { return m_FontType; }
   void SetFontType(FontType type) { m_FontType = type; }
   uint64_t GetObjectTag() const { return m_ObjectTag; }
-  pdfium::span<uint8_t> GetFontSpan() const { return m_FontData; }
+  pdfium::raw_span<uint8_t> GetFontSpan() const { return m_FontData; }
   std::unique_ptr<CFX_Path> LoadGlyphPathImpl(uint32_t glyph_index,
                                               int dest_width) const;
   int GetGlyphWidthImpl(uint32_t glyph_index, int dest_width, int weight) const;
@@ -158,10 +158,9 @@ class CFX_Font {
   mutable RetainPtr<CFX_GlyphCache> m_GlyphCache;
   std::unique_ptr<CFX_SubstFont> m_pSubstFont;
   DataVector<uint8_t> m_FontDataAllocation;
-  pdfium::span<uint8_t> m_FontData;
+  pdfium::raw_span<uint8_t> m_FontData;
   FontType m_FontType = FontType::kUnknown;
   uint64_t m_ObjectTag = 0;
-  bool m_bEmbedded = false;
   bool m_bVertical = false;
 #if BUILDFLAG(IS_APPLE)
   UNOWNED_PTR_EXCLUSION void* m_pPlatformFont = nullptr;

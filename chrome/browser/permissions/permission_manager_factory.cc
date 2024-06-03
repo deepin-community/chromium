@@ -29,12 +29,14 @@
 #include "chrome/common/webui_url_constants.h"
 #include "components/background_sync/background_sync_permission_context.h"
 #include "components/embedder_support/permission_context_utils.h"
+#include "components/permissions/contexts/keyboard_lock_permission_context.h"
 #include "components/permissions/contexts/local_fonts_permission_context.h"
+#include "components/permissions/contexts/pointer_lock_permission_context.h"
 #include "components/permissions/contexts/speaker_selection_permission_context.h"
 #include "components/permissions/contexts/window_management_permission_context.h"
 #include "components/permissions/permission_manager.h"
 #include "ppapi/buildflags/buildflags.h"
-#include "services/device/public/cpp/geolocation/geolocation_manager.h"
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
 #include "chrome/browser/media/protected_media_identifier_permission_context.h"
@@ -62,8 +64,9 @@ permissions::PermissionManager::PermissionContextMap CreatePermissionContexts(
       std::make_unique<GeolocationPermissionContextDelegate>(profile);
 #endif  // BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  delegates.geolocation_manager = device::GeolocationManager::GetInstance();
-  DCHECK(delegates.geolocation_manager);
+  delegates.geolocation_system_permission_manager =
+      device::GeolocationSystemPermissionManager::GetInstance();
+  DCHECK(delegates.geolocation_system_permission_manager);
 #endif
   delegates.media_stream_device_enumerator =
       MediaCaptureDevicesDispatcher::GetInstance();
@@ -102,6 +105,9 @@ permissions::PermissionManager::PermissionContextMap CreatePermissionContexts(
   permission_contexts[ContentSettingsType::IDLE_DETECTION] =
       std::make_unique<IdleDetectionPermissionContext>(profile);
 
+  permission_contexts[ContentSettingsType::KEYBOARD_LOCK] =
+      std::make_unique<permissions::KeyboardLockPermissionContext>(profile);
+
   // TODO(crbug.com/1043295): Still in development for Android so we don't
   // support it on WebLayer yet.
   permission_contexts[ContentSettingsType::LOCAL_FONTS] =
@@ -115,6 +121,9 @@ permissions::PermissionManager::PermissionContextMap CreatePermissionContexts(
       std::make_unique<MediaStreamDevicePermissionContext>(
           profile, ContentSettingsType::MEDIASTREAM_MIC);
 
+  permission_contexts[ContentSettingsType::SPEAKER_SELECTION] =
+      std::make_unique<SpeakerSelectionPermissionContext>(profile);
+
   // TODO(crbug.com/1025610): Move once Notifications are supported on WebLayer.
   permission_contexts[ContentSettingsType::NOTIFICATIONS] =
       std::make_unique<NotificationPermissionContext>(profile);
@@ -122,6 +131,9 @@ permissions::PermissionManager::PermissionContextMap CreatePermissionContexts(
   // TODO(crbug.com/1091211): Move once supported on WebLayer.
   permission_contexts[ContentSettingsType::PERIODIC_BACKGROUND_SYNC] =
       std::make_unique<PeriodicBackgroundSyncPermissionContext>(profile);
+
+  permission_contexts[ContentSettingsType::POINTER_LOCK] =
+      std::make_unique<permissions::PointerLockPermissionContext>(profile);
 
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)
   // We don't support Chrome OS and Windows for WebLayer yet so only the Android
@@ -146,9 +158,6 @@ permissions::PermissionManager::PermissionContextMap CreatePermissionContexts(
   permission_contexts[ContentSettingsType::CAPTURED_SURFACE_CONTROL] =
       std::make_unique<permissions::CapturedSurfaceControlPermissionContext>(
           profile);
-
-  permission_contexts[ContentSettingsType::SPEAKER_SELECTION] =
-      std::make_unique<permissions::SpeakerSelectionPermissionContext>(profile);
 
 #if BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CUPS)
   permission_contexts[ContentSettingsType::WEB_PRINTING] =

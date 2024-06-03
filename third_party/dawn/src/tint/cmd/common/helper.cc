@@ -27,6 +27,7 @@
 
 #include "src/tint/cmd/common/helper.h"
 
+#include <cstdio>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -46,8 +47,10 @@
 #endif
 
 #include "src/tint/utils/diagnostic/formatter.h"
-#include "src/tint/utils/diagnostic/printer.h"
 #include "src/tint/utils/text/string.h"
+#include "src/tint/utils/text/styled_text.h"
+#include "src/tint/utils/text/styled_text_printer.h"
+#include "src/tint/utils/text/text_style.h"
 #include "src/tint/utils/traits/traits.h"
 
 namespace tint::cmd {
@@ -145,10 +148,10 @@ tint::Program ReadSpirv(const std::vector<uint32_t>& data, const LoadProgramOpti
 }  // namespace
 
 [[noreturn]] void TintInternalCompilerErrorReporter(const InternalCompilerError& err) {
-    auto printer = diag::Printer::Create(stderr, true);
-    diag::Style bold_red{diag::Color::kRed, true};
-    printer->Write(err.Error(), bold_red);
-    constexpr const char* please_file_bug = R"(
+    auto printer = StyledTextPrinter::Create(stderr);
+    StyledText msg;
+    msg << (style::Error + style::Bold) << err.Error();
+    msg << R"(
 ********************************************************************
 *  The tint shader compiler has encountered an unexpected error.   *
 *                                                                  *
@@ -156,7 +159,7 @@ tint::Program ReadSpirv(const std::vector<uint32_t>& data, const LoadProgramOpti
 *  crbug.com/tint with the source program that triggered the bug.  *
 ********************************************************************
 )";
-    printer->Write(please_file_bug, bold_red);
+    printer->Print(msg);
     exit(1);
 }
 
@@ -267,9 +270,16 @@ ProgramInfo LoadProgramInfo(const LoadProgramOptions& opts) {
             PrintWGSL(std::cout, info.program);
         }
 
-        auto diag_printer = tint::diag::Printer::Create(stderr, true);
-        tint::diag::Formatter diag_formatter;
-        diag_formatter.Format(info.program.Diagnostics(), diag_printer.get());
+        tint::diag::Formatter formatter;
+        if (opts.printer) {
+            opts.printer->Print(formatter.Format(info.program.Diagnostics()));
+        } else {
+            tint::StyledTextPrinter::Create(stderr)->Print(
+                formatter.Format(info.program.Diagnostics()));
+        }
+        // Flush any diagnostics written to stderr. We depend on these being emitted to the console
+        // before the program for end-to-end tests.
+        fflush(stderr);
     }
 
     if (!info.program.IsValid()) {
@@ -451,6 +461,8 @@ std::string TexelFormatToString(tint::inspector::ResourceBinding::TexelFormat fo
             return "Rgba32Sint";
         case tint::inspector::ResourceBinding::TexelFormat::kRgba32Float:
             return "Rgba32Float";
+        case tint::inspector::ResourceBinding::TexelFormat::kR8Unorm:
+            return "R8Unorm";
         case tint::inspector::ResourceBinding::TexelFormat::kNone:
             return "None";
     }

@@ -9,8 +9,10 @@
 
 #include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
+#include "base/feature_list.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/autofill_i18n_formatting_expressions.h"
 #include "components/autofill/core/browser/data_model/autofill_i18n_hierarchies.h"
 #include "components/autofill/core/browser/data_model/autofill_i18n_parsing_expressions.h"
@@ -104,6 +106,7 @@ std::unique_ptr<AddressComponent> BuildTreeNode(
     case ADDRESS_HOME_LINE3:
     case ADDRESS_HOME_APT:
     case ADDRESS_HOME_APT_TYPE:
+    case ADDRESS_HOME_HOUSE_NUMBER_AND_APT:
     case ADDRESS_HOME_OTHER_SUBUNIT:
     case ADDRESS_HOME_ADDRESS_WITH_NAME:
     case ADDRESS_HOME_STREET_LOCATION_AND_LOCALITY:
@@ -247,7 +250,7 @@ TreeEdgesList GetTreeEdges(AddressCountryCode country_code) {
         ->second;
   }
 
-  auto* it = kAutofillModelRules.find(country_code.value());
+  auto it = kAutofillModelRules.find(country_code.value());
 
   // If the entry is not defined, use the legacy rules.
   return it == kAutofillModelRules.end()
@@ -299,7 +302,7 @@ std::u16string GetFormattingExpression(FieldType field_type,
     // expression if they exist. Note that it should not fallback to a legacy
     // expression, as these ones refer to a different hierarchy.
     if (IsCustomHierarchyAvailableForCountry(country_code)) {
-      auto* it =
+      auto it =
           kAutofillFormattingRulesMap.find({country_code.value(), field_type});
 
       return it != kAutofillFormattingRulesMap.end()
@@ -308,7 +311,7 @@ std::u16string GetFormattingExpression(FieldType field_type,
     }
 
     // Otherwise return a legacy formatting expression that exists.
-    auto* legacy_it = kAutofillFormattingRulesMap.find(
+    auto legacy_it = kAutofillFormattingRulesMap.find(
         {kLegacyHierarchyCountryCode.value(), field_type});
     return legacy_it != kAutofillFormattingRulesMap.end()
                ? std::u16string(legacy_it->second)
@@ -333,7 +336,7 @@ i18n_model_definition::ValueParsingResults ParseValueByI18nRegularExpression(
           ? country_code
           : kLegacyHierarchyCountryCode;
 
-  auto* it = kAutofillParsingRulesMap.find(
+  auto it = kAutofillParsingRulesMap.find(
       {country_code_for_parsing.value(), field_type});
   return it != kAutofillParsingRulesMap.end() ? it->second->Parse(value)
                                               : std::nullopt;
@@ -342,7 +345,7 @@ i18n_model_definition::ValueParsingResults ParseValueByI18nRegularExpression(
 std::optional<std::u16string_view> GetStopwordsExpression(
     FieldType field_type,
     AddressCountryCode country_code) {
-  auto* it = kAutofillModelStopwords.find({country_code.value(), field_type});
+  auto it = kAutofillModelStopwords.find({country_code.value(), field_type});
   if (it == kAutofillModelStopwords.end()) {
     return std::nullopt;
   }
@@ -359,7 +362,7 @@ bool IsTypeEnabledForCountry(FieldType field_type,
     return true;
   }
 
-  auto* it = kAutofillModelRules.find(country_code.value());
+  auto it = kAutofillModelRules.find(country_code.value());
   return base::ranges::any_of(
       it->second, [field_type](const FieldTypeDescription& description) {
         return description.field_type == field_type ||
@@ -373,6 +376,15 @@ bool IsCustomHierarchyAvailableForCountry(AddressCountryCode country_code) {
     return false;
   }
 
+  if (country_code == AddressCountryCode("AU") &&
+      !base::FeatureList::IsEnabled(features::kAutofillUseAUAddressModel)) {
+    return false;
+  }
+  if (country_code == AddressCountryCode("BR") &&
+      !base::FeatureList::IsEnabled(features::kAutofillUseBRAddressModel)) {
+    return false;
+  }
+
   if (country_code == AddressCountryCode("DE") &&
       !base::FeatureList::IsEnabled(features::kAutofillUseDEAddressModel)) {
     return false;
@@ -380,6 +392,11 @@ bool IsCustomHierarchyAvailableForCountry(AddressCountryCode country_code) {
 
   if (country_code == AddressCountryCode("IN") &&
       !base::FeatureList::IsEnabled(features::kAutofillUseINAddressModel)) {
+    return false;
+  }
+
+  if (country_code == AddressCountryCode("MX") &&
+      !base::FeatureList::IsEnabled(features::kAutofillUseMXAddressModel)) {
     return false;
   }
 

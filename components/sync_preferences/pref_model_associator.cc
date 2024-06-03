@@ -154,7 +154,7 @@ void PrefModelAssociator::InitPrefAndAssociate(
       DVLOG(1) << "Found user pref value for " << pref_name;
       // We have both server and local values. Merge them if account storage
       // is not supported.
-      // TODO(crbug.com/1434943): Consider the case where a value is set before
+      // TODO(crbug.com/40264973): Consider the case where a value is set before
       // initial merge. This would overwrite the value the user just set.
       base::Value new_value(helper::MergePreference(
           client_.get(), pref_name, *user_pref_value, sync_value));
@@ -394,7 +394,7 @@ bool PrefModelAssociator::IsPrefSyncedForTesting(
 }
 
 void PrefModelAssociator::RegisterPref(const std::string& name) {
-  DCHECK(!base::Contains(registered_preferences_, name));
+  DCHECK(!registered_preferences_.contains(name));
   DCHECK(
       !client_ ||
       (client_->GetSyncablePrefsDatabase().IsPreferenceSyncable(name) &&

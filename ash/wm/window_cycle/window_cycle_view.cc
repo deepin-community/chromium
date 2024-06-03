@@ -455,8 +455,8 @@ void WindowCycleView::HandleWindowDestruction(aura::Window* destroying_window,
     // With no remaining child mini views contained in `preview`, we need to
     // remove `preview` and clean up the `preview` in `cycle_views_` and
     // `no_previews_list_`.
-    base::Erase(cycle_views_, preview);
-    base::Erase(no_previews_list_, preview);
+    std::erase(cycle_views_, preview);
+    std::erase(no_previews_list_, preview);
     parent->RemoveChildViewT(preview);
   }
   // With one of its children now gone, we must re-layout `mirror_container_`.
@@ -715,7 +715,8 @@ void WindowCycleView::OnImplicitAnimationsCompleted() {
 gfx::Rect WindowCycleView::GetContentContainerBounds() const {
   const bool empty_mirror_container = mirror_container_->children().empty();
   if (empty_mirror_container && no_recent_items_label_)
-    return gfx::Rect(no_recent_items_label_->GetPreferredSize());
+    return gfx::Rect(no_recent_items_label_->GetPreferredSize(
+        views::SizeBounds(no_recent_items_label_->width(), {})));
   return gfx::Rect(mirror_container_->GetPreferredSize());
 }
 

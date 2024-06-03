@@ -45,19 +45,22 @@
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
 #include "testing/platform_test.h"
 
 #if BUILDFLAG(IS_WIN)
-#include <shellapi.h>
-#include <shlobj.h>
 #include <tchar.h>
 #include <windows.h>
-#include <winioctl.h>
+
+#include <shellapi.h>
+#include <shlobj.h>
+
 #include "base/scoped_native_library.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/file_path_reparse_point_win.h"
 #include "base/test/gtest_util.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/win_util.h"
@@ -96,80 +99,7 @@ namespace {
 
 const size_t kLargeFileSize = (1 << 16) + 3;
 
-// To test that NormalizeFilePath() deals with NTFS reparse points correctly,
-// we need functions to create and delete reparse points.
 #if BUILDFLAG(IS_WIN)
-typedef struct _REPARSE_DATA_BUFFER {
-  ULONG  ReparseTag;
-  USHORT  ReparseDataLength;
-  USHORT  Reserved;
-  union {
-    struct {
-      USHORT SubstituteNameOffset;
-      USHORT SubstituteNameLength;
-      USHORT PrintNameOffset;
-      USHORT PrintNameLength;
-      ULONG Flags;
-      WCHAR PathBuffer[1];
-    } SymbolicLinkReparseBuffer;
-    struct {
-      USHORT SubstituteNameOffset;
-      USHORT SubstituteNameLength;
-      USHORT PrintNameOffset;
-      USHORT PrintNameLength;
-      WCHAR PathBuffer[1];
-    } MountPointReparseBuffer;
-    struct {
-      UCHAR DataBuffer[1];
-    } GenericReparseBuffer;
-  };
-} REPARSE_DATA_BUFFER, *PREPARSE_DATA_BUFFER;
-
-// Sets a reparse point. |source| will now point to |target|. Returns true if
-// the call succeeds, false otherwise.
-bool SetReparsePoint(HANDLE source, const FilePath& target_path) {
-  std::wstring kPathPrefix = FILE_PATH_LITERAL("\\??\\");
-  std::wstring target_str;
-  // The juction will not work if the target path does not start with \??\ .
-  if (kPathPrefix != target_path.value().substr(0, kPathPrefix.size()))
-    target_str += kPathPrefix;
-  target_str += target_path.value();
-  const wchar_t* target = target_str.c_str();
-  USHORT size_target = static_cast<USHORT>(wcslen(target)) * sizeof(target[0]);
-  char buffer[2000] = {0};
-  DWORD returned;
-
-  REPARSE_DATA_BUFFER* data = reinterpret_cast<REPARSE_DATA_BUFFER*>(buffer);
-
-  data->ReparseTag = 0xa0000003;
-  memcpy(data->MountPointReparseBuffer.PathBuffer, target, size_target + 2);
-
-  data->MountPointReparseBuffer.SubstituteNameLength = size_target;
-  data->MountPointReparseBuffer.PrintNameOffset = size_target + 2;
-  data->ReparseDataLength = size_target + 4 + 8;
-
-  int data_size = data->ReparseDataLength + 8;
-
-  if (!DeviceIoControl(source, FSCTL_SET_REPARSE_POINT, &buffer, data_size,
-                       NULL, 0, &returned, NULL)) {
-    return false;
-  }
-  return true;
-}
-
-// Delete the reparse point referenced by |source|. Returns true if the call
-// succeeds, false otherwise.
-bool DeleteReparsePoint(HANDLE source) {
-  DWORD returned;
-  REPARSE_DATA_BUFFER data = {0};
-  data.ReparseTag = 0xa0000003;
-  if (!DeviceIoControl(source, FSCTL_DELETE_REPARSE_POINT, &data, 8, NULL, 0,
-                       &returned, NULL)) {
-    return false;
-  }
-  return true;
-}
-
 // Method that wraps the win32 GetShortPathName API. Returns an empty path on
 // error.
 FilePath MakeShortFilePath(const FilePath& input) {
@@ -186,36 +116,7 @@ FilePath MakeShortFilePath(const FilePath& input) {
 
   return FilePath(path_short_str);
 }
-
-// Manages a reparse point for a test.
-class ReparsePoint {
- public:
-  // Creates a reparse point from |source| (an empty directory) to |target|.
-  ReparsePoint(const FilePath& source, const FilePath& target) {
-    dir_.Set(
-        ::CreateFile(source.value().c_str(), GENERIC_READ | GENERIC_WRITE,
-                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                     NULL, OPEN_EXISTING,
-                     FILE_FLAG_BACKUP_SEMANTICS,  // Needed to open a directory.
-                     NULL));
-    created_ = dir_.is_valid() && SetReparsePoint(dir_.get(), target);
-  }
-  ReparsePoint(const ReparsePoint&) = delete;
-  ReparsePoint& operator=(const ReparsePoint&) = delete;
-
-  ~ReparsePoint() {
-    if (created_)
-      DeleteReparsePoint(dir_.get());
-  }
-
-  bool IsValid() { return created_; }
-
- private:
-  win::ScopedHandle dir_;
-  bool created_;
-};
-
-#endif
+#endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_MAC)
 // Provide a simple way to change the permissions bits on |path| in tests.
@@ -401,8 +302,8 @@ class ScopedWorkingDirectory {
 TEST_F(FileUtilTest, MakeAbsoluteFilePathNoResolveSymbolicLinks) {
   FilePath cwd;
   ASSERT_TRUE(GetCurrentDirectory(&cwd));
-  const std::pair<FilePath, absl::optional<FilePath>> kExpectedResults[]{
-      {FilePath(), absl::nullopt},
+  const std::pair<FilePath, std::optional<FilePath>> kExpectedResults[]{
+      {FilePath(), std::nullopt},
       {FilePath("."), cwd},
       {FilePath(".."), cwd.DirName()},
       {FilePath("a/.."), cwd},
@@ -595,18 +496,20 @@ TEST_F(FileUtilTest, NormalizeFilePathReparsePoints) {
   ASSERT_TRUE(CreateDirectory(to_sub_a));
   FilePath normalized_path;
   {
-    ReparsePoint reparse_to_sub_a(to_sub_a, sub_a);
-    ASSERT_TRUE(reparse_to_sub_a.IsValid());
+    auto reparse_to_sub_a = test::FilePathReparsePoint::Create(to_sub_a, sub_a);
+    ASSERT_TRUE(reparse_to_sub_a.has_value());
 
     FilePath to_base_b = base_b.Append(FPL("to_base_b"));
     ASSERT_TRUE(CreateDirectory(to_base_b));
-    ReparsePoint reparse_to_base_b(to_base_b, base_b);
-    ASSERT_TRUE(reparse_to_base_b.IsValid());
+    auto reparse_to_base_b =
+        test::FilePathReparsePoint::Create(to_base_b, base_b);
+    ASSERT_TRUE(reparse_to_base_b.has_value());
 
     FilePath to_sub_long = base_b.Append(FPL("to_sub_long"));
     ASSERT_TRUE(CreateDirectory(to_sub_long));
-    ReparsePoint reparse_to_sub_long(to_sub_long, sub_long);
-    ASSERT_TRUE(reparse_to_sub_long.IsValid());
+    auto reparse_to_sub_long =
+        test::FilePathReparsePoint::Create(to_sub_long, sub_long);
+    ASSERT_TRUE(reparse_to_sub_long.has_value());
 
     // Normalize a junction free path: base_a\sub_a\file.txt .
     ASSERT_TRUE(NormalizeFilePath(file_txt, &normalized_path));
@@ -1072,7 +975,7 @@ TEST_F(FileUtilTest, CreateAndReadRelativeSymlinks) {
   ASSERT_TRUE(ReadSymbolicLink(link_from, &result));
   EXPECT_EQ(filename_link_to.value(), result.value());
 
-  absl::optional<FilePath> absolute_link = ReadSymbolicLinkAbsolute(link_from);
+  std::optional<FilePath> absolute_link = ReadSymbolicLinkAbsolute(link_from);
   ASSERT_TRUE(absolute_link);
   EXPECT_EQ(link_to.value(), absolute_link->value());
 
@@ -3326,8 +3229,8 @@ TEST_F(FileUtilTest, FileEnumeratorTest) {
 #if BUILDFLAG(IS_WIN)
   {
     // Make dir1 point to dir2.
-    ReparsePoint reparse_point(dir1, dir2);
-    EXPECT_TRUE(reparse_point.IsValid());
+    auto reparse_point = test::FilePathReparsePoint::Create(dir1, dir2);
+    EXPECT_TRUE(reparse_point.has_value());
 
     // There can be a delay for the enumeration code to see the change on
     // the file system so skip this test for XP.
@@ -3444,7 +3347,7 @@ TEST_F(FileUtilTest, ReadFileToBytes) {
   // Create test file.
   ASSERT_TRUE(WriteFile(file_path, kTestData));
 
-  absl::optional<std::vector<uint8_t>> bytes = ReadFileToBytes(file_path);
+  std::optional<std::vector<uint8_t>> bytes = ReadFileToBytes(file_path);
   ASSERT_TRUE(bytes.has_value());
   EXPECT_EQ(kTestData, bytes);
 
@@ -4485,65 +4388,106 @@ TEST_F(FileUtilTest, GetUniquePathNumberTooManyFiles) {
   EXPECT_EQ(GetUniquePathNumber(some_file), -1);
 }
 
-TEST_F(FileUtilTest, PreReadFile_ExistingFile_NoSize) {
+#if BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING) && \
+    defined(ARCH_CPU_32_BITS)
+// TODO(crbug.com/327582285): Re-enable these tests. They may be failing due to
+// prefetching failing under memory pressure.
+#define FLAKY_327582285 1
+#endif
+
+#if defined(FLAKY_327582285)
+#define MAYBE_PreReadFileExistingFileNoSize \
+  DISABLED_PreReadFileExistingFileNoSize
+#else
+#define MAYBE_PreReadFileExistingFileNoSize PreReadFileExistingFileNoSize
+#endif
+TEST_F(FileUtilTest, MAYBE_PreReadFileExistingFileNoSize) {
   FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
   CreateTextFile(text_file, bogus_content);
 
-  EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false));
+  EXPECT_TRUE(
+      PreReadFile(text_file, /*is_executable=*/false, /*sequential=*/false));
 }
 
-TEST_F(FileUtilTest, PreReadFile_ExistingFile_ExactSize) {
+#if defined(FLAKY_327582285)
+#define MAYBE_PreReadFileExistingFileExactSize \
+  DISABLED_PreReadFileExistingFileExactSize
+#else
+#define MAYBE_PreReadFileExistingFileExactSize PreReadFileExistingFileExactSize
+#endif
+TEST_F(FileUtilTest, MAYBE_PreReadFileExistingFileExactSize) {
   FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
   CreateTextFile(text_file, bogus_content);
 
   EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false,
-                          std::size(bogus_content)));
+                          /*sequential=*/false, std::size(bogus_content)));
 }
 
-TEST_F(FileUtilTest, PreReadFile_ExistingFile_OverSized) {
+#if defined(FLAKY_327582285)
+#define MAYBE_PreReadFileExistingFileOverSized \
+  DISABLED_PreReadFileExistingFileOverSized
+#else
+#define MAYBE_PreReadFileExistingFileOverSized PreReadFileExistingFileOverSized
+#endif
+TEST_F(FileUtilTest, MAYBE_PreReadFileExistingFileOverSized) {
   FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
   CreateTextFile(text_file, bogus_content);
 
   EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false,
-                          std::size(bogus_content) * 2));
+                          /*sequential=*/false, std::size(bogus_content) * 2));
 }
 
-TEST_F(FileUtilTest, PreReadFile_ExistingFile_UnderSized) {
+#if defined(FLAKY_327582285)
+#define MAYBE_PreReadFileExistingFileUnderSized \
+  DISABLED_PreReadFileExistingFileUnderSized
+#else
+#define MAYBE_PreReadFileExistingFileUnderSized \
+  PreReadFileExistingFileUnderSized
+#endif
+TEST_F(FileUtilTest, MAYBE_PreReadFileExistingFileUnderSized) {
   FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
   CreateTextFile(text_file, bogus_content);
 
   EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false,
-                          std::size(bogus_content) / 2));
+                          /*sequential=*/false, std::size(bogus_content) / 2));
 }
 
-TEST_F(FileUtilTest, PreReadFile_ExistingFile_ZeroSize) {
+TEST_F(FileUtilTest, PreReadFileExistingFileZeroSize) {
   FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
   CreateTextFile(text_file, bogus_content);
 
-  EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false, /*max_bytes=*/0));
+  EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false,
+                          /*sequential=*/false, /*max_bytes=*/0));
 }
 
-TEST_F(FileUtilTest, PreReadFile_ExistingEmptyFile_NoSize) {
+TEST_F(FileUtilTest, PreReadFileExistingEmptyFileNoSize) {
   FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
   CreateTextFile(text_file, L"");
   // The test just asserts that this doesn't crash. The Windows implementation
   // fails in this case, due to the base::MemoryMappedFile implementation and
   // the limitations of ::MapViewOfFile().
-  PreReadFile(text_file, /*is_executable=*/false);
+  PreReadFile(text_file, /*is_executable=*/false, /*sequential=*/false);
 }
 
-TEST_F(FileUtilTest, PreReadFile_ExistingEmptyFile_ZeroSize) {
+TEST_F(FileUtilTest, PreReadFileExistingEmptyFileZeroSize) {
   FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
   CreateTextFile(text_file, L"");
-  EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false, /*max_bytes=*/0));
+  EXPECT_TRUE(PreReadFile(text_file, /*is_executable=*/false,
+                          /*sequential=*/false, /*max_bytes=*/0));
 }
 
-TEST_F(FileUtilTest, PreReadFile_InexistentFile) {
+TEST_F(FileUtilTest, PreReadFileInexistentFile) {
   FilePath inexistent_file = temp_dir_.GetPath().Append(FPL("inexistent_file"));
-  EXPECT_FALSE(PreReadFile(inexistent_file, /*is_executable=*/false));
+  EXPECT_FALSE(PreReadFile(inexistent_file, /*is_executable=*/false,
+                           /*sequential=*/false));
 }
 
-TEST_F(FileUtilTest, PreReadFile_Executable) {
+#if defined(FLAKY_327582285)
+#define MAYBE_PreReadFileExecutable DISABLED_PreReadFileExecutable
+#else
+#define MAYBE_PreReadFileExecutable PreReadFileExecutable
+#endif
+TEST_F(FileUtilTest, MAYBE_PreReadFileExecutable) {
   FilePath exe_data_dir;
   ASSERT_TRUE(PathService::Get(DIR_TEST_DATA, &exe_data_dir));
   exe_data_dir = exe_data_dir.Append(FPL("pe_image_reader"));
@@ -4553,8 +4497,25 @@ TEST_F(FileUtilTest, PreReadFile_Executable) {
   // `test_exe` is a Windows binary, which is fine in this case because only the
   // Windows implementation treats binaries differently from other files.
   const FilePath test_exe = exe_data_dir.Append(FPL("signed.exe"));
-  EXPECT_TRUE(PreReadFile(test_exe, /*is_executable=*/true));
+  EXPECT_TRUE(
+      PreReadFile(test_exe, /*is_executable=*/true, /*sequential=*/false));
 }
+
+#if defined(FLAKY_327582285)
+#define MAYBE_PreReadFileWithSequentialAccess \
+  DISABLED_PreReadFileWithSequentialAccess
+#else
+#define MAYBE_PreReadFileWithSequentialAccess PreReadFileWithSequentialAccess
+#endif
+TEST_F(FileUtilTest, MAYBE_PreReadFileWithSequentialAccess) {
+  FilePath text_file = temp_dir_.GetPath().Append(FPL("text_file"));
+  CreateTextFile(text_file, bogus_content);
+
+  EXPECT_TRUE(
+      PreReadFile(text_file, /*is_executable=*/false, /*sequential=*/true));
+}
+
+#undef FLAKY_327582285
 
 // Test that temp files obtained racily are all unique (no interference between
 // threads). Mimics file operations in DoLaunchChildTestProcess() to rule out

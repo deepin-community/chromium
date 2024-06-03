@@ -13,7 +13,6 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/core/common/features.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 #include "url/url_canon.h"
@@ -238,6 +237,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kSafeBrowsingDeepScanningEnabled, true);
   registry->RegisterBooleanPref(
       prefs::kSafeBrowsingEsbOptInWithFriendlierSettings, false);
+  registry->RegisterBooleanPref(
+      prefs::kSafeBrowsingAutomaticDeepScanningIPHSeen, false);
 }
 
 const base::Value::Dict& GetExtensionTelemetryConfig(const PrefService& prefs) {
@@ -415,10 +416,15 @@ void GetPasswordProtectionLoginURLsPref(const PrefService& prefs,
   const base::Value::List& pref_value =
       prefs.GetList(prefs::kPasswordProtectionLoginURLs);
   out_login_url_list->clear();
+#if BUILDFLAG(IS_CHROMEOS)
+  // Include known authn URL by default.
+  out_login_url_list->push_back(GURL("chrome://os-settings"));
+#endif
   for (const base::Value& value : pref_value) {
     GURL login_url(value.GetString());
-    // Skip invalid or none-http/https login URLs.
-    if (login_url.is_valid() && login_url.SchemeIsHTTPOrHTTPS()) {
+    // Skip invalid or none-http/https/chrome login URLs.
+    if (login_url.is_valid() &&
+        (login_url.SchemeIsHTTPOrHTTPS() || login_url.SchemeIs("chrome"))) {
       out_login_url_list->push_back(login_url);
     }
   }
@@ -441,7 +447,14 @@ bool MatchesURLList(const GURL& target_url, const std::vector<GURL> url_list) {
   }
   GURL simple_target_url = GetSimplifiedURL(target_url);
   for (const GURL& url : url_list) {
-    if (GetSimplifiedURL(url) == simple_target_url) {
+    GURL simple_url = GetSimplifiedURL(url);
+    if (simple_url == simple_target_url) {
+      return true;
+    }
+    // Append trailing slash in case the policy specifies a URL with a path
+    // that does not append a slash. Simplified URLs will not match if the
+    // sole difference is a missing trailing slash.
+    if (simple_url.spec() + "/" == simple_target_url.spec()) {
       return true;
     }
   }

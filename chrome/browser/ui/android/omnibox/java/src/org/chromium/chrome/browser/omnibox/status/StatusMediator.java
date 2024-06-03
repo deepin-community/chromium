@@ -43,10 +43,8 @@ import org.chromium.components.browser_ui.site_settings.SiteSettingsUtil;
 import org.chromium.components.content_settings.ContentSettingValues;
 import org.chromium.components.content_settings.ContentSettingsType;
 import org.chromium.components.content_settings.CookieBlocking3pcdStatus;
-import org.chromium.components.content_settings.CookieControlsBreakageConfidenceLevel;
 import org.chromium.components.content_settings.CookieControlsBridge;
 import org.chromium.components.content_settings.CookieControlsObserver;
-import org.chromium.components.content_settings.CookieControlsStatus;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.page_info.PageInfoController;
@@ -118,7 +116,8 @@ public class StatusMediator
     private int mPermissionIconDisplayTimeoutMs = PERMISSION_ICON_DEFAULT_DISPLAY_TIMEOUT_MS;
 
     private CookieControlsBridge mCookieControlsBridge;
-    private int mCookieBlockingStatus;
+    private boolean mCookieControlsVisible;
+    private boolean mThirdPartyCookiesBlocked;
     private int mBlockingStatus3pcd;
     private int mLastTabId;
     private boolean mCurrentTabCrashed;
@@ -595,7 +594,7 @@ public class StatusMediator
             // autocomplete text still pointing at the previous url's autocomplete text.
             urlTextWithAutocomplete = "";
         } else if (TextUtils.indexOf(currentAutocompleteText, urlBarText) > -1) {
-            // TODO(crbug.com/1015147): This is to workaround the UrlBar text pointing to the
+            // TODO(crbug.com/40103581): This is to workaround the UrlBar text pointing to the
             // "current" url and the the autocomplete text pointing to the "previous" url.
             urlTextWithAutocomplete = currentAutocompleteText;
         } else {
@@ -652,8 +651,8 @@ public class StatusMediator
 
     // CookieControlsObserver interface
     @Override
-    public void onBreakageConfidenceLevelChanged(int level) {
-        if (level == CookieControlsBreakageConfidenceLevel.HIGH) {
+    public void onHighlightCookieControl(boolean shouldHighlight) {
+        if (shouldHighlight) {
             animateCookieControlsIcon(
                     () -> {
                         if (mBlockingStatus3pcd == CookieBlocking3pcdStatus.NOT_IN3PCD) {
@@ -665,12 +664,22 @@ public class StatusMediator
     }
 
     @Override
-    public void onStatusChanged(int status, int enforcement, int blockingStatus, long expiration) {
-        mCookieBlockingStatus = status;
+    public void onStatusChanged(
+            boolean controlsVisible,
+            boolean protectionsOn,
+            int enforcement,
+            int blockingStatus,
+            long expiration) {
+        mCookieControlsVisible = controlsVisible;
+        mThirdPartyCookiesBlocked = protectionsOn;
         mBlockingStatus3pcd = blockingStatus;
     }
 
     private void animateCookieControlsIcon(Runnable onAnimationFinished) {
+        // Check if the web content is valid before attempting to animate.
+        if (mLocationBarDataProvider.getTab().getWebContents() == null) {
+            return;
+        }
         resetCustomIconsStatus();
 
         boolean isIncognito = mLocationBarDataProvider.isIncognito();
@@ -838,7 +847,7 @@ public class StatusMediator
             return;
         }
         if (mBlockingStatus3pcd != CookieBlocking3pcdStatus.NOT_IN3PCD) {
-            if (mCookieBlockingStatus != CookieControlsStatus.ENABLED) return;
+            if (!mCookieControlsVisible || !mThirdPartyCookiesBlocked) return;
 
             if (UserPrefs.get(profile).getInteger(Pref.TRACKING_PROTECTION_ONBOARDING_ACK_ACTION)
                     == 0) {

@@ -26,8 +26,16 @@ namespace autofill {
 class AutofillWebDataService;
 }
 
+namespace commerce {
+class ProductSpecificationsService;
+}
+
 namespace password_manager {
 class PasswordStoreInterface;
+}
+
+namespace plus_addresses {
+class PlusAddressWebDataService;
 }
 
 namespace sync_bookmarks {
@@ -65,7 +73,10 @@ class SyncApiComponentFactoryImpl : public syncer::SyncApiComponentFactory {
       sync_bookmarks::BookmarkSyncService* account_bookmark_sync_service,
       power_bookmarks::PowerBookmarkService* power_bookmark_service,
       supervised_user::SupervisedUserSettingsService*
-          supervised_user_settings_service);
+          supervised_user_settings_service,
+      const scoped_refptr<plus_addresses::PlusAddressWebDataService>&
+          plus_address_webdata_service,
+      commerce::ProductSpecificationsService* product_specifications_service);
   SyncApiComponentFactoryImpl(const SyncApiComponentFactoryImpl&) = delete;
   SyncApiComponentFactoryImpl& operator=(const SyncApiComponentFactoryImpl&) =
       delete;
@@ -74,15 +85,14 @@ class SyncApiComponentFactoryImpl : public syncer::SyncApiComponentFactory {
   // Creates and returns enabled datatypes and their controllers.
   // `disabled_types` allows callers to prevent certain types from being
   // created.
-  syncer::DataTypeController::TypeVector CreateCommonDataTypeControllers(
+  syncer::ModelTypeController::TypeVector CreateCommonModelTypeControllers(
       syncer::ModelTypeSet disabled_types,
       syncer::SyncService* sync_service);
 
   // SyncApiComponentFactory implementation:
   std::unique_ptr<syncer::DataTypeManager> CreateDataTypeManager(
-      const syncer::DataTypeController::TypeMap* controllers,
+      const syncer::ModelTypeController::TypeMap* controllers,
       const syncer::DataTypeEncryptionHandler* encryption_handler,
-      syncer::ModelTypeConfigurer* configurer,
       syncer::DataTypeManagerObserver* observer) override;
   std::unique_ptr<syncer::SyncEngine> CreateSyncEngine(
       const std::string& name,
@@ -132,6 +142,10 @@ class SyncApiComponentFactoryImpl : public syncer::SyncApiComponentFactory {
   const raw_ptr<power_bookmarks::PowerBookmarkService> power_bookmark_service_;
   const raw_ptr<supervised_user::SupervisedUserSettingsService>
       supervised_user_settings_service_;
+  const scoped_refptr<plus_addresses::PlusAddressWebDataService>
+      plus_address_webdata_service_;
+  const raw_ptr<commerce::ProductSpecificationsService>
+      product_specifications_service_;
 };
 
 }  // namespace browser_sync

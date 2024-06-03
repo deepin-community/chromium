@@ -42,16 +42,16 @@ constexpr char kPolicyInfoFileName[] = "CachedPolicyInfo";
 // {policy_type} that it receives from the DMServer.
 constexpr char kPolicyFileName[] = "PolicyFetchResponse";
 
-// Deletes the child directories in cache root if they do not appear in
-// set |policy_types_base64|.
-bool DeleteObsoletePolicies(const base::FilePath& cache_root,
-                            const std::set<std::string>& policy_types_base64) {
+// Deletes the child directories in the cache root if they do not appear in
+// `exclusion_set`.
+bool DeletePolicies(const base::FilePath& cache_root,
+                    const std::set<std::string>& exclusion_set) {
   bool result = true;
   base::FileEnumerator(cache_root,
                        /* recursive */ false, base::FileEnumerator::DIRECTORIES,
                        FILE_PATH_LITERAL("*"))
-      .ForEach([&policy_types_base64, &result](const base::FilePath& file) {
-        if (policy_types_base64.count(file.BaseName().MaybeAsASCII())) {
+      .ForEach([&exclusion_set, &result](const base::FilePath& file) {
+        if (exclusion_set.count(file.BaseName().MaybeAsASCII())) {
           return;
         }
 
@@ -103,11 +103,13 @@ DMStorage::~DMStorage() {
 
 bool DMStorage::InvalidateDMToken() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  VLOG(1) << __func__;
   return token_service_->StoreDmToken(kInvalidTokenValue);
 }
 
 bool DMStorage::DeleteDMToken() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  VLOG(1) << __func__;
   return token_service_->DeleteDmToken();
 }
 
@@ -138,26 +140,27 @@ bool DMStorage::PersistPolicies(const DMPolicyMap& policy_map) const {
     return true;
   }
 
-  // Each policy in the map should be signed in the same way. If a policy
-  // in the map contains a public key, normally it means the server rotates the
-  // key. In this case, we persists the policy into the cached policy info file
-  // for future policy fetch.
-  const std::string policy_info_data = policy_map.cbegin()->second;
-  CachedPolicyInfo cached_info;
-  if (cached_info.Populate(policy_info_data) &&
-      !cached_info.public_key().empty() &&
-      !WriteContentToGlobalReadableFile(policy_info_file_, policy_info_data)) {
-    return false;
-  }
-
   // Persists individual policies.
-  std::set<std::string> policy_types_base64;
+  std::set<std::string> updated_policy_set;
+  bool policy_info_data_saved = false;
   for (const auto& policy_entry : policy_map) {
     const std::string& policy_type = policy_entry.first;
     const std::string& policy_value = policy_entry.second;
+    if (!policy_info_data_saved) {
+      // Policy info has a new public key when server rotates the key.
+      // In this case, persists the policy info as the cached policy info
+      // for future policy fetch.
+      CachedPolicyInfo cached_info;
+      if (cached_info.Populate(policy_value) &&
+          !cached_info.public_key().empty() &&
+          WriteContentToGlobalReadableFile(policy_info_file_, policy_value)) {
+        VLOG(1) << "Public key rotated.";
+        policy_info_data_saved = true;
+      }
+    }
 
     std::string encoded_policy_type = base::Base64Encode(policy_type);
-    policy_types_base64.emplace(encoded_policy_type);
+    updated_policy_set.emplace(encoded_policy_type);
 
     const base::FilePath policy_dir =
         policy_cache_root_.AppendASCII(encoded_policy_type);
@@ -168,8 +171,15 @@ bool DMStorage::PersistPolicies(const DMPolicyMap& policy_map) const {
     }
   }
 
-  // Purge all stale policies not in |policy_types_base64|.
-  return DeleteObsoletePolicies(policy_cache_root_, policy_types_base64);
+  // All policies not in `updated_policy_set` are considered stale and deleted.
+  return DeletePolicies(policy_cache_root_, updated_policy_set);
+}
+
+bool DMStorage::RemoveAllPolicies() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  VLOG(1) << __func__;
+  return base::DeleteFile(policy_info_file_) &&
+         DeletePolicies(policy_cache_root_, /*exclusion_set=*/{});
 }
 
 std::unique_ptr<CachedPolicyInfo> DMStorage::GetCachedPolicyInfo() const {

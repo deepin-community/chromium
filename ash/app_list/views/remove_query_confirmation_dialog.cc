@@ -9,7 +9,6 @@
 
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/public/cpp/ash_typography.h"
-#include "ash/public/cpp/view_shadow.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
@@ -34,6 +33,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_shadow.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
@@ -63,7 +63,8 @@ RemoveQueryConfirmationDialog::RemoveQueryConfirmationDialog(
   layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
   layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
 
-  view_shadow_ = std::make_unique<ViewShadow>(this, kDialogShadowElevation);
+  view_shadow_ =
+      std::make_unique<views::ViewShadow>(this, kDialogShadowElevation);
   view_shadow_->SetRoundedCornerRadius(kDialogRoundedCornerRadius);
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -100,7 +101,7 @@ RemoveQueryConfirmationDialog::RemoveQueryConfirmationDialog(
   title_->layer()->SetFillsBoundsOpaquely(false);
   // Ignore labels for accessibility - the accessible name is defined for the
   // whole dialog view.
-  title_->GetViewAccessibility().OverrideIsIgnored(true);
+  title_->GetViewAccessibility().SetIsIgnored(true);
 
   // Add dialog body.
   body_ =
@@ -125,7 +126,7 @@ RemoveQueryConfirmationDialog::RemoveQueryConfirmationDialog(
   body_->layer()->SetFillsBoundsOpaquely(false);
   // Ignore labels for accessibility - the accessible name is defined for the
   // whole dialog view.
-  body_->GetViewAccessibility().OverrideIsIgnored(true);
+  body_->GetViewAccessibility().SetIsIgnored(true);
 
   auto run_callback = [](RemoveQueryConfirmationDialog* dialog, bool accept) {
     if (!dialog->confirm_callback_)

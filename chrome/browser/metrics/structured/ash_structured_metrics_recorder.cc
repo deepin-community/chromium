@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/files/file_path.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/task/current_thread.h"
 #include "chrome/browser/metrics/structured/ash_event_storage.h"
@@ -116,48 +117,24 @@ void AshStructuredMetricsRecorder::AddSequenceMetadata(
   }
 }
 
-void AshStructuredMetricsRecorder::OnProfileAdded(
-    const base::FilePath& profile_path) {
-  // If a profile has already been added then we do not need to add another one.
-  if (HasState(State::kProfileAdded)) {
-    return;
-  }
-
-  StructuredMetricsRecorder::OnProfileAdded(profile_path);
-  external_metrics_ = std::make_unique<ExternalMetrics>(
-      base::FilePath(kExternalMetricsDir),
-      GetExternalMetricsCollectionInterval(),
-      base::BindRepeating(
-          &AshStructuredMetricsRecorder::OnExternalMetricsCollected,
-          weak_factory_.GetWeakPtr()));
-
-  if (recording_enabled()) {
-    external_metrics_->EnableRecording();
-  }
-}
-
 void AshStructuredMetricsRecorder::OnSystemProfileInitialized() {
   system_profile_initialized_ = true;
 }
 
-void AshStructuredMetricsRecorder::ProvideSystemProfile(
-    SystemProfileProto* system_profile) {
-  // Populate the proto if the system profile has been initialized and
-  // have a system profile provider.
-  // The field may be populated if ChromeOSMetricsProvider has already run.
-  if (system_profile_initialized_) {
-    system_profile_provider_->ProvideSystemProfileMetrics(system_profile);
-  }
-}
-
 void AshStructuredMetricsRecorder::OnExternalMetricsCollected(
     const EventsProto& events) {
+  SCOPED_UMA_HISTOGRAM_TIMER_MICROS(
+      "StructuredMetrics.OnExternalMetricsCollectedDuration");
   DCHECK(base::CurrentUIThread::IsSet());
   if (!recording_enabled()) {
     return;
   }
 
   event_storage_->AddBatchEvents(events.non_uma_events());
+
+  for (const auto& event : events.non_uma_events()) {
+    NotifyEventRecorded(event);
+  }
 
   // Only increment if new events were add.
   if (events.non_uma_events_size()) {
@@ -173,4 +150,27 @@ void AshStructuredMetricsRecorder::SetExternalMetricsDirForTest(
           &AshStructuredMetricsRecorder::OnExternalMetricsCollected,
           weak_factory_.GetWeakPtr()));
 }
+
+void AshStructuredMetricsRecorder::ProfileAdded(const Profile& profile) {
+  external_metrics_ = std::make_unique<ExternalMetrics>(
+      base::FilePath(kExternalMetricsDir),
+      GetExternalMetricsCollectionInterval(),
+      base::BindRepeating(
+          &AshStructuredMetricsRecorder::OnExternalMetricsCollected,
+          weak_factory_.GetWeakPtr()));
+  if (recording_enabled()) {
+    external_metrics_->EnableRecording();
+  }
+}
+
+void AshStructuredMetricsRecorder::ProvideSystemProfile(
+    SystemProfileProto* system_profile) {
+  // Populate the proto if the system profile has been initialized and
+  // have a system profile provider.
+  // The field may be populated if ChromeOSMetricsProvider has already run.
+  if (system_profile_initialized_) {
+    system_profile_provider_->ProvideSystemProfileMetrics(system_profile);
+  }
+}
+
 }  // namespace metrics::structured

@@ -14,7 +14,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/scope_extension_info.h"
 #include "chrome/browser/web_applications/web_app_chromeos_data.h"
@@ -38,6 +37,7 @@ enum class WebappUninstallSource;
 
 namespace web_app {
 
+class IsolatedWebAppStorageLocation;
 class WebApp;
 class WebAppProvider;
 
@@ -48,8 +48,7 @@ class WebAppInstallFinalizer {
  public:
   using InstallFinalizedCallback =
       base::OnceCallback<void(const webapps::AppId& app_id,
-                              webapps::InstallResultCode code,
-                              OsHooksErrors os_hooks_errors)>;
+                              webapps::InstallResultCode code)>;
   using UninstallWebAppCallback =
       base::OnceCallback<void(webapps::UninstallResultCode code)>;
   using RepeatingUninstallCallback =
@@ -72,12 +71,13 @@ class WebAppInstallFinalizer {
     std::optional<ash::SystemWebAppData> system_web_app_data;
 #endif
 
-    // If set, will set `WebApp::IsolationData` with the given location, as well
-    // as the version from `WebAppInstallInfo::isolated_web_app_version`. Will
-    // `CHECK` if `web_app_info.isolated_web_app_version` is invalid.
-    std::optional<web_app::IsolatedWebAppLocation> isolated_web_app_location;
+    // If set, will set `IsolatedWebAppStorageLocation` with the given
+    // location, as well as the version from
+    // `WebAppInstallInfo::isolated_web_app_version`. Will `CHECK` if
+    // `web_app_info.isolated_web_app_version` is invalid.
+    std::optional<IsolatedWebAppStorageLocation> isolated_web_app_location;
 
-    // If true, OsIntegrationManager::InstallOsHooks won't be called at all,
+    // If true, OsIntegrationManager::Synchronize() won't be called at all,
     // meaning that all other OS Hooks related parameters below will be ignored.
     bool bypass_os_hooks = false;
 
@@ -134,14 +134,9 @@ class WebAppInstallFinalizer {
  private:
   using CommitCallback = base::OnceCallback<void(bool success)>;
 
-  void OnMaybeRegisterOsUninstall(const webapps::AppId& app_id,
-                                  WebAppManagement::Type source,
-                                  UninstallWebAppCallback callback,
-                                  OsHooksErrors os_hooks_errors);
-
   void UpdateIsolationDataAndResetPendingUpdateInfo(
       WebApp* web_app,
-      const IsolatedWebAppLocation& location,
+      const IsolatedWebAppStorageLocation& location,
       const base::Version& version);
 
   void SetWebAppManifestFieldsAndWriteData(
@@ -173,8 +168,7 @@ class WebAppInstallFinalizer {
                                            bool success);
 
   void OnInstallHooksFinished(InstallFinalizedCallback callback,
-                              webapps::AppId app_id,
-                              OsHooksErrors os_hooks_errors);
+                              webapps::AppId app_id);
   void NotifyWebAppInstalledWithOsHooks(webapps::AppId app_id);
 
   bool ShouldUpdateOsHooks(const webapps::AppId& app_id);
@@ -188,8 +182,7 @@ class WebAppInstallFinalizer {
       bool success);
 
   void OnUpdateHooksFinished(InstallFinalizedCallback callback,
-                             webapps::AppId app_id,
-                             OsHooksErrors os_hooks_errors);
+                             webapps::AppId app_id);
 
   // Returns a value indicating whether the file handlers registered with the OS
   // should be updated. Used to avoid unnecessary updates. TODO(estade): why

@@ -14,6 +14,7 @@
 #include "chrome/browser/android/webapk/webapk_specifics_fetcher.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/model_type_sync_bridge.h"
+#include "components/sync/protocol/web_apk_specifics.pb.h"
 
 namespace syncer {
 struct EntityData;
@@ -63,12 +64,15 @@ class WebApkSyncBridge : public syncer::ModelTypeSyncBridge {
   std::optional<syncer::ModelError> ApplyIncrementalSyncChanges(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_changes) override;
-  void GetData(StorageKeyList storage_keys, DataCallback callback) override;
+  void GetDataForCommit(StorageKeyList storage_keys,
+                        DataCallback callback) override;
   void GetAllDataForDebugging(DataCallback callback) override;
   std::string GetClientTag(const syncer::EntityData& entity_data) override;
   std::string GetStorageKey(const syncer::EntityData& entity_data) override;
   void ApplyDisableSyncChanges(std::unique_ptr<syncer::MetadataChangeList>
                                    delete_metadata_change_list) override;
+
+  void RemoveOldWebAPKsFromSync(int64_t current_time_ms_since_unix_epoch);
 
   void RegisterDoneInitializingCallback(
       base::OnceCallback<void(bool)> init_done_callback);
@@ -87,8 +91,17 @@ class WebApkSyncBridge : public syncer::ModelTypeSyncBridge {
           installed_apps,
       const syncer::EntityChangeList& sync_changes) const;
 
-  void OnWebApkUsed(std::unique_ptr<sync_pb::WebApkSpecifics> app_specifics);
+  void OnWebApkUsed(std::unique_ptr<sync_pb::WebApkSpecifics> app_specifics,
+                    bool is_install);
   void OnWebApkUninstalled(const std::string& manifest_id);
+
+  // Get the apps info for apps that are available to restore. Returns the AppId
+  // and the app name for each of the apps as a vector of a vector.
+  std::vector<std::vector<std::string>> GetRestorableAppsInfo() const;
+
+  const WebApkProto* GetWebApkByAppId(webapps::AppId app_id) const;
+
+  void SetClockForTesting(std::unique_ptr<base::Clock> clock);
 
   const Registry& GetRegistryForTesting() const;
 
@@ -96,6 +109,19 @@ class WebApkSyncBridge : public syncer::ModelTypeSyncBridge {
   GetModelTypeControllerDelegate();
 
  private:
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class AddOrModifyType {
+    // Note that the "Modification" items refer to _any_ modification of the
+    // specifics proto - even just a timestamp change. This does not necessarily
+    // imply that there is any change in the actual WebAPK.
+    kNewInstallOnDeviceAndNewAddToSync = 0,
+    kNewInstallOnDeviceAndModificationToSync = 1,
+    kLaunchOnDeviceAndNewAddToSync = 2,
+    kLaunchOnDeviceAndModificationToSync = 3,
+    kMaxValue = kLaunchOnDeviceAndModificationToSync,
+  };
+
   void ReportErrorToChangeProcessor(const syncer::ModelError& error);
   void OnDatabaseOpened(base::OnceClosure callback,
                         Registry registry,
@@ -107,8 +133,12 @@ class WebApkSyncBridge : public syncer::ModelTypeSyncBridge {
   void ApplyIncrementalSyncChangesToRegistry(
       std::unique_ptr<RegistryUpdateData> update_data);
 
-  void AddOrModifyAppInSync(std::unique_ptr<WebApkProto> app);
-  void DeleteAppFromSync(const webapps::AppId& app_id);
+  void AddOrModifyAppInSync(std::unique_ptr<WebApkProto> app, bool is_install);
+  void DeleteAppsFromSync(const std::vector<webapps::AppId>& app_ids);
+
+  void RecordSyncedWebApkAdditionHistogram(bool is_install,
+                                           bool already_exists_in_sync) const;
+  void RecordSyncedWebApkRemovalCountHistogram(int num_web_apks_removed) const;
 
   WebApkDatabase database_;
   Registry registry_;

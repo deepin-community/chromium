@@ -86,21 +86,6 @@ class CORE_EXPORT BlockNode : public LayoutInputNode {
   // To be called when we're done repeating a node, when at the last fragment.
   void FinishRepeatableRoot() const;
 
-  // This method is just for use within the |OutOfFlowLayoutPart|.
-  //
-  // As OOF-positioned objects have their position, and size computed
-  // pre-layout, we need a way to quickly determine if we need to perform this
-  // work.
-  //
-  // We have this "first-tier" cache explicitly for this purpose.
-  // This method compares the containing-block size to determine if we can skip
-  // the position, and size calculation.
-  //
-  // If the containing-block size hasn't changed, and we are layout-clean we
-  // can reuse the previous layout result.
-  const LayoutResult* CachedLayoutResultForOutOfFlowPositioned(
-      LogicalSize container_content_size) const;
-
   LayoutInputNode NextSibling() const;
 
   // Computes the value of min-content and max-content for this node's border
@@ -157,6 +142,8 @@ class CORE_EXPORT BlockNode : public LayoutInputNode {
   std::optional<gfx::Transform> GetTransformForChildFragment(
       const PhysicalBoxFragment& child_fragment,
       PhysicalSize size) const;
+
+  bool MayHaveAnchorQuery() const { return box_->MayHaveAnchorQuery(); }
 
   bool HasLeftOverflow() const { return box_->HasLeftOverflow(); }
   bool HasTopOverflow() const { return box_->HasTopOverflow(); }

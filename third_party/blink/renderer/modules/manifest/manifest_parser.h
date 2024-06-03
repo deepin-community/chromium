@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <optional>
+#include <string>
 
 #include "base/types/strong_alias.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
@@ -70,6 +71,38 @@ class MODULES_EXPORT ManifestParser {
  private:
   // Used to indicate whether to strip whitespace when parsing a string.
   using Trim = base::StrongAlias<class TrimTag, bool>;
+
+  // Partially represents `URLPatternInit` in the URL Pattern spec.
+  // https://urlpattern.spec.whatwg.org/#dictdef-urlpatterninit
+  struct PatternInit {
+    PatternInit(std::optional<String> protocol,
+                std::optional<String> username,
+                std::optional<String> password,
+                std::optional<String> hostname,
+                std::optional<String> port,
+                std::optional<String> pathname,
+                std::optional<String> search,
+                std::optional<String> hash,
+                KURL base_url);
+    ~PatternInit();
+    PatternInit(const PatternInit&) = delete;
+    PatternInit& operator=(const PatternInit&) = delete;
+    PatternInit(PatternInit&&);
+    PatternInit& operator=(PatternInit&&);
+
+    // Returns true if any of protocol, hostname, or port are filled.
+    bool IsAbsolute() const;
+
+    std::optional<String> protocol;
+    std::optional<String> username;
+    std::optional<String> password;
+    std::optional<String> hostname;
+    std::optional<String> port;
+    std::optional<String> pathname;
+    std::optional<String> search;
+    std::optional<String> hash;
+    KURL base_url;
+  };
 
   // Indicate restrictions to be placed on the parsed URL with respect to the
   // document URL or manifest scope.
@@ -176,10 +209,16 @@ class MODULES_EXPORT ManifestParser {
   // and query if there is no defined scope or if the parsing failed.
   KURL ParseScope(const JSONObject* object, const KURL& start_url);
 
+  enum class ParseStartUrlResult {
+    // The start_url was parsed from the json entry without errors.
+    kParsedFromJson,
+    // There was no start_url entry or parsing failed.
+    kDefaultDocumentUrl
+  };
   // Parses the 'start_url' field of the manifest, as defined in:
   // https://w3c.github.io/manifest/#dfn-steps-for-processing-the-start_url-member
-  // Returns the parsed KURL if any, an empty KURL if the parsing failed.
-  KURL ParseStartURL(const JSONObject* object);
+  std::pair<KURL, ParseStartUrlResult> ParseStartURL(const JSONObject* object,
+                                                     const KURL& document_url);
 
   // Parses the 'display' field of the manifest, as defined in:
   // https://w3c.github.io/manifest/#dfn-steps-for-processing-the-display-member
@@ -542,6 +581,13 @@ class MODULES_EXPORT ManifestParser {
   // Parses the 'scope_patterns' field of the 'tab_strip.home_tab' field
   // of the manifest.
   Vector<SafeUrlPattern> ParseScopePatterns(const JSONObject* object);
+
+  // Helper method to parse individual scope patterns.
+  std::optional<SafeUrlPattern> ParseScopePattern(const PatternInit& init,
+                                                  const KURL& base_url);
+
+  std::optional<PatternInit> MaybeCreatePatternInit(
+      const JSONObject* pattern_object);
 
   String ParseVersion(const JSONObject* object);
 

@@ -5,8 +5,6 @@
 #ifndef COMPONENTS_VIZ_SERVICE_DISPLAY_OVERLAY_CANDIDATE_FACTORY_H_
 #define COMPONENTS_VIZ_SERVICE_DISPLAY_OVERLAY_CANDIDATE_FACTORY_H_
 
-#include <optional>
-
 #include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
@@ -48,6 +46,9 @@ class VIZ_SERVICE_EXPORT OverlayCandidateFactory {
   using CandidateStatus = OverlayCandidate::CandidateStatus;
 
   struct VIZ_SERVICE_EXPORT OverlayContext {
+    OverlayContext();
+    OverlayContext(const OverlayContext&);
+
     bool is_delegated_context = false;
     // When false, the factory can modify the candidate to provide the same
     // output but result in a smaller serialization size.
@@ -58,13 +59,17 @@ class VIZ_SERVICE_EXPORT OverlayCandidateFactory {
     bool supports_rounded_display_masks = false;
     bool supports_mask_filter = false;
     bool transform_and_clip_rpdq = false;
+    // When true, allow a quad to be promoted, even if its resource is not an
+    // overlay candidate.
+    bool allow_non_overlay_resources = false;
+    bool supports_flip_rotate_transform = false;
   };
 
   // The coordinate space of |render_pass| is the target space for candidates
   // produced by this factory.
   OverlayCandidateFactory(
       const AggregatedRenderPass* render_pass,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       const SurfaceDamageRectList* surface_damage_rect_list,
       const SkM44* output_color_matrix,
       const gfx::RectF primary_rect,
@@ -164,7 +169,7 @@ class VIZ_SERVICE_EXPORT OverlayCandidateFactory {
   void SetDisplayRect(const DrawQuad& quad, OverlayCandidate& candidate) const;
 
   raw_ptr<const AggregatedRenderPass> render_pass_;
-  raw_ptr<DisplayResourceProvider> resource_provider_;
+  raw_ptr<const DisplayResourceProvider> resource_provider_;
   raw_ptr<const SurfaceDamageRectList> surface_damage_rect_list_;
   const gfx::RectF primary_rect_;
   raw_ptr<const OverlayProcessorInterface::FilterOperationsMap>

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "base/feature_list.h"
@@ -77,6 +78,9 @@ const char kOfflinePreviewsMimeType[] = "multipart/related";
 
 static constexpr uint64_t kInstantPageLoadEventsTraceTrackId = 14878427190820;
 
+const char kHistogramSoftNavigationCount[] =
+    "PageLoad.Expermental.SoftNavigations.Count";
+
 template <size_t N>
 uint64_t PackBytes(base::span<const uint8_t, N> bytes) {
   static_assert(N <= 8u,
@@ -88,7 +92,7 @@ uint64_t PackBytes(base::span<const uint8_t, N> bytes) {
   return result;
 }
 
-uint64_t StrToHash64Bit(base::StringPiece str) {
+uint64_t StrToHash64Bit(std::string_view str) {
   auto bytes = base::as_bytes(base::make_span(str));
   const base::SHA1Digest digest = base::SHA1HashSpan(bytes);
   return PackBytes(base::make_span(digest).subspan<0, 8>());
@@ -877,6 +881,11 @@ void UkmPageLoadMetricsObserver::RecordTimingMetrics(
       auto priority = cwv_lcp_timing_info.ImageRequestPriority();
       if (priority)
         builder.SetPaintTiming_LargestContentfulPaintRequestPriority(*priority);
+      bool is_cross_origin = cwv_lcp_timing_info.Type() ==
+                             (cwv_lcp_timing_info.Type() |
+                              blink::LargestContentfulPaintType::kCrossOrigin);
+      builder.SetPaintTiming_LargestContentfulPaintImageIsCrossOrigin(
+          is_cross_origin);
     }
     if (cwv_lcp_timing_info.ImageDiscoveryTime().has_value()) {
       builder.SetPaintTiming_LargestContentfulPaintImageDiscoveryTime(
@@ -993,6 +1002,10 @@ void UkmPageLoadMetricsObserver::RecordTimingMetrics(
     RecordSoftNavigationMetrics(GetDelegate().GetUkmSourceIdForSoftNavigation(),
                                 GetDelegate().GetSoftNavigationMetrics());
   }
+
+  // Record soft navigation count histogram to UMA.
+  base::UmaHistogramCounts100(kHistogramSoftNavigationCount,
+                              GetDelegate().GetSoftNavigationMetrics().count);
 }
 
 void UkmPageLoadMetricsObserver::RecordInternalTimingMetrics(
@@ -1162,6 +1175,16 @@ void UkmPageLoadMetricsObserver::ReportMainResourceTimingMetrics(
   }
   builder.SetMainFrameResource_RequestStartToReceiveHeadersEnd(
       request_start_to_receive_headers_end_ms);
+
+  if (!main_frame_timing_->connect_timing.connect_start.is_null() &&
+      !GetDelegate().GetNavigationStart().is_null()) {
+    base::TimeDelta navigation_start_to_connect_start =
+        main_frame_timing_->connect_timing.connect_start -
+        GetDelegate().GetNavigationStart();
+
+    builder.SetMainFrameResource_NavigationStartToConnectStart(
+        navigation_start_to_connect_start.InMilliseconds());
+  }
 
   if (!main_frame_timing_->request_start.is_null() &&
       !GetDelegate().GetNavigationStart().is_null()) {

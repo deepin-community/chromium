@@ -52,6 +52,11 @@ def _ExceptionForLegacyResponse(response):
 def _ExceptionForStandardResponse(response):
   error = response['value']['error']
   msg = response['value']['message']
+
+  stacktrace = response['value']['stacktrace']
+  if stacktrace:
+      msg += '\n\nStackTrace:\n\n' + stacktrace
+
   return EXCEPTION_MAP.get(error, ChromeDriverException)(msg)
 
 class ChromeDriver(object):
@@ -594,6 +599,12 @@ class ChromeDriver(object):
   def FullScreenWindow(self):
     return self.ExecuteCommand(Command.FULLSCREEN_WINDOW)
 
+  def SetDevicePosture(self, posture):
+    return self.ExecuteCommand(Command.SET_DEVICE_POSTURE, {'posture': posture})
+
+  def ClearDevicePosture(self):
+    return self.ExecuteCommand(Command.CLEAR_DEVICE_POSTURE)
+
   def TakeScreenshot(self):
     return self.ExecuteCommand(Command.SCREENSHOT)
 
@@ -672,7 +683,8 @@ class ChromeDriver(object):
   def AddVirtualAuthenticator(self, protocol=None, transport=None,
                               hasResidentKey=None, hasUserVerification=None,
                               isUserConsenting=None, isUserVerified=None,
-                              extensions=None):
+                              extensions=None, defaultBackupState=None,
+                              defaultBackupEligibility=None):
     options = {}
     if protocol is not None:
       options['protocol'] = protocol
@@ -688,6 +700,10 @@ class ChromeDriver(object):
       options['isUserVerified'] = isUserVerified
     if extensions is not None:
       options['extensions'] = extensions
+    if defaultBackupState is not None:
+      options['defaultBackupState'] = defaultBackupState
+    if defaultBackupEligibility is not None:
+      options['defaultBackupEligibility'] = defaultBackupEligibility
 
     return self.ExecuteCommand(Command.ADD_VIRTUAL_AUTHENTICATOR, options)
 
@@ -697,7 +713,8 @@ class ChromeDriver(object):
 
   def AddCredential(self, authenticatorId=None, credentialId=None,
                     isResidentCredential=None, rpId=None, privateKey=None,
-                    userHandle=None, signCount=None, largeBlob=None):
+                    userHandle=None, signCount=None, largeBlob=None,
+                    backupState=None, backupEligibility=None):
     options = {}
     if authenticatorId is not None:
       options['authenticatorId'] = authenticatorId
@@ -715,6 +732,10 @@ class ChromeDriver(object):
       options['signCount'] = signCount
     if largeBlob is not None:
       options['largeBlob'] = largeBlob
+    if backupState is not None:
+      options['backupState'] = backupState
+    if backupEligibility is not None:
+      options['backupEligibility'] = backupEligibility
     return self.ExecuteCommand(Command.ADD_CREDENTIAL, options)
 
   def GetCredentials(self, authenticatorId):
@@ -734,6 +755,15 @@ class ChromeDriver(object):
     params = {'authenticatorId': authenticatorId,
               'isUserVerified': isUserVerified}
     return self.ExecuteCommand(Command.SET_USER_VERIFIED, params)
+
+  def SetCredentialProperties(self, authenticatorId, credentialId,
+                              backupState=None, backupEligibility=None):
+    params = {'authenticatorId': authenticatorId, 'credentialId': credentialId}
+    if backupState is not None:
+      params['backupState'] = backupState
+    if backupEligibility is not None:
+      params['backupEligibility'] = backupEligibility
+    return self.ExecuteCommand(Command.SET_CREDENTIAL_PROPERTIES, params)
 
   def SetSPCTransactionMode(self, mode):
     params = {'mode': mode}
@@ -771,6 +801,9 @@ class ChromeDriver(object):
 
   def ResetCooldown(self):
     return self.ExecuteCommand(Command.RESET_COOLDOWN, {})
+
+  def RunBounceTrackingMitigations(self):
+    return self.ExecuteCommand(Command.RUN_BOUNCE_TRACKING_MITIGATIONS, {})
 
   def GetSessionId(self):
     if not hasattr(self, '_session_id'):

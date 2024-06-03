@@ -15,6 +15,7 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/page_info/core/about_this_site_service.h"
@@ -42,6 +43,17 @@
 #include "chrome/browser/ui/page_info/about_this_site_side_panel.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/web_app_ui_utils.h"
+#endif
+
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#include "chrome/browser/media/webrtc/system_media_capture_permissions_mac.h"
+#include "chrome/browser/web_applications/app_shim_registry_mac.h"
+#include "chrome/browser/web_applications/os_integration/web_app_shortcut_mac.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
+#include "chrome/browser/web_applications/web_app_tab_helper.h"
+#include "components/content_settings/core/common/features.h"
 #endif
 
 ChromePageInfoUiDelegate::ChromePageInfoUiDelegate(
@@ -91,7 +103,7 @@ std::u16string ChromePageInfoUiDelegate::GetAutomaticallyBlockedReason(
       break;
     }
     // Media only supports CONTENT_SETTING_ALLOW for secure origins.
-    // TODO(crbug.com/1227679): This string can probably be removed.
+    // TODO(crbug.com/40189322): This string can probably be removed.
     case ContentSettingsType::MEDIASTREAM_MIC:
     case ContentSettingsType::MEDIASTREAM_CAMERA: {
       if (!network::IsUrlPotentiallyTrustworthy(site_url_)) {
@@ -112,7 +124,7 @@ std::optional<page_info::proto::SiteInfo>
 ChromePageInfoUiDelegate::GetAboutThisSiteInfo() {
   Browser* browser = chrome::FindBrowserWithTab(web_contents_);
   if (!browser || !browser->is_type_normal()) {
-    // TODO(crbug.com/1435450): SidePanel is not available. Evaluate if we can
+    // TODO(crbug.com/40904874): SidePanel is not available. Evaluate if we can
     //                          show ATP in a different way.
     return std::nullopt;
   }
@@ -155,13 +167,13 @@ bool ChromePageInfoUiDelegate::ShouldShowSiteSettings(int* link_text_id,
   return true;
 }
 
-// TODO(crbug.com/1227074): Reconcile with LastTabStandingTracker.
+// TODO(crbug.com/40776829): Reconcile with LastTabStandingTracker.
 bool ChromePageInfoUiDelegate::IsMultipleTabsOpen() {
   const extensions::WindowControllerList::ControllerList& windows =
       extensions::WindowControllerList::GetInstance()->windows();
   int count = 0;
   auto site_origin = site_url_.DeprecatedGetOriginAsURL();
-  for (auto* window : windows) {
+  for (extensions::WindowController* window : windows) {
     const Browser* const browser = window->GetBrowser();
     if (!browser)
       continue;
@@ -190,12 +202,114 @@ void ChromePageInfoUiDelegate::ShowPrivacySandboxSettings() {
 std::u16string ChromePageInfoUiDelegate::GetPermissionDetail(
     ContentSettingsType type) {
   switch (type) {
-    // TODO(crbug.com/1228243): Reconcile with SiteDetailsPermissionElement.
+    // TODO(crbug.com/40777580): Reconcile with SiteDetailsPermissionElement.
     case ContentSettingsType::ADS:
       return l10n_util::GetStringUTF16(IDS_PAGE_INFO_PERMISSION_ADS_SUBTITLE);
     default:
       return {};
   }
+}
+
+bool ChromePageInfoUiDelegate::ShouldShowSettingsLinkForPermission(
+    ContentSettingsType type,
+    int* text_id,
+    int* link_id) {
+#if BUILDFLAG(IS_MAC)
+  switch (type) {
+    case ContentSettingsType::NOTIFICATIONS:
+      if (base::FeatureList::IsEnabled(
+              features::kAppShimNotificationAttribution)) {
+        // If this notification permission is associated with a locally
+        // installed web app, the corresponding app shim needs to have system
+        // level notification permission for notifications to work. If system
+        // permissions are missing, guide the user to system settings to fix
+        // this.
+        std::optional<webapps::AppId> app_id =
+            web_app::WebAppTabHelper::GetAppIdForNotificationAttribution(
+                web_contents_);
+        if (!app_id.has_value()) {
+          return false;
+        }
+
+        // If the system permission is already granted linking to system
+        // settings doesn't really add anything. If system permissions is
+        // "not determined", there won't be a page in system settings to link
+        // to for this app, and Chrome will still be able to display a system
+        // permission prompt, so there is no reason to guide the user to system
+        // settings yet.
+        auto system_permission_status =
+            AppShimRegistry::Get()->GetNotificationPermissionStatusForApp(
+                *app_id);
+        if (system_permission_status ==
+                mac_notifications::mojom::PermissionStatus::kGranted ||
+            system_permission_status ==
+                mac_notifications::mojom::PermissionStatus::kNotDetermined) {
+          return false;
+        }
+        *text_id = IDS_PAGE_INFO_NOTIFICATIONS_SYSTEM_SETTINGS_DESCRIPTION;
+        *link_id = IDS_PAGE_INFO_SYSTEM_SETTINGS_LINK;
+        return true;
+      }
+      return false;
+    case ContentSettingsType::MEDIASTREAM_CAMERA:
+      if (base::FeatureList::IsEnabled(
+              content_settings::features::kLeftHandSideActivityIndicators) &&
+          (system_media_permissions::CheckSystemVideoCapturePermission() ==
+           system_media_permissions::SystemPermission::kDenied)) {
+        *text_id = IDS_PAGE_INFO_CAMERA_SYSTEM_SETTINGS_DESCRIPTION;
+        *link_id = IDS_PAGE_INFO_SETTINGS_OF_A_SYSTEM_LINK;
+        return true;
+      }
+      return false;
+    case ContentSettingsType::MEDIASTREAM_MIC:
+      if (base::FeatureList::IsEnabled(
+              content_settings::features::kLeftHandSideActivityIndicators) &&
+          (system_media_permissions::CheckSystemAudioCapturePermission() ==
+           system_media_permissions::SystemPermission::kDenied)) {
+        *text_id = IDS_PAGE_INFO_MICROPHONE_SYSTEM_SETTINGS_DESCRIPTION;
+        *link_id = IDS_PAGE_INFO_SETTINGS_OF_A_SYSTEM_LINK;
+        return true;
+      }
+      return false;
+    default:
+      return false;
+  }
+#else
+  return false;
+#endif
+}
+
+void ChromePageInfoUiDelegate::SettingsLinkClicked(ContentSettingsType type) {
+#if BUILDFLAG(IS_MAC)
+  switch (type) {
+    case ContentSettingsType::NOTIFICATIONS: {
+      const webapps::AppId* app_id =
+          web_app::WebAppTabHelper::GetAppId(web_contents_);
+      if (!app_id) {
+        return;
+      }
+      base::mac::OpenSystemSettingsPane(
+          base::mac::SystemSettingsPane::kNotifications,
+          web_app::GetBundleIdentifierForShim(*app_id));
+      return;
+    }
+    case ContentSettingsType::MEDIASTREAM_CAMERA: {
+      base::mac::OpenSystemSettingsPane(
+          base::mac::SystemSettingsPane::kPrivacySecurity_Camera);
+      return;
+    }
+    case ContentSettingsType::MEDIASTREAM_MIC: {
+      base::mac::OpenSystemSettingsPane(
+          base::mac::SystemSettingsPane::kPrivacySecurity_Microphone);
+      return;
+    }
+    default:
+      NOTREACHED();
+      return;
+  }
+#else
+  NOTREACHED();
+#endif
 }
 
 bool ChromePageInfoUiDelegate::IsBlockAutoPlayEnabled() {

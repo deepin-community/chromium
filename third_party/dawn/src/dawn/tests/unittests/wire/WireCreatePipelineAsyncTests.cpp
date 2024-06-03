@@ -119,7 +119,7 @@ DAWN_INSTANTIATE_WIRE_FUTURE_TEST_P(WireCreateRenderPipelineAsyncTest);
 TEST_P(WireCreateComputePipelineAsyncTest, CreateSuccess) {
     DeviceCreateComputePipelineAsync(device, &mDescriptor, this);
 
-    EXPECT_CALL(api, OnDeviceCreateComputePipelineAsync(apiDevice, _, _, _))
+    EXPECT_CALL(api, OnDeviceCreateComputePipelineAsync(apiDevice, _, _))
         .WillOnce(InvokeWithoutArgs([&] {
             api.CallDeviceCreateComputePipelineAsyncCallback(
                 apiDevice, WGPUCreatePipelineAsyncStatus_Success, nullptr, "");
@@ -139,7 +139,7 @@ TEST_P(WireCreateComputePipelineAsyncTest, CreateSuccess) {
 TEST_P(WireCreateComputePipelineAsyncTest, CreateError) {
     DeviceCreateComputePipelineAsync(device, &mDescriptor, this);
 
-    EXPECT_CALL(api, OnDeviceCreateComputePipelineAsync(apiDevice, _, _, _))
+    EXPECT_CALL(api, OnDeviceCreateComputePipelineAsync(apiDevice, _, _))
         .WillOnce(InvokeWithoutArgs([&] {
             api.CallDeviceCreateComputePipelineAsyncCallback(
                 apiDevice, WGPUCreatePipelineAsyncStatus_ValidationError, nullptr,
@@ -161,7 +161,7 @@ TEST_P(WireCreateComputePipelineAsyncTest, CreateError) {
 TEST_P(WireCreateRenderPipelineAsyncTest, CreateSuccess) {
     DeviceCreateRenderPipelineAsync(device, &mDescriptor, this);
 
-    EXPECT_CALL(api, OnDeviceCreateRenderPipelineAsync(apiDevice, _, _, _))
+    EXPECT_CALL(api, OnDeviceCreateRenderPipelineAsync(apiDevice, _, _))
         .WillOnce(InvokeWithoutArgs([&] {
             api.CallDeviceCreateRenderPipelineAsyncCallback(
                 apiDevice, WGPUCreatePipelineAsyncStatus_Success, nullptr, "");
@@ -181,7 +181,7 @@ TEST_P(WireCreateRenderPipelineAsyncTest, CreateSuccess) {
 TEST_P(WireCreateRenderPipelineAsyncTest, CreateError) {
     DeviceCreateRenderPipelineAsync(device, &mDescriptor, this);
 
-    EXPECT_CALL(api, OnDeviceCreateRenderPipelineAsync(apiDevice, _, _, _))
+    EXPECT_CALL(api, OnDeviceCreateRenderPipelineAsync(apiDevice, _, _))
         .WillOnce(InvokeWithoutArgs([&] {
             api.CallDeviceCreateRenderPipelineAsyncCallback(
                 apiDevice, WGPUCreatePipelineAsyncStatus_ValidationError, nullptr,
@@ -204,7 +204,7 @@ TEST_P(WireCreateRenderPipelineAsyncTest, CreateError) {
 TEST_P(WireCreateRenderPipelineAsyncTest, CreateThenDisconnect) {
     DeviceCreateRenderPipelineAsync(device, &mDescriptor, this);
 
-    EXPECT_CALL(api, OnDeviceCreateRenderPipelineAsync(apiDevice, _, _, _))
+    EXPECT_CALL(api, OnDeviceCreateRenderPipelineAsync(apiDevice, _, _))
         .WillOnce(InvokeWithoutArgs([&] {
             api.CallDeviceCreateRenderPipelineAsyncCallback(
                 apiDevice, WGPUCreatePipelineAsyncStatus_Success, nullptr, "");
@@ -225,7 +225,7 @@ TEST_P(WireCreateRenderPipelineAsyncTest, CreateThenDisconnect) {
 TEST_P(WireCreateComputePipelineAsyncTest, CreateThenDisconnect) {
     DeviceCreateComputePipelineAsync(device, &mDescriptor, this);
 
-    EXPECT_CALL(api, OnDeviceCreateComputePipelineAsync(apiDevice, _, _, _))
+    EXPECT_CALL(api, OnDeviceCreateComputePipelineAsync(apiDevice, _, _))
         .WillOnce(InvokeWithoutArgs([&] {
             api.CallDeviceCreateComputePipelineAsyncCallback(
                 apiDevice, WGPUCreatePipelineAsyncStatus_Success, nullptr, "");
@@ -300,8 +300,7 @@ TEST(WireCreatePipelineAsyncTestNullBackend, ServerDeletedBeforeCallback) {
 
     auto reserved = wireClient->ReserveInstance();
     WGPUInstance instance = reserved.instance;
-    wireServer->InjectInstance(dawn::native::GetProcs().createInstance(nullptr),
-                               reserved.reservation);
+    wireServer->InjectInstance(dawn::native::GetProcs().createInstance(nullptr), reserved.handle);
 
     WGPURequestAdapterOptions adapterOptions = {};
     adapterOptions.backendType = WGPUBackendType_Null;
@@ -349,6 +348,7 @@ TEST(WireCreatePipelineAsyncTestNullBackend, ServerDeletedBeforeCallback) {
     ASSERT_TRUE(c2sBuf->Flush());
 
     // Delete the server. It should force async work to complete.
+    c2sBuf->SetHandler(nullptr);
     wireServer.reset();
 
     ASSERT_TRUE(s2cBuf->Flush());
@@ -359,6 +359,8 @@ TEST(WireCreatePipelineAsyncTestNullBackend, ServerDeletedBeforeCallback) {
     wgpuDeviceRelease(device);
     wgpuAdapterRelease(adapter);
     wgpuInstanceRelease(instance);
+
+    s2cBuf->SetHandler(nullptr);
 }
 
 }  // anonymous namespace

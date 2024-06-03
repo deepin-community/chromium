@@ -33,7 +33,6 @@ class ProfileDestroyer;
 class ProfileKey;
 class TestingProfile;
 class ThemeService;
-class TemplateURLService;
 class InstantService;
 
 namespace base {
@@ -72,15 +71,6 @@ class ProfileObserver;
 // http://dev.chromium.org/developers/design-documents/profile-architecture
 class Profile : public content::BrowserContext {
  public:
-  enum CreateStatus {
-    // Profile services were not created due to a local error (e.g., disk full).
-    CREATE_STATUS_LOCAL_FAIL,
-    // Profile created but before initializing extensions and promo resources.
-    CREATE_STATUS_CREATED,
-    // Profile is created, extensions and promo resources are initialized.
-    CREATE_STATUS_INITIALIZED,
-  };
-
   enum CreateMode {
     CREATE_MODE_SYNCHRONOUS,
     CREATE_MODE_ASYNCHRONOUS
@@ -367,24 +357,22 @@ class Profile : public content::BrowserContext {
   virtual void set_last_selected_directory(const base::FilePath& path) = 0;
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  enum AppLocaleChangedVia {
-    // Caused by chrome://settings change.
-    APP_LOCALE_CHANGED_VIA_SETTINGS,
-    // Locale has been reverted via LocaleChangeGuard.
-    APP_LOCALE_CHANGED_VIA_REVERT,
-    // From login screen.
-    APP_LOCALE_CHANGED_VIA_LOGIN,
-    // From login to a public session.
-    APP_LOCALE_CHANGED_VIA_PUBLIC_SESSION_LOGIN,
-    // From AllowedLanguages policy.
-    APP_LOCALE_CHANGED_VIA_POLICY,
-    // From demo session.
-    APP_LOCALE_CHANGED_VIA_DEMO_SESSION,
-    // From system tray.
-    APP_LOCALE_CHANGED_VIA_SYSTEM_TRAY,
-    // Source unknown.
-    APP_LOCALE_CHANGED_VIA_UNKNOWN
-  };
+  enum AppLocaleChangedVia{// Caused by chrome://settings change.
+                           APP_LOCALE_CHANGED_VIA_SETTINGS,
+                           // Locale has been reverted via LocaleChangeGuard.
+                           APP_LOCALE_CHANGED_VIA_REVERT,
+                           // From login screen.
+                           APP_LOCALE_CHANGED_VIA_LOGIN,
+                           // From login to a public session.
+                           APP_LOCALE_CHANGED_VIA_PUBLIC_SESSION_LOGIN,
+                           // From AllowedLanguages policy.
+                           APP_LOCALE_CHANGED_VIA_POLICY,
+                           // Locale is reverted in the next demo session.
+                           APP_LOCALE_CHANGED_VIA_DEMO_SESSION_REVERT,
+                           // From system tray.
+                           APP_LOCALE_CHANGED_VIA_SYSTEM_TRAY,
+                           // Source unknown.
+                           APP_LOCALE_CHANGED_VIA_UNKNOWN};
 
   // Changes application locale for a profile.
   virtual void ChangeAppLocale(
@@ -509,12 +497,6 @@ class Profile : public content::BrowserContext {
   const std::optional<raw_ptr<ThemeService>>& theme_service() {
     return theme_service_;
   }
-  void set_template_url_service(TemplateURLService* template_url_service) {
-    template_url_service_ = template_url_service;
-  }
-  const std::optional<raw_ptr<TemplateURLService>>& template_url_service() {
-    return template_url_service_;
-  }
   void set_instant_service(InstantService* instant_service) {
     instant_service_ = instant_service;
   }
@@ -555,7 +537,6 @@ class Profile : public content::BrowserContext {
   // Experimental objects to gauge the performance of caching frequently used
   // KeyedServices in a Profile pointer.
   std::optional<raw_ptr<ThemeService>> theme_service_;
-  std::optional<raw_ptr<TemplateURLService>> template_url_service_;
   std::optional<raw_ptr<InstantService>> instant_service_;
 
   base::ObserverList<ProfileObserver,

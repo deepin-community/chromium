@@ -93,14 +93,16 @@ class AutofillSaveCardInfoBarDelegateMobileTest
  private:
   void LocalSaveCardPromptCallback(
       AutofillClient::SaveCardOfferUserDecision user_decision) {
-    personal_data_.get()->SaveImportedCreditCard(credit_card_to_save_);
+    personal_data_->test_payments_data_manager().SaveImportedCreditCard(
+        credit_card_to_save_);
   }
 
   void UploadSaveCardPromptCallback(
       AutofillClient::SaveCardOfferUserDecision user_decision,
       const AutofillClient::UserProvidedCardDetails&
           user_provided_card_details) {
-    personal_data_.get()->SaveImportedCreditCard(credit_card_to_save_);
+    personal_data_->test_payments_data_manager().SaveImportedCreditCard(
+        credit_card_to_save_);
   }
 
   CreditCard credit_card_to_save_;
@@ -253,7 +255,7 @@ TEST_F(AutofillSaveCardInfoBarDelegateMobileTest, Metrics_Local_Main) {
 
   // Accept the infobar.
   {
-    personal_data_->ClearCreditCards();
+    personal_data_->test_payments_data_manager().ClearCreditCards();
     std::unique_ptr<ConfirmInfoBarDelegate> infobar(CreateDelegate(
         /* is_uploading= */ false));
 
@@ -331,7 +333,7 @@ TEST_F(AutofillSaveCardInfoBarDelegateMobileTest, Metrics_Server_Main) {
 
   // Accept the infobar.
   {
-    personal_data_->ClearCreditCards();
+    personal_data_->test_payments_data_manager().ClearCreditCards();
     std::unique_ptr<ConfirmInfoBarDelegate> infobar(CreateDelegate(
         /* is_uploading= */ true));
 
@@ -347,7 +349,7 @@ TEST_F(AutofillSaveCardInfoBarDelegateMobileTest, Metrics_Server_Main) {
 
   // Accept the infobar which should request an expiration date.
   {
-    personal_data_->ClearCreditCards();
+    personal_data_->test_payments_data_manager().ClearCreditCards();
     std::unique_ptr<ConfirmInfoBarDelegate> infobar(
         CreateDelegateWithLegalMessageAndOptions(
             /* is_uploading= */ true, /* legal_message_string= */ "",
@@ -374,7 +376,7 @@ TEST_F(AutofillSaveCardInfoBarDelegateMobileTest, Metrics_Server_Main) {
 
   // Accept the infobar which should request a cardholder name.
   {
-    personal_data_->ClearCreditCards();
+    personal_data_->test_payments_data_manager().ClearCreditCards();
     std::unique_ptr<ConfirmInfoBarDelegate> infobar(
         CreateDelegateWithLegalMessageAndOptions(
             /* is_uploading= */ true, /* legal_message_string= */ "",
@@ -539,7 +541,7 @@ TEST_F(AutofillSaveCardInfoBarDelegateMobileTest, Metrics_Cvc_Local_Main) {
 
   // Accept the infobar.
   {
-    personal_data_->ClearCreditCards();
+    personal_data_->test_payments_data_manager().ClearCreditCards();
     std::unique_ptr<ConfirmInfoBarDelegate> infobar(CreateDelegateWithOptions(
         /* is_uploading= */ false,
         AutofillClient::SaveCreditCardOptions().with_card_save_type(
@@ -599,7 +601,7 @@ TEST_F(AutofillSaveCardInfoBarDelegateMobileTest, Metrics_Cvc_Server_Main) {
 
   // Accept the infobar.
   {
-    personal_data_->ClearCreditCards();
+    personal_data_->test_payments_data_manager().ClearCreditCards();
     std::unique_ptr<ConfirmInfoBarDelegate> infobar(CreateDelegateWithOptions(
         /* is_uploading= */ true,
         AutofillClient::SaveCreditCardOptions().with_card_save_type(

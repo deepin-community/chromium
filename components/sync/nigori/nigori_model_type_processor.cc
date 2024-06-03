@@ -137,8 +137,6 @@ void NigoriModelTypeProcessor::OnUpdateReceived(
 
   const bool is_initial_sync =
       !IsInitialSyncDone(model_type_state_.initial_sync_state());
-  LogUpdatesReceivedByProcessorHistogram(NIGORI, is_initial_sync,
-                                         updates.size());
 
   model_type_state_ = type_state;
 
@@ -322,8 +320,6 @@ void NigoriModelTypeProcessor::ModelReadyToSync(
   if (model_error_) {
     return;
   }
-
-  MigrateLegacyInitialSyncDone(nigori_metadata.model_type_state, NIGORI);
 
   if (IsInitialSyncDone(
           nigori_metadata.model_type_state.initial_sync_state()) &&

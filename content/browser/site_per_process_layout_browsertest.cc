@@ -23,10 +23,12 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/hit_test_region_observer.h"
+#include "content/public/test/synchronize_visual_properties_interceptor.h"
 #include "content/public/test/test_frame_navigation_observer.h"
 #include "content/test/render_document_feature.h"
 #include "content/test/render_widget_host_visibility_observer.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom-test-utils.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/window_tree_host.h"
@@ -2320,8 +2322,15 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
 // that the scroll-delta matches the distance between TouchStart/End as seen
 // by the oopif, i.e. the oopif content 'sticks' to the finger during scrolling.
 // The relation is not exact, but should be close.
+// TODO(crbug.com/40697699): Re-enable the flaky test.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_DisableScrollOopifInPinchZoomedPage \
+  DISABLED_ScrollOopifInPinchZoomedPage
+#else
+#define MAYBE_DisableScrollOopifInPinchZoomedPage ScrollOopifInPinchZoomedPage
+#endif
 IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
-                       ScrollOopifInPinchZoomedPage) {
+                       MAYBE_DisableScrollOopifInPinchZoomedPage) {
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));

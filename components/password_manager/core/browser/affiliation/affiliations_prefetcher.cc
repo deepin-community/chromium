@@ -165,14 +165,13 @@ void AffiliationsPrefetcher::OnLoginsRetained(
     if (IsFacetValidForAffiliation(facet_uri))
       facets.push_back(std::move(facet_uri));
   }
-  // TODO(crbug.com/1100818): Current logic cancels prefetch for all missing
+  // TODO(crbug.com/40138080): Current logic cancels prefetch for all missing
   // facets. This might be wrong if both account and profile store is used.
   affiliation_service_->KeepPrefetchForFacets(std::move(facets));
 }
 
 void AffiliationsPrefetcher::OnPasskeysChanged(
     const std::vector<webauthn::PasskeyModelChange>& changes) {
-  std::vector<FacetURI> facet_uris_to_trim;
   for (const webauthn::PasskeyModelChange& change : changes) {
     std::optional<FacetURI> facet = FacetURIFromPasskey(change.passkey());
     if (!facet) {

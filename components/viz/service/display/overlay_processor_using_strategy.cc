@@ -784,7 +784,7 @@ bool OverlayProcessorUsingStrategy::AttemptWithStrategies(
     const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
     const OverlayProcessorInterface::FilterOperationsMap&
         render_pass_backdrop_filters,
-    DisplayResourceProvider* resource_provider,
+    const DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_pass_list,
     SurfaceDamageRectList* surface_damage_rect_list,
     OverlayProcessorInterface::OutputSurfaceOverlayPlane* primary_plane,
@@ -1088,8 +1088,8 @@ bool OverlayProcessorUsingStrategy::AttemptMultipleOverlays(
   }
 
   // Remove failed candidates.
-  base::EraseIf(candidates, [](auto& cand) { return !cand.overlay_handled; });
-  base::EraseIf(test_candidates, [](auto& proposed) -> bool {
+  std::erase_if(candidates, [](auto& cand) { return !cand.overlay_handled; });
+  std::erase_if(test_candidates, [](auto& proposed) -> bool {
     return !proposed.candidate.overlay_handled;
   });
   const int num_overlays_promoted = candidates.size();

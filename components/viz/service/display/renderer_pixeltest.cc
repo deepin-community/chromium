@@ -53,6 +53,7 @@
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
+#include "gpu/ipc/client/client_shared_image_interface.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_types.h"
 #include "media/renderers/video_resource_updater.h"
@@ -128,8 +129,9 @@ ResourceId CreateGpuResource(
   gpu::SharedImageInterface* sii = context_provider->SharedImageInterface();
   DCHECK(sii);
   auto client_shared_image = sii->CreateSharedImage(
-      format, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
-      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ, "TestLabel", pixels);
+      {format, size, color_space, gpu::SHARED_IMAGE_USAGE_DISPLAY_READ,
+       "TestLabel"},
+      pixels);
   gpu::SyncToken sync_token = sii->GenUnverifiedSyncToken();
 
   TransferableResource gl_resource = TransferableResource::MakeGpu(
@@ -827,7 +829,7 @@ void CreateTestYUVVideoDrawQuad_NV12(
       video_resource_updater->YuvSharedImageFormat(8), color_space, y_pixels);
 
   // U goes in the R component and V goes in the G component.
-  uint32_t rgba_pixel = (u << 24) | (v << 16);
+  uint32_t rgba_pixel = (u) | (v << 8);
   std::vector<uint32_t> uv_pixels(uv_tex_size.GetArea(), rgba_pixel);
   ResourceId resource_u = CreateGpuResource(
       child_context_provider, child_resource_provider, uv_tex_size,
@@ -855,8 +857,8 @@ void CreateTestYUVVideoDrawQuad_NV12(
   yuv_quad->SetNew(shared_state, rect, visible_rect, needs_blending,
                    ya_tex_size, video_frame_visible_rect, uv_sample_size,
                    mapped_resource_y, mapped_resource_u, mapped_resource_v,
-                   resource_a, color_space, 0.0f, 1.0f, 8,
-                   gfx::ProtectedVideoType::kClear, std::nullopt);
+                   resource_a, color_space, 8, gfx::ProtectedVideoType::kClear,
+                   std::nullopt);
 }
 
 // Create two quads of specified colors on half-pixel boundaries.
@@ -1953,11 +1955,13 @@ class IntersectingMultiplanarVideoQuadPixelTest : public VizPixelTestWithParam {
 
     video_resource_updater_ = std::make_unique<media::VideoResourceUpdater>(
         this->child_context_provider_.get(), nullptr,
-        this->child_resource_provider_.get(), kUseStreamVideoDrawQuad,
+        this->child_resource_provider_.get(),
+        /*shared_image_interface=*/nullptr, kUseStreamVideoDrawQuad,
         kUseGpuMemoryBufferResources, kMaxResourceSize);
     video_resource_updater2_ = std::make_unique<media::VideoResourceUpdater>(
         this->child_context_provider_.get(), nullptr,
-        this->child_resource_provider_.get(), kUseStreamVideoDrawQuad,
+        this->child_resource_provider_.get(),
+        /*shared_image_interface=*/nullptr, kUseStreamVideoDrawQuad,
         kUseGpuMemoryBufferResources, kMaxResourceSize);
   }
 
@@ -2429,8 +2433,8 @@ class VideoRendererPixelTestBase : public VizPixelTest {
     constexpr int kMaxResourceSize = 10000;
     video_resource_updater_ = std::make_unique<media::VideoResourceUpdater>(
         child_context_provider_.get(), nullptr, child_resource_provider_.get(),
-        kUseStreamVideoDrawQuad, kUseGpuMemoryBufferResources,
-        kMaxResourceSize);
+        /*shared_image_interface=*/nullptr, kUseStreamVideoDrawQuad,
+        kUseGpuMemoryBufferResources, kMaxResourceSize);
   }
 
   void TearDown() override {
@@ -2484,6 +2488,98 @@ TEST_P(VideoRendererPixelHiLoTest, SimpleYUVRect) {
           .SetErrorPixelsPercentageLimit(100.f)
           .SetAvgAbsErrorLimit(1.2f)
           .SetAbsErrorLimit(2)));
+}
+
+class VideoRendererPixelHiLoColorSpaceTest
+    : public VideoRendererPixelTestBase,
+      public testing::WithParamInterface<std::tuple<bool, gfx::ColorSpace>> {
+ public:
+  VideoRendererPixelHiLoColorSpaceTest()
+      : VideoRendererPixelTestBase(RendererType::kSkiaGL) {}
+
+  bool IsHighbit() const { return std::get<0>(GetParam()); }
+  gfx::ColorSpace GetColorSpace() const { return std::get<1>(GetParam()); }
+  const std::string GetName() const {
+    auto cs = GetColorSpace();
+    switch (cs.GetMatrixID()) {
+      case gfx::ColorSpace::MatrixID::FCC:
+        return "_fcc_limited";
+      case gfx::ColorSpace::MatrixID::YCOCG:
+        return "_ycocg_limited";
+      case gfx::ColorSpace::MatrixID::SMPTE240M:
+        return "_smpte240m_limited";
+      case gfx::ColorSpace::MatrixID::YDZDX:
+        return "_ydzdx_limited";
+      case gfx::ColorSpace::MatrixID::GBR:
+        return "_gbr_limited";
+      default:
+        NOTREACHED();
+    }
+    return "";
+  }
+};
+
+gfx::ColorSpace yuv_color_spaces[] = {
+    gfx::ColorSpace(gfx::ColorSpace::PrimaryID::SMPTE170M,
+                    gfx::ColorSpace::TransferID::SMPTE170M,
+                    gfx::ColorSpace::MatrixID::YCOCG,
+                    gfx::ColorSpace::RangeID::LIMITED),
+    gfx::ColorSpace(gfx::ColorSpace::PrimaryID::SMPTE170M,
+                    gfx::ColorSpace::TransferID::SMPTE170M,
+                    gfx::ColorSpace::MatrixID::FCC,
+                    gfx::ColorSpace::RangeID::LIMITED),
+    gfx::ColorSpace(gfx::ColorSpace::PrimaryID::SMPTE170M,
+                    gfx::ColorSpace::TransferID::SMPTE170M,
+                    gfx::ColorSpace::MatrixID::SMPTE240M,
+                    gfx::ColorSpace::RangeID::LIMITED),
+    gfx::ColorSpace(gfx::ColorSpace::PrimaryID::SMPTE170M,
+                    gfx::ColorSpace::TransferID::SMPTE170M,
+                    gfx::ColorSpace::MatrixID::YDZDX,
+                    gfx::ColorSpace::RangeID::LIMITED),
+    gfx::ColorSpace(gfx::ColorSpace::PrimaryID::SMPTE170M,
+                    gfx::ColorSpace::TransferID::SMPTE170M,
+                    gfx::ColorSpace::MatrixID::GBR,
+                    gfx::ColorSpace::RangeID::LIMITED),
+};
+
+INSTANTIATE_TEST_SUITE_P(,
+                         VideoRendererPixelHiLoColorSpaceTest,
+                         testing::Combine(testing::Bool(),
+                                          testing::ValuesIn(yuv_color_spaces)));
+
+TEST_P(VideoRendererPixelHiLoColorSpaceTest, SimpleYUVRect) {
+  gfx::Rect rect(this->device_viewport_size_);
+
+  CompositorRenderPassId id{1};
+  auto pass = CreateTestRootRenderPass(id, rect);
+  // Set the output color space to match the input primaries and transfer.
+  this->display_color_spaces_ = kRec601DisplayColorSpaces;
+
+  CreateTestMultiplanarVideoDrawQuad_Striped(
+      media::PIXEL_FORMAT_I420, GetColorSpace(), false, IsHighbit(),
+      gfx::RectF(0.0f, 0.0f, 1.0f, 1.0f), pass.get(),
+      this->video_resource_updater_.get(), rect, rect,
+      this->resource_provider_.get(), this->child_resource_provider_.get(),
+      this->child_context_provider_.get());
+
+  AggregatedRenderPassId new_id{1};
+  auto copy_pass = cc::CopyToAggregatedRenderPass(
+      pass.get(), new_id, gfx::ContentColorUsage::kSRGB);
+
+  AggregatedRenderPassList pass_list;
+  pass_list.push_back(std::move(copy_pass));
+
+  base::FilePath expected_result =
+      base::FilePath(FILE_PATH_LITERAL("yuv_stripes.png"));
+  expected_result = expected_result.InsertBeforeExtensionASCII(GetName());
+  // TODO(crbug.com/1465939): Remove error relaxations once software pixel
+  // upload support lands for Windows for multiplanar SI.
+  EXPECT_TRUE(this->RunPixelTest(&pass_list, expected_result,
+                                 cc::FuzzyPixelComparator()
+                                     .DiscardAlpha()
+                                     .SetErrorPixelsPercentageLimit(100.f)
+                                     .SetAvgAbsErrorLimit(1.0f)
+                                     .SetAbsErrorLimit(2)));
 }
 
 #if BUILDFLAG(IS_IOS)
@@ -2681,10 +2777,10 @@ TEST_P(VideoRendererPixelTest, SimpleNV12JRect) {
   SharedQuadState* shared_state = CreateTestSharedQuadState(
       gfx::Transform(), rect, pass.get(), gfx::MaskFilterInfo());
 
-  // YUV of (149,43,21) should be green (0,255,0) in RGB.
+  // YUV of (149,100,50) should be emerald green (39, 214, 99) in RGB.
   CreateTestYUVVideoDrawQuad_NV12(
       shared_state, gfx::ColorSpace::CreateJpeg(),
-      gfx::RectF(0.0f, 0.0f, 1.0f, 1.0f), 149, 43, 21, pass.get(),
+      gfx::RectF(0.0f, 0.0f, 1.0f, 1.0f), 149, 100, 50, pass.get(),
       this->video_resource_updater_.get(), rect, rect,
       this->resource_provider_.get(), this->child_resource_provider_.get(),
       this->child_context_provider_);
@@ -2693,7 +2789,7 @@ TEST_P(VideoRendererPixelTest, SimpleNV12JRect) {
   pass_list.push_back(std::move(pass));
 
   EXPECT_TRUE(this->RunPixelTest(
-      &pass_list, base::FilePath(FILE_PATH_LITERAL("green.png")),
+      &pass_list, base::FilePath(FILE_PATH_LITERAL("emerald_green.png")),
       cc::AlphaDiscardingFuzzyPixelOffByOneComparator()));
 }
 
@@ -3815,7 +3911,7 @@ TEST_P(RendererPixelTestWithBackdropFilter, OffsetFilter) {
       cc::FilterOperation::CreateOffsetFilter(gfx::Point(5, 5)));
   SetUpRenderPassList();
 
-  // TODO(989329): See comment in
+  // TODO(crbug.com/41473761): See comment in
   // LayerTreeHostFiltersPixelTest/BackdropFilterOffsetTest. The software
   // compositor does not correctly apply clamping when accessing content outside
   // of the layer.
@@ -4178,7 +4274,7 @@ TEST_P(GPURendererPixelTest, BlendingWithoutAntiAliasing) {
 }
 
 TEST_P(GPURendererPixelTest, TrilinearFiltering) {
-  // TODO(crbug.com/1442381): Enable test for Graphite once mipmap issue is
+  // TODO(crbug.com/40266937): Enable test for Graphite once mipmap issue is
   // fixed.
   if (is_skia_graphite()) {
     GTEST_SKIP();
@@ -5583,7 +5679,7 @@ TEST_P(RendererPixelTest, RoundedCornerMultipleQads) {
 
 TEST_P(RendererPixelTest, BlurExpandsBounds) {
 #if defined(MEMORY_SANITIZER)
-  // TODO(crbug.com/1441704): Re-enable this test.
+  // TODO(crbug.com/40266622): Re-enable this test.
   // Skia Vulkan renderer had problems with this test when MSAN was enabled.
   if (renderer_type() == RendererType::kSkiaVk) {
     GTEST_SKIP();
@@ -5664,7 +5760,8 @@ class RendererPixelTestWithOverdrawFeedback : public VizPixelTestWithParam {
 };
 
 TEST_P(RendererPixelTestWithOverdrawFeedback, TranslucentRectangles) {
-  // TODO(crbug.com/1475653): Enable this test once issue is fixed for Graphite.
+  // TODO(crbug.com/40279711): Enable this test once issue is fixed for
+  // Graphite.
   if (is_skia_graphite()) {
     GTEST_SKIP();
   }

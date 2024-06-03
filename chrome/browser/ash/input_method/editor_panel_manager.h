@@ -12,12 +12,15 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "chrome/browser/ash/input_method/editor_consent_enums.h"
 #include "chrome/browser/ash/input_method/editor_metrics_recorder.h"
 #include "chromeos/ash/services/orca/public/mojom/orca_service.mojom.h"
 #include "chromeos/crosapi/mojom/editor_panel.mojom.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/bindings/remote_set.h"
 
 namespace ash::input_method {
 
@@ -43,7 +46,13 @@ class EditorPanelManager : public crosapi::mojom::EditorPanelManager {
     virtual EditorOpportunityMode GetEditorOpportunityMode() const = 0;
     virtual std::vector<EditorBlockedReason> GetBlockedReasons() const = 0;
 
+    virtual void FetchAndUpdateInputContext() = 0;
     virtual void CacheContext() = 0;
+  };
+
+  class Observer : public base::CheckedObserver {
+   public:
+    virtual void OnEditorModeChanged(const EditorMode& mode) = 0;
   };
 
   explicit EditorPanelManager(Delegate* delegate);
@@ -60,13 +69,16 @@ class EditorPanelManager : public crosapi::mojom::EditorPanelManager {
   void StartEditingFlowWithFreeform(const std::string& text) override;
   void OnEditorMenuVisibilityChanged(bool visible) override;
   void LogEditorMode(crosapi::mojom::EditorPanelMode mode) override;
+  void BindEditorObserver(mojo::PendingRemote<crosapi::mojom::EditorObserver>
+                              pending_observer_remote) override;
 
   void BindReceiver(mojo::PendingReceiver<crosapi::mojom::EditorPanelManager>
                         pending_receiver);
-
   void BindEditorClient();
-
   bool IsEditorMenuVisible() const;
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
+  void NotifyEditorModeChanged(const EditorMode& mode);
 
  private:
   void OnGetPresetTextQueriesResult(
@@ -78,6 +90,9 @@ class EditorPanelManager : public crosapi::mojom::EditorPanelManager {
   mojo::Remote<orca::mojom::EditorClient> editor_client_remote_;
 
   bool is_editor_menu_visible_ = false;
+
+  mojo::RemoteSet<crosapi::mojom::EditorObserver> observer_remotes_;
+  base::ObserverList<EditorPanelManager::Observer> observers_;
 
   base::WeakPtrFactory<EditorPanelManager> weak_ptr_factory_{this};
 };

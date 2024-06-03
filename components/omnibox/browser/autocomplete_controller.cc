@@ -31,6 +31,7 @@
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/ranges/algorithm.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -46,7 +47,6 @@
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/omnibox/browser/autocomplete_provider_client.h"
-#include "components/omnibox/browser/autocomplete_scoring_model_service.h"
 #include "components/omnibox/browser/autocomplete_scoring_signals_annotator.h"
 #include "components/omnibox/browser/bookmark_provider.h"
 #include "components/omnibox/browser/bookmark_scoring_signals_annotator.h"
@@ -66,6 +66,7 @@
 #include "components/omnibox/browser/omnibox_prefs.h"
 #include "components/omnibox/browser/on_device_head_provider.h"
 #include "components/omnibox/browser/open_tab_provider.h"
+#include "components/omnibox/browser/page_classification_functions.h"
 #include "components/omnibox/browser/query_tile_provider.h"
 #include "components/omnibox/browser/search_provider.h"
 #include "components/omnibox/browser/shortcuts_provider.h"
@@ -75,6 +76,7 @@
 #include "components/omnibox/browser/zero_suggest_verbatim_match_provider.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/open_from_clipboard/clipboard_recent_content.h"
+#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
@@ -88,6 +90,8 @@
 #include "third_party/omnibox_proto/types.pb.h"
 #include "ui/base/device_form_factor.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/url_canon.h"
+#include "url/url_util.h"
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 #include "components/omnibox/browser/featured_search_provider.h"
@@ -99,11 +103,26 @@
 #include "components/open_from_clipboard/clipboard_recent_content_generic.h"
 #endif
 
+#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+#include "components/omnibox/browser/autocomplete_scoring_model_service.h"
+#endif
+
+constexpr bool kIsDesktop = !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS);
+
 namespace {
 
 using ScoringSignals = ::metrics::OmniboxEventProto::Suggestion::ScoringSignals;
 
 constexpr bool is_android = !!BUILDFLAG(IS_ANDROID);
+
+void RecordMlScoreCoverage(size_t matches_with_non_null_scores,
+                           size_t total_scored_matches) {
+  int percent_score_coverage =
+      matches_with_non_null_scores * 100 / total_scored_matches;
+  base::UmaHistogramPercentage(
+      "Omnibox.URLScoringModelExecuted.MLScoreCoverage",
+      percent_score_coverage);
+}
 
 // Appends available autocompletion of the given type, subtype, and number to
 // the existing available autocompletions string, encoding according to the
@@ -213,6 +232,12 @@ std::u16string GetDomain(const AutocompleteMatch& match) {
   std::u16string url_domain;
   url_formatter::SplitHost(url, &url_host, &url_domain, nullptr);
   return url_domain;
+}
+
+std::string EncodeURIComponent(const std::string& component) {
+  url::RawCanonOutputT<char> encoded;
+  url::EncodeURIComponent(component, &encoded);
+  return std::string(encoded.view());
 }
 
 }  // namespace
@@ -778,7 +803,7 @@ void AutocompleteController::
   const std::string experiment_stats = base::StringPrintf(
       "%" PRId64 "j%dj%d", query_formulation_time.InMilliseconds(),
       search_feature_triggered, input_.current_page_classification());
-  // TODO(crbug.com/1247846): experiment_stats is a deprecated field. We should
+  // TODO(crbug.com/40197024): experiment_stats is a deprecated field. We should
   // however continue to report it for the downstream consumers that expect this
   // field. Eventually Chrome should start logging the substitute fields and
   // the downstream consumers should migrate to using those fields before we
@@ -822,17 +847,20 @@ void AutocompleteController::
 void AutocompleteController::SetMatchDestinationURL(
     AutocompleteMatch* match) const {
   TRACE_EVENT0("omnibox", "AutocompleteController::SetMatchDestinationURL");
-  const TemplateURL* turl = match->GetTemplateURL(template_url_service_, false);
-  const std::string search_terms =
-      base::UTF16ToUTF8(match->search_terms_args->search_terms);
+
+  // Convert search terms to UTF8 and URI-component encode the string.
+  const std::string encoded_search_terms = EncodeURIComponent(
+      base::UTF16ToUTF8(match->search_terms_args->search_terms));
+
   // Append an extra header to navigations from the @gemini scope.
+  const TemplateURL* turl = match->GetTemplateURL(template_url_service_, false);
   if (turl &&
       turl->starter_pack_id() == TemplateURLStarterPackData::kAskGoogle &&
-      net::HttpUtil::IsValidHeaderValue(search_terms)) {
+      !encoded_search_terms.empty() &&
+      net::HttpUtil::IsValidHeaderValue(encoded_search_terms)) {
     DCHECK(net::HttpUtil::IsValidHeaderName(kOmniboxGeminiHeader));
-    match->extra_headers = kOmniboxGeminiHeader;
-    match->extra_headers += ":";
-    match->extra_headers += search_terms;
+    match->extra_headers =
+        base::StrCat({kOmniboxGeminiHeader, ":", encoded_search_terms});
   }
 
   auto url = ComputeURLFromSearchTermsArgs(turl, *match->search_terms_args);
@@ -1261,17 +1289,9 @@ void AutocompleteController::AttachActions() {
 #endif
   }
   internal_result_.TrimOmniboxActions(input_.IsZeroSuggest());
-
-  // TODO(crbug.com/1477861): Eliminate the NTP realbox check when realbox UI
-  //  is fixed for this feature. For now the *IncludeRealbox feature param is
-  //  defaulted to true so that developers see realbox issues but they can
-  //  be prevented in experiments.
-  if (OmniboxFieldTrial::IsActionsUISimplificationEnabled() &&
-      (OmniboxFieldTrial::kActionsUISimplificationIncludeRealbox.Get() ||
-       input_.current_page_classification() !=
-           metrics::OmniboxEventProto::NTP_REALBOX)) {
-    internal_result_.SplitActionsToSuggestions();
-  }
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  internal_result_.SplitActionsToSuggestions();
+#endif
 }
 
 void AutocompleteController::UpdateAssociatedKeywords(
@@ -1302,8 +1322,7 @@ void AutocompleteController::UpdateAssociatedKeywords(
       // Prevent starter-pack keywords from attaching to non-starter-pack
       // matches. Those will have a dedicated UI with an explicit match
       // selection to enter keyword mode.
-      if (OmniboxFieldTrial::IsKeywordModeRefreshEnabled() &&
-          match.type != AutocompleteMatchType::STARTER_PACK) {
+      if (kIsDesktop && match.type != AutocompleteMatchType::STARTER_PACK) {
         TemplateURL* turl =
             template_url_service_->GetTemplateURLForKeyword(exact_keyword);
         // Note, starter pack matches that removed the '@' from the beginning of
@@ -1320,6 +1339,7 @@ void AutocompleteController::UpdateAssociatedKeywords(
       // it along with a keyword hint. Prefer the keyword hint, and revert
       // to a typical search.
       match.answer.reset();
+      match.answer_template.reset();
       match.associated_keyword = std::make_unique<AutocompleteMatch>(
           keyword_provider_->CreateVerbatimMatch(exact_keyword, exact_keyword,
                                                  input_));
@@ -1336,8 +1356,7 @@ void AutocompleteController::UpdateAssociatedKeywords(
     if (!keyword.empty()) {
       // Prevent starter-pack keywords from attaching to non-starter-pack
       // matches.
-      if (OmniboxFieldTrial::IsKeywordModeRefreshEnabled() &&
-          match.type != AutocompleteMatchType::STARTER_PACK) {
+      if (kIsDesktop && match.type != AutocompleteMatchType::STARTER_PACK) {
         TemplateURL* turl =
             template_url_service_->GetTemplateURLForKeyword(keyword);
         if (turl && turl->starter_pack_id() != 0 &&
@@ -1349,8 +1368,7 @@ void AutocompleteController::UpdateAssociatedKeywords(
       // Only add the keyword if the match does not have a duplicate keyword
       // with a more relevant match.
       if (!keywords.count(keyword) ||
-          (OmniboxFieldTrial::IsKeywordModeRefreshEnabled() &&
-           match.type == AutocompleteMatchType::STARTER_PACK)) {
+          (kIsDesktop && match.type == AutocompleteMatchType::STARTER_PACK)) {
         keywords.insert(keyword);
         match.associated_keyword = std::make_unique<AutocompleteMatch>(
             keyword_provider_->CreateVerbatimMatch(match.fill_into_edit,
@@ -1724,6 +1742,12 @@ bool AutocompleteController::ShouldRunProvider(
     return false;
   }
 
+  // Only a subset of providers are run for the Lens searchboxes.
+  if (omnibox::IsLensSearchbox(input_.current_page_classification())) {
+    return provider->type() == AutocompleteProvider::TYPE_SEARCH ||
+           provider->type() == AutocompleteProvider::TYPE_ZERO_SUGGEST;
+  }
+
   if (input_.InKeywordMode()) {
     // Only a subset of providers are run when we're in a starter pack keyword
     // mode. Try to grab the TemplateURL to determine if we're in starter pack
@@ -1868,6 +1892,7 @@ void AutocompleteController::RunBatchUrlScoringModel(OldResult& old_result) {
   std::priority_queue<int> relevance_heap;
   std::priority_queue<std::tuple<float, int, AutocompleteResult::iterator>>
       prediction_and_match_itr_heap;
+  size_t score_coverage_count = 0;
   // Likewise, keep the same number of shortcut boosted suggestions but reassign
   // them to the highest scoring suggestions.
   size_t boosted_shortcut_count = 0;
@@ -1876,6 +1901,7 @@ void AutocompleteController::RunBatchUrlScoringModel(OldResult& old_result) {
     if (!prediction.has_value()) {
       continue;
     }
+    score_coverage_count++;
 
     auto match_itr = eligible_match_itrs[index];
     relevance_heap.emplace(match_itr->relevance);
@@ -1884,6 +1910,10 @@ void AutocompleteController::RunBatchUrlScoringModel(OldResult& old_result) {
     if (match_itr->shortcut_boosted)
       boosted_shortcut_count++;
   }
+
+  // Record the percentage of matches that were assigned non-null scores by
+  // the ML scoring model.
+  RecordMlScoreCoverage(score_coverage_count, results.size());
 
   if (!relevance_heap.empty()) {
     // Record whether the model was executed for at least one eligible match.
@@ -1895,8 +1925,9 @@ void AutocompleteController::RunBatchUrlScoringModel(OldResult& old_result) {
                                  relevance_heap.size());
 
     // Record how long it took to execute the model for all eligible matches.
-    base::UmaHistogramTimes("Omnibox.URLScoringModelExecuted.ElapsedTime",
-                            elapsed_timer.Elapsed());
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "Omnibox.URLScoringModelExecuted.ElapsedTime", elapsed_timer.Elapsed(),
+        base::Microseconds(1), base::Milliseconds(3), 100);
   }
 
   while (!relevance_heap.empty()) {
@@ -1975,8 +2006,9 @@ void AutocompleteController::RunBatchUrlScoringModelWithStableSearches(
                                results.size());
 
   // Record how long it took to execute the model for all eligible matches.
-  base::UmaHistogramTimes("Omnibox.URLScoringModelExecuted.ElapsedTime",
-                          elapsed_timer.Elapsed());
+  UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+      "Omnibox.URLScoringModelExecuted.ElapsedTime", elapsed_timer.Elapsed(),
+      base::Microseconds(1), base::Milliseconds(3), 100);
 
   // Record whether the model was executed for at least one eligible match.
   provider_client_->GetOmniboxTriggeredFeatureService()->FeatureTriggered(
@@ -2054,8 +2086,14 @@ void AutocompleteController::RunBatchUrlScoringModelMappedSearchBlending(
   std::vector<size_t> scored_positions;
   for (size_t i = 0; i < internal_result_.size(); ++i) {
     const auto& match = internal_result_.matches_[i];
-    if (!match.IsUrlScoringEligible())
+    // Do not attempt to score matches that are generally ineligible for ML
+    // scoring nor any stale suggestions sourced from the DocumentProvider
+    // cache.
+    if (!match.IsUrlScoringEligible() ||
+        (match.type == AutocompleteMatchType::DOCUMENT_SUGGESTION &&
+         match.relevance == 0)) {
       continue;
+    }
     batch_scoring_signals.push_back(&match.scoring_signals.value());
     scored_positions.push_back(i);
   }
@@ -2075,8 +2113,9 @@ void AutocompleteController::RunBatchUrlScoringModelMappedSearchBlending(
                                results.size());
 
   // Record how long it took to execute the model for all eligible matches.
-  base::UmaHistogramTimes("Omnibox.URLScoringModelExecuted.ElapsedTime",
-                          elapsed_timer.Elapsed());
+  UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+      "Omnibox.URLScoringModelExecuted.ElapsedTime", elapsed_timer.Elapsed(),
+      base::Microseconds(1), base::Milliseconds(3), 100);
 
   // Record whether the model was executed for at least one eligible match.
   provider_client_->GetOmniboxTriggeredFeatureService()->FeatureTriggered(
@@ -2090,13 +2129,23 @@ void AutocompleteController::RunBatchUrlScoringModelMappedSearchBlending(
   const int grouping_threshold = OmniboxFieldTrial::GetMLConfig()
                                      .mapped_search_blending_grouping_threshold;
 
+  int score_coverage_count = 0;
   for (size_t i = 0; i < results.size(); ++i) {
+    const auto& prediction = results[i];
+    float p_value = prediction.value_or(0);
+    if (prediction.has_value()) {
+      score_coverage_count++;
+    }
     auto& match = internal_result_.matches_[scored_positions[i]];
     match.RecordAdditionalInfo("ml legacy relevance", match.relevance);
-    match.RecordAdditionalInfo("ml model output", *results[i]);
-    match.relevance = min + *results[i] * (max - min);
+    match.RecordAdditionalInfo("ml model output", p_value);
+    match.relevance = min + p_value * (max - min);
     match.shortcut_boosted = match.relevance > grouping_threshold;
   }
+
+  // Record the percentage of matches that were assigned non-null scores by
+  // the ML scoring model.
+  RecordMlScoreCoverage(score_coverage_count, results.size());
 
   // Following the initial relevance assignment, build a sorted list of
   // values which will contain the finalized set of relevance scores for URL
@@ -2121,7 +2170,9 @@ void AutocompleteController::RunBatchUrlScoringModelMappedSearchBlending(
 
   std::vector<std::pair<float, size_t>> prediction_and_position_heap;
   for (size_t i = 0; i < results.size(); ++i) {
-    prediction_and_position_heap.push_back({*results[i], scored_positions[i]});
+    const auto& prediction = results[i];
+    prediction_and_position_heap.push_back(
+        {prediction.value_or(0), scored_positions[i]});
   }
   base::ranges::stable_sort(prediction_and_position_heap, std::greater<>(),
                             [](const auto& pair) { return pair.first; });
@@ -2198,8 +2249,7 @@ void AutocompleteController::MaybeCleanSuggestionsForKeywordMode(
     // Realbox doesn't support keyword mode yet, so keep original list intact.
     return;
   }
-  if (OmniboxFieldTrial::IsKeywordModeRefreshEnabled() &&
-      input.text().starts_with(u'@')) {
+  if (kIsDesktop && input.text().starts_with(u'@')) {
     // When the input is '@' exactly, some special filtering rules are applied.
     // Note: the rule preserving other matches with `associated_keyword` is
     // not currently necessary, but is intended to make it easy to coexist
@@ -2236,23 +2286,10 @@ void AutocompleteController::MaybeCleanSuggestionsForKeywordMode(
       }
     }
 
-    // Clear help text that is repeated across consecutive instant keyword
-    // matches. During this pass, also eliminate tab switch on instant
-    // keyword matches for an extra clean appearance.
-    PrefService* prefs = provider_client_->GetPrefs();
-    const bool instant_keyword_used =
-        prefs ? prefs->GetBoolean(omnibox::kOmniboxInstantKeywordUsed) : false;
-    size_t instant_counter = 0;
+    // Eliminate tab switch on instant keyword matches for clean appearance.
     for (size_t i = 0; i < result->size(); i++) {
       if (result->match_at(i)->HasInstantKeyword(template_url_service_)) {
         result->match_at(i)->actions.clear();
-        instant_counter++;
-        if (instant_counter > 1 || instant_keyword_used) {
-          result->match_at(i)->contents.clear();
-          result->match_at(i)->contents_class = {{}};
-        }
-      } else {
-        instant_counter = 0;
       }
     }
   }

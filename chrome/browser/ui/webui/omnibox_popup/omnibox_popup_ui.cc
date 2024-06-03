@@ -12,8 +12,8 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
-#include "chrome/browser/ui/webui/realbox/realbox_handler.h"
 #include "chrome/browser/ui/webui/sanitized_image_source.h"
+#include "chrome/browser/ui/webui/searchbox/realbox_handler.h"
 #include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/omnibox_popup_resources.h"
@@ -50,7 +50,7 @@ WEB_UI_CONTROLLER_TYPE_IMPL(OmniboxPopupUI)
 
 void OmniboxPopupUI::BindInterface(
     content::RenderFrameHost* host,
-    mojo::PendingReceiver<omnibox::mojom::PageHandler> pending_page_handler) {
+    mojo::PendingReceiver<searchbox::mojom::PageHandler> pending_page_handler) {
   // Extract SessionID from URL to select the omnibox that initiated page load.
   const GURL& url = host->GetWebUI()->GetWebContents()->GetLastCommittedURL();
   SessionID id = SessionID::InvalidValue();
@@ -82,7 +82,8 @@ void OmniboxPopupUI::BindInterface(
 
       handler_ = std::make_unique<RealboxHandler>(
           std::move(pending_page_handler), Profile::FromWebUI(web_ui()),
-          web_ui()->GetWebContents(), &metrics_reporter_, controller);
+          web_ui()->GetWebContents(), &metrics_reporter_,
+          /*lens_searchbox_client=*/nullptr, controller);
     }
   }
 }

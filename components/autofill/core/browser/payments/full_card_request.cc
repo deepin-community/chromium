@@ -168,9 +168,19 @@ void FullCardRequest::GetFullCardImpl(
 
   request_->fido_assertion_info = std::move(fido_assertion_info);
 
+  // Add appropriate ClientBehaviorConstants to the request based on the
+  // user experience.
   if (ShouldShowCardMetadata(card)) {
     request_->client_behavior_signals.push_back(
         ClientBehaviorConstants::kShowingCardArtImageAndCardProductName);
+  }
+  // TODO(crbug.com/332715322): Refactor FullCardRequest to use
+  // AutofillClient::GetPersonalDataManager() instead of a separate class
+  // variable.
+  if (DidDisplayBenefitForCard(card, autofill_client_.get(),
+                               *personal_data_manager_)) {
+    request_->client_behavior_signals.push_back(
+        ClientBehaviorConstants::kShowingCardBenefits);
   }
 
   // If there is a UI delegate, then perform a CVC check.
@@ -232,7 +242,7 @@ void FullCardRequest::OnUnmaskPromptAccepted(
     SendUnmaskCardRequest();
 }
 
-void FullCardRequest::OnUnmaskPromptClosed() {
+void FullCardRequest::OnUnmaskPromptCancelled() {
   if (result_delegate_) {
     result_delegate_->OnFullCardRequestFailed(request_->card.record_type(),
                                               FailureType::PROMPT_CLOSED);
@@ -268,7 +278,7 @@ void FullCardRequest::SendUnmaskCardRequest() {
 
 void FullCardRequest::OnDidGetRealPan(
     AutofillClient::PaymentsRpcResult result,
-    payments::PaymentsNetworkInterface::UnmaskResponseDetails&
+    const payments::PaymentsNetworkInterface::UnmaskResponseDetails&
         response_details) {
   // If the CVC field is populated, that means the user performed a CVC check.
   // If FIDO AssertionInfo is populated, then the user must have performed FIDO

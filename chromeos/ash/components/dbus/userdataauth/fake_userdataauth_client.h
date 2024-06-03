@@ -174,8 +174,7 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) FakeUserDataAuthClient
     // AuthSession id.
     std::string id;
     std::string broadcast_id;
-    // Whether the `AUTH_SESSION_FLAGS_EPHEMERAL_USER` flag was passed on
-    // creation.
+    // Whether the is_ephemeral_user flag was set on creation.
     bool ephemeral = false;
     // Account associated with the session.
     cryptohome::AccountIdentifier account;
@@ -214,6 +213,10 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) FakeUserDataAuthClient
   void AddFingerprintAuthObserver(FingerprintAuthObserver* observer) override;
   void RemoveFingerprintAuthObserver(
       FingerprintAuthObserver* observer) override;
+  void AddPrepareAuthFactorProgressObserver(
+      PrepareAuthFactorProgressObserver* observer) override;
+  void RemovePrepareAuthFactorProgressObserver(
+      PrepareAuthFactorProgressObserver* observer) override;
   void WaitForServiceToBeAvailable(
       chromeos::WaitForServiceToBeAvailableCallback callback) override;
   void IsMounted(const ::user_data_auth::IsMountedRequest& request,
@@ -469,8 +472,11 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) FakeUserDataAuthClient
   // List of observers.
   base::ObserverList<Observer> observer_list_;
 
-  // List of fingerprint event observers.
+  // List of legacy fingerprint event observers.
   base::ObserverList<FingerprintAuthObserver> fingerprint_observers_;
+
+  // List of PrepareAuthFactorProgress event observers.
+  base::ObserverList<PrepareAuthFactorProgressObserver> progress_observers_;
 
   // Do we run the dircrypto migration, as in, emit signals, when
   // StartMigrateToDircrypto() is called?

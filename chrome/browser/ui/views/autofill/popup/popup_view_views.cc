@@ -27,6 +27,7 @@
 #include "chrome/browser/ui/views/autofill/popup/popup_row_factory_utils.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_separator_view.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_title_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_warning_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -82,7 +83,7 @@ constexpr int kAutofillPopupWidthMultiple = 12;
 // (see crbug.com/1434330).
 constexpr int kAutofillPopupMinWidth = kAutofillPopupWidthMultiple * 13;
 static_assert(kAutofillPopupMinWidth > 128);
-// TODO(crbug.com/831603): move handling the max width to the base class.
+// TODO(crbug.com/41382463): move handling the max width to the base class.
 constexpr int kAutofillPopupMaxWidth = kAutofillPopupWidthMultiple * 38;
 
 // Preferred position relative to the control sides of the sub-popup.
@@ -200,7 +201,7 @@ bool PopupViewViews::Show(
   // Check for the special "warning bubble" mode: single warning suggestion
   // which content should be just announced to the user. Triggering
   // Event::kAlert on such a row makes screen readers read its content out.
-  // TODO(crbug.com/1480487): Consider supporting "warning mode" explicitly.
+  // TODO(crbug.com/40281426): Consider supporting "warning mode" explicitly.
   if (rows_.size() == 1 &&
       absl::holds_alternative<PopupWarningView*>(rows_[0])) {
     absl::get<PopupWarningView*>(rows_[0])->NotifyAccessibilityEvent(
@@ -217,6 +218,10 @@ bool PopupViewViews::Show(
 
 void PopupViewViews::Hide() {
   NotifyAccessibilityEvent(ax::mojom::Event::kExpandedChanged, true);
+
+  open_sub_popup_timer_.Stop();
+  no_selection_sub_popup_close_timer_.Stop();
+
   // The controller is no longer valid after it hides us.
   controller_ = nullptr;
   DoHide();
@@ -281,25 +286,6 @@ bool PopupViewViews::HandleKeyPressEvent(
       (event.GetModifiers() & blink::WebInputEvent::kKeyModifiers &
        ~blink::WebInputEvent::kShiftKey);
 
-  // Selects the content cell of the row with currently open sup-popup if any,
-  // which closes the sub-popup and looks like going one menu level back.
-  auto select_sub_popup_content_cell = [&]() {
-    if (!row_with_open_sub_popup_) {
-      return false;
-    }
-
-    size_t row_index = *row_with_open_sub_popup_;
-    // Closing the sub-popup by setting `std::nullopt` is required as
-    // `suppress_popup=true` is not enough: the sub-popup closing will be
-    // prevented by the "same value" check.
-    SetRowWithOpenSubPopup(std::nullopt);
-    SetSelectedCell(CellIndex{row_index, PopupRowView::CellType::kContent},
-                    PopupCellSelectionSource::kKeyboard,
-                    AutoselectFirstSuggestion(false),
-                    /*suppress_popup=*/true);
-    return true;
-  };
-
   switch (event.windows_key_code) {
     case ui::VKEY_UP:
       SelectPreviousRow();
@@ -315,14 +301,14 @@ bool PopupViewViews::HandleKeyPressEvent(
       if (base::i18n::IsRTL()) {
         return SelectNextHorizontalCell();
       } else {
-        if (select_sub_popup_content_cell()) {
+        if (SelectParentPopupContentCell()) {
           return true;
         }
         return SelectPreviousHorizontalCell();
       }
     case ui::VKEY_RIGHT:
       if (base::i18n::IsRTL()) {
-        if (select_sub_popup_content_cell()) {
+        if (SelectParentPopupContentCell()) {
           return true;
         }
         return SelectPreviousHorizontalCell();
@@ -342,7 +328,7 @@ bool PopupViewViews::HandleKeyPressEvent(
     case ui::VKEY_DELETE:
       return kHasShiftModifier && RemoveSelectedCell();
     case ui::VKEY_ESCAPE:
-      if (select_sub_popup_content_cell()) {
+      if (SelectParentPopupContentCell()) {
         return true;
       }
       // If this is the root popup view and there was no sub-popup open (find
@@ -359,7 +345,7 @@ bool PopupViewViews::HandleKeyPressEvent(
       // We do not want to handle Mod+TAB for other modifiers because this may
       // have other purposes (e.g., change the tab).
       if (!kHasNonShiftModifier) {
-        AcceptSelectedContentOrCreditCardCell(base::TimeTicks::Now());
+        AcceptSelectedContentOrCreditCardCell();
       }
       return false;
     default:
@@ -376,28 +362,99 @@ bool PopupViewViews::HandleKeyPressEventForCompose(
     case ui::VKEY_ESCAPE:
       controller_->Hide(PopupHidingReason::kUserAborted);
       return true;
-    case ui::VKEY_TAB:
+    case ui::VKEY_UP:
       if (GetSelectedCell()) {
-        if (kHasShiftModifier) {
-          // Shift+TAB should remove the selection, but keep the popup open.
-          SetSelectedCell(std::nullopt, PopupCellSelectionSource::kKeyboard);
+        SelectPreviousRow();
+        return true;
+      }
+      return false;
+    case ui::VKEY_DOWN:
+      if (GetSelectedCell()) {
+        SelectNextRow();
+        return true;
+      }
+      return false;
+    case ui::VKEY_LEFT:
+      // `base::i18n::IsRTL` is used here instead of the controller's method
+      // because the controller's `IsRTL` depends on the language of the focused
+      // field and not the overall UI language. However, the layout of the popup
+      // is determined by the overall UI language.
+      if (base::i18n::IsRTL()) {
+        return SelectNextHorizontalCell();
+      } else {
+        if (SelectParentPopupContentCell()) {
           return true;
         }
+        return SelectPreviousHorizontalCell();
+      }
+    case ui::VKEY_RIGHT:
+      if (base::i18n::IsRTL()) {
+        if (SelectParentPopupContentCell()) {
+          return true;
+        }
+        return SelectPreviousHorizontalCell();
+      } else {
+        return SelectNextHorizontalCell();
+      }
+    case ui::VKEY_TAB: {
+      const bool is_root_popup = !parent_;
+      // TAB should only be handled by the root popup. The subpopup only deals
+      // with selection (ENTER) and arrow navigation.
+      if (!is_root_popup) {
+        return false;
+      }
+      std::optional<CellIndex> selected_cell = GetSelectedCell();
+      // The `!row_with_open_sub_popup_` check is to make sure that we only
+      // select the content cell if there is no subpopup open. This is because
+      // if one presses TAB from the subpopup, we also want to close the root
+      // popup (and navigate to the next HTML element).
+      const bool tab_pressed_popup_unselected =
+          !selected_cell && !kHasShiftModifier && !row_with_open_sub_popup_;
+      if (tab_pressed_popup_unselected) {
+        // If there is no selected cell in the compose popup, TAB should select
+        // the single compose nudge entry.
+        SetSelectedCell(CellIndex(0, PopupRowView::CellType::kContent),
+                        PopupCellSelectionSource::kKeyboard);
+        return true;
+      }
+
+      const bool tab_pressed_popup_selected =
+          selected_cell && !kHasShiftModifier;
+      if (tab_pressed_popup_selected) {
         // TAB should close the popup and focus the next HTML element if the
         // Compose entry is selected.
         controller_->Hide(PopupHidingReason::kUserAborted);
         return false;
       }
 
-      // If the Compose suggestion is not selected, Shift+TAB should not be
-      // handled, but TAB should select the suggestion.
-      if (kHasShiftModifier) {
+      const bool shift_tab_pressed_popup_unselected_no_subpopup =
+          !selected_cell && kHasShiftModifier && !row_with_open_sub_popup_;
+      if (shift_tab_pressed_popup_unselected_no_subpopup) {
+        // If the Compose suggestion is not selected, Shift+TAB should not be
+        // handled.
         return false;
       }
-      // Compose nudges have a single entry - select it.
-      SetSelectedCell(CellIndex(0, PopupRowView::CellType::kContent),
-                      PopupCellSelectionSource::kKeyboard);
-      return true;
+
+      const bool shift_tab_pressed_has_subpopup =
+          kHasShiftModifier && row_with_open_sub_popup_;
+      if (shift_tab_pressed_has_subpopup) {
+        // In this case, focus on the root/parent popup content area. This
+        // closes the sub-popup.
+        SetSelectedCell(CellIndex(0, PopupRowView::CellType::kContent),
+                        PopupCellSelectionSource::kKeyboard);
+        return true;
+      }
+
+      const bool shift_tab_pressed_root_popup_selected =
+          selected_cell && kHasShiftModifier && is_root_popup;
+      if (shift_tab_pressed_root_popup_selected) {
+        // Shift+TAB should remove the selection when the root popup is
+        // selected, but keep the popup open.
+        SetSelectedCell(std::nullopt, PopupCellSelectionSource::kKeyboard);
+        return true;
+      }
+      return false;
+    }
     default:
       return false;
   }
@@ -457,19 +514,18 @@ bool PopupViewViews::SelectNextHorizontalCell() {
 
 bool PopupViewViews::SelectPreviousHorizontalCell() {
   std::optional<CellIndex> selected_cell = GetSelectedCell();
-  if (selected_cell && HasPopupRowViewAt(selected_cell->first)) {
-    if (selected_cell->second == PopupRowView::CellType::kControl) {
-      SetSelectedCell(
-          CellIndex{selected_cell->first, PopupRowView::CellType::kContent},
-          PopupCellSelectionSource::kKeyboard);
-      return true;
-    }
+  if (selected_cell &&
+      selected_cell->second == PopupRowView::CellType::kControl &&
+      HasPopupRowViewAt(selected_cell->first)) {
+    SetSelectedCell(
+        CellIndex{selected_cell->first, PopupRowView::CellType::kContent},
+        PopupCellSelectionSource::kKeyboard);
+    return true;
   }
   return false;
 }
 
-bool PopupViewViews::AcceptSelectedContentOrCreditCardCell(
-    base::TimeTicks event_time) {
+bool PopupViewViews::AcceptSelectedContentOrCreditCardCell() {
   std::optional<CellIndex> index = GetSelectedCell();
   if (!controller_ || !index) {
     return false;
@@ -486,7 +542,7 @@ bool PopupViewViews::AcceptSelectedContentOrCreditCardCell(
     return false;
   }
 
-  controller_->AcceptSuggestion(index->first, event_time);
+  controller_->AcceptSuggestion(index->first);
   return true;
 }
 
@@ -509,9 +565,8 @@ bool PopupViewViews::RemoveSelectedCell() {
 }
 
 void PopupViewViews::OnSuggestionsChanged() {
-  if (open_sub_popup_timer_.IsRunning()) {
-    open_sub_popup_timer_.Stop();
-  }
+  // New suggestions invalidate this scheduling (if it's running), cancel it.
+  open_sub_popup_timer_.Stop();
   SetRowWithOpenSubPopup(std::nullopt);
 
   CreateChildViews();
@@ -606,6 +661,8 @@ void PopupViewViews::OnWidgetVisibilityChanged(views::Widget* widget,
       feature_engagement::kIPHAutofillVirtualCardSuggestionFeature);
   browser->window()->MaybeShowFeaturePromo(
       feature_engagement::kIPHAutofillExternalAccountProfileSuggestionFeature);
+  browser->window()->MaybeShowFeaturePromo(
+      feature_engagement::kIPHAutofillCreditCardBenefitFeature);
 }
 
 void PopupViewViews::SetSelectedCell(
@@ -626,24 +683,31 @@ void PopupViewViews::SetSelectedCell(
     GetPopupRowViewAt(old_index->first).SetSelectedCell(std::nullopt);
   }
 
-  if (open_sub_popup_timer_.IsRunning()) {
-    open_sub_popup_timer_.Stop();
-  }
+  // New selected cell invalidates this scheduling (if it's running), cancel it.
+  open_sub_popup_timer_.Stop();
 
   if (cell_index && HasPopupRowViewAt(cell_index->first)) {
     has_keyboard_focus_ = true;
+    // The sub-popup hiding is canceled because the newly selected cell will
+    // rule the sub-pupop visibility from now.
+    no_selection_sub_popup_close_timer_.Stop();
 
     row_with_selected_cell_ = cell_index->first;
     PopupRowView& new_selected_row = GetPopupRowViewAt(cell_index->first);
     new_selected_row.SetSelectedCell(cell_index->second);
     new_selected_row.ScrollViewToVisible();
 
+    if (!controller_) {
+      // The previous SetSelectedCell() call may have hidden the popup.
+      return;
+    }
     const Suggestion& suggestion =
         controller_->GetSuggestionAt(cell_index->first);
+
     bool can_open_sub_popup =
         !suppress_popup &&
         (cell_index->second == PopupRowView::CellType::kControl ||
-         !suggestion.is_acceptable);
+         CanOpenSubPopupSuggestion(suggestion));
 
     CHECK(!can_open_sub_popup ||
           !controller_->GetSuggestionAt(cell_index->first).children.empty());
@@ -723,6 +787,12 @@ void PopupViewViews::CreateChildViews() {
               std::make_unique<PopupSeparatorView>(kInterItemsPadding)));
           break;
 
+        case PopupItemId::kTitle:
+          rows_.push_back(
+              body_container->AddChildView(std::make_unique<PopupTitleView>(
+                  kSuggestions[current_line_number].main_text.value)));
+          break;
+
         case PopupItemId::kMixedFormMessage:
         case PopupItemId::kInsecureContextPaymentDisabledMessage:
           rows_.push_back(
@@ -739,28 +809,31 @@ void PopupViewViews::CreateChildViews() {
                   /*selection_delegate=*/*this, current_line_number));
           rows_.push_back(row_view);
 
-          const std::string& feature_for_iph =
+          const base::Feature* const feature_for_iph =
               kSuggestions[current_line_number].feature_for_iph;
 
           // Set appropriate element ids for IPH targets, it is important to
           // set them earlier to make sure the elements are discoverable later
           // during popup's visibility change and the promo bubble showing.
           if (feature_for_iph ==
-              feature_engagement::kIPHAutofillVirtualCardSuggestionFeature
-                  .name) {
+              &feature_engagement::kIPHAutofillVirtualCardSuggestionFeature) {
             row_view->SetProperty(views::kElementIdentifierKey,
                                   kAutofillCreditCardSuggestionEntryElementId);
           } else if (feature_for_iph ==
-                     feature_engagement::
-                         kIPHAutofillVirtualCardCVCSuggestionFeature.name) {
+                     &feature_engagement::
+                         kIPHAutofillVirtualCardCVCSuggestionFeature) {
             row_view->SetProperty(views::kElementIdentifierKey,
                                   kAutofillStandaloneCvcSuggestionElementId);
           } else if (feature_for_iph ==
-                     feature_engagement::
-                         kIPHAutofillExternalAccountProfileSuggestionFeature
-                             .name) {
+                     &feature_engagement::
+                         kIPHAutofillExternalAccountProfileSuggestionFeature) {
             row_view->SetProperty(views::kElementIdentifierKey,
                                   kAutofillSuggestionElementId);
+          } else if (feature_for_iph ==
+                     &feature_engagement::
+                         kIPHAutofillCreditCardBenefitFeature) {
+            row_view->SetProperty(views::kElementIdentifierKey,
+                                  kAutofillCreditCardBenefitElementId);
           }
       }
     }
@@ -1011,6 +1084,10 @@ bool PopupViewViews::CanShowDropdownInBounds(const gfx::Rect& bounds) const {
 void PopupViewViews::SetRowWithOpenSubPopup(
     std::optional<size_t> row_index,
     AutoselectFirstSuggestion autoselect_first_suggestion) {
+  if (!controller_) {
+    return;
+  }
+
   if (row_with_open_sub_popup_ == row_index) {
     return;
   }
@@ -1041,6 +1118,28 @@ void PopupViewViews::SetRowWithOpenSubPopup(
       }
     }
   }
+}
+
+bool PopupViewViews::CanOpenSubPopupSuggestion(const Suggestion& suggestion) {
+  // Checking both `is_acceptable` and `apply_deactivated_style` because the
+  // latter is used for disabling virtual cards which cannot open a sub popup.
+  return !suggestion.is_acceptable && !suggestion.apply_deactivated_style;
+}
+
+bool PopupViewViews::SelectParentPopupContentCell() {
+  if (!row_with_open_sub_popup_) {
+    return false;
+  }
+  size_t row_index = *row_with_open_sub_popup_;
+  // Closing the sub-popup by setting `std::nullopt` is required as
+  // `suppress_popup=true` is not enough: the sub-popup closing will be
+  // prevented by the "same value" check.
+  SetRowWithOpenSubPopup(std::nullopt);
+  SetSelectedCell(CellIndex{row_index, PopupRowView::CellType::kContent},
+                  PopupCellSelectionSource::kKeyboard,
+                  AutoselectFirstSuggestion(false),
+                  /*suppress_popup=*/true);
+  return true;
 }
 
 base::WeakPtr<AutofillPopupView> PopupViewViews::GetWeakPtr() {

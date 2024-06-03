@@ -194,7 +194,7 @@ struct StructTraits<autofill::mojom::FormFieldDataDataView,
   }
 
   static const std::u16string& name(const autofill::FormFieldData& r) {
-    return r.name;
+    return r.name();
   }
 
   static const std::u16string& id_attribute(const autofill::FormFieldData& r) {
@@ -207,7 +207,7 @@ struct StructTraits<autofill::mojom::FormFieldDataDataView,
   }
 
   static const std::u16string& value(const autofill::FormFieldData& r) {
-    return r.value;
+    return r.value();
   }
 
   static const std::u16string& selected_text(const autofill::FormFieldData& r) {
@@ -216,7 +216,7 @@ struct StructTraits<autofill::mojom::FormFieldDataDataView,
 
   static autofill::mojom::FormControlType form_control_type(
       const autofill::FormFieldData& r) {
-    return r.form_control_type;
+    return r.form_control_type();
   }
 
   static const std::string& autocomplete_attribute(
@@ -248,7 +248,7 @@ struct StructTraits<autofill::mojom::FormFieldDataDataView,
 
   static autofill::FieldRendererId renderer_id(
       const autofill::FormFieldData& r) {
-    return r.renderer_id;
+    return r.renderer_id();
   }
 
   static autofill::FormRendererId host_form_id(
@@ -359,6 +359,11 @@ struct StructTraits<autofill::mojom::FormFieldData_FillDataDataView,
     return r.renderer_id;
   }
 
+  static autofill::FormRendererId host_form_id(
+      const autofill::FormFieldData::FillData& r) {
+    return r.host_form_id;
+  }
+
   static bool is_autofilled(const autofill::FormFieldData::FillData& r) {
     return r.is_autofilled;
   }
@@ -448,23 +453,6 @@ struct StructTraits<autofill::mojom::FormDataDataView, autofill::FormData> {
 
   static bool Read(autofill::mojom::FormDataDataView data,
                    autofill::FormData* out);
-};
-
-template <>
-struct StructTraits<autofill::mojom::FormData_FillDataDataView,
-                    autofill::FormData::FillData> {
-  static autofill::FormRendererId renderer_id(
-      const autofill::FormData::FillData& r) {
-    return r.renderer_id;
-  }
-
-  static const std::vector<autofill::FormFieldData::FillData>& fields(
-      const autofill::FormData::FillData& r) {
-    return r.fields;
-  }
-
-  static bool Read(autofill::mojom::FormData_FillDataDataView data,
-                   autofill::FormData::FillData* out);
 };
 
 template <>

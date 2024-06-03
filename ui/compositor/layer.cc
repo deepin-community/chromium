@@ -7,6 +7,7 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <utility>
 
 #include "base/auto_reset.h"
@@ -309,7 +310,7 @@ std::unique_ptr<Layer> Layer::Clone() const {
   clone->SetAcceptEvents(accept_events());
   clone->SetFillsBoundsOpaquely(fills_bounds_opaquely_);
   clone->SetFillsBoundsCompletely(fills_bounds_completely_);
-  clone->SetRoundedCornerRadius(rounded_corner_radii());
+  clone->SetRoundedCornerRadius(GetTargetRoundedCornerRadius());
   clone->SetGradientMask(gradient_mask());
   clone->SetIsFastRoundedCorner(is_fast_rounded_corner());
   clone->SetName(name_);
@@ -830,6 +831,15 @@ bool Layer::IsVisible() const {
   return layer == nullptr;
 }
 
+gfx::RoundedCornersF Layer::GetTargetRoundedCornerRadius() const {
+  if (animator_ &&
+      animator_->IsAnimatingProperty(LayerAnimationElement::ROUNDED_CORNERS)) {
+    return animator_->GetTargetRoundedCorners();
+  }
+
+  return rounded_corner_radii();
+}
+
 void Layer::SetRoundedCornerRadius(const gfx::RoundedCornersF& corner_radii) {
   GetAnimator()->SetRoundedCorners(corner_radii);
 }
@@ -870,11 +880,19 @@ void Layer::ConvertPointToLayer(const Layer* source,
   const Layer* target_root_layer = GetRoot(target);
   // TODO(b/319939913): Remove this log when the issue is fixed.
   if (source_root_layer != target_root_layer) {
-    LOG(ERROR) << "Source has different root than tareget: source="
-               << source->name()
-               << ", soruce root=" << source_root_layer->name()
-               << ", target=" << target->name()
-               << ", target root=" << target_root_layer->name();
+    auto chain_name = [](const Layer* layer) {
+      std::ostringstream out;
+      out << "[";
+      out << layer->name();
+      while (layer->parent()) {
+        out << "]-[" << layer->name();
+        layer = layer->parent();
+      }
+      out << "]";
+      return out.str();
+    };
+    LOG(ERROR) << "Source has different root than tareget: source chain="
+               << chain_name(source) << ", target chain=" << chain_name(target);
   }
   CHECK_EQ(source_root_layer, target_root_layer);
 
@@ -1497,6 +1515,13 @@ void Layer::SetScrollOffset(const gfx::PointF& offset) {
 
 void Layer::RequestCopyOfOutput(
     std::unique_ptr<viz::CopyOutputRequest> request) {
+  if (!request->has_result_task_runner()) {
+    CHECK(GetCompositor())
+        << "A copy request must either have a task runner, or be added to the "
+           "layer that has already been added to compositor.";
+    request->set_result_task_runner(GetCompositor()->task_runner());
+  }
+
   cc_layer_->RequestCopyOfOutput(std::move(request));
 }
 
@@ -1630,8 +1655,9 @@ void Layer::SetBoundsFromAnimation(const gfx::Rect& bounds,
       mirror_dest->SetBounds(bounds);
   }
 
-  for (auto* reflecting_layer : subtree_reflecting_layers_)
+  for (Layer* reflecting_layer : subtree_reflecting_layers_) {
     reflecting_layer->MatchLayerSize(this);
+  }
 }
 
 void Layer::SetTransformFromAnimation(const gfx::Transform& new_transform,

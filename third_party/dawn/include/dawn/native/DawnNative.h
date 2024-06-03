@@ -141,6 +141,9 @@ struct DAWN_NATIVE_EXPORT DawnInstanceDescriptor : wgpu::ChainedStruct {
     bool beginCaptureOnStartup = false;
     bool enableAdapterBlocklist = false;
 
+    WGPULoggingCallback loggingCallback = nullptr;
+    void* loggingCallbackUserdata = nullptr;
+
     // Equality operators, mostly for testing. Note that this tests
     // strict pointer-pointer equality if the struct contains member pointers.
     bool operator==(const DawnInstanceDescriptor& rhs) const;
@@ -168,7 +171,6 @@ class DAWN_NATIVE_EXPORT Instance {
         const wgpu::RequestAdapterOptions* options = nullptr) const;
 
     const ToggleInfo* GetToggleInfo(const char* toggleName);
-    const FeatureInfo* GetFeatureInfo(WGPUFeatureName feature);
 
     // Enables backend validation layers
     void EnableBackendValidation(bool enableBackendValidation);
@@ -184,6 +186,9 @@ class DAWN_NATIVE_EXPORT Instance {
 
     // Returns the underlying WGPUInstance object.
     WGPUInstance Get() const;
+
+    // Make mImpl->mPlatform point to an object inside Dawn in case it becomes a dangling pointer
+    void DisconnectDawnPlatform();
 
   private:
     InstanceBase* mImpl = nullptr;

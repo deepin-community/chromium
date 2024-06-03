@@ -503,25 +503,6 @@ void ServiceWorkerVersion::set_fetch_handler_type(
   fetch_handler_type_ = fetch_handler_type;
 }
 
-ServiceWorkerVersion::FetchHandlerType
-ServiceWorkerVersion::EffectiveFetchHandlerType() const {
-  switch (fetch_handler_type()) {
-    case FetchHandlerType::kNoHandler:
-      return FetchHandlerType::kNoHandler;
-    case FetchHandlerType::kNotSkippable:
-      return FetchHandlerType::kNotSkippable;
-    case FetchHandlerType::kEmptyFetchHandler: {
-      if (base::FeatureList::IsEnabled(
-              features::kServiceWorkerSkipIgnorableFetchHandler) &&
-          features::kSkipEmptyFetchHandler.Get()) {
-        return FetchHandlerType::kEmptyFetchHandler;
-      } else {
-        return FetchHandlerType::kNotSkippable;
-      }
-    }
-  }
-}
-
 void ServiceWorkerVersion::set_has_hid_event_handlers(
     bool has_hid_event_handlers) {
   has_hid_event_handlers_ = has_hid_event_handlers;
@@ -1194,7 +1175,8 @@ void ServiceWorkerVersion::InitializeGlobalScope() {
   // The registration must exist since we keep a reference to it during
   // service worker startup.
   DCHECK(registration);
-  DCHECK(worker_host_);
+  CHECK(worker_host_);
+  CHECK(worker_host_->container_host());
   DCHECK(service_worker_remote_);
   service_worker_remote_->InitializeGlobalScope(
       std::move(service_worker_host), std::move(associated_remote_from_browser),
@@ -1491,6 +1473,7 @@ void ServiceWorkerVersion::OnStarted(
 }
 
 void ServiceWorkerVersion::OnStopping() {
+  TRACE_EVENT0("ServiceWorker", "ServiceWorkerVersion::OnStopping");
   DCHECK(stop_time_.is_null());
   RestartTick(&stop_time_);
   TRACE_EVENT_NESTABLE_ASYNC_BEGIN2(
@@ -1520,10 +1503,12 @@ void ServiceWorkerVersion::OnStopping() {
 }
 
 void ServiceWorkerVersion::OnStopped(blink::EmbeddedWorkerStatus old_status) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
   OnStoppedInternal(old_status);
 }
 
 void ServiceWorkerVersion::OnDetached(blink::EmbeddedWorkerStatus old_status) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
   OnStoppedInternal(old_status);
 }
 
@@ -1738,6 +1723,8 @@ void ServiceWorkerVersion::PostMessageToClient(
     receiver_.reset();
     return;
   }
+  base::UmaHistogramBoolean("ServiceWorker.PostMessage.IsExecutionReady",
+                            container_host->is_execution_ready());
   if (!container_host->is_execution_ready()) {
     // It's subtle why this ReportBadMessage is correct. Consider the
     // sequence:
@@ -1906,60 +1893,14 @@ void ServiceWorkerVersion::SkipWaiting(SkipWaitingCallback callback) {
     registration->ActivateWaitingVersionWhenReady();
 }
 
-void ServiceWorkerVersion::RegisterRouter(
-    const blink::ServiceWorkerRouterRules& rules,
-    RegisterRouterCallback callback) {
-  if (!IsStaticRouterEnabled()) {
-    // This renderer should have called this only when the feature is enabled.
-    associated_interface_receiver_.ReportBadMessage(
-        "Unexpected router registration call during the feature is disabled.");
-    return;
-  }
-  switch (router_registration_method_) {
-    case RouterRegistrationMethod::Uninitialized:
-      break;
-    case RouterRegistrationMethod::RegisterRouter:
-      // The renderer should have denied calling this twice.
-    case RouterRegistrationMethod::AddRoutes:
-      // The renderer should have denied calling both RegisterRouter() and
-      // AddRoutes().
-      CHECK(router_evaluator());
-      associated_interface_receiver_.ReportBadMessage(
-          "The ServiceWorker router rules are set twice.");
-      return;
-  }
-  if (!SetupRouterEvaluator(rules)) {
-    // The renderer should have denied calling this method while the setup
-    // fails.
-    // TODO(crbug.com/1371756): revisit this to confirm no case for this error.
-    associated_interface_receiver_.ReportBadMessage(
-        "Failed to configure a router. Possibly a syntax error");
-    return;
-  }
-  router_registration_method_ = RouterRegistrationMethod::RegisterRouter;
-  std::move(callback).Run();
-}
-
 void ServiceWorkerVersion::AddRoutes(
     const blink::ServiceWorkerRouterRules& rules,
-    RegisterRouterCallback callback) {
+    AddRoutesCallback callback) {
   if (!IsStaticRouterEnabled()) {
     // This renderer should have called this only when the feature is enabled.
     associated_interface_receiver_.ReportBadMessage(
         "Unexpected router registration call during the feature is disabled.");
     return;
-  }
-  switch (router_registration_method_) {
-    case RouterRegistrationMethod::Uninitialized:
-    case RouterRegistrationMethod::AddRoutes:
-      break;
-    case RouterRegistrationMethod::RegisterRouter:
-      // The renderer should have denied calling both RegisterRouter() and
-      // AddRoutes().
-      CHECK(router_evaluator());
-      associated_interface_receiver_.ReportBadMessage(
-          "The ServiceWorker router rules are set twice.");
-      return;
   }
   if (!SetupRouterEvaluator(rules)) {
     // The renderer should have denied calling this method while the setup
@@ -1969,7 +1910,6 @@ void ServiceWorkerVersion::AddRoutes(
         "Failed to configure a router. Possibly a syntax error");
     return;
   }
-  router_registration_method_ = RouterRegistrationMethod::AddRoutes;
   std::move(callback).Run();
 }
 
@@ -2731,6 +2671,7 @@ void ServiceWorkerVersion::FoundRegistrationForUpdate(
 
 void ServiceWorkerVersion::OnStoppedInternal(
     blink::EmbeddedWorkerStatus old_status) {
+  TRACE_EVENT0("ServiceWorker", "ServiceWorkerVersion::OnStoppedInternal");
   DCHECK_EQ(blink::EmbeddedWorkerStatus::kStopped, running_status());
   scoped_refptr<ServiceWorkerVersion> protect;
   if (!in_dtor_)
@@ -2740,21 +2681,27 @@ void ServiceWorkerVersion::OnStoppedInternal(
   // the worker was stopping. The worker must be restarted to fulfill the
   // request.
   bool should_restart = !start_callbacks_.empty();
+  bool should_warm_up =
+      will_warm_up_on_stopped_ && !is_stopping_warmed_up_worker_;
   if (is_redundant() || in_dtor_) {
     // This worker will be destroyed soon.
     should_restart = false;
+    should_warm_up = false;
   } else if (ping_controller_.IsTimedOut()) {
     // This worker exhausted its time to run, don't let it restart.
     should_restart = false;
+    should_warm_up = false;
   } else if (old_status == blink::EmbeddedWorkerStatus::kStarting) {
     // This worker unexpectedly stopped because start failed.  Attempting to
     // restart on start failure could cause an endless loop of start attempts,
     // so don't try to restart now.
     should_restart = false;
+    should_warm_up = false;
   } else if (is_stopping_warmed_up_worker_) {
     // This worker is stopped while warmed-up or warming-up. Such workers don't
-    // need to restart.
+    // need to restart nor re-warm-up.
     should_restart = false;
+    should_warm_up = false;
   }
 
   if (!stop_time_.is_null()) {
@@ -2813,6 +2760,8 @@ void ServiceWorkerVersion::OnStoppedInternal(
   pending_external_requests_.clear();
   worker_is_idle_on_renderer_ = true;
   worker_host_.reset();
+  will_warm_up_on_stopped_ = false;
+  is_stopping_warmed_up_worker_ = false;
 
   for (auto& observer : observers_)
     observer.OnRunningStateChanged(this);
@@ -2822,10 +2771,18 @@ void ServiceWorkerVersion::OnStoppedInternal(
     OnNoWorkInBrowser();
   }
 
-  if (!should_restart && will_warm_up_on_stopped_ && context_) {
-    context_->wrapper()->WarmUpServiceWorker(scope_, key_, base::DoNothing());
+  if (should_warm_up && !should_restart && context_) {
+    // Posts a re-warm-up task so that the warming up operation runs in a
+    // different task.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<ServiceWorkerContextCore> context,
+                          const GURL scope, const blink::StorageKey key) {
+                         context->wrapper()->WarmUpServiceWorker(
+                             scope, key, base::DoNothing());
+                       },
+                       context_, scope_, key_));
   }
-  will_warm_up_on_stopped_ = false;
 }
 
 void ServiceWorkerVersion::FinishStartWorker(
@@ -3133,6 +3090,11 @@ void ServiceWorkerVersion::GetAssociatedInterface(
 
   mojo::ScopedInterfaceEndpointHandle handle = receiver.PassHandle();
   associated_registry_->TryBindInterface(name, &handle);
+}
+
+bool ServiceWorkerVersion::BFCacheContainsControllee(
+    const std::string& uuid) const {
+  return base::Contains(bfcached_controllee_map_, uuid);
 }
 
 base::WeakPtr<ServiceWorkerVersion> ServiceWorkerVersion::GetWeakPtr() {

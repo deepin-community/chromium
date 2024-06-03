@@ -119,7 +119,8 @@ const base::FeatureParam<int> kMaskedDomainListExperimentGroup{
     /*default_value=*/0};
 
 // Used to build the MDL component's installer attributes and possibly control
-// which release version is retrieved. Does not have any effect for WebView.
+// which release version is retrieved.
+// Altering this value via Finch does not have any effect for WebView.
 const base::FeatureParam<std::string> kMaskedDomainListExperimentalVersion{
     &kMaskedDomainList, /*name=*/"MaskedDomainListExperimentalVersion",
     /*default_value=*/""};
@@ -161,7 +162,7 @@ BASE_FEATURE(kAttributionReportingReportVerification,
 // registering with a native attribution API.
 BASE_FEATURE(kAttributionReportingCrossAppWeb,
              "AttributionReportingCrossAppWeb",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables preprocessing requests with the Private State Tokens API Fetch flags
 // set, and handling their responses, according to the protocol.
@@ -295,12 +296,12 @@ uint32_t GetDataPipeDefaultAllocationSize(DataPipeAllocationSize option) {
 #endif
 }
 
-uint32_t GetNetAdapterMaxBufSize() {
+size_t GetNetAdapterMaxBufSize() {
   return GetNetAdapterMaxBufSizeParam();
 }
 
 // static
-uint32_t GetLoaderChunkSize() {
+size_t GetLoaderChunkSize() {
   return GetMaxNumConsumedBytesInTask();
 }
 
@@ -385,6 +386,13 @@ BASE_FEATURE(kPrefetchNoVarySearch,
 const base::FeatureParam<bool> kPrefetchNoVarySearchShippedByDefault{
     &kPrefetchNoVarySearch, "shipped_by_default", true};
 
+// If enabled, then the network service will parse the Cookie-Indices header.
+// This does not currently control changing cache behavior according to the
+// value of this header.
+BASE_FEATURE(kCookieIndicesHeader,
+             "CookieIndicesHeader",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 // Enables the backend of the compression dictionary transport feature.
 // When this feature is enabled, the following will happen:
 //   * The network service loads the metadata database.
@@ -414,7 +422,13 @@ BASE_FEATURE(kCompressionDictionaryTransport,
 // even when the connection is using HTTP/1 for non-localhost requests.
 BASE_FEATURE(kCompressionDictionaryTransportOverHttp1,
              "CompressionDictionaryTransportOverHttp1",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When this feature is enabled, Chromium can use stored shared dictionaries
+// even when the connection is using HTTP/2 for non-localhost requests.
+BASE_FEATURE(kCompressionDictionaryTransportOverHttp2,
+             "CompressionDictionaryTransportOverHttp2",
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // When this feature is enabled, Chromium will use stored shared dictionaries
 // only if the request URL is a localhost URL or the transport layer is using a
@@ -466,5 +480,16 @@ const base::FeatureParam<bool> kSkipTpcdMitigationsForAdsTopLevelTrial{
     &kSkipTpcdMitigationsForAds,
     /*name=*/"SkipTpcdMitigationsForAdsTopLevelTrial",
     /*default_value=*/false};
+
+// Avoids copying ResourceRequest when possible.
+BASE_FEATURE(kAvoidResourceRequestCopies,
+             "AvoidResourceRequestCopies",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables Document-Isolation-Policy (DIP).
+// https://github.com/explainers-by-googlers/document-isolation-policy
+BASE_FEATURE(kDocumentIsolationPolicy,
+             "DocumentIsolationPolicy",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace network::features

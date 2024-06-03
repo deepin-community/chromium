@@ -76,7 +76,8 @@ void CopyToClipboard(
     BookmarkModel* model,
     const std::vector<raw_ptr<const BookmarkNode, VectorExperimental>>& nodes,
     bool remove_nodes,
-    metrics::BookmarkEditSource source);
+    metrics::BookmarkEditSource source,
+    bool is_off_the_record);
 
 // Pastes from the clipboard. The new nodes are added to |parent|, unless
 // |parent| is null in which case this does nothing. The nodes are inserted
@@ -113,10 +114,10 @@ void GetMostRecentlyUsedEntries(BookmarkModel* model,
 // Returns up to |max_count| bookmarks from |model| whose url or title contain
 // the text |query.word_phrase_query| and exactly match |query.url| and
 // |query.title|, for all of the preceding fields that are not NULL.
-void GetBookmarksMatchingProperties(BookmarkModel* model,
-                                    const QueryFields& query,
-                                    size_t max_count,
-                                    std::vector<const BookmarkNode*>* nodes);
+std::vector<const BookmarkNode*> GetBookmarksMatchingProperties(
+    BookmarkModel* model,
+    const QueryFields& query,
+    size_t max_count);
 
 // Parses the provided query and returns a vector of query words.
 std::vector<std::u16string> ParseBookmarkQuery(

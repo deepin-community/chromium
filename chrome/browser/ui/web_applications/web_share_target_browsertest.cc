@@ -60,7 +60,7 @@
 
 namespace {
 
-// TODO(crbug.com/1225825): Support file sharing from Lacros.
+// TODO(crbug.com/40776025): Support file sharing from Lacros.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 base::FilePath PrepareWebShareDirectory(Profile* profile) {
   constexpr base::FilePath::CharType kWebShareDirname[] =
@@ -88,7 +88,7 @@ base::FilePath StoreSharedFile(const base::FilePath& directory,
   base::ScopedAllowBlockingForTesting allow_blocking;
   base::File file(path,
                   base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
-  EXPECT_EQ(file.WriteAtCurrentPos(content.begin(), content.size()),
+  EXPECT_EQ(file.WriteAtCurrentPos(content.data(), content.size()),
             static_cast<int>(content.size()));
   return path;
 }

@@ -65,7 +65,7 @@ class TabAndroid : public base::SupportsUserData {
 
   TabAndroid(JNIEnv* env,
              const base::android::JavaRef<jobject>& obj,
-             const base::android::JavaRef<jobject>& profile,
+             Profile* profile,
              int tab_id);
 
   TabAndroid(const TabAndroid&) = delete;
@@ -148,6 +148,7 @@ class TabAndroid : public base::SupportsUserData {
       const base::android::JavaParamRef<jobject>& jweb_contents_delegate,
       const base::android::JavaParamRef<jobject>&
           jcontext_menu_populator_factory);
+  void InitializeAutofillIfNecessary(JNIEnv* env);
   void UpdateDelegates(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& jweb_contents_delegate,

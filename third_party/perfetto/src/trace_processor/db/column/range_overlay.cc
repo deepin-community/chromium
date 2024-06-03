@@ -47,25 +47,6 @@ SingleSearchResult RangeOverlay::ChainImpl::SingleSearch(FilterOp op,
   return inner_->SingleSearch(op, sql_val, i + range_->start);
 }
 
-UniqueSearchResult RangeOverlay::ChainImpl::UniqueSearch(
-    FilterOp op,
-    SqlValue sql_val,
-    uint32_t* index) const {
-  switch (inner_->UniqueSearch(op, sql_val, index)) {
-    case UniqueSearchResult::kMatch:
-      if (!range_->Contains(*index)) {
-        return UniqueSearchResult::kNoMatch;
-      }
-      *index -= range_->start;
-      return UniqueSearchResult::kMatch;
-    case UniqueSearchResult::kNoMatch:
-      return UniqueSearchResult::kNoMatch;
-    case UniqueSearchResult::kNeedsFullSearch:
-      return UniqueSearchResult::kNeedsFullSearch;
-  }
-  PERFETTO_FATAL("For GCC");
-}
-
 SearchValidationResult RangeOverlay::ChainImpl::ValidateSearchConstraints(
     FilterOp op,
     SqlValue sql_val) const {
@@ -84,6 +65,9 @@ RangeOrBitVector RangeOverlay::ChainImpl::SearchValidated(
   auto inner_res = inner_->SearchValidated(op, sql_val, inner_search_range);
   if (inner_res.IsRange()) {
     Range inner_res_range = std::move(inner_res).TakeIfRange();
+    if (inner_res_range.empty()) {
+      return RangeOrBitVector(Range());
+    }
     return RangeOrBitVector(Range(inner_res_range.start - range_->start,
                                   inner_res_range.end - range_->start));
   }
@@ -124,34 +108,30 @@ RangeOrBitVector RangeOverlay::ChainImpl::SearchValidated(
   return RangeOrBitVector(std::move(builder).Build());
 }
 
-RangeOrBitVector RangeOverlay::ChainImpl::IndexSearchValidated(
-    FilterOp op,
-    SqlValue sql_val,
-    Indices indices) const {
+void RangeOverlay::ChainImpl::IndexSearchValidated(FilterOp op,
+                                                   SqlValue sql_val,
+                                                   Indices& indices) const {
   PERFETTO_TP_TRACE(metatrace::Category::DB, "RangeOverlay::IndexSearch");
-
-  std::vector<uint32_t> storage_iv(indices.size);
-  // Should be SIMD optimized.
-  for (uint32_t i = 0; i < indices.size; ++i) {
-    storage_iv[i] = indices.data[i] + range_->start;
+  for (auto& token : indices.tokens) {
+    token.index += range_->start;
   }
-  return inner_->IndexSearchValidated(
-      op, sql_val, Indices{storage_iv.data(), indices.size, indices.state});
+  inner_->IndexSearchValidated(op, sql_val, indices);
 }
 
 Range RangeOverlay::ChainImpl::OrderedIndexSearchValidated(
     FilterOp op,
     SqlValue sql_val,
-    Indices indices) const {
+    const OrderedIndices& indices) const {
   PERFETTO_TP_TRACE(metatrace::Category::DB, "RangeOverlay::IndexSearch");
 
-  std::vector<uint32_t> storage_iv(indices.size);
   // Should be SIMD optimized.
+  std::vector<uint32_t> storage_iv(indices.size);
   for (uint32_t i = 0; i < indices.size; ++i) {
     storage_iv[i] = indices.data[i] + range_->start;
   }
   return inner_->OrderedIndexSearchValidated(
-      op, sql_val, Indices{storage_iv.data(), indices.size, indices.state});
+      op, sql_val,
+      OrderedIndices{storage_iv.data(), indices.size, indices.state});
 }
 
 void RangeOverlay::ChainImpl::StableSort(SortToken* start,

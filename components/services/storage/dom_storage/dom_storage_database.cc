@@ -30,8 +30,7 @@ const char kInvalidDatabaseMessage[] = "DomStorageDatabase no longer valid.";
 
 class DomStorageDatabaseEnv : public leveldb_env::ChromiumEnv {
  public:
-  DomStorageDatabaseEnv()
-      : ChromiumEnv("ChromiumEnv.StorageService", CreateFilesystemProxy()) {}
+  DomStorageDatabaseEnv() : ChromiumEnv(CreateFilesystemProxy()) {}
 
   DomStorageDatabaseEnv(const DomStorageDatabaseEnv&) = delete;
   DomStorageDatabaseEnv& operator=(const DomStorageDatabaseEnv&) = delete;
@@ -47,13 +46,6 @@ std::string MakeFullPersistentDBName(const base::FilePath& directory,
   // ChromiumEnv treats DB name strings as UTF-8 file paths.
   return directory.Append(base::FilePath::FromUTF8Unsafe(db_name))
       .AsUTF8Unsafe();
-}
-
-leveldb_env::Options CreateDefaultInMemoryOptions() {
-  leveldb_env::Options options;
-  options.create_if_missing = true;
-  options.max_open_files = 0;
-  return options;
 }
 
 leveldb_env::Options AddEnvToOptions(const leveldb_env::Options& options,
@@ -144,8 +136,7 @@ DomStorageDatabase::DomStorageDatabase(
         memory_dump_id,
     scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
     StatusCallback callback)
-    : DomStorageDatabase(PassKey(),
-                         MakeFullPersistentDBName(directory, name),
+    : DomStorageDatabase(MakeFullPersistentDBName(directory, name),
                          /*env=*/nullptr,
                          options,
                          memory_dump_id,
@@ -159,16 +150,14 @@ DomStorageDatabase::DomStorageDatabase(
         memory_dump_id,
     scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
     StatusCallback callback)
-    : DomStorageDatabase(PassKey(),
-                         "",
+    : DomStorageDatabase("",
                          leveldb_chrome::NewMemEnv(tracking_name),
-                         CreateDefaultInMemoryOptions(),
+                         leveldb_env::Options(),
                          memory_dump_id,
                          std::move(callback_task_runner),
                          std::move(callback)) {}
 
 DomStorageDatabase::DomStorageDatabase(
-    PassKey,
     const std::string& name,
     std::unique_ptr<leveldb::Env> env,
     const leveldb_env::Options& options,
@@ -309,13 +298,6 @@ DomStorageDatabase::Status DomStorageDatabase::Put(KeyView key,
   if (!db_)
     return Status::IOError(kInvalidDatabaseMessage);
   return db_->Put(leveldb::WriteOptions(), MakeSlice(key), MakeSlice(value));
-}
-
-DomStorageDatabase::Status DomStorageDatabase::Delete(KeyView key) const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!db_)
-    return Status::IOError(kInvalidDatabaseMessage);
-  return db_->Delete(leveldb::WriteOptions(), MakeSlice(key));
 }
 
 DomStorageDatabase::Status DomStorageDatabase::GetPrefixed(

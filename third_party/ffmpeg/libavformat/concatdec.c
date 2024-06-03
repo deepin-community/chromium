@@ -638,6 +638,12 @@ static int concat_parse_script(AVFormatContext *avf)
         }
     }
 
+    if (file->inpoint != AV_NOPTS_VALUE && file->outpoint != AV_NOPTS_VALUE) {
+        if (file->inpoint  > file->outpoint ||
+            file->outpoint - (uint64_t)file->inpoint > INT64_MAX)
+            ret = AVERROR_INVALIDDATA;
+    }
+
 fail:
     for (arg = 0; arg < MAX_ARGS; arg++)
         av_freep(&arg_str[arg]);
@@ -930,14 +936,16 @@ static const AVOption options[] = {
 
 static const AVClass concat_class = {
     .class_name = "concat demuxer",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
 
-const AVInputFormat ff_concat_demuxer = {
-    .name           = "concat",
-    .long_name      = NULL_IF_CONFIG_SMALL("Virtual concatenation script"),
+const FFInputFormat ff_concat_demuxer = {
+    .p.name         = "concat",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Virtual concatenation script"),
+    .p.priv_class   = &concat_class,
     .priv_data_size = sizeof(ConcatContext),
     .flags_internal = FF_FMT_INIT_CLEANUP,
     .read_probe     = concat_probe,
@@ -945,5 +953,4 @@ const AVInputFormat ff_concat_demuxer = {
     .read_packet    = concat_read_packet,
     .read_close     = concat_read_close,
     .read_seek2     = concat_seek,
-    .priv_class     = &concat_class,
 };

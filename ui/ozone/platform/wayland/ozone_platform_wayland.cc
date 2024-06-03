@@ -4,14 +4,15 @@
 
 #include "ui/ozone/platform/wayland/ozone_platform_wayland.h"
 
+#include <aura-shell-client-protocol.h>
+
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <components/exo/wayland/protocol/aura-shell-client-protocol.h>
-
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/message_loop/message_pump_type.h"
@@ -342,6 +343,15 @@ class OzonePlatformWayland : public OzonePlatform,
       // arbitrary position.
       properties->supports_global_screen_coordinates =
           kDefaultScreenCoordinateEnabled;
+
+#if BUILDFLAG(IS_LINUX)
+      // TODO(crbug.com/40800718): Revisit (and maybe remove) once proper
+      // support, probably backed by org.freedesktop.portal.Screenshot.PickColor
+      // API is implemented. Note: this is restricted to Linux Desktop as Lacros
+      // implements it at a higher level layer using ChromeOS' mojo croapi.
+      properties->supports_color_picker_dialog = false;
+#endif
+
       initialised = true;
     }
 
@@ -380,11 +390,14 @@ class OzonePlatformWayland : public OzonePlatform,
       properties.needs_background_image =
           connection_->ShouldUseOverlayDelegation() &&
           connection_->viewporter();
-      if (connection_->zaura_shell()) {
-        properties.supports_activation =
-            zaura_shell_get_version(connection_->zaura_shell()->wl_object()) >=
-            ZAURA_TOPLEVEL_ACTIVATE_SINCE_VERSION;
-      }
+      properties.supports_activation =
+          connection_->zaura_shell() &&
+          zaura_shell_get_version(connection_->zaura_shell()->wl_object()) >=
+              ZAURA_TOPLEVEL_ACTIVATE_SINCE_VERSION;
+      properties.supports_subwindows_as_accelerated_widgets =
+          connection_->ShouldUseOverlayDelegation() &&
+          connection_->surface_augmenter() &&
+          connection_->surface_augmenter()->SupportsCompositingOnlySurface();
 
       if (surface_factory_) {
         DCHECK(has_initialized_gpu());

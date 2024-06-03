@@ -8,10 +8,10 @@
 #include <optional>
 
 #include "base/base64.h"
-#include "base/big_endian.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_piece.h"
 #include "base/time/time.h"
@@ -148,10 +148,10 @@ OriginTrialTokenStatus TrialToken::Extract(
   }
 
   // Extract the length of the signed data (Big-endian).
-  uint32_t payload_length;
-  base::ReadBigEndian(
-      reinterpret_cast<const uint8_t*>(&(token_contents[kPayloadLengthOffset])),
-      &payload_length);
+  uint32_t payload_length =
+      base::numerics::U32FromBigEndian(base::as_byte_span(token_contents)
+                                           .subspan(kPayloadLengthOffset)
+                                           .first<4>());
 
   // Validate that the stated length matches the actual payload length.
   if (payload_length != token_contents.length() - kPayloadOffset) {

@@ -11,11 +11,11 @@
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "components/attribution_reporting/constants.h"
 #include "components/attribution_reporting/destination_set.h"
 #include "components/attribution_reporting/event_trigger_data.h"
 #include "components/attribution_reporting/os_registration.h"
@@ -25,7 +25,6 @@
 #include "components/attribution_reporting/suitable_origin.h"
 #include "components/attribution_reporting/test_utils.h"
 #include "components/attribution_reporting/trigger_registration.h"
-#include "content/browser/attribution_reporting/attribution_constants.h"
 #include "content/browser/attribution_reporting/attribution_data_host_manager_impl.h"
 #include "content/browser/attribution_reporting/attribution_manager.h"
 #include "content/browser/attribution_reporting/attribution_manager_impl.h"
@@ -36,7 +35,6 @@
 #include "content/browser/attribution_reporting/test/mock_attribution_host.h"
 #include "content/browser/attribution_reporting/test/mock_attribution_manager.h"
 #include "content/browser/attribution_reporting/test/mock_content_browser_client.h"
-#include "content/browser/attribution_reporting/test/mock_data_host.h"
 #include "content/browser/attribution_reporting/test/source_observer.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/storage_partition_impl.h"
@@ -90,6 +88,8 @@ using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::Property;
 using ::testing::StrictMock;
+
+using attribution_reporting::kAttributionReportingRegisterSourceHeader;
 
 }  // namespace
 
@@ -744,7 +744,7 @@ IN_PROC_BROWSER_TEST_P(AttributionSrcBrowserTest,
       browser_client,
       GetAttributionSupport(
           ContentBrowserClient::AttributionReportingOsApiState::kDisabled,
-          testing::_))
+          /*client_os_disabled=*/false))
       .WillRepeatedly(
           testing::Return(network::mojom::AttributionSupport::kNone));
 
@@ -1175,6 +1175,9 @@ IN_PROC_BROWSER_TEST_P(AttributionSrcFencedFrameBrowserTest,
       fenced_frame_helper_->CreateFencedFrame(
           root_rfh, GURL(url::kAboutBlankURL), net::OK,
           blink::FencedFrame::DeprecatedFencedFrameMode::kOpaqueAds));
+  FrameTreeNode* fenced_frame_node =
+      static_cast<RenderFrameHostImpl*>(&(*fenced_frame_host))
+          ->frame_tree_node();
   bool rfh_should_change =
       fenced_frame_host->ShouldChangeRenderFrameHostOnSameSiteNavigation();
   TestFrameNavigationObserver observer(fenced_frame_host.get());
@@ -1188,7 +1191,7 @@ IN_PROC_BROWSER_TEST_P(AttributionSrcFencedFrameBrowserTest,
   if (rfh_should_change) {
     EXPECT_TRUE(fenced_frame_host.WaitUntilRenderFrameDeleted());
   } else {
-    ASSERT_NE(fenced_frame_host.get(), nullptr);
+    ASSERT_NE(fenced_frame_node->current_frame_host(), nullptr);
   }
 
   RenderFrameHostWrapper fenced_frame_host2(
@@ -1482,18 +1485,12 @@ IN_PROC_BROWSER_TEST_P(AttributionSrcCrossAppWebEnabledBrowserTest,
         CreateAttributionTestHttpsServer();
 
     base::RunLoop run_loop;
-    const auto on_registration = base::BarrierClosure(
-        test_case.expected_os_registrations.size(), run_loop.QuitClosure());
-    // TODO(https://crbug.com/1444525): Update to expect a single call.
-    for (const auto& item : test_case.expected_os_registrations) {
-      EXPECT_CALL(
-          mock_attribution_manager(),
-          HandleOsRegistration(Field(
-              &OsRegistration::registration_items,
-              std::vector<attribution_reporting::OsRegistrationItem>({item}))))
-          .Times(1)
-          .WillOnce([&on_registration]() { on_registration.Run(); });
-    }
+    EXPECT_CALL(
+        mock_attribution_manager(),
+        HandleOsRegistration(Field(&OsRegistration::registration_items,
+                                   test_case.expected_os_registrations)))
+        .Times(1)
+        .WillOnce([&run_loop]() { run_loop.Quit(); });
 
     auto register_response =
         std::make_unique<net::test_server::ControllableHttpResponse>(
@@ -1520,6 +1517,43 @@ IN_PROC_BROWSER_TEST_P(AttributionSrcCrossAppWebEnabledBrowserTest,
         R"("https://r1.test/x", "https://r2.test/y"; debug-reporting)");
     register_response->Send(http_response->ToResponseString());
     register_response->Done();
+
+    run_loop.Run();
+  }
+}
+
+IN_PROC_BROWSER_TEST_P(AttributionSrcCrossAppWebEnabledBrowserTest,
+                       WebAndOsHeadersAndPreferOs_OsRegistered) {
+  AttributionOsLevelManager::ScopedApiStateForTesting scoped_api_state_setting(
+      AttributionOsLevelManager::ApiState::kEnabled);
+
+  const char* kTestCases[] = {
+      "/register_source_headers_preferred_os.html",
+      "/register_trigger_headers_preferred_os.html",
+  };
+
+  GURL page_url =
+      https_server()->GetURL("b.test", "/page_with_impression_creator.html");
+
+  for (const char* path : kTestCases) {
+    SCOPED_TRACE(path);
+
+    EXPECT_TRUE(NavigateToURL(web_contents(), page_url));
+
+    GURL register_url = https_server()->GetURL("c.test", path);
+
+    base::RunLoop run_loop;
+    EXPECT_CALL(
+        mock_attribution_manager(),
+        HandleOsRegistration(Field(
+            &OsRegistration::registration_items,
+            ElementsAre(Field(&attribution_reporting::OsRegistrationItem::url,
+                              GURL("https://r.test"))))))
+        .Times(1)
+        .WillOnce([&run_loop]() { run_loop.Quit(); });
+
+    EXPECT_TRUE(ExecJs(web_contents(), JsReplace("createAttributionSrcImg($1);",
+                                                 register_url)));
 
     run_loop.Run();
   }

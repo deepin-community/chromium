@@ -14,18 +14,23 @@
 #include <type_traits>
 #include <utility>
 
-#include "third_party/base/check.h"
-#include "third_party/base/compiler_specific.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/compiler_specific.h"
+#include "core/fxcrt/unowned_ptr_exclusion.h"
 
-#if defined(PDF_USE_PARTITION_ALLOC)
-#include "partition_alloc/pointers/raw_ptr.h"
-#endif
+// SAFETY: TODO(crbug.com/pdfium/2085): this entire file is to be replaced
+// with the fully annotated one that is being prepared in base/.
 
 namespace pdfium {
 
 constexpr size_t dynamic_extent = static_cast<size_t>(-1);
 
 template <typename T>
+using DefaultSpanInternalPtr = UNOWNED_PTR_EXCLUSION T*;
+
+template <typename T,
+          size_t Extent = dynamic_extent,
+          typename InternalPtr = DefaultSpanInternalPtr<T>>
 class span;
 
 namespace internal {
@@ -179,13 +184,15 @@ using EnableIfConstSpanCompatibleContainer =
 // - using size_t instead of ptrdiff_t for indexing
 //
 // Additions beyond the C++ standard draft
+// - as_chars() function.
+// - as_writable_chars() function.
 // - as_byte_span() function.
 // - as_writable_byte_span() function.
 // - span_from_ref() function.
 // - byte_span_from_ref() function.
 
 // [span], class template span
-template <typename T>
+template <typename T, size_t Extent, typename InternalPtr>
 class TRIVIAL_ABI GSL_POINTER span {
  public:
   using value_type = typename std::remove_cv<T>::type;
@@ -198,9 +205,6 @@ class TRIVIAL_ABI GSL_POINTER span {
 
   // [span.cons], span constructors, copy, assignment, and destructor
   constexpr span() noexcept = default;
-  constexpr span(T* data, size_t size) noexcept : data_(data), size_(size) {
-    DCHECK(data_ || size_ == 0);
-  }
 
   // TODO(dcheng): Implement construction from a |begin| and |end| pointer.
   template <size_t N>
@@ -208,6 +212,10 @@ class TRIVIAL_ABI GSL_POINTER span {
 
   template <size_t N>
   constexpr span(std::array<T, N>& array) noexcept : span(array.data(), N) {}
+
+  template <size_t N>
+  constexpr span(const std::array<std::remove_cv_t<T>, N>& array) noexcept
+      : span(array.data(), N) {}
 
   // Conversion from a container that provides |T* data()| and |integral_type
   // size()|. Note that |data()| may not return nullptr for some empty
@@ -234,8 +242,13 @@ class TRIVIAL_ABI GSL_POINTER span {
 
   // Conversions from spans of compatible types: this allows a span<T> to be
   // seamlessly used as a span<const T>, but not the other way around.
-  template <typename U, typename = internal::EnableIfLegalSpanConversion<U, T>>
-  constexpr span(const span<U>& other) : span(other.data(), other.size()) {}
+  template <typename U,
+            size_t M,
+            typename R,
+            typename = internal::EnableIfLegalSpanConversion<U, T>>
+  constexpr span(const span<U, M, R>& other)
+      : span(other.data(), other.size()) {}
+
   span& operator=(const span& other) noexcept {
     if (this != &other) {
       data_ = other.data_;
@@ -253,13 +266,14 @@ class TRIVIAL_ABI GSL_POINTER span {
 
   const span last(size_t count) const {
     CHECK(count <= size_);
-    return span(static_cast<T*>(data_) + (size_ - count), count);
+    return UNSAFE_BUFFERS(
+        span(static_cast<T*>(data_) + (size_ - count), count));
   }
 
   const span subspan(size_t pos, size_t count = dynamic_extent) const {
     CHECK(pos <= size_);
     CHECK(count == dynamic_extent || count <= size_ - pos);
-    return span(static_cast<T*>(data_) + pos,
+    return span(UNSAFE_BUFFERS(static_cast<T*>(data_) + pos),
                 count == dynamic_extent ? size_ - pos : count);
   }
 
@@ -271,7 +285,7 @@ class TRIVIAL_ABI GSL_POINTER span {
   // [span.elem], span element access
   T& operator[](size_t index) const noexcept {
     CHECK(index < size_);
-    return static_cast<T*>(data_)[index];
+    return UNSAFE_BUFFERS(static_cast<T*>(data_)[index]);
   }
 
   constexpr T& front() const noexcept {
@@ -281,14 +295,16 @@ class TRIVIAL_ABI GSL_POINTER span {
 
   constexpr T& back() const noexcept {
     CHECK(!empty());
-    return *(data() + size() - 1);
+    return UNSAFE_BUFFERS(*(data() + size() - 1));
   }
 
   constexpr T* data() const noexcept { return static_cast<T*>(data_); }
 
   // [span.iter], span iterator support
   constexpr iterator begin() const noexcept { return static_cast<T*>(data_); }
-  constexpr iterator end() const noexcept { return begin() + size_; }
+  constexpr iterator end() const noexcept {
+    return UNSAFE_BUFFERS(begin() + size_);
+  }
 
   constexpr const_iterator cbegin() const noexcept { return begin(); }
   constexpr const_iterator cend() const noexcept { return end(); }
@@ -308,30 +324,25 @@ class TRIVIAL_ABI GSL_POINTER span {
   }
 
  private:
-#if defined(PDF_USE_PARTITION_ALLOC)
-  raw_ptr<T, AllowPtrArithmetic> data_ = nullptr;
-#else
-  T* data_ = nullptr;
-#endif
+  // Move to public section once clang starts enforcing UNSAFE_BUFFERS on
+  // constructors (https://github.com/llvm/llvm-project/issues/80482). Until
+  // then, force calls into two-arg make_span() which enforces the unsafe
+  // buffer usage checks.
+  UNSAFE_BUFFER_USAGE constexpr span(T* data, size_t size) noexcept
+      : data_(data), size_(size) {
+    DCHECK(data_ || size_ == 0);
+  }
+  template <typename U>
+  friend constexpr span<U> make_span(U* data, size_t size) noexcept;
+
+  InternalPtr data_ = nullptr;
   size_t size_ = 0;
 };
 
-// [span.objectrep], views of object representation
-template <typename T>
-span<const uint8_t> as_bytes(span<T> s) noexcept {
-  return {reinterpret_cast<const uint8_t*>(s.data()), s.size_bytes()};
-}
-
-template <typename T,
-          typename U = typename std::enable_if<!std::is_const<T>::value>::type>
-span<uint8_t> as_writable_bytes(span<T> s) noexcept {
-  return {reinterpret_cast<uint8_t*>(s.data()), s.size_bytes()};
-}
-
 // Type-deducing helpers for constructing a span.
 template <typename T>
-constexpr span<T> make_span(T* data, size_t size) noexcept {
-  return span<T>(data, size);
+UNSAFE_BUFFER_USAGE constexpr span<T> make_span(T* data, size_t size) noexcept {
+  return UNSAFE_BUFFERS(span<T>(data, size));
 }
 
 template <typename T, size_t N>
@@ -359,12 +370,46 @@ constexpr span<T> make_span(const Container& container) {
   return span<T>(container);
 }
 
+// [span.objectrep], views of object representation
+template <typename T, size_t N, typename P>
+span<const uint8_t> as_bytes(span<T, N, P> s) noexcept {
+  // SAFETY: from size_bytes() method.
+  return UNSAFE_BUFFERS(
+      make_span(reinterpret_cast<const uint8_t*>(s.data()), s.size_bytes()));
+}
+
+template <typename T,
+          size_t N,
+          typename P,
+          typename U = typename std::enable_if<!std::is_const<T>::value>::type>
+span<uint8_t> as_writable_bytes(span<T, N, P> s) noexcept {
+  // SAFETY: from size_bytes() method.
+  return UNSAFE_BUFFERS(
+      make_span(reinterpret_cast<uint8_t*>(s.data()), s.size_bytes()));
+}
+
+template <typename T, size_t N, typename P>
+span<const char> as_chars(span<T, N, P> s) noexcept {
+  // SAFETY: from size_bytes() method.
+  return UNSAFE_BUFFERS(
+      make_span(reinterpret_cast<const char*>(s.data()), s.size_bytes()));
+}
+
+template <typename T,
+          size_t N,
+          typename P,
+          typename U = typename std::enable_if<!std::is_const<T>::value>::type>
+span<char> as_writable_chars(span<T, N, P> s) noexcept {
+  return {reinterpret_cast<char*>(s.data()), s.size_bytes()};
+}
+
 // `span_from_ref` converts a reference to T into a span of length 1.  This is a
 // non-std helper that is inspired by the `std::slice::from_ref()` function from
 // Rust.
 template <typename T>
 static constexpr span<T> span_from_ref(T& single_object) noexcept {
-  return span<T>(&single_object, 1u);
+  // SAFETY: single object passed by reference.
+  return UNSAFE_BUFFERS(make_span<T>(&single_object, 1u));
 }
 
 // `byte_span_from_ref` converts a reference to T into a span of uint8_t of
@@ -373,11 +418,11 @@ static constexpr span<T> span_from_ref(T& single_object) noexcept {
 template <typename T>
 static constexpr span<const uint8_t> byte_span_from_ref(
     const T& single_object) noexcept {
-  return as_bytes(span<const T>(&single_object, 1u));
+  return as_bytes(span_from_ref(single_object));
 }
 template <typename T>
 static constexpr span<uint8_t> byte_span_from_ref(T& single_object) noexcept {
-  return as_writable_bytes(span<T>(&single_object, 1u));
+  return as_writable_bytes(span_from_ref(single_object));
 }
 
 // Convenience function for converting an object which is itself convertible

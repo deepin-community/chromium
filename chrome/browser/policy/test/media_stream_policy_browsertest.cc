@@ -71,11 +71,12 @@ class MediaStreamDevicesControllerBrowserTest
     int render_frame_id = web_contents->GetPrimaryMainFrame()->GetRoutingID();
     return content::MediaStreamRequest(
         render_process_id, render_frame_id, 0,
-        url::Origin::Create(request_url_), false, blink::MEDIA_DEVICE_ACCESS,
+        url::Origin::Create(request_url_), false, blink::MEDIA_GENERATE_STREAM,
         /*requested_audio_device_ids=*/{}, /*requested_video_device_ids=*/{},
         audio_request_type, video_request_type,
         /*disable_local_echo=*/false,
-        /*request_pan_tilt_zoom_permission=*/false);
+        /*request_pan_tilt_zoom_permission=*/false,
+        /*captured_surface_control_active=*/false);
   }
 
   // Configure a given policy map. The |policy_name| is the name of either the
@@ -135,10 +136,11 @@ class MediaStreamDevicesControllerBrowserTest
     }
   }
 
-  void FinishAudioTest() {
+  void FinishAudioTest(std::string requested_device_id) {
     content::MediaStreamRequest request(
         CreateRequest(blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE,
                       blink::mojom::MediaStreamType::NO_SERVICE));
+    request.requested_audio_device_ids = {requested_device_id};
     // TODO(raymes): Test MEDIA_DEVICE_OPEN (Pepper) which grants both webcam
     // and microphone permissions at the same time.
     webrtc::MediaStreamDevicesController::RequestPermissions(
@@ -148,10 +150,11 @@ class MediaStreamDevicesControllerBrowserTest
     quit_closure_.Run();
   }
 
-  void FinishVideoTest() {
+  void FinishVideoTest(std::string requested_device_id) {
     content::MediaStreamRequest request(
         CreateRequest(blink::mojom::MediaStreamType::NO_SERVICE,
                       blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE));
+    request.requested_video_device_ids = {requested_device_id};
     // TODO(raymes): Test MEDIA_DEVICE_OPEN (Pepper) which grants both webcam
     // and microphone permissions at the same time.
     webrtc::MediaStreamDevicesController::RequestPermissions(
@@ -188,7 +191,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
           base::Unretained(MediaCaptureDevicesDispatcher::GetInstance()),
           audio_devices),
       base::BindOnce(&MediaStreamDevicesControllerBrowserTest::FinishAudioTest,
-                     base::Unretained(this)));
+                     base::Unretained(this), fake_audio_device.id));
 
   base::RunLoop loop;
   quit_closure_ = loop.QuitWhenIdleClosure();
@@ -225,7 +228,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
             audio_devices),
         base::BindOnce(
             &MediaStreamDevicesControllerBrowserTest::FinishAudioTest,
-            base::Unretained(this)));
+            base::Unretained(this), fake_audio_device.id));
 
     base::RunLoop loop;
     quit_closure_ = loop.QuitWhenIdleClosure();
@@ -252,7 +255,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
           base::Unretained(MediaCaptureDevicesDispatcher::GetInstance()),
           video_devices),
       base::BindOnce(&MediaStreamDevicesControllerBrowserTest::FinishVideoTest,
-                     base::Unretained(this)));
+                     base::Unretained(this), std::move(fake_video_device.id)));
 
   base::RunLoop loop;
   quit_closure_ = loop.QuitWhenIdleClosure();
@@ -289,7 +292,7 @@ IN_PROC_BROWSER_TEST_P(MediaStreamDevicesControllerBrowserTest,
             video_devices),
         base::BindOnce(
             &MediaStreamDevicesControllerBrowserTest::FinishVideoTest,
-            base::Unretained(this)));
+            base::Unretained(this), fake_video_device.id));
 
     base::RunLoop loop;
     quit_closure_ = loop.QuitWhenIdleClosure();

@@ -11,6 +11,7 @@
 #include "base/check_op.h"
 #include "base/containers/contains.h"
 #include "base/functional/overloaded.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "components/performance_manager/frame_node_source.h"
@@ -23,7 +24,7 @@
 
 namespace performance_manager {
 
-using WorkerNodeSet = base::flat_set<WorkerNodeImpl*>;
+using WorkerNodeSet = base::flat_set<raw_ptr<WorkerNodeImpl, CtnExperimental>>;
 
 namespace {
 
@@ -75,8 +76,9 @@ void DisconnectClientsOnGraph(WorkerNodeSet worker_nodes,
       FROM_HERE,
       base::BindOnce(
           [](WorkerNodeSet worker_nodes, FrameNodeImpl* client_frame_node) {
-            for (auto* worker_node : worker_nodes)
+            for (WorkerNodeImpl* worker_node : worker_nodes) {
               worker_node->RemoveClientFrame(client_frame_node);
+            }
           },
           std::move(worker_nodes), client_frame_node));
 }
@@ -100,8 +102,9 @@ void DisconnectClientsOnGraph(WorkerNodeSet worker_nodes,
       FROM_HERE,
       base::BindOnce(
           [](WorkerNodeSet worker_nodes, WorkerNodeImpl* client_worker_node) {
-            for (auto* worker_node : worker_nodes)
+            for (WorkerNodeImpl* worker_node : worker_nodes) {
               worker_node->RemoveClientWorker(client_worker_node);
+            }
           },
           std::move(worker_nodes), client_worker_node));
 }
@@ -229,7 +232,7 @@ void WorkerWatcher::OnWorkerCreated(
     content::DedicatedWorkerCreator creator) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // TODO(https://crbug.com/993029): Plumb through the URL.
+  // TODO(crbug.com/40640034): Plumb through the URL.
   auto worker_node = PerformanceManagerImpl::CreateWorkerNode(
       browser_context_id_, WorkerNode::WorkerType::kDedicated,
       process_node_source_->GetProcessNode(worker_process_id),

@@ -18,9 +18,8 @@
 #include "components/autofill/core/browser/data_model/iban.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/browser/strike_databases/autofill_profile_migration_strike_database.h"
-#include "components/autofill/core/browser/strike_databases/test_inmemory_strike_database.h"
-#include "components/signin/public/identity_manager/account_info.h"
+#include "components/autofill/core/browser/test_address_data_manager.h"
+#include "components/autofill/core/browser/test_payments_data_manager.h"
 
 namespace autofill {
 
@@ -35,65 +34,46 @@ class TestPersonalDataManager : public PersonalDataManager {
 
   ~TestPersonalDataManager() override;
 
-  using PersonalDataManager::GetProfileSaveStrikeDatabase;
-  using PersonalDataManager::GetProfileUpdateStrikeDatabase;
-  using PersonalDataManager::SetPrefService;
+  TestAddressDataManager& test_address_data_manager() {
+    AddressDataManager& manager = address_data_manager();
+    return static_cast<TestAddressDataManager&>(manager);
+  }
+  const TestAddressDataManager& test_address_data_manager() const {
+    const AddressDataManager& manager = address_data_manager();
+    return static_cast<const TestAddressDataManager&>(manager);
+  }
+  TestPaymentsDataManager& test_payments_data_manager() {
+    PaymentsDataManager& manager = payments_data_manager();
+    return static_cast<TestPaymentsDataManager&>(manager);
+  }
+  const TestPaymentsDataManager& test_payments_data_manager() const {
+    const PaymentsDataManager& manager = payments_data_manager();
+    return static_cast<const TestPaymentsDataManager&>(manager);
+  }
+
+  // Can be used to inject mock instances.
+  void set_address_data_manager(
+      std::unique_ptr<TestAddressDataManager> address_data_manager) {
+    address_data_manager_ = std::move(address_data_manager);
+  }
+  void set_payments_data_manager(
+      std::unique_ptr<TestPaymentsDataManager> payments_data_manager) {
+    payments_data_manager_ = std::move(payments_data_manager);
+  }
 
   // PersonalDataManager overrides.  These functions are overridden as needed
   // for various tests, whether to skip calls to uncreated databases/services,
   // or to make things easier in general to toggle.
-  bool IsPaymentsWalletSyncTransportEnabled() const override;
-  void RecordUseOf(absl::variant<const AutofillProfile*, const CreditCard*>
-                       profile_or_credit_card) override;
-  void RecordUseOfIban(Iban& iban) override;
-  std::string SaveImportedCreditCard(
-      const CreditCard& imported_credit_card) override;
-  void AddProfile(const AutofillProfile& profile) override;
-  void RemoveByGUID(const std::string& guid) override;
-  bool IsEligibleForAddressAccountStorage() const override;
-  void AddCreditCard(const CreditCard& credit_card) override;
-  std::string AddAsLocalIban(const Iban iban) override;
-  std::string UpdateIban(const Iban& iban) override;
-  void DeleteLocalCreditCards(const std::vector<CreditCard>& cards) override;
-  void UpdateCreditCard(const CreditCard& credit_card) override;
-  const std::string& GetDefaultCountryCodeForNewAddress() const override;
-  void LoadCreditCards() override;
-  void LoadCreditCardCloudTokenData() override;
-  void LoadIbans() override;
-  bool IsAutofillProfileEnabled() const override;
-  bool IsAutofillPaymentMethodsEnabled() const override;
-  bool IsAutofillWalletImportEnabled() const override;
-  bool ShouldSuggestServerPaymentMethods() const override;
-  void ClearAllLocalData() override;
   bool IsDataLoaded() const override;
-  bool IsSyncFeatureEnabledForPaymentsServerMetrics() const override;
-  CoreAccountInfo GetAccountInfoForPaymentsServer() const override;
-  const AutofillProfileMigrationStrikeDatabase*
-  GetProfileMigrationStrikeDatabase() const override;
-  const AutofillProfileSaveStrikeDatabase* GetProfileSaveStrikeDatabase()
-      const override;
-  const AutofillProfileUpdateStrikeDatabase* GetProfileUpdateStrikeDatabase()
-      const override;
-  bool IsPaymentMethodsMandatoryReauthEnabled() override;
-  void SetPaymentMethodsMandatoryReauthEnabled(bool enabled) override;
-  bool IsPaymentCvcStorageEnabled() override;
-  void AddServerCvc(int64_t instrument_id, const std::u16string& cvc) override;
-  void ClearServerCvcs() override;
-  void ClearLocalCvcs() override;
 
   // Unique to TestPersonalDataManager:
+  void SetPrefService(PrefService* pref_service);
 
   // Clears `web_profiles_` and `account_profiles_`.
   void ClearProfiles();
 
-  // Clears |local_credit_cards_| and |server_credit_cards_|.
-  void ClearCreditCards();
-
-  // Clears |server_credit_card_cloud_token_data_|.
-  void ClearCloudTokenData();
-
-  // Clears |autofill_offer_data_|.
-  void ClearCreditCardOfferData();
+  // Clears all address and payments data.
+  void ClearAllLocalData();
 
   // Adds a card to `server_credit_cards_`. This test class treats masked and
   // full server cards equally, relying on their preset RecordType to
@@ -120,72 +100,32 @@ class TestPersonalDataManager : public PersonalDataManager {
   void SetNicknameForCardWithGUID(std::string_view guid,
                                   std::string_view nickname);
 
-  void set_default_country_code(const std::string& default_country_code) {
-    default_country_code_ = default_country_code;
-  }
-
-  int num_times_save_imported_credit_card_called() const {
-    return num_times_save_imported_credit_card_called_;
-  }
-
+  // TODO(b/322170538): Remove function from TestPDM.
   void SetAutofillPaymentMethodsEnabled(bool autofill_payment_methods_enabled) {
-    autofill_payment_methods_enabled_ = autofill_payment_methods_enabled;
+    test_payments_data_manager().SetAutofillPaymentMethodsEnabled(
+        autofill_payment_methods_enabled);
   }
 
+  // TODO(b/322170538): Remove function from TestPDM.
   void SetAutofillProfileEnabled(bool autofill_profile_enabled) {
-    autofill_profile_enabled_ = autofill_profile_enabled;
+    test_address_data_manager().SetAutofillProfileEnabled(
+        autofill_profile_enabled);
   }
 
+  // TODO(b/322170538): Remove function from TestPDM.
   void SetAutofillWalletImportEnabled(bool autofill_wallet_import_enabled) {
-    autofill_wallet_import_enabled_ = autofill_wallet_import_enabled;
-  }
-
-  void SetIsEligibleForAddressAccountStorage(bool eligible) {
-    eligible_for_account_storage_ = eligible;
+    test_payments_data_manager().SetAutofillWalletImportEnabled(
+        autofill_wallet_import_enabled);
   }
 
   void SetPaymentsCustomerData(
       std::unique_ptr<PaymentsCustomerData> customer_data) {
-    payments_customer_data_ = std::move(customer_data);
+    payments_data_manager_->payments_customer_data_ = std::move(customer_data);
   }
 
-  void SetIsPaymentsWalletSyncTransportEnabled(bool enabled) {
-    payments_wallet_sync_transport_enabled_ = enabled;
+  void ClearCreditCardArtImages() {
+    payments_data_manager_->credit_card_art_images_.clear();
   }
-
-  void SetAccountInfoForPayments(const CoreAccountInfo& account_info) {
-    account_info_ = account_info;
-  }
-
-  void SetIsPaymentCvcStorageEnabled(bool enabled) {
-    payments_cvc_storage_enabled_ = enabled;
-  }
-
-  void ClearCreditCardArtImages() { credit_card_art_images_.clear(); }
-
- private:
-  // This should be called when you just want to delete the element via `guid`
-  // and not trigger `NotifyPersonalDataObserver()`.
-  void RemoveByGuidWithoutNotifications(const std::string& guid);
-
-  std::string default_country_code_;
-  int num_times_save_imported_credit_card_called_ = 0;
-  std::optional<bool> autofill_profile_enabled_;
-  std::optional<bool> autofill_payment_methods_enabled_;
-  std::optional<bool> autofill_wallet_import_enabled_;
-  std::optional<bool> eligible_for_account_storage_;
-  std::optional<bool> payment_methods_mandatory_reauth_enabled_;
-  std::optional<bool> payments_wallet_sync_transport_enabled_;
-  CoreAccountInfo account_info_;
-  std::optional<bool> payments_cvc_storage_enabled_;
-
-  TestInMemoryStrikeDatabase inmemory_strike_database_;
-  AutofillProfileMigrationStrikeDatabase
-      inmemory_profile_migration_strike_database_{&inmemory_strike_database_};
-  AutofillProfileSaveStrikeDatabase inmemory_profile_save_strike_database_{
-      &inmemory_strike_database_};
-  AutofillProfileUpdateStrikeDatabase inmemory_profile_update_strike_database_{
-      &inmemory_strike_database_};
 };
 
 }  // namespace autofill

@@ -231,6 +231,13 @@ void RecordPaintCanvas::drawLine(SkScalar x0,
   push<DrawLineOp>(x0, y0, x1, y1, flags, draw_path_count_ > 4);
 }
 
+void RecordPaintCanvas::drawArc(const SkRect& oval,
+                                SkScalar start_angle_degrees,
+                                SkScalar sweep_angle_degrees,
+                                const PaintFlags& flags) {
+  push<DrawArcOp>(oval, start_angle_degrees, sweep_angle_degrees, flags);
+}
+
 void RecordPaintCanvas::drawRect(const SkRect& rect, const PaintFlags& flags) {
   push<DrawRectOp>(rect, flags);
 }
@@ -344,6 +351,11 @@ void RecordPaintCanvas::drawPicture(PaintRecord record) {
   push<DrawRecordOp>(std::move(record));
 }
 
+void RecordPaintCanvas::drawPicture(PaintRecord record, bool local_ctm) {
+  // TODO(enne): If this is small, maybe flatten it?
+  push<DrawRecordOp>(std::move(record), local_ctm);
+}
+
 void RecordPaintCanvas::Annotate(AnnotationType type,
                                  const SkRect& rect,
                                  sk_sp<SkData> data) {
@@ -361,6 +373,13 @@ void RecordPaintCanvas::setNodeId(int node_id) {
 InspectableRecordPaintCanvas::InspectableRecordPaintCanvas(
     const gfx::Size& size)
     : canvas_(size.width(), size.height()) {}
+
+InspectableRecordPaintCanvas::InspectableRecordPaintCanvas(
+    CreateChildCanvasTag,
+    const InspectableRecordPaintCanvas& parent)
+    : canvas_(SkIRect::MakeSize(parent.imageInfo().dimensions())) {
+  canvas_.setMatrix(parent.canvas_.getLocalToDevice());
+}
 
 InspectableRecordPaintCanvas::~InspectableRecordPaintCanvas() = default;
 

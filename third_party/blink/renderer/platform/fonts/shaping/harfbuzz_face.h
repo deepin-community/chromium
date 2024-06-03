@@ -36,6 +36,8 @@
 #include "third_party/blink/renderer/platform/fonts/unicode_range_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 
@@ -50,12 +52,12 @@ struct HarfBuzzFontData;
 
 // |HarfBuzzFace| is a thread specific data associated to |FontPlatformData|,
 // hold by |HarfBuzzFontCache|.
-class HarfBuzzFace final : public GarbageCollected<HarfBuzzFace> {
+class PLATFORM_EXPORT HarfBuzzFace final
+    : public GarbageCollected<HarfBuzzFace> {
  public:
   HarfBuzzFace(const FontPlatformData* platform_data, uint64_t);
   HarfBuzzFace(const HarfBuzzFace&) = delete;
   HarfBuzzFace& operator=(const HarfBuzzFace&) = delete;
-  ~HarfBuzzFace();
 
   void Trace(Visitor*) const;
 
@@ -67,7 +69,7 @@ class HarfBuzzFace final : public GarbageCollected<HarfBuzzFace> {
   // Passing in specified_size in order to control selecting the right value
   // from the trak table. If not set, the size of the internal FontPlatformData
   // object will be used.
-  hb_font_t* GetScaledFont(scoped_refptr<UnicodeRangeSet>,
+  hb_font_t* GetScaledFont(const UnicodeRangeSet*,
                            VerticalLayoutCallbacks,
                            float specified_size) const;
 
@@ -80,23 +82,35 @@ class HarfBuzzFace final : public GarbageCollected<HarfBuzzFace> {
   unsigned UnitsPerEmFromHeadTable();
   Glyph HbGlyphForCharacter(UChar32 character);
 
+  hb_codepoint_t HarfBuzzGetGlyphForTesting(UChar32 character,
+                                            UChar32 variation_selector);
+
   bool ShouldSubpixelPosition();
 
   const OpenTypeVerticalData& VerticalData() const;
 
   static void Init();
 
+  static bool GetIgnoreVariationSelectors() {
+    return ignore_variation_selectors_;
+  }
+
+  static void SetIgnoreVariationSelectors(bool value) {
+    DCHECK(RuntimeEnabledFeatures::FontVariationSequencesEnabled() || value);
+    ignore_variation_selectors_ = value;
+  }
+
  private:
 
   void PrepareHarfBuzzFontData();
 
   Member<const FontPlatformData> platform_data_;
-  const uint64_t unique_id_;
-  // TODO(crbug.com/1489080): When briefly given MiraclePtr protection,
-  // these members were both found dangling.
-  hb_font_t* unscaled_font_;
-  HarfBuzzFontData* harfbuzz_font_data_;
+  Member<HarfBuzzFontData> harfbuzz_font_data_;
+  static bool ignore_variation_selectors_;
 };
+
+inline constexpr hb_codepoint_t kUnmatchedVSGlyphId =
+    static_cast<hb_codepoint_t>(-1);
 
 }  // namespace blink
 

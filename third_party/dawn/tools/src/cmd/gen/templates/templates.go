@@ -189,7 +189,7 @@ type intrinsicCache struct {
 	path           string
 	cachedSem      *sem.Sem            // lazily built by sem()
 	cachedTable    *gen.IntrinsicTable // lazily built by intrinsicTable()
-	cachedPermuter *gen.Permuter       // lazily built by permute()
+	cachedPermuter *gen.Permutator     // lazily built by permute()
 }
 
 // Sem lazily parses and resolves the intrinsic.def file, returning the semantic info.
@@ -244,12 +244,16 @@ func (i *intrinsicCache) Permute(overload *sem.Overload) ([]gen.Permutation, err
 		if err != nil {
 			return nil, err
 		}
-		i.cachedPermuter, err = gen.NewPermuter(sem)
+		i.cachedPermuter, err = gen.NewPermutator(sem)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return i.cachedPermuter.Permute(overload)
+	out, err := i.cachedPermuter.Permute(overload)
+	if err != nil {
+		return nil, fmt.Errorf("while permuting '%v'\n%w", overload, err)
+	}
+	return out, nil
 }
 
 // Cache for objects that are expensive to build, and can be reused between templates.
@@ -307,7 +311,7 @@ func generate(tmplPath string, cache *genCache, w io.Writer, writeFile WriteFile
 		"IsAbstract":                          gen.IsAbstract,
 		"IsDeclarable":                        gen.IsDeclarable,
 		"IsHostShareable":                     gen.IsHostShareable,
-		"OverloadUsesF16":                     gen.OverloadUsesF16,
+		"OverloadUsesType":                    gen.OverloadUsesType,
 		"OverloadUsesReadWriteStorageTexture": gen.OverloadUsesReadWriteStorageTexture,
 		"IsFirstIn":                           isFirstIn,
 		"IsLastIn":                            isLastIn,

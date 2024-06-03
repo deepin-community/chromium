@@ -158,7 +158,7 @@ class ProfileImportProcess {
     return import_metadata_;
   }
 
-  AutofillClient::SaveAddressProfileOfferUserDecision user_decision() const {
+  AutofillClient::AddressPromptUserDecision user_decision() const {
     return user_decision_;
   }
 
@@ -208,13 +208,16 @@ class ProfileImportProcess {
   // Supply a user |decision| for the import process. The option
   // |edited_profile| reflect user edits to the import candidate.
   void SetUserDecision(
-      AutofillClient::SaveAddressProfileOfferUserDecision decision,
+      AutofillClient::AddressPromptUserDecision decision,
       base::optional_ref<const AutofillProfile> edited_profile = std::nullopt);
 
-  // Records UMA and UKM metrics. Should only be called after a user decision
-  // was supplied or a silent update happens.
-  void CollectMetrics(ukm::UkmRecorder* ukm_recorder,
-                      ukm::SourceId source_id) const;
+  // Records UMA and UKM metrics after the import was applied. Should only be
+  // called after a user decision was supplied or a silent update happens.
+  // `existing_profiles` are the profiles before the import was applied.
+  void CollectMetrics(
+      ukm::UkmRecorder* ukm_recorder,
+      ukm::SourceId source_id,
+      const std::vector<AutofillProfile*>& existing_profiles) const;
 
  private:
   // Determines the import type of |observed_profile_| with respect to
@@ -242,9 +245,7 @@ class ProfileImportProcess {
 
   // Computes the settings-visible profile difference between the
   // `import_candidate_` and the `confirmed_import_candidate_`. Logs all edited
-  // types and the number of edited fields to UMA histograms, depending on the
-  // import type.
-  // Returns the number of edited fields.
+  // types, depending on the import type. Returns the number of edited fields.
   // If the user didn't edit any fields (or wasn't prompted), this is a no-op.
   int CollectedEditedTypeHistograms() const;
 
@@ -277,8 +278,8 @@ class ProfileImportProcess {
   std::optional<AutofillProfile> confirmed_import_candidate_;
 
   // The decision the user made when prompted.
-  AutofillClient::SaveAddressProfileOfferUserDecision user_decision_{
-      AutofillClient::SaveAddressProfileOfferUserDecision::kUndefined};
+  AutofillClient::AddressPromptUserDecision user_decision_{
+      AutofillClient::AddressPromptUserDecision::kUndefined};
 
   // The application locale used for this import process.
   std::string app_locale_;

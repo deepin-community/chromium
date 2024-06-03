@@ -366,6 +366,8 @@ void PrefsTabHelper::RegisterProfilePrefs(
       prefs::kEnableReferrers,
       !base::FeatureList::IsEnabled(features::kNoReferrers));
   registry->RegisterBooleanPref(prefs::kEnableEncryptedMedia, true);
+  registry->RegisterStringPref(prefs::kPrefixedVideoFullscreenApiAvailability,
+                               "runtime-enabled");
   registry->RegisterBooleanPref(prefs::kScrollToTextFragmentEnabled, true);
 #if BUILDFLAG(IS_ANDROID)
   registry->RegisterDoublePref(browser_ui::prefs::kWebKitFontScaleFactor, 1.0);
@@ -433,7 +435,7 @@ void PrefsTabHelper::RegisterProfilePrefs(
   if (base::FeatureList::IsEnabled(kUnlocalizeMinimumFontSize)) {
     registry->RegisterIntegerPref(prefs::kWebKitMinimumFontSize, 0);
   } else {
-    // TODO(crbug.com/1432798): When the feature is stabilized and cleaning up,
+    // TODO(crbug.com/40264121): When the feature is stabilized and cleaning up,
     // make sure to remove all `IDS_MINIMUM_FONT_SIZE`. `kWebKitMinimumFontSize`
     // helping the readability is no longer needed, but it's still important for
     // accessibility. See the design doc linked from crbug.com/1432798.

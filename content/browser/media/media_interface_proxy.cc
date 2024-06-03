@@ -78,6 +78,7 @@
 #if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
 #include "content/public/browser/stable_video_decoder_factory.h"
 #include "media/base/media_switches.h"
+#include "mojo/public/cpp/bindings/message.h"
 #endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
 
 namespace content {
@@ -179,10 +180,8 @@ class FrameInterfaceFactoryImpl : public media::mojom::FrameInterfaceFactory,
     // is, we should proceed with opening in MediaLicenseManager.
     if (base::FeatureList::IsEnabled(features::kCdmStorageDatabase) &&
         !base::FeatureList::IsEnabled(features::kCdmStorageDatabaseMigration)) {
-      CdmStorageManager* cdm_storage_manager =
-          static_cast<StoragePartitionImpl*>(
-              render_frame_host_->GetStoragePartition())
-              ->GetCdmStorageManager();
+      CdmStorageManager* cdm_storage_manager = static_cast<CdmStorageManager*>(
+          render_frame_host_->GetStoragePartition()->GetCdmStorageDataModel());
 
       cdm_storage_manager->OpenCdmStorage(
           CdmStorageBindingContext(storage_key, cdm_type_),
@@ -305,14 +304,44 @@ void MediaInterfaceProxy::CreateVideoDecoder(
   mojo::PendingRemote<media::stable::mojom::StableVideoDecoder>
       oop_video_decoder;
 #if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
-  if (media::IsOutOfProcessVideoDecodingEnabled()) {
-    render_frame_host().GetProcess()->CreateStableVideoDecoder(
-        oop_video_decoder.InitWithNewPipeAndPassReceiver());
+  switch (media::GetOutOfProcessVideoDecodingMode()) {
+    case media::OOPVDMode::kEnabledWithGpuProcessAsProxy:
+      render_frame_host().GetProcess()->CreateStableVideoDecoder(
+          oop_video_decoder.InitWithNewPipeAndPassReceiver());
+      break;
+    case media::OOPVDMode::kEnabledWithoutGpuProcessAsProxy:
+      // Well-behaved clients shouldn't call CreateVideoDecoder() in this OOP-VD
+      // mode.
+      return;
+    case media::OOPVDMode::kDisabled:
+      break;
   }
 #endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
   factory->CreateVideoDecoder(std::move(receiver),
                               std::move(oop_video_decoder));
 }
+
+#if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
+void MediaInterfaceProxy::CreateStableVideoDecoder(
+    mojo::PendingReceiver<media::stable::mojom::StableVideoDecoder>
+        video_decoder) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  switch (media::GetOutOfProcessVideoDecodingMode()) {
+    case media::OOPVDMode::kEnabledWithGpuProcessAsProxy:
+    case media::OOPVDMode::kDisabled:
+      // Well-behaved clients shouldn't call CreateStableVideoDecoder() in this
+      // OOP-VD mode and MediaInterfaceProxy::CreateStableVideoDecoder() should
+      // always be called during a message dispatch.
+      CHECK(mojo::IsInMessageDispatch());
+      mojo::ReportBadMessage("CreateStableVideoDecoder() called unexpectedly");
+      return;
+    case media::OOPVDMode::kEnabledWithoutGpuProcessAsProxy:
+      render_frame_host().GetProcess()->CreateStableVideoDecoder(
+          std::move(video_decoder));
+      break;
+  }
+}
+#endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
 
 void MediaInterfaceProxy::CreateAudioEncoder(
     mojo::PendingReceiver<media::mojom::AudioEncoder> receiver) {

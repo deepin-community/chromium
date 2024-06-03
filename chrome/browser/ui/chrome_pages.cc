@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "ash/constants/ash_features.h"
 #include "ash/webui/shortcut_customization_ui/url_constants.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/map_util.h"
@@ -63,10 +64,13 @@
 #include "ui/base/window_open_disposition.h"
 #include "url/url_util.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/webui/settings/public/constants/routes_util.h"
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "ash/webui/connectivity_diagnostics/url_constants.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
-#include "ash/webui/settings/public/constants/routes_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #else
@@ -117,7 +121,12 @@ void OpenBookmarkManagerForNode(Browser* browser, int64_t node_id) {
 void LaunchReleaseNotesImpl(Profile* profile, apps::LaunchSource source) {
   base::RecordAction(UserMetricsAction("ReleaseNotes.ShowReleaseNotes"));
   ash::SystemAppLaunchParams params;
-  params.url = GURL("chrome://help-app/updates");
+  params.url =
+      base::FeatureList::IsEnabled(
+          ash::features::kHelpAppOpensInsteadOfReleaseNotesNotification) &&
+              source == apps::LaunchSource::kFromReleaseNotesNotification
+          ? GURL("chrome://help-app/updates?launchSource=version-update")
+          : GURL("chrome://help-app/updates");
   params.launch_source = source;
   LaunchSystemWebAppAsync(profile, ash::SystemWebAppType::HELP, params);
 }
@@ -198,7 +207,7 @@ std::string GenerateContentSettingsExceptionsSubPage(ContentSettingsType type) {
   // purposes of URL generation for MD Settings only. We need this because some
   // of the old group names are no longer appropriate.
   //
-  // TODO(crbug.com/728353): Update the group names defined in
+  // TODO(crbug.com/40523530): Update the group names defined in
   // site_settings_helper once Options is removed from Chrome. Then this list
   // will no longer be needed.
 
@@ -226,7 +235,7 @@ std::string GenerateContentSettingsExceptionsSubPage(ContentSettingsType type) {
 
 bool SiteGURLIsValid(const GURL& url) {
   url::Origin site_origin = url::Origin::Create(url);
-  // TODO(https://crbug.com/444047): Site Details should work with file:// urls
+  // TODO(crbug.com/40399136): Site Details should work with file:// urls
   // when this bug is fixed, so add it to the allowlist when that happens.
   return !site_origin.opaque() && (url.SchemeIsHTTPOrHTTPS() ||
                                    url.SchemeIs(extensions::kExtensionScheme) ||
@@ -250,8 +259,6 @@ void ShowSiteSettingsImpl(Browser* browser, Profile* profile, const GURL& url) {
   Navigate(&params);
 }
 
-// TODO(crbug.com/1011533): Remove `kFileSystemAccessPersistentPermissions`
-// flag after FSA Persistent Permissions feature launch.
 // TODO(crbug.com/1011533): Add a browsertest that parallels the existing site
 // settings browsertests that open the page info button, and click through to
 // the file system site settings page for a given origin.
@@ -508,6 +515,16 @@ void ShowPasswordManager(Browser* browser) {
                                          GURL(kChromeUIPasswordManagerURL));
 }
 
+void ShowPasswordDetailsPage(Browser* browser,
+                             const std::string& password_domain_name) {
+  base::RecordAction(
+      UserMetricsAction("Options_ShowPasswordDetailsInPasswordManager"));
+  std::string url =
+      base::StrCat({kChromeUIPasswordManagerURL, "/", kPasswordManagerSubPage,
+                    "/", password_domain_name});
+  ShowSingletonTabIgnorePathOverwriteNTP(browser, GURL(url));
+}
+
 void ShowPasswordCheck(Browser* browser) {
   base::RecordAction(UserMetricsAction("Options_ShowPasswordCheck"));
   ShowSingletonTabIgnorePathOverwriteNTP(
@@ -624,14 +641,15 @@ void ShowAppManagementPage(Profile* profile,
   chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(profile,
                                                                sub_page);
 }
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
+#if BUILDFLAG(IS_CHROMEOS)
 GURL GetOSSettingsUrl(const std::string& sub_page) {
   DCHECK(sub_page.empty() || chromeos::settings::IsOSSettingsSubPage(sub_page))
       << sub_page;
-  std::string url = kChromeUIOSSettingsURL;
-  return GURL(url + sub_page);
+  return GURL(std::string(kChromeUIOSSettingsURL) + sub_page);
 }
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void ShowPrintManagementApp(Profile* profile) {
 #if BUILDFLAG(IS_CHROMEOS_ASH)

@@ -537,6 +537,11 @@ static constexpr ToggleEnumAndInfoList kToggleNameAndInfoList = {{
       "Use the StorageInputOutput16 SPIR-V capability for f16 shader IO types when the device "
       "supports it.",
       "https://crbug.com/tint/2161", ToggleStage::Device}},
+    {Toggle::D3D12DontUseShaderModel66OrHigher,
+     {"d3d12_dont_use_shader_model_66_or_higher",
+      "Only use shader model 6.5 or less for D3D12 backend, to workaround issues on some Intel "
+      "devices.",
+      "https://crbug.com/dawn/2470", ToggleStage::Adapter}},
     {Toggle::NoWorkaroundSampleMaskBecomesZeroForAllButLastColorTarget,
      {"no_workaround_sample_mask_becomes_zero_for_all_but_last_color_target",
       "MacOS 12.0+ Intel has a bug where the sample mask is only applied for the last color "
@@ -553,6 +558,17 @@ static constexpr ToggleEnumAndInfoList kToggleNameAndInfoList = {{
       "Using D3D12_BLEND_DEST_ALPHA as source blend factor for both color and alpha blending "
       "doesn't work correctly on the D3D12 backend using Intel Gen9 or Gen9.5 GPUs.",
       "https://crbug.com/dawn/1579", ToggleStage::Device}},
+    {Toggle::ClearColorWithDraw,
+     {"clear_color_with_draw",
+      "Use Draw instead of ClearRenderTargetView() to clear color attachments. On D3D11, "
+      "ClearRenderTargetView() does not always clear texture correctly.",
+      "https://crbug.com/chromium/329702368", ToggleStage::Device}},
+    {Toggle::VulkanSkipDraw,
+     {"vulkan_skip_draw",
+      "Some chrome tests run with swiftshader, they don't care about the pixel output. This toggle "
+      "allows skipping expensive draw operations for them.",
+      "https://crbug.com/chromium/331688266", ToggleStage::Device}},
+
     // Comment to separate the }} so it is clearer what to copy-paste to add a toggle.
 }};
 }  // anonymous namespace

@@ -49,15 +49,14 @@ const size_t kCredentialIdSize = 16;
 // JSON keys for request fields used for both GetAssertion and MakeCredential.
 const char kRequestDataKey[] = "request";
 const char kRequestClientDataJSONKey[] = "client_data_json";
+const char kRequestClaimedPINKey[] = "claimed_pin";
+const char kRequestWrappedPINDataKey[] = "wrapped_pin_data";
 
 // JSON keys for GetAssertion request fields.
-const char kGetAssertionRequestUvKey[] = "uv";
 const char kGetAssertionRequestProtobufKey[] = "protobuf";
 
 // JSON keys for GetAssertion response fields.
 const char kGetAssertionResponseKey[] = "response";
-
-const char kMakeCredentialRequestWrappedSecretKey[] = "wrapped_secret";
 
 // JSON keys for MakeCredential response fields.
 const char kMakeCredentialResponseEncryptedKey[] = "encrypted";
@@ -314,8 +313,11 @@ ParseMakeCredentialResponse(cbor::Value response_value,
   // complete.
   uint8_t flags =
       static_cast<uint8_t>(AuthenticatorData::Flag::kTestOfUserPresence) |
-      static_cast<uint8_t>(AuthenticatorData::Flag::kTestOfUserVerification) |
       static_cast<uint8_t>(AuthenticatorData::Flag::kAttestation);
+  if (request.user_verification != UserVerificationRequirement::kDiscouraged) {
+    flags |=
+        static_cast<uint8_t>(AuthenticatorData::Flag::kTestOfUserVerification);
+  }
   AuthenticatorData authenticator_data(
       fido_parsing_utils::CreateSHA256Hash(request.rp.id), flags,
       std::array<uint8_t, 4>({0, 0, 0, 0}), std::move(credential_data));
@@ -337,18 +339,23 @@ cbor::Value BuildGetAssertionCommand(
     const sync_pb::WebauthnCredentialSpecifics& passkey,
     scoped_refptr<JSONRequest> request,
     std::string client_data_json,
-    std::vector<std::vector<uint8_t>> wrapped_secrets) {
+    std::unique_ptr<ClaimedPIN> claimed_pin,
+    std::optional<std::vector<uint8_t>> wrapped_secret,
+    std::optional<std::vector<uint8_t>> secret) {
+  CHECK(wrapped_secret.has_value() ^ secret.has_value());
   cbor::Value::MapValue entry_map;
 
   entry_map.emplace(cbor::Value(kRequestCommandKey),
                     cbor::Value(kGetAssertionCommandName));
   entry_map.emplace(cbor::Value(kRequestDataKey), toCbor(*request->value));
 
-  cbor::Value::ArrayValue cbor_wrapped_secrets;
-  for (auto& wrapped_secret : wrapped_secrets) {
-    cbor_wrapped_secrets.emplace_back(std::move(wrapped_secret));
+  if (wrapped_secret.has_value()) {
+    entry_map.emplace(cbor::Value(kRequestWrappedSecretKey),
+                      cbor::Value(std::move(*wrapped_secret)));
+  } else {
+    entry_map.emplace(cbor::Value(kRequestSecretKey),
+                      cbor::Value(std::move(*secret)));
   }
-  entry_map.emplace("wrapped_secrets", std::move(cbor_wrapped_secrets));
 
   int passkey_byte_size = passkey.ByteSize();
   std::vector<uint8_t> serialized_passkey;
@@ -360,20 +367,38 @@ cbor::Value BuildGetAssertionCommand(
   entry_map.emplace(cbor::Value(kRequestClientDataJSONKey),
                     cbor::Value(client_data_json));
 
-  entry_map.emplace(cbor::Value(kGetAssertionRequestUvKey), cbor::Value(true));
+  if (claimed_pin) {
+    entry_map.emplace(kRequestClaimedPINKey, std::move(claimed_pin->pin_claim));
+    entry_map.emplace(kRequestWrappedPINDataKey,
+                      std::move(claimed_pin->wrapped_pin));
+  }
 
   return cbor::Value(entry_map);
 }
 
-cbor::Value BuildMakeCredentialCommand(scoped_refptr<JSONRequest> request,
-                                       std::vector<uint8_t> wrapped_secret) {
+cbor::Value BuildMakeCredentialCommand(
+    scoped_refptr<JSONRequest> request,
+    std::unique_ptr<ClaimedPIN> claimed_pin,
+    std::optional<std::vector<uint8_t>> wrapped_secret,
+    std::optional<std::vector<uint8_t>> secret) {
+  CHECK(wrapped_secret.has_value() ^ secret.has_value());
   cbor::Value::MapValue entry_map;
 
   entry_map.emplace(cbor::Value(kRequestCommandKey),
                     cbor::Value(kMakeCredentialCommandName));
   entry_map.emplace(cbor::Value(kRequestDataKey), toCbor(*request->value));
-  entry_map.emplace(cbor::Value(kMakeCredentialRequestWrappedSecretKey),
-                    cbor::Value(std::move(wrapped_secret)));
+  if (wrapped_secret.has_value()) {
+    entry_map.emplace(cbor::Value(kRequestWrappedSecretKey),
+                      cbor::Value(std::move(*wrapped_secret)));
+  } else {
+    entry_map.emplace(cbor::Value(kRequestSecretKey),
+                      cbor::Value(std::move(*secret)));
+  }
+  if (claimed_pin) {
+    entry_map.emplace(kRequestClaimedPINKey, std::move(claimed_pin->pin_claim));
+    entry_map.emplace(kRequestWrappedPINDataKey,
+                      std::move(claimed_pin->wrapped_pin));
+  }
 
   return cbor::Value(entry_map);
 }

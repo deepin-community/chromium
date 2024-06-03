@@ -15,7 +15,6 @@
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/crosapi/browser_loader.h"
-#include "chrome/browser/ash/crosapi/fake_device_ownership_waiter.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/fake_cros_component_manager.h"
@@ -32,6 +31,7 @@
 #include "components/account_id/account_id.h"
 #include "components/component_updater/mock_component_updater_service.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/fake_device_ownership_waiter.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager.h"
@@ -107,10 +107,12 @@ class BrowserManagerFake : public BrowserManager {
   void SetStatePublic(State state) { SetState(state); }
 
   void SimulateLacrosTermination() {
-    SetStatePublic(State::TERMINATING);
+    // Simulate termination triggered from Lacros.
+    SetStatePublic(State::WAITING_FOR_PROCESS_TERMINATED);
     if (browser_service_.has_value()) {
       OnBrowserServiceDisconnected(*crosapi_id_, browser_service_->mojo_id);
     }
+    crosapi_id_.reset();
     OnLacrosChromeTerminated();
   }
 
@@ -119,7 +121,7 @@ class BrowserManagerFake : public BrowserManager {
     SetStatePublic(State::STARTING);
     OnBrowserServiceConnected(*crosapi_id_,
                               mojo::RemoteSetElementId::FromUnsafeValue(70),
-                              browser_service, 70);
+                              browser_service, mojom::BrowserService::Version_);
   }
 
   // Make the State enum publicly available.
@@ -249,7 +251,7 @@ class BrowserManagerTest : public testing::Test {
     fake_browser_manager_->set_version_service_delegate_for_testing(
         std::move(version_service_delegate));
     fake_browser_manager_->set_device_ownership_waiter_for_testing(
-        std::make_unique<FakeDeviceOwnershipWaiter>());
+        std::make_unique<user_manager::FakeDeviceOwnershipWaiter>());
   }
 
   enum class UserType {
@@ -356,7 +358,7 @@ TEST_F(BrowserManagerTest, LacrosKeepAlive) {
   EXPECT_EQ(fake_browser_manager_->start_count(), 0);
 
   // Creating a ScopedKeepAlive does not start Lacros.
-  std::unique_ptr<BrowserManager::ScopedKeepAlive> keep_alive =
+  std::unique_ptr<BrowserManagerScopedKeepAlive> keep_alive =
       fake_browser_manager_->KeepAlive(BrowserManager::Feature::kTestOnly);
   EXPECT_EQ(fake_browser_manager_->start_count(), 0);
 
@@ -397,7 +399,7 @@ TEST_F(BrowserManagerTest, LacrosKeepAliveReloadsWhenUpdateAvailable) {
   version_service_delegate_->set_latest_lauchable_version(
       base::Version("1.0.0"));
 
-  std::unique_ptr<BrowserManager::ScopedKeepAlive> keep_alive =
+  std::unique_ptr<BrowserManagerScopedKeepAlive> keep_alive =
       fake_browser_manager_->KeepAlive(BrowserManager::Feature::kTestOnly);
 
   ExpectCallingLoad(browser_util::LacrosSelection::kStateful,
@@ -468,7 +470,7 @@ TEST_F(BrowserManagerTest, LacrosKeepAliveDoesNotBlockRestart) {
   EXPECT_EQ(fake_browser_manager_->start_count(), 0);
 
   // Creating a ScopedKeepAlive does not start Lacros.
-  std::unique_ptr<BrowserManager::ScopedKeepAlive> keep_alive =
+  std::unique_ptr<BrowserManagerScopedKeepAlive> keep_alive =
       fake_browser_manager_->KeepAlive(BrowserManager::Feature::kTestOnly);
   EXPECT_EQ(fake_browser_manager_->start_count(), 0);
 

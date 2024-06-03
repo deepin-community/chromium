@@ -7,9 +7,9 @@
 #include <algorithm>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_set.h"
 #include "base/i18n/case_conversion.h"
 #include "base/strings/string_split.h"
@@ -106,7 +106,7 @@ UsernameFieldData ComputeUsernameFieldData(
   UsernameFieldData field_data;
   field_data.input_element = input_element;
 
-  AppendValueAndShortTokens(field.name, &field_data.developer_value,
+  AppendValueAndShortTokens(field.name(), &field_data.developer_value,
                             &field_data.developer_short_tokens);
   AppendValueAndShortTokens(field.id_attribute, &field_data.developer_value,
                             &field_data.developer_short_tokens);
@@ -140,7 +140,7 @@ void InferUsernameFieldData(
         continue;
 
       // Find matching field data and web input element.
-      if (field_data.name == element_name) {
+      if (field_data.name() == element_name) {
         next_element_range_begin = i + 1;
         possible_usernames_data->push_back(
             ComputeUsernameFieldData(input_element, field_data));
@@ -201,7 +201,7 @@ void RemoveFieldsWithNegativeWords(
       kNegativeLatin, kNegativeLatinSize, kNegativeNonLatin,
       kNegativeNonLatinSize};
 
-  base::EraseIf(
+  std::erase_if(
       *possible_usernames_data, [](const UsernameFieldData& possible_username) {
         return ContainsWordFromCategory(possible_username, kNegativeCategory);
       });

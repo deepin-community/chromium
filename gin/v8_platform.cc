@@ -13,7 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/nonscannable_memory.h"
-#include "base/memory/raw_ptr.h"
+#include "base/memory/stack_allocated.h"
 #include "base/no_destructor.h"
 #include "base/system/sys_info.h"
 #include "base/task/post_job.h"
@@ -25,6 +25,7 @@
 #include "base/trace_event/trace_event.h"
 #include "base/tracing_buildflags.h"
 #include "build/build_config.h"
+#include "gin/converter.h"
 #include "gin/per_isolate_data.h"
 #include "gin/thread_isolation.h"
 #include "gin/v8_platform_thread_isolated_allocator.h"
@@ -136,12 +137,9 @@ base::TaskPriority ToBaseTaskPriority(v8::TaskPriority priority) {
   }
 }
 
-base::Location ToBaseLocation(const v8::SourceLocation& location) {
-  return base::Location::Current(location.Function(), location.FileName(),
-                                 location.Line());
-}
-
 class JobDelegateImpl : public v8::JobDelegate {
+  STACK_ALLOCATED();
+
  public:
   explicit JobDelegateImpl(base::JobDelegate* delegate) : delegate_(delegate) {}
   JobDelegateImpl() = default;
@@ -158,7 +156,7 @@ class JobDelegateImpl : public v8::JobDelegate {
   bool IsJoiningThread() const override { return delegate_->IsJoiningThread(); }
 
  private:
-  raw_ptr<base::JobDelegate> delegate_;
+  base::JobDelegate* delegate_ = nullptr;
 };
 
 class JobHandleImpl : public v8::JobHandle {
@@ -397,7 +395,7 @@ void V8Platform::PostTaskOnWorkerThreadImpl(
     v8::TaskPriority priority,
     std::unique_ptr<v8::Task> task,
     const v8::SourceLocation& location) {
-  base::ThreadPool::PostTask(ToBaseLocation(location),
+  base::ThreadPool::PostTask(V8ToBaseLocation(location),
                              {ToBaseTaskPriority(priority)},
                              base::BindOnce(&v8::Task::Run, std::move(task)));
 }
@@ -408,7 +406,7 @@ void V8Platform::PostDelayedTaskOnWorkerThreadImpl(
     double delay_in_seconds,
     const v8::SourceLocation& location) {
   base::ThreadPool::PostDelayedTask(
-      ToBaseLocation(location), {ToBaseTaskPriority(priority)},
+      V8ToBaseLocation(location), {ToBaseTaskPriority(priority)},
       base::BindOnce(&v8::Task::Run, std::move(task)),
       base::Seconds(delay_in_seconds));
 }
@@ -421,7 +419,7 @@ std::unique_ptr<v8::JobHandle> V8Platform::CreateJobImpl(
   // |max_concurrency_callback| uses an unretained pointer.
   auto* job_task_ptr = job_task.get();
   auto handle = base::CreateJob(
-      ToBaseLocation(location),
+      V8ToBaseLocation(location),
       {ToBaseTaskPriority(priority), base::ThreadPolicy::PREFER_BACKGROUND},
       base::BindRepeating(
           [](const std::unique_ptr<v8::JobTask>& job_task,

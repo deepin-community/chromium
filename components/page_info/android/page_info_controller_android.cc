@@ -83,7 +83,7 @@ void PageInfoControllerAndroid::RecordPageInfoAction(
     const JavaParamRef<jobject>& obj,
     jint action) {
   presenter_->RecordPageInfoAction(
-      static_cast<PageInfo::PageInfoAction>(action));
+      static_cast<page_info::PageInfoAction>(action));
 }
 
 void PageInfoControllerAndroid::UpdatePermissions(
@@ -147,10 +147,7 @@ void PageInfoControllerAndroid::SetPermissionInfo(
     permissions_to_display.push_back(
         ContentSettingsType::FEDERATED_IDENTITY_API);
   }
-  if (base::FeatureList::IsEnabled(
-          permissions::features::kPermissionStorageAccessAPI)) {
     permissions_to_display.push_back(ContentSettingsType::STORAGE_ACCESS);
-  }
 
   std::map<ContentSettingsType, ContentSetting>
       user_specified_settings_to_display;
@@ -228,7 +225,7 @@ std::optional<ContentSetting> PageInfoControllerAndroid::GetSettingToDisplay(
   // factory-default after we add the functionality to populate the permissions
   // subpage directly from the permissions returned from this controller.
 
-  return std::optional<ContentSetting>();
+  return std::nullopt;
 }
 
 void PageInfoControllerAndroid::SetAdPersonalizationInfo(

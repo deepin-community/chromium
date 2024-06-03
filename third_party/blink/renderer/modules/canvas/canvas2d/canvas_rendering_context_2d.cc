@@ -674,7 +674,7 @@ void CanvasRenderingContext2D::drawFormattedText(
     Draw<OverdrawOp::kNone>(
         [&recording](cc::PaintCanvas* c,
                      const cc::PaintFlags* flags)  // draw lambda
-        { c->drawPicture(std::move(recording)); },
+        { c->drawPicture(recording); },
         [](const SkIRect& rect) { return false; }, bounds,
         CanvasRenderingContext2DState::PaintType::kFillPaintType,
         CanvasRenderingContext2DState::kNoImage,
@@ -780,7 +780,8 @@ void CanvasRenderingContext2D::DrawFocusRing(const Path& path,
       color_scheme = style->UsedColorScheme();
   }
 
-  SkColor color = LayoutTheme::GetTheme().FocusRingColor(color_scheme).Rgb();
+  const SkColor4f color =
+      LayoutTheme::GetTheme().FocusRingColor(color_scheme).toSkColor4f();
   const int kFocusRingWidth = 5;
   DrawPlatformFocusRing(path.GetSkPath(), GetPaintCanvas(), color,
                         /*width=*/kFocusRingWidth,

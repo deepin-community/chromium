@@ -20,13 +20,17 @@
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
+#include "components/autofill/core/browser/filling_product.h"
 #include "components/autofill/core/browser/ui/autofill_resource_utils.h"
+#include "components/autofill/core/browser/ui/popup_item_ids.h"
 #include "components/autofill/core/browser/ui/suggestion.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "ui/color/color_id.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/controls/throbber.h"
 #include "ui/views/style/typography.h"
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #include "components/plus_addresses/resources/vector_icons.h"
@@ -64,7 +68,7 @@ constexpr int kAutofillPopupAdditionalDoubleRowHeight = 22;
 constexpr int kAutofillPopupAdditionalDoubleRowHeightNewStyle = 16;
 
 // The additional padding of the row in case it has three lines of text.
-constexpr int kAutofillPopupAdditionalPadding = 16;
+constexpr int kAutofillPopupAdditionalVerticalPadding = 16;
 
 // Vertical spacing between labels in one row.
 constexpr int kAdjacentLabelsVerticalSpacing = 2;
@@ -76,6 +80,9 @@ constexpr int kGooglePasswordManagerIconSize = 20;
 // Metric to measure the duration of getting the image for the Autofill pop-up.
 constexpr char kHistogramGetImageViewByName[] =
     "Autofill.PopupGetImageViewTime";
+
+// The opacity for grayed-out disabled views.
+constexpr double kGrayedOutOpacity = 0.38;
 
 // Returns the name of the network for payment method icons, empty string
 // otherwise.
@@ -278,6 +285,10 @@ std::u16string GetVoiceOverStringFromSuggestion(const Suggestion& suggestion) {
   return base::JoinString(text, u" ");
 }
 
+// TODO(b/330912574): Refactor this code that is today confusing. Horizontal
+// margins are being set both here and in the popup row. Furthermore, there is a
+// `PopupBaseView::GetHorizontalMargin()` that makes things even more
+// complicated.
 gfx::Insets GetMarginsForContentCell(bool has_control_element) {
   int left_margin = PopupBaseView::GetHorizontalMargin();
   int right_margin = left_margin;
@@ -453,12 +464,25 @@ void AddSuggestionContentToView(
   // If there are three rows in total, add extra padding to avoid cramming.
   DCHECK_LE(subtext_views.size(), 2u);
   if (subtext_views.size() == 2u) {
-    layout.set_inside_border_insets(gfx::Insets::VH(
-        kAutofillPopupAdditionalPadding, PopupBaseView::GetHorizontalMargin()));
+    layout.set_inside_border_insets(
+        gfx::Insets::TLBR(kAutofillPopupAdditionalVerticalPadding,
+                          layout.inside_border_insets().left(),
+                          kAutofillPopupAdditionalVerticalPadding,
+                          layout.inside_border_insets().right()));
   }
 
   // The leading icon.
-  if (std::unique_ptr<views::ImageView> icon = GetIconImageView(suggestion)) {
+  if (suggestion.is_loading) {
+    content_view.AddChildView(std::make_unique<views::Throbber>())->Start();
+    AddSpacerWithSize(content_view, layout,
+                      PopupBaseView::GetHorizontalPadding(),
+                      /*resize=*/false);
+    content_view.SetEnabled(false);
+  } else if (std::unique_ptr<views::ImageView> icon =
+                 GetIconImageView(suggestion)) {
+    if (suggestion.apply_deactivated_style) {
+      ApplyDeactivatedStyle(*icon);
+    }
     content_view.AddChildView(std::move(icon));
     AddSpacerWithSize(content_view, layout,
                       PopupBaseView::GetHorizontalPadding(),
@@ -514,35 +538,40 @@ void FormatLabel(views::Label& label,
 }
 
 // Creates a label for the suggestion's main text.
-std::unique_ptr<views::Label> CreateMainTextLabel(
-    const Suggestion::Text& main_text,
-    int primary_text_style) {
+std::unique_ptr<views::Label> CreateMainTextLabel(const Suggestion& suggestion,
+                                                  int primary_text_style) {
   int non_primary_text_style = ShouldApplyNewAutofillPopupStyle()
                                    ? views::style::TextStyle::STYLE_BODY_3
                                    : views::style::TextStyle::STYLE_PRIMARY;
   auto label = std::make_unique<views::Label>(
-      main_text.value, views::style::CONTEXT_DIALOG_BODY_TEXT,
-      main_text.is_primary ? primary_text_style : non_primary_text_style);
+      suggestion.main_text.value, views::style::CONTEXT_DIALOG_BODY_TEXT,
+      suggestion.main_text.is_primary ? primary_text_style
+                                      : non_primary_text_style);
 
-  if (!main_text.is_primary && ShouldApplyNewAutofillPopupStyle()) {
+  if (!suggestion.main_text.is_primary && ShouldApplyNewAutofillPopupStyle()) {
     label->SetEnabledColorId(ui::kColorLabelForegroundSecondary);
   }
-
+  if (suggestion.apply_deactivated_style) {
+    ApplyDeactivatedStyle(*label);
+  }
   return label;
 }
 
 // Creates a label for the suggestion's minor text.
 std::unique_ptr<views::Label> CreateMinorTextLabel(
-    const Suggestion::Text& minor_text) {
-  if (minor_text.value.empty()) {
+    const Suggestion& suggestion) {
+  if (suggestion.minor_text.value.empty()) {
     return nullptr;
   }
 
   auto label = std::make_unique<views::Label>(
-      minor_text.value, views::style::CONTEXT_DIALOG_BODY_TEXT,
+      suggestion.minor_text.value, views::style::CONTEXT_DIALOG_BODY_TEXT,
       GetSecondaryTextStyle());
   if (ShouldApplyNewAutofillPopupStyle()) {
     label->SetEnabledColorId(ui::kColorLabelForegroundSecondary);
+  }
+  if (suggestion.apply_deactivated_style) {
+    ApplyDeactivatedStyle(*label);
   }
   return label;
 }
@@ -613,6 +642,20 @@ std::unique_ptr<views::ImageView> ImageViewFromVectorIcon(
     int icon_size = kIconSize) {
   return std::make_unique<views::ImageView>(
       ui::ImageModel::FromVectorIcon(vector_icon, ui::kColorIcon, icon_size));
+}
+
+void ApplyDeactivatedStyle(views::View& view) {
+  view.SetPaintToLayer();
+  view.layer()->SetOpacity(kGrayedOutOpacity);
+}
+
+const gfx::VectorIcon& GetExpandableMenuIcon(PopupItemId popup_item_id) {
+  CHECK(IsExpandablePopupItemId(popup_item_id));
+  // Only compose suggestions have a different expandable icon.
+  return GetFillingProductFromPopupItemId(popup_item_id) ==
+                 FillingProduct::kCompose
+             ? kBrowserToolsChromeRefreshIcon
+             : vector_icons::kSubmenuArrowChromeRefreshIcon;
 }
 
 }  // namespace autofill::popup_cell_utils

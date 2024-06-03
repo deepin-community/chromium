@@ -10,10 +10,11 @@
 
 #include <algorithm>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxge/dib/blend.h"
 #include "core/fxge/dib/fx_dib.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 using fxge::Blend;
 
@@ -24,17 +25,11 @@ using fxge::Blend;
 
 namespace {
 
-struct RGB {
-  int red;
-  int green;
-  int blue;
-};
-
-int Lum(RGB color) {
+int Lum(FX_RGB<int> color) {
   return (color.red * 30 + color.green * 59 + color.blue * 11) / 100;
 }
 
-RGB ClipColor(RGB color) {
+FX_RGB<int> ClipColor(FX_RGB<int> color) {
   int l = Lum(color);
   int n = std::min(color.red, std::min(color.green, color.blue));
   int x = std::max(color.red, std::max(color.green, color.blue));
@@ -51,7 +46,7 @@ RGB ClipColor(RGB color) {
   return color;
 }
 
-RGB SetLum(RGB color, int l) {
+FX_RGB<int> SetLum(FX_RGB<int> color, int l) {
   int d = l - Lum(color);
   color.red += d;
   color.green += d;
@@ -59,16 +54,16 @@ RGB SetLum(RGB color, int l) {
   return ClipColor(color);
 }
 
-int Sat(RGB color) {
+int Sat(FX_RGB<int> color) {
   return std::max(color.red, std::max(color.green, color.blue)) -
          std::min(color.red, std::min(color.green, color.blue));
 }
 
-RGB SetSat(RGB color, int s) {
+FX_RGB<int> SetSat(FX_RGB<int> color, int s) {
   int min = std::min(color.red, std::min(color.green, color.blue));
   int max = std::max(color.red, std::max(color.green, color.blue));
   if (min == max)
-    return {0, 0, 0};
+    return {};
 
   color.red = (color.red - min) * s / (max - min);
   color.green = (color.green - min) * s / (max - min);
@@ -80,15 +75,11 @@ void RGB_Blend(BlendMode blend_mode,
                const uint8_t* src_scan,
                const uint8_t* dest_scan,
                int results[3]) {
-  RGB result = {0, 0, 0};
-  RGB src;
-  src.red = src_scan[2];
-  src.green = src_scan[1];
-  src.blue = src_scan[0];
-  RGB back;
-  back.red = dest_scan[2];
-  back.green = dest_scan[1];
-  back.blue = dest_scan[0];
+  FX_RGB<int> result = {};
+  FX_RGB<int> src = {
+      .red = src_scan[2], .green = src_scan[1], .blue = src_scan[0]};
+  FX_RGB<int> back = {
+      .red = dest_scan[2], .green = dest_scan[1], .blue = dest_scan[0]};
   switch (blend_mode) {
     case BlendMode::kHue:
       result = SetLum(SetSat(src, Sat(back)), Lum(back));
@@ -2540,7 +2531,9 @@ pdfium::span<uint8_t> CFX_ScanlineCompositor::Palette::Make8BitPalette(
   m_Width = sizeof(uint8_t);
   m_nElements = nElements;
   m_pData.reset(reinterpret_cast<uint32_t*>(FX_Alloc(uint8_t, m_nElements)));
-  return {reinterpret_cast<uint8_t*>(m_pData.get()), m_nElements};
+  // SAFETY: `m_nElements` passed to FX_Alloc() of type uint8_t.
+  return UNSAFE_BUFFERS(pdfium::make_span(
+      reinterpret_cast<uint8_t*>(m_pData.get()), m_nElements));
 }
 
 pdfium::span<uint32_t> CFX_ScanlineCompositor::Palette::Make32BitPalette(
@@ -2548,17 +2541,23 @@ pdfium::span<uint32_t> CFX_ScanlineCompositor::Palette::Make32BitPalette(
   m_Width = sizeof(uint32_t);
   m_nElements = nElements;
   m_pData.reset(FX_Alloc(uint32_t, m_nElements));
-  return {m_pData.get(), m_nElements};
+  // SAFETY: `m_nElements` passed to FX_Alloc() of type uint32_t.
+  return UNSAFE_BUFFERS(pdfium::make_span(m_pData.get(), m_nElements));
 }
 
 pdfium::span<const uint8_t> CFX_ScanlineCompositor::Palette::Get8BitPalette()
     const {
   CHECK(!m_pData || m_Width == sizeof(uint8_t));
-  return {reinterpret_cast<const uint8_t*>(m_pData.get()), m_nElements};
+  // SAFETY: `m_Width` only set to sizeof(uint8_t) just prior to passing
+  // `m_nElements` to FX_Alloc() of type uint8_t.
+  return UNSAFE_BUFFERS(pdfium::make_span(
+      reinterpret_cast<const uint8_t*>(m_pData.get()), m_nElements));
 }
 
 pdfium::span<const uint32_t> CFX_ScanlineCompositor::Palette::Get32BitPalette()
     const {
   CHECK(!m_pData || m_Width == sizeof(uint32_t));
-  return {m_pData.get(), m_nElements};
+  // SAFETY: `m_Width` only set to sizeof(uint32_t) just prior to passing
+  // `m_nElements` to FX_Alloc() of type uint32_t.
+  return UNSAFE_BUFFERS(pdfium::make_span(m_pData.get(), m_nElements));
 }

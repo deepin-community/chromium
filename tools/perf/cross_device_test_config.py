@@ -27,6 +27,9 @@ TARGET_DEVICES = {
         'speedometer2': {
             'Speedometer2': 3,
         },
+        'speedometer3': {
+            'Speedometer3': 3,
+        },
         'rendering.mobile': {
             'css_transitions_triggered_style_element': 4,
             'canvas_animation_no_clear': 4
@@ -42,6 +45,9 @@ TARGET_DEVICES = {
         'speedometer2': {
             'Speedometer2': 10,
         },
+        'speedometer3': {
+            'Speedometer3': 10,
+        },
     },
     'android-go-wembley-perf': {
         'jetstream2': {
@@ -56,6 +62,9 @@ TARGET_DEVICES = {
         'speedometer2': {
             'Speedometer2': 10,
         },
+        'speedometer3': {
+            'Speedometer3': 10,
+        },
     },
     'android-pixel4-perf': {
         'jetstream2': {
@@ -64,6 +73,9 @@ TARGET_DEVICES = {
         'speedometer2': {
             'Speedometer2': 20,
         },
+        'speedometer3': {
+            'Speedometer3': 20,
+        },
     },
     'android-pixel4_webview-perf': {
         'jetstream2': {
@@ -71,6 +83,31 @@ TARGET_DEVICES = {
         },
         'speedometer2': {
             'Speedometer2': 20,
+        },
+        'speedometer3': {
+            'Speedometer3': 20,
+        },
+    },
+    'android-pixel6-perf': {
+        'jetstream2': {
+            'JetStream2': 5,
+        },
+        'speedometer2': {
+            'Speedometer2': 20,
+        },
+        'speedometer3': {
+            'Speedometer3': 20,
+        },
+    },
+    'android-pixel6-perf-pgo': {
+        'jetstream2': {
+            'JetStream2': 5,
+        },
+        'speedometer2': {
+            'Speedometer2': 20,
+        },
+        'speedometer3': {
+            'Speedometer3': 20,
         },
     },
     'linux-perf': {
@@ -92,6 +129,18 @@ TARGET_DEVICES = {
         'speedometer2-nominorms': {
             'Speedometer2': 20,
         },
+        'speedometer2-predictable': {
+            'Speedometer2': 20,
+        },
+        'speedometer3': {
+            'Speedometer3': 20,
+        },
+        'speedometer3-nominorms': {
+            'Speedometer3': 20,
+        },
+        'speedometer3-predictable': {
+            'Speedometer3': 20,
+        },
     },
     'win-10_laptop_low_end-perf': {
         'jetstream2': {
@@ -99,6 +148,9 @@ TARGET_DEVICES = {
         },
         'speedometer2': {
             'Speedometer2': 20,
+        },
+        'speedometer3': {
+            'Speedometer3': 20,
         },
     },
     'win-10-perf': {
@@ -114,6 +166,9 @@ TARGET_DEVICES = {
         'speedometer2': {
             'Speedometer2': 20,
         },
+        'speedometer3': {
+            'Speedometer3': 20,
+        },
     },
     'win-11-perf': {
         'jetstream2': {
@@ -128,6 +183,9 @@ TARGET_DEVICES = {
         'speedometer2': {
             'Speedometer2': 20,
         },
+        'speedometer3': {
+            'Speedometer3': 20,
+        },
     },
     'linux-perf-calibration': {
         'jetstream2': {
@@ -135,6 +193,9 @@ TARGET_DEVICES = {
         },
         'speedometer2': {
             'Speedometer2': 28,
+        },
+        'speedometer3': {
+            'Speedometer3': 28,
         },
         'blink_perf.shadow_dom': 31
     },
@@ -144,6 +205,9 @@ TARGET_DEVICES = {
         },
         'speedometer2': {
             'Speedometer2': 20,
+        },
+        'speedometer3': {
+            'Speedometer3': 20,
         },
     },
     'mac-m1_mini_2020-perf': {

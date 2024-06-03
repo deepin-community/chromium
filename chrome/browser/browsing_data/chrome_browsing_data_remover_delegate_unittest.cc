@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -53,6 +54,8 @@
 #include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/download/download_core_service_impl.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
+#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/language/url_language_histogram_factory.h"
 #include "chrome/browser/media/webrtc/media_device_salt_service_factory.h"
@@ -76,9 +79,10 @@
 #include "chrome/browser/storage/durable_storage_permission_context.h"
 #include "chrome/browser/subresource_filter/subresource_filter_profile_context_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
+#include "chrome/browser/tpcd/metadata/manager_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/trusted_vault/trusted_vault_service_factory.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/browser/webid/federated_identity_permission_context.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_features.h"
@@ -151,6 +155,10 @@
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/site_isolation/pref_names.h"
 #include "components/sync/test/test_sync_service.h"
+#include "components/tpcd/metadata/manager.h"
+#include "components/tpcd/metadata/parser.h"
+#include "components/tpcd/metadata/parser_test_helper.h"
+#include "components/tpcd/metadata/prefs.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/background_tracing_manager.h"
 #include "content/public/browser/browser_context.h"
@@ -166,6 +174,7 @@
 #include "content/public/test/mock_download_manager.h"
 #include "content/public/test/test_utils.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "net/base/features.h"
 #include "net/base/isolation_info.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/cookies/canonical_cookie.h"
@@ -350,9 +359,8 @@ class RemoveCookieTester {
 
   void AddCookie() {
     base::RunLoop run_loop;
-    auto cookie = net::CanonicalCookie::Create(
-        cookie_url_, "A=1", base::Time::Now(), std::nullopt /* server_time */,
-        std::nullopt /* cookie_partition_key */);
+    auto cookie = net::CanonicalCookie::CreateForTesting(cookie_url_, "A=1",
+                                                         base::Time::Now());
     cookie_manager_->SetCanonicalCookie(
         *cookie, cookie_url_, net::CookieOptions::MakeAllInclusive(),
         base::BindLambdaForTesting([&](net::CookieAccessResult result) {
@@ -752,6 +760,41 @@ class RemovePermissionPromptCountsTest {
   raw_ptr<permissions::PermissionDecisionAutoBlocker> autoblocker_;
 };
 
+class RemoveTpcdMetadataCohortsTester {
+ public:
+  explicit RemoveTpcdMetadataCohortsTester(TestingProfile* profile) {
+    det_generator_ = new tpcd::metadata::DeterministicGenerator();
+    tpcd::metadata::RegisterLocalStatePrefs(local_state_.registry());
+    manager_ = tpcd::metadata::ManagerFactory::GetForProfile(profile);
+    manager_->SetRandGeneratorForTesting(det_generator_);
+    manager_->SetPrefServiceForTesting(&local_state_);
+  }
+  ~RemoveTpcdMetadataCohortsTester() {
+    det_generator_ = nullptr;
+    manager_ = nullptr;
+  }
+
+  RemoveTpcdMetadataCohortsTester(const RemoveTpcdMetadataCohortsTester&) =
+      delete;
+  RemoveTpcdMetadataCohortsTester& operator=(
+      const RemoveTpcdMetadataCohortsTester&) = delete;
+
+  tpcd::metadata::Parser* GetParser() {
+    return tpcd::metadata::Parser::GetInstance();
+  }
+
+  tpcd::metadata::Manager* GetManager() { return manager_; }
+
+  tpcd::metadata::DeterministicGenerator* GetDetGenerator() {
+    return det_generator_;
+  }
+
+ private:
+  raw_ptr<tpcd::metadata::Manager> manager_;
+  raw_ptr<tpcd::metadata::DeterministicGenerator> det_generator_;
+  TestingPrefServiceSimple local_state_;
+};
+
 // Custom matcher to test the equivalence of two URL filters. Since those are
 // blackbox predicates, we can only approximate the equivalence by testing
 // whether the filter give the same answer for several URLs. This is currently
@@ -893,7 +936,7 @@ class RemoveAutofillTester {
   void AddProfileAndCard() {
     personal_data_manager_->AddProfile(autofill::test::GetFullProfile());
     personal_data_manager_->AddCreditCard(autofill::test::GetCreditCard());
-    autofill::PersonalDataProfileTaskWaiter(*personal_data_manager_).Wait();
+    autofill::PersonalDataChangedWaiter(*personal_data_manager_).Wait();
   }
 
  private:
@@ -2687,6 +2730,7 @@ TEST_F(ChromeBrowsingDataRemoverDelegateWithPasswordsTest,
   filter->SetCookiePartitionKeyCollection(net::CookiePartitionKeyCollection(
       net::CookiePartitionKey::FromURLForTesting(
           GURL("https://notcookie.com"))));
+  filter->SetPartitionedCookiesOnly(true);
   EXPECT_CALL(*profile_password_store(), DisableAutoSignInForOrigins).Times(0);
   BlockUntilOriginDataRemoved(base::Time(), base::Time::Max(),
                               content::BrowsingDataRemover::DATA_TYPE_COOKIES,
@@ -4160,6 +4204,45 @@ TEST_F(ChromeBrowsingDataRemoverDelegateTest,
   ASSERT_FALSE(token.has_token_value());
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(ChromeBrowsingDataRemoverDelegateTest,
+       RevokeActiveFileSystemPermission) {
+  ChromeFileSystemAccessPermissionContext* context =
+      FileSystemAccessPermissionContextFactory::GetForProfile(GetProfile());
+
+  auto kTestOrigin1 = url::Origin::Create(GURL("https://a.com"));
+  auto kTestOrigin2 = url::Origin::Create(GURL("https://b.com"));
+
+  const base::FilePath kTestPath1 = base::FilePath(FILE_PATH_LITERAL("/a/b"));
+  const base::FilePath kTestPath2 = base::FilePath(FILE_PATH_LITERAL("/a/c"));
+
+  // Populate the `grants` object with permissions.
+  auto origin1_file_read_grant =
+      context->GetExtendedReadPermissionGrantForTesting(
+          kTestOrigin1, kTestPath1,
+          ChromeFileSystemAccessPermissionContext::HandleType::kFile);
+  auto origin2_file_read_grant =
+      context->GetExtendedReadPermissionGrantForTesting(
+          kTestOrigin2, kTestPath2,
+          ChromeFileSystemAccessPermissionContext::HandleType::kFile);
+
+  EXPECT_EQ(
+      origin1_file_read_grant->GetStatus(),
+      content::FileSystemAccessPermissionGrant::PermissionStatus::GRANTED);
+  EXPECT_EQ(
+      origin2_file_read_grant->GetStatus(),
+      content::FileSystemAccessPermissionGrant::PermissionStatus::GRANTED);
+
+  BlockUntilBrowsingDataRemoved(base::Time(), base::Time::Max(),
+                                constants::DATA_TYPE_CONTENT_SETTINGS, false);
+
+  EXPECT_EQ(origin1_file_read_grant->GetStatus(),
+            content::FileSystemAccessPermissionGrant::PermissionStatus::ASK);
+  EXPECT_EQ(origin2_file_read_grant->GetStatus(),
+            content::FileSystemAccessPermissionGrant::PermissionStatus::ASK);
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
 class ChromeBrowsingDataRemoverDelegateOriginTrialsTest
     : public ChromeBrowsingDataRemoverDelegateTest {
  public:
@@ -4347,4 +4430,166 @@ TEST_F(ChromeBrowsingDataRemoverDelegateMediaDeviceSaltTest,
   EXPECT_NE(salt1c, salt1b);
   EXPECT_EQ(salt2c, salt2b);
   EXPECT_EQ(salt3c, salt3b);
+}
+
+class ChromeBrowsingDataRemoverDelegateTpcdMetadataTest
+    : public ChromeBrowsingDataRemoverDelegateTest {
+ public:
+  ChromeBrowsingDataRemoverDelegateTpcdMetadataTest() {
+    feature_list_.InitWithFeatures({net::features::kTpcdMetadataStagedRollback},
+                                   {});
+  }
+};
+
+TEST_F(ChromeBrowsingDataRemoverDelegateTpcdMetadataTest, ResetAllCohorts) {
+  auto tester = RemoveTpcdMetadataCohortsTester(GetProfile());
+
+  const std::string primary_pattern_spec = "https://example1.com";
+  const std::string primary_pattern_spec_2 = "https://example2.com";
+  const std::string secondary_pattern_spec = "https://example3.com";
+
+  // dtrp is arbitrary here, selected between (0,100).
+  const uint32_t dtrp = 10;
+  tpcd::metadata::Metadata metadata;
+  tpcd::metadata::helpers::AddEntryToMetadata(
+      metadata, primary_pattern_spec, secondary_pattern_spec,
+      tpcd::metadata::Parser::kSource1pDt, dtrp);
+  tpcd::metadata::helpers::AddEntryToMetadata(
+      metadata, primary_pattern_spec_2, secondary_pattern_spec,
+      tpcd::metadata::Parser::kSource1pDt, dtrp);
+
+  // Establish grant with deterministic cohorts.
+  {
+    // rand is set as-is here to guarantee GRACE_PERIOD_FORCED_ON.
+    uint32_t rand = dtrp + 1;
+    tester.GetDetGenerator()->set_rand(rand);
+
+    tester.GetParser()->ParseMetadata(metadata.SerializeAsString());
+
+    EXPECT_EQ(
+        tester.GetManager()
+            ->GetGrants()
+            .front()
+            .metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+    EXPECT_EQ(
+        tester.GetManager()->GetGrants().back().metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+  }
+
+  // Make sure the cohorts are persisted.
+  {
+    // rand is set as-is here to guarantee GRACE_PERIOD_FORCED_OFF.
+    uint32_t rand = dtrp;
+    tester.GetDetGenerator()->set_rand(rand);
+
+    tester.GetParser()->ParseMetadata(metadata.SerializeAsString());
+
+    EXPECT_EQ(
+        tester.GetManager()
+            ->GetGrants()
+            .front()
+            .metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+    EXPECT_EQ(
+        tester.GetManager()->GetGrants().back().metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+  }
+
+  // Apply deletion of cookies.
+  BlockUntilBrowsingDataRemoved(base::Time(), base::Time::Max(),
+                                content::BrowsingDataRemover::DATA_TYPE_COOKIES,
+                                false);
+
+  // Make sure the cohorts were reset.
+  {
+    EXPECT_EQ(
+        tester.GetManager()
+            ->GetGrants()
+            .front()
+            .metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_OFF);
+    EXPECT_EQ(
+        tester.GetManager()->GetGrants().back().metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_OFF);
+  }
+}
+
+TEST_F(ChromeBrowsingDataRemoverDelegateTpcdMetadataTest, ResetAllCohort_PreserveMode) {
+  auto tester = RemoveTpcdMetadataCohortsTester(GetProfile());
+
+  const std::string primary_pattern_spec = "https://example1.com";
+  const std::string primary_pattern_spec_2 = "https://example2.com";
+  const std::string secondary_pattern_spec = "https://example3.com";
+
+  // dtrp is arbitrary here, selected between (0,100).
+  const uint32_t dtrp = 10;
+  tpcd::metadata::Metadata metadata;
+  tpcd::metadata::helpers::AddEntryToMetadata(
+      metadata, primary_pattern_spec, secondary_pattern_spec,
+      tpcd::metadata::Parser::kSource1pDt, dtrp);
+  tpcd::metadata::helpers::AddEntryToMetadata(
+      metadata, primary_pattern_spec_2, secondary_pattern_spec,
+      tpcd::metadata::Parser::kSource1pDt, dtrp);
+
+  // Establish grant with deterministic cohorts.
+  {
+    // rand is set as-is here to guarantee GRACE_PERIOD_FORCED_ON.
+    uint32_t rand = dtrp + 1;
+    tester.GetDetGenerator()->set_rand(rand);
+
+    tester.GetParser()->ParseMetadata(metadata.SerializeAsString());
+
+    EXPECT_EQ(
+        tester.GetManager()
+            ->GetGrants()
+            .front()
+            .metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+    EXPECT_EQ(
+        tester.GetManager()->GetGrants().back().metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+  }
+
+  // Make sure the cohorts are persisted.
+  {
+    // rand is set as-is here to guarantee GRACE_PERIOD_FORCED_OFF.
+    uint32_t rand = dtrp;
+    tester.GetDetGenerator()->set_rand(rand);
+
+    tester.GetParser()->ParseMetadata(metadata.SerializeAsString());
+
+    EXPECT_EQ(
+        tester.GetManager()
+            ->GetGrants()
+            .front()
+            .metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+    EXPECT_EQ(
+        tester.GetManager()->GetGrants().back().metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_ON);
+  }
+
+  // Apply deletion of cookies with preservation of select URL.
+  // NOTE: This is still expected to reset all cohorts.
+  std::unique_ptr<BrowsingDataFilterBuilder> filter(
+      BrowsingDataFilterBuilder::Create(
+          BrowsingDataFilterBuilder::Mode::kPreserve));
+  filter->AddRegisterableDomain(GURL(primary_pattern_spec).host());
+  BlockUntilOriginDataRemoved(base::Time(), base::Time::Max(),
+                              content::BrowsingDataRemover::DATA_TYPE_COOKIES,
+                              std::move(filter));
+
+  // Make sure both cohorts were reset.
+  {
+    EXPECT_EQ(
+        tester.GetManager()
+            ->GetGrants()
+            .front()
+            .metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_OFF);
+    EXPECT_EQ(
+        tester.GetManager()->GetGrants().back().metadata.tpcd_metadata_cohort(),
+        content_settings::mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_OFF);
+  }
 }

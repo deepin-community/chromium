@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/check_op.h"
@@ -20,7 +21,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -81,6 +81,7 @@
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -771,8 +772,8 @@ class ProfileNetworkContextTrustTokensBrowsertest
   }
 
   void ProvideRequestHandlerKeyCommitmentsToNetworkService(
-      base::StringPiece host) {
-    base::flat_map<url::Origin, base::StringPiece> origins_and_commitments;
+      std::string_view host) {
+    base::flat_map<url::Origin, std::string_view> origins_and_commitments;
     std::string key_commitments = request_handler_.GetKeyCommitmentRecord();
 
     GURL::Replacements replacements;
@@ -876,68 +877,4 @@ IN_PROC_BROWSER_TEST_F(ProfileNetworkContextTrustTokensBrowsertest,
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
   EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   EXPECT_EQ(false, EvalJs(GetActiveWebContents(), command));
-}
-
-class ProfileNetworkContextServiceResourceBlocklistBrowsertest
-    : public ProfileNetworkContextServiceBrowsertest {
- public:
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::
-            kEnableNetworkServiceResourceBlockListIfThirdPartyCookiesBlocked);
-    ProfileNetworkContextServiceBrowsertest::SetUp();
-  }
-
-  content::WebContents* GetActiveWebContents() {
-    return chrome_test_utils::GetActiveWebContents(this);
-  }
-
-  PrefService* GetPrefs() {
-    return user_prefs::UserPrefs::Get(
-        GetActiveWebContents()->GetBrowserContext());
-  }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// Test that with
-// kEnableNetworkServiceResourceBlockListIfThirdPartyCookiesBlocked enabled, the
-// anti-fingerprinting blocklist is not enabled if third party cookies are
-// allowed.
-IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceResourceBlocklistBrowsertest,
-                       ThirdPartyCookiesAllowed) {
-  ProfileNetworkContextService* profile_network_context_service =
-      ProfileNetworkContextServiceFactory::GetForContext(browser()->profile());
-  base::FilePath empty_relative_partition_path;
-  network::mojom::NetworkContextParams network_context_params;
-  cert_verifier::mojom::CertVerifierCreationParams
-      cert_verifier_creation_params;
-  profile_network_context_service->ConfigureNetworkContextParams(
-      /*in_memory=*/false, empty_relative_partition_path,
-      &network_context_params, &cert_verifier_creation_params);
-
-  EXPECT_FALSE(network_context_params.afp_block_list_experiment_enabled);
-}
-
-// Test that with
-// kEnableNetworkServiceResourceBlockListIfThirdPartyCookiesBlocked enabled, the
-// anti-fingerprinting blocklist is enabled if third party cookies are blocked.
-IN_PROC_BROWSER_TEST_F(ProfileNetworkContextServiceResourceBlocklistBrowsertest,
-                       ThirdPartyCookiesBlocked) {
-  GetPrefs()->SetInteger(
-      prefs::kCookieControlsMode,
-      static_cast<int>(content_settings::CookieControlsMode::kBlockThirdParty));
-
-  ProfileNetworkContextService* profile_network_context_service =
-      ProfileNetworkContextServiceFactory::GetForContext(browser()->profile());
-  base::FilePath empty_relative_partition_path;
-  network::mojom::NetworkContextParams network_context_params;
-  cert_verifier::mojom::CertVerifierCreationParams
-      cert_verifier_creation_params;
-  profile_network_context_service->ConfigureNetworkContextParams(
-      /*in_memory=*/false, empty_relative_partition_path,
-      &network_context_params, &cert_verifier_creation_params);
-
-  EXPECT_TRUE(network_context_params.afp_block_list_experiment_enabled);
 }
