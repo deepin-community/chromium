@@ -250,7 +250,8 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
 
   // View overrides:
   void Layout(PassKey) override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override;
   bool GetNeedsNotificationWhenVisibleBoundsChange() const override;
   void OnVisibleBoundsChanged() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
@@ -484,7 +485,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // Updates the focus rings of the TableView and the TableHeader if necessary.
   void UpdateFocusRings();
 
-  raw_ptr<ui::TableModel> model_ = nullptr;
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<ui::TableModel, LeakedDanglingUntriaged> model_ = nullptr;
 
   std::vector<ui::TableColumn> columns_;
 
@@ -498,7 +501,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
 
   // The header. This is only created if more than one column is specified or
   // the first column has a non-empty title.
-  raw_ptr<TableHeader> header_ = nullptr;
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<TableHeader, LeakedDanglingUntriaged> header_ = nullptr;
 
   // TableView allows using the keyboard to activate a cell or row, including
   // optionally the header row. This bool keeps track of whether the active row
@@ -516,7 +521,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // is selected then.
   bool select_on_remove_ = true;
 
-  raw_ptr<TableViewObserver, DanglingUntriaged> observer_ = nullptr;
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<TableViewObserver, LeakedDanglingUntriaged> observer_ = nullptr;
   // If |sort_on_paint_| is true, table will sort before painting.
   bool sort_on_paint_ = false;
 
@@ -541,7 +548,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   std::vector<size_t> view_to_model_;
   std::vector<size_t> model_to_view_;
 
-  raw_ptr<TableGrouper> grouper_ = nullptr;
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<TableGrouper, LeakedDanglingUntriaged> grouper_ = nullptr;
 
   // True if in SetVisibleColumnWidth().
   bool in_set_visible_column_width_ = false;
@@ -573,5 +582,27 @@ END_VIEW_BUILDER
 }  // namespace views
 
 DEFINE_VIEW_BUILDER(VIEWS_EXPORT, views::TableView)
+
+namespace base {
+
+// Allow use of ScopedObservation with TableView, which requires use of
+// SetObserver and only supports a single TableViewObserver at a time.
+template <>
+struct ScopedObservationTraits<views::TableView, views::TableViewObserver> {
+  static void AddObserver(views::TableView* source,
+                          views::TableViewObserver* observer) {
+    CHECK(!source->GetObserver())
+        << "TableView does not support multiple observers";
+    source->SetObserver(observer);
+  }
+  static void RemoveObserver(views::TableView* source,
+                             views::TableViewObserver* observer) {
+    CHECK_EQ(source->GetObserver(), observer)
+        << "TableView does not support multiple observers";
+    source->SetObserver(nullptr);
+  }
+};
+
+}  // namespace base
 
 #endif  // UI_VIEWS_CONTROLS_TABLE_TABLE_VIEW_H_

@@ -9,10 +9,10 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 
-#include <optional>
 #include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
@@ -98,7 +98,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) QuotaDatabase {
       const BucketInitParams& params,
       blink::mojom::StorageType type);
 
-  // TODO(crbug.com/1208141): Remove `storage_type` when the only supported
+  // TODO(crbug.com/40181609): Remove `storage_type` when the only supported
   // StorageType is kTemporary.
   QuotaErrorOr<BucketInfo> CreateBucketForTesting(
       const blink::StorageKey& storage_key,
@@ -141,7 +141,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) QuotaDatabase {
   QuotaErrorOr<BucketInfo> UpdateBucketPersistence(BucketId bucket,
                                                    bool persistent);
 
-  // TODO(crbug.com/1202167): Remove once all usages have updated to use
+  // TODO(crbug.com/40179024): Remove once all usages have updated to use
   // SetBucketLastAccessTime.
   [[nodiscard]] QuotaError SetStorageKeyLastAccessTime(
       const blink::StorageKey& storage_key,
@@ -201,8 +201,11 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) QuotaDatabase {
       base::Time begin,
       base::Time end);
 
-  // Returns a set of all expired buckets.
-  QuotaErrorOr<std::set<BucketInfo>> GetExpiredBuckets();
+  // Returns a set of all expired or stale (not accessed or modified in 400 days
+  // and not persisted) buckets.
+  // See crbug.com/40281870 for more info.
+  QuotaErrorOr<std::set<BucketInfo>> GetExpiredBuckets(
+      SpecialStoragePolicy* special_storage_policy);
 
   base::FilePath GetStoragePath() const { return storage_directory_->path(); }
 
@@ -322,6 +325,11 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) QuotaDatabase {
   std::optional<std::string> last_operation_;
 
   base::RepeatingCallback<void(int)> db_error_callback_;
+
+  // We need to delay evicting stale buckets until after any session
+  // restore has taken place, otherwise we might fail to record current usage.
+  // See crbug.com/40281870 for more info.
+  base::Time evict_stale_buckets_after_{GetNow() + base::Minutes(1)};
 };
 
 }  // namespace storage

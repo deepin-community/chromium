@@ -128,6 +128,8 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
                         bool started_in_foreground) override;
   ObservePolicy OnPreviewStart(content::NavigationHandle* navigation_handle,
                                const GURL& currently_committed_url) override;
+  ObservePolicy OnNavigationHandleTimingUpdated(
+      content::NavigationHandle* navigation_handle) override;
   ObservePolicy OnRedirect(
       content::NavigationHandle* navigation_handle) override;
   ObservePolicy OnCommit(content::NavigationHandle* navigation_handle) override;
@@ -148,6 +150,7 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
       content::NavigationHandle* navigation_handle) override {}
   ObservePolicy ShouldObserveMimeType(
       const std::string& mime_type) const override;
+  ObservePolicy ShouldObserveScheme(const GURL& url) const override;
   void OnTimingUpdate(content::RenderFrameHost* subframe_rfh,
                       const mojom::PageLoadTiming& timing) override {}
   void OnSoftNavigationUpdated(const mojom::SoftNavigationMetrics&) override {}
@@ -250,6 +253,9 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
   void OnV8MemoryChanged(
       const std::vector<MemoryUpdate>& memory_updates) override {}
   void OnSharedStorageWorkletHostCreated() override {}
+  void OnSharedStorageSelectURLCalled() override {}
+  void OnCustomUserTimingMarkObserved(
+      const std::vector<mojom::CustomUserTimingMarkPtr>& timings) override {}
 
  private:
   raw_ptr<PageLoadMetricsObserverDelegate, DanglingUntriaged> delegate_ =

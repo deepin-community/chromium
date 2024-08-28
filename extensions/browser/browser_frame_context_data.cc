@@ -25,18 +25,18 @@ bool BrowserFrameContextData::IsIsolatedApplication() const {
   return frame_ &&
          content::IsolatedWebAppsPolicy::AreIsolatedWebAppsEnabled(
              frame_->GetBrowserContext()) &&
-         frame_->GetWebExposedIsolationLevel() >=
-             content::WebExposedIsolationLevel::kMaybeIsolatedApplication;
+         frame_->GetWebExposedIsolationLevel() ==
+             content::WebExposedIsolationLevel::kIsolatedApplication;
 }
 
 std::unique_ptr<FrameContextData>
 BrowserFrameContextData::GetLocalParentOrOpener() const {
   CHECK(frame_);
   content::RenderFrameHost* parent_or_opener = frame_->GetParent();
-  // Non primary pages(e.g. fenced frame, prerendered page, bfcache, and
-  // portals) can't look at the opener, and WebContents::GetOpener returns the
-  // opener on the primary frame tree. Thus, GetOpener should be called when
-  // |frame_| is a primary main frame.
+  // Non primary pages (e.g. fenced frame, prerendered page, bfcache) can't look
+  // at the opener, and WebContents::GetOpener returns the opener on the primary
+  // frame tree. Thus, GetOpener should be called when `frame_` is a primary
+  // main frame.
   if (!parent_or_opener && frame_->IsInPrimaryMainFrame()) {
     parent_or_opener =
         content::WebContents::FromRenderFrameHost(frame_)->GetOpener();
@@ -62,7 +62,7 @@ GURL BrowserFrameContextData::GetUrl() const {
   CHECK(frame_);
   if (frame_->GetLastCommittedURL().is_empty()) {
     // It's possible for URL to be empty when `frame_` is on the initial empty
-    // document. TODO(https://crbug.com/1197308): Consider making  `frame_`'s
+    // document. TODO(crbug.com/40176869): Consider making  `frame_`'s
     // document's URL about:blank instead of empty in that case.
     return GURL(url::kAboutBlankURL);
   }
@@ -77,12 +77,12 @@ url::Origin BrowserFrameContextData::GetOrigin() const {
 // BrowserFrameContextData::CanAccess is unable to replicate all of the
 // WebSecurityOrigin::CanAccess checks, so these methods should not be called.
 bool BrowserFrameContextData::CanAccess(const url::Origin& target) const {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return true;
 }
 
 bool BrowserFrameContextData::CanAccess(const FrameContextData& target) const {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return true;
 }
 

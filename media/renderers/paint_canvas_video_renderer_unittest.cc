@@ -9,7 +9,7 @@
 #include "base/logging.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/raw_ptr.h"
-#include "base/sys_byteorder.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "cc/paint/paint_flags.h"
@@ -241,12 +241,12 @@ static scoped_refptr<VideoFrame> CreateCroppedFrame() {
   };
 
   libyuv::I420Copy(cropped_y_plane, 16, cropped_u_plane, 8, cropped_v_plane, 8,
-                   cropped_frame->writable_data(VideoFrame::kYPlane),
-                   cropped_frame->stride(VideoFrame::kYPlane),
-                   cropped_frame->writable_data(VideoFrame::kUPlane),
-                   cropped_frame->stride(VideoFrame::kUPlane),
-                   cropped_frame->writable_data(VideoFrame::kVPlane),
-                   cropped_frame->stride(VideoFrame::kVPlane), 16, 16);
+                   cropped_frame->writable_data(VideoFrame::Plane::kY),
+                   cropped_frame->stride(VideoFrame::Plane::kY),
+                   cropped_frame->writable_data(VideoFrame::Plane::kU),
+                   cropped_frame->stride(VideoFrame::Plane::kU),
+                   cropped_frame->writable_data(VideoFrame::Plane::kV),
+                   cropped_frame->stride(VideoFrame::Plane::kV), 16, 16);
 
   return cropped_frame;
 }
@@ -619,7 +619,7 @@ TEST_F(PaintCanvasVideoRendererTest, HighBitDepth) {
         param.format, cropped_frame()->coded_size(),
         cropped_frame()->visible_rect(), cropped_frame()->natural_size(),
         cropped_frame()->timestamp()));
-    for (int plane = VideoFrame::kYPlane; plane <= VideoFrame::kVPlane;
+    for (int plane = VideoFrame::Plane::kY; plane <= VideoFrame::Plane::kV;
          ++plane) {
       int width = cropped_frame()->row_bytes(plane);
       uint16_t* dst = reinterpret_cast<uint16_t*>(frame->writable_data(plane));
@@ -898,24 +898,32 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
       texsubimage2d_callback_;
 };
 
+#if !BUILDFLAG(IS_ANDROID)
 void MailboxHoldersReleased(const gpu::SyncToken& sync_token) {}
+#endif
 }  // namespace
 
+// NOTE: The below test tests behavior when PaintCanvasVideoRenderer is used
+// without GPU raster. It is not relevant on Android, where GPU raster is
+// always used.
+#if !BUILDFLAG(IS_ANDROID)
 // Test that PaintCanvasVideoRenderer::Paint doesn't crash when GrContext is
 // unable to wrap a video frame texture (eg due to being abandoned).
 TEST_F(PaintCanvasVideoRendererTest, ContextLost) {
   auto context_provider = viz::TestContextProvider::Create();
+  CHECK(context_provider);
   context_provider->BindToCurrentSequence();
+  CHECK(context_provider->GrContext());
   context_provider->GrContext()->abandonContext();
 
   cc::SkiaPaintCanvas canvas(AllocBitmap(kWidth, kHeight));
 
   gfx::Size size(kWidth, kHeight);
-  gpu::MailboxHolder holders[VideoFrame::kMaxPlanes] = {
-      gpu::MailboxHolder(gpu::Mailbox::GenerateForSharedImage(),
-                         gpu::SyncToken(), GL_TEXTURE_RECTANGLE_ARB)};
-  auto video_frame = VideoFrame::WrapNativeTextures(
-      PIXEL_FORMAT_NV12, holders, base::BindOnce(MailboxHoldersReleased), size,
+  scoped_refptr<gpu::ClientSharedImage> shared_image =
+      gpu::ClientSharedImage::CreateForTesting();
+  auto video_frame = VideoFrame::WrapSharedImage(
+      PIXEL_FORMAT_NV12, shared_image, gpu::SyncToken(),
+      GL_TEXTURE_RECTANGLE_ARB, base::BindOnce(MailboxHoldersReleased), size,
       gfx::Rect(size), size, kNoTimestamp);
 
   cc::PaintFlags flags;
@@ -923,6 +931,7 @@ TEST_F(PaintCanvasVideoRendererTest, ContextLost) {
   renderer_.Paint(std::move(video_frame), &canvas, kNaturalRect, flags,
                   kNoTransformation, context_provider.get());
 }
+#endif
 
 void EmptyCallback(const gpu::SyncToken& sync_token) {}
 

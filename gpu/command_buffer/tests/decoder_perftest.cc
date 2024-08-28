@@ -23,7 +23,6 @@
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/command_buffer/service/gpu_tracer.h"
 #include "gpu/command_buffer/service/logger.h"
-#include "gpu/command_buffer/service/mailbox_manager_impl.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/passthrough_discardable_manager.h"
 #include "gpu/command_buffer/service/service_discardable_manager.h"
@@ -116,7 +115,7 @@ class RecordReplayCommandBuffer : public CommandBufferDirect {
         saved_get_buffer_ = transfer_buffer_id;
         break;
       case kReplay:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }
@@ -181,7 +180,7 @@ class RecordReplayContext : public GpuControl {
 
     scoped_refptr<gles2::FeatureInfo> feature_info = new gles2::FeatureInfo();
     scoped_refptr<gles2::ContextGroup> context_group = new gles2::ContextGroup(
-        gpu_preferences_, true, &mailbox_manager_, nullptr /* memory_tracker */,
+        gpu_preferences_, true, nullptr /* memory_tracker */,
         &translator_cache_, &completeness_cache_, feature_info,
         bind_generates_resource, nullptr /* progress_reporter */,
         GpuFeatureInfo(), &discardable_manager_,
@@ -264,24 +263,24 @@ class RecordReplayContext : public GpuControl {
   }
 
   void SignalQuery(uint32_t query, base::OnceClosure callback) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
-  void CancelAllQueries() override { NOTREACHED(); }
+  void CancelAllQueries() override { NOTREACHED_IN_MIGRATION(); }
 
   void CreateGpuFence(uint32_t gpu_fence_id, ClientGpuFence source) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   void GetGpuFence(uint32_t gpu_fence_id,
                    base::OnceCallback<void(std::unique_ptr<gfx::GpuFence>)>
                        callback) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
-  void SetLock(base::Lock*) override { NOTREACHED(); }
+  void SetLock(base::Lock*) override { NOTREACHED_IN_MIGRATION(); }
 
-  void EnsureWorkVisible() override { NOTREACHED(); }
+  void EnsureWorkVisible() override { NOTREACHED_IN_MIGRATION(); }
 
   gpu::CommandBufferNamespace GetNamespaceID() const override {
     return gpu::CommandBufferNamespace::INVALID;
@@ -291,35 +290,34 @@ class RecordReplayContext : public GpuControl {
     return gpu::CommandBufferId();
   }
 
-  void FlushPendingWork() override { NOTREACHED(); }
+  void FlushPendingWork() override { NOTREACHED_IN_MIGRATION(); }
 
   uint64_t GenerateFenceSyncRelease() override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return 0;
   }
 
   bool IsFenceSyncReleased(uint64_t release) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return true;
   }
 
   void SignalSyncToken(const gpu::SyncToken& sync_token,
                        base::OnceClosure callback) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   void WaitSyncToken(const gpu::SyncToken& sync_token) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   bool CanWaitUnverifiedSyncToken(const gpu::SyncToken& sync_token) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return true;
   }
 
   GpuPreferences gpu_preferences_;
 
-  gles2::MailboxManagerImpl mailbox_manager_;
   scoped_refptr<gl::GLShareGroup> share_group_;
   ServiceDiscardableManager discardable_manager_;
   PassthroughDiscardableManager passthrough_discardable_manager_;
@@ -426,8 +424,6 @@ class DecoderPerfTest : public testing::Test {
                                  GL_RENDERBUFFER, renderbuffer_);
     gl_->Viewport(0, 0, 256, 256);
   }
-
-  void TearDown() override { context_.reset(); }
 
   void StartRecord() { context_->StartRecord(); }
 

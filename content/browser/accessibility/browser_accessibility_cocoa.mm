@@ -29,7 +29,6 @@
 #include "content/browser/accessibility/browser_accessibility_manager_mac.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
 #include "content/browser/accessibility/one_shot_accessibility_tree_search.h"
-#include "content/browser/accessibility/web_ax_platform_tree_manager_delegate.h"
 #include "content/public/common/content_client.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -40,6 +39,7 @@
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #import "ui/accessibility/platform/ax_platform_node_mac.h"
+#include "ui/accessibility/platform/ax_platform_tree_manager_delegate.h"
 #include "ui/accessibility/platform/ax_utils_mac.h"
 #include "ui/gfx/mac/coordinate_conversion.h"
 #include "ui/strings/grit/ax_strings.h"
@@ -53,9 +53,9 @@ using content::BrowserAccessibilityManager;
 using content::BrowserAccessibilityManagerMac;
 using content::ContentClient;
 using content::OneShotAccessibilityTreeSearch;
-using content::WebAXPlatformTreeManagerDelegate;
 using ui::AXActionHandlerRegistry;
 using ui::AXNodeData;
+using ui::AXPlatformTreeManagerDelegate;
 using ui::AXPositionToAXTextMarker;
 using ui::AXRangeToAXTextMarkerRange;
 using ui::AXTextMarkerRangeToAXRange;
@@ -1106,7 +1106,7 @@ bool content::IsNSRange(id value) {
 
   // Get the delegate for the topmost BrowserAccessibilityManager, because
   // that's the only one that can convert points to their origin in the screen.
-  WebAXPlatformTreeManagerDelegate* delegate =
+  ui::AXPlatformTreeManagerDelegate* delegate =
       _owner->manager()->GetDelegateFromRootManager();
   if (delegate) {
     return gfx::ScreenRectToNSRect(
@@ -1153,42 +1153,60 @@ bool content::IsNSRange(id value) {
 }
 
 - (NSArray*)rowHeaders {
-  if (![self instanceActive])
+  if (![self instanceActive]) {
     return nil;
+  }
 
-  bool is_cell_or_table_header = ui::IsCellOrTableHeader(_owner->GetRole());
-  bool is_table_like = ui::IsTableLike(_owner->GetRole());
-  if (!is_table_like && !is_cell_or_table_header)
+  bool isCellOrTableHeader = ui::IsCellOrTableHeader(_owner->GetRole());
+  bool isTableLike = ui::IsTableLike(_owner->GetRole());
+  if (!isTableLike && !isCellOrTableHeader) {
     return nil;
+  }
+
   BrowserAccessibility* table = [self containingTable];
-  if (!table)
+  if (!table) {
     return nil;
+  }
 
-  NSMutableArray* ret = [[NSMutableArray alloc] init];
+  // A table with no row headers.
+  if (isTableLike && !table->GetTableRowCount().has_value()) {
+    return nil;
+  }
 
-  if (is_table_like) {
-    // If this is a table, return all row headers.
+  NSMutableArray* rowHeaders = [[NSMutableArray alloc] init];
+
+  if (isTableLike) {
+    // Return the table's row headers.
     std::set<int32_t> headerIds;
-    for (int i = 0; i < *table->GetTableRowCount(); i++) {
+
+    int numberOfRows = table->GetTableRowCount().value();
+
+    // Rows can have more than one row header cell. Also, we apparently need
+    // to guard against duplicate row header ids. Storing in a set dedups.
+    for (int i = 0; i < numberOfRows; i++) {
       std::vector<int32_t> rowHeaderIds = table->GetRowHeaderNodeIds(i);
-      for (int32_t id : rowHeaderIds)
-        headerIds.insert(id);
+      for (int32_t rowHeaderId : rowHeaderIds) {
+        headerIds.insert(rowHeaderId);
+      }
     }
-    for (int32_t id : headerIds) {
-      BrowserAccessibility* cell = _owner->manager()->GetFromID(id);
-      if (cell)
-        [ret addObject:cell->GetNativeViewAccessible()];
+
+    for (int32_t headerId : headerIds) {
+      BrowserAccessibility* cell = _owner->manager()->GetFromID(headerId);
+      if (cell) {
+        [rowHeaders addObject:cell->GetNativeViewAccessible()];
+      }
     }
   } else {
     // Otherwise this is a cell, return the row headers for this cell.
-    for (int32_t id : _owner->node()->GetTableCellRowHeaderNodeIds()) {
-      BrowserAccessibility* cell = _owner->manager()->GetFromID(id);
-      if (cell)
-        [ret addObject:cell->GetNativeViewAccessible()];
+    for (int32_t nodeId : _owner->node()->GetTableCellRowHeaderNodeIds()) {
+      BrowserAccessibility* cell = _owner->manager()->GetFromID(nodeId);
+      if (cell) {
+        [rowHeaders addObject:cell->GetNativeViewAccessible()];
+      }
     }
   }
 
-  return [ret count] ? ret : nil;
+  return [rowHeaders count] ? rowHeaders : nil;
 }
 
 - (NSValue*)rowIndexRange {
@@ -1363,7 +1381,7 @@ bool content::IsNSRange(id value) {
     case ax::mojom::SortDirection::kOther:
       return NSAccessibilityUnknownSortDirectionValue;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   return nil;
@@ -1395,7 +1413,7 @@ bool content::IsNSRange(id value) {
   if ([self internalRole] == ax::mojom::Role::kDescriptionList)
     return NSAccessibilityDefinitionListSubrole;
 
-  if ([self internalRole] == ax::mojom::Role::kDirectory ||
+  if ([self internalRole] == ax::mojom::Role::kDirectoryDeprecated ||
       [self internalRole] == ax::mojom::Role::kList) {
     return NSAccessibilityContentListSubrole;
   }
@@ -1589,14 +1607,14 @@ bool content::IsNSRange(id value) {
           ->GetManagerForRootFrame()
           ->ToBrowserAccessibilityManagerMac();
   if (!root_manager) {
-    // TODO(crbug.com/1350583) Find out why this happens -- there should always
+    // TODO(crbug.com/40234203) Find out why this happens -- there should always
     // be a root manager whenever an object is instanceActive. This used to be a
     // CHECK() but caused too many crashes, with unknown cause.
     return nil;
   }
   if (!root_manager->GetParentView()) {
-    // TODO(crbug.com/1425682) Find out why this happens, there should always be
-    // a parent view. This used to be a CHECK() but caused too many crashes.
+    // TODO(crbug.com/40898856) Find out why this happens, there should always
+    // be a parent view. This used to be a CHECK() but caused too many crashes.
     // Repro steps are available in the bug.
     return nil;
   }

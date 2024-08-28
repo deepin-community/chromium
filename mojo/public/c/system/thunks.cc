@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "mojo/public/c/system/thunks.h"
 
 #include <cstddef>
@@ -341,6 +346,13 @@ MojoResult MojoDestroyMessage(MojoMessageHandle message) {
 MojoResult MojoSerializeMessage(MojoMessageHandle message,
                                 const MojoSerializeMessageOptions* options) {
   return INVOKE_THUNK(SerializeMessage, message, options);
+}
+
+MojoResult MojoReserveMessageCapacity(MojoMessageHandle message,
+                                      uint32_t payload_buffer_size,
+                                      uint32_t* buffer_size) {
+  return INVOKE_THUNK(ReserveMessageCapacity, message, payload_buffer_size,
+                      buffer_size);
 }
 
 MojoResult MojoAppendMessageData(MojoMessageHandle message,
@@ -856,6 +868,7 @@ MojoSystemThunks32 g_thunks_32 = {
     MojoQueryQuota32,
     MojoShutdown,
     MojoSetDefaultProcessErrorHandler,
+    MojoReserveMessageCapacity,
 };
 
 const MojoSystemThunks2* MojoEmbedderGetSystemThunks2() {

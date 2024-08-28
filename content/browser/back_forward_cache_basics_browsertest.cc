@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/back_forward_cache_browsertest.h"
 
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -1271,7 +1276,7 @@ class BackForwardCacheStillNavigatingBrowserTest
   std::string GetMainFramePath() {
     switch (GetParam()) {
       case TestFrameType::kMainFrame:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return "";
       case TestFrameType::kSubFrame:
         return "/back_forward_cache/controllable_subframe.html";
@@ -1420,8 +1425,7 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
   web_contents()->GetController().GoBack();
   EXPECT_FALSE(WaitForLoadStop(shell()->web_contents()));
   ExpectNotRestored(
-      {NotRestoredReason::kHTTPStatusNotOK, NotRestoredReason::kNoResponseHead,
-       NotRestoredReason::kErrorDocument},
+      {NotRestoredReason::kHTTPStatusNotOK, NotRestoredReason::kErrorDocument},
       {}, {}, {}, {}, FROM_HERE);
 }
 
@@ -1681,7 +1685,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Test pagehide's persisted value and whether the page can be BFCached when a
 // sticky/non-sticky feature is used on the mainframe/subframe.
 //
-// TODO(crbug.com/1446474): Flaky on all platforms.
+// TODO(crbug.com/40913015): Flaky on all platforms.
 IN_PROC_BROWSER_TEST_P(
     BackForwardCacheBrowserTestWithVaryingFrameAndFeatureStickinessType,
     DISABLED_TestPagehidePersistedValue) {
@@ -1852,8 +1856,8 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
 
 // On windows, the expected value is off by ~20ms. In order to get the
 // feature out to canary, the test is disabled for WIN.
-// TODO(crbug.com/1022191): Fix this for Win.
-// TODO(crbug.com/1211428): Flaky on other platforms.
+// TODO(crbug.com/40657468): Fix this for Win.
+// TODO(crbug.com/40767606): Flaky on other platforms.
 // Make sure we are exposing the duration between back navigation's
 // navigationStart and the page's original navigationStart through pageshow
 // event's timeStamp, and that we aren't modifying

@@ -9,10 +9,11 @@
 #include <math.h>
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_system.h"
-#include "third_party/base/check_op.h"
 
 namespace {
 
@@ -417,7 +418,7 @@ std::optional<CFX_FloatRect> CFX_Path::GetRect(const CFX_Matrix* matrix) const {
   if (!IsRectPreTransform(path_points))
     return std::nullopt;
 
-  CFX_PointF points[5];
+  std::array<CFX_PointF, 5> points;
   for (size_t i = 0; i < path_points.size(); ++i) {
     points[i] = matrix->Transform(path_points[i].m_Point);
 

@@ -42,9 +42,6 @@ class RenderPipeline final : public RenderPipelineBase {
     static Ref<RenderPipeline> CreateUninitialized(
         Device* device,
         const UnpackedPtr<RenderPipelineDescriptor>& descriptor);
-    static void InitializeAsync(Ref<RenderPipelineBase> renderPipeline,
-                                WGPUCreateRenderPipelineAsyncCallback callback,
-                                void* userdata);
 
     VkPipeline GetHandle() const;
 
@@ -64,8 +61,12 @@ class RenderPipeline final : public RenderPipelineBase {
     };
     VkPipelineVertexInputStateCreateInfo ComputeVertexInputDesc(
         PipelineVertexInputStateCreateInfoTemporaryAllocations* temporaryAllocations);
+    VkPipelineDepthStencilStateCreateInfo ComputeDepthStencilDesc();
 
     VkPipeline mHandle = VK_NULL_HANDLE;
+
+    // Whether the pipeline has any input attachment being used in the frag shader.
+    bool mHasInputAttachment = false;
 };
 
 }  // namespace dawn::native::vulkan

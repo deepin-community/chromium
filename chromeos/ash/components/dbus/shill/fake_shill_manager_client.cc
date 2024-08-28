@@ -237,6 +237,8 @@ const char kNetworkActivated[] = "activated";
 const char kNetworkDisabled[] = "disabled";
 const char kCellularServicePath[] = "/service/cellular1";
 const char kRoamingRequired[] = "required";
+const char kDefaultTetheringSSID[] = "test_tethering_ssid";
+const char kDefaultTetheringPassphrase[] = "tetheringpassword";
 
 }  // namespace
 
@@ -378,6 +380,9 @@ void FakeShillManagerClient::ConfigureService(
     case FakeShillSimulatedResult::kTimeout:
       // No callbacks get executed and the caller should eventually timeout.
       return;
+    case FakeShillSimulatedResult::kInProgress:
+      // No callbacks get executed in this case.
+      return;
   }
 
   ShillServiceClient::TestInterface* service_client =
@@ -512,11 +517,30 @@ void FakeShillManagerClient::SetTetheringEnabled(bool enabled,
                                                  StringCallback callback,
                                                  ErrorCallback error_callback) {
   switch (simulate_tethering_enable_result_) {
-    case FakeShillSimulatedResult::kSuccess:
+    case FakeShillSimulatedResult::kSuccess: {
+      // Set additional Hotspot properties when the result is a success.
+      if (simulate_enable_tethering_result_string_ ==
+          shill::kTetheringEnableResultSuccess) {
+        base::Value::Dict tethering_state;
+        if (enabled) {
+          tethering_state.Set(shill::kTetheringStatusStateProperty,
+                              shill::kTetheringStateActive);
+          tethering_state.Set(shill::kTetheringStatusClientsProperty,
+                              base::Value::List());
+        } else {
+          tethering_state.Set(shill::kTetheringStatusStateProperty,
+                              shill::kTetheringStateIdle);
+          tethering_state.Set(shill::kTetheringStatusIdleReasonProperty,
+                              shill::kTetheringIdleReasonUserExit);
+        }
+        SetManagerProperty(shill::kTetheringStatusProperty,
+                           base::Value(std::move(tethering_state)));
+      }
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(std::move(callback),
                                     simulate_enable_tethering_result_string_));
       return;
+    }
     case FakeShillSimulatedResult::kFailure:
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE, base::BindOnce(std::move(error_callback), "Error",
@@ -525,7 +549,31 @@ void FakeShillManagerClient::SetTetheringEnabled(bool enabled,
     case FakeShillSimulatedResult::kTimeout:
       // No callbacks get executed and the caller should eventually timeout.
       return;
+    case FakeShillSimulatedResult::kInProgress: {
+      base::Value::Dict tethering_state;
+      tethering_state.Set(shill::kTetheringStatusStateProperty,
+                          shill::kTetheringStateStarting);
+      SetManagerProperty(shill::kTetheringStatusProperty,
+                         base::Value(std::move(tethering_state)));
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(callback), "In progress"));
+      return;
+    }
   }
+}
+
+void FakeShillManagerClient::EnableTethering(
+    const shill::WiFiInterfacePriority& priority,
+    StringCallback callback,
+    ErrorCallback error_callback) {
+  SetTetheringEnabled(/*enabled=*/true, std::move(callback),
+                      std::move(error_callback));
+}
+
+void FakeShillManagerClient::DisableTethering(StringCallback callback,
+                                              ErrorCallback error_callback) {
+  SetTetheringEnabled(/*enabled=*/false, std::move(callback),
+                      std::move(error_callback));
 }
 
 void FakeShillManagerClient::CheckTetheringReadiness(
@@ -545,6 +593,9 @@ void FakeShillManagerClient::CheckTetheringReadiness(
     case FakeShillSimulatedResult::kTimeout:
       // No callbacks get executed and the caller should eventually timeout.
       return;
+    case FakeShillSimulatedResult::kInProgress:
+      // No callbacks get executed in this case.
+      return;
   }
 }
 
@@ -555,6 +606,178 @@ void FakeShillManagerClient::SetLOHSEnabled(bool enabled,
       FROM_HERE,
       base::BindOnce(std::move(error_callback), "Error", "Fake failure"));
   return;
+}
+
+void FakeShillManagerClient::CreateP2PGroup(
+    const CreateP2PGroupParameter& create_group_argument,
+    base::OnceCallback<void(base::Value::Dict result)> callback,
+    ErrorCallback error_callback) {
+  switch (simulate_create_p2p_group_result_) {
+    case FakeShillSimulatedResult::kSuccess: {
+      auto fake_success_result = base::Value::Dict().Set(
+          shill::kP2PResultCode, simulate_create_p2p_group_result_code_);
+      if (simulate_create_p2p_group_result_code_ !=
+          shill::kCreateP2PGroupResultSuccess) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(callback),
+                                      std::move(fake_success_result)));
+        return;
+      }
+      const int shill_id = 0;
+      fake_success_result.Set(shill::kP2PDeviceShillID, shill_id);
+      auto group_owner_info = base::Value::List().Append(
+          base::Value::Dict()
+              .Set(shill::kP2PGroupInfoShillIDProperty, shill_id)
+              .Set(shill::kP2PGroupInfoInterfaceProperty, "p2p-wlan-0")
+              .Set(shill::kP2PGroupInfoStateProperty,
+                   shill::kP2PGroupInfoStateActive)
+              .Set(shill::kP2PGroupInfoSSIDProperty,
+                   create_group_argument.ssid ? *create_group_argument.ssid
+                                              : "DIRECT-A0")
+              .Set(shill::kP2PGroupInfoPassphraseProperty,
+                   create_group_argument.passphrase
+                       ? *create_group_argument.passphrase
+                       : "direct-passphrase")
+              .Set(shill::kP2PGroupInfoFrequencyProperty, 1000)
+              .Set(shill::kP2PGroupInfoNetworkIDProperty, 1)
+              .Set(shill::kP2PGroupInfoIPv4AddressProperty, "100.0.0.1"));
+      SetManagerProperty(shill::kP2PGroupInfosProperty,
+                         base::Value(std::move(group_owner_info)));
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(callback), std::move(fake_success_result)));
+      return;
+    }
+    case FakeShillSimulatedResult::kFailure:
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(error_callback), "Error", "Fake failure"));
+      return;
+    case FakeShillSimulatedResult::kTimeout:
+      // No callbacks get executed and the caller should eventually timeout.
+      return;
+    case FakeShillSimulatedResult::kInProgress:
+      // No callbacks get executed in this case.
+      return;
+  }
+}
+
+void FakeShillManagerClient::ConnectToP2PGroup(
+    const ConnectP2PGroupParameter& connect_group_argument,
+    base::OnceCallback<void(base::Value::Dict result)> callback,
+    ErrorCallback error_callback) {
+  switch (simulate_connect_p2p_group_result_) {
+    case FakeShillSimulatedResult::kSuccess: {
+      auto fake_success_result = base::Value::Dict().Set(
+          shill::kP2PResultCode, simulate_connect_p2p_group_result_code_);
+      if (simulate_connect_p2p_group_result_code_ !=
+          shill::kConnectToP2PGroupResultSuccess) {
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE, base::BindOnce(std::move(callback),
+                                      std::move(fake_success_result)));
+        return;
+      }
+      const int shill_id = 0;
+      fake_success_result.Set(shill::kP2PDeviceShillID, shill_id);
+      auto group_owner_info = base::Value::List().Append(
+          base::Value::Dict()
+              .Set(shill::kP2PClientInfoShillIDProperty, shill_id)
+              .Set(shill::kP2PClientInfoInterfaceProperty, "p2p-wlan-0")
+              .Set(shill::kP2PClientInfoStateProperty,
+                   shill::kP2PClientInfoStateConnected)
+              .Set(shill::kP2PClientInfoSSIDProperty,
+                   connect_group_argument.ssid)
+              .Set(shill::kP2PClientInfoPassphraseProperty,
+                   connect_group_argument.passphrase)
+              .Set(shill::kP2PClientInfoFrequencyProperty,
+                   connect_group_argument.frequency
+                       ? static_cast<int>(*connect_group_argument.frequency)
+                       : 1000)
+              .Set(shill::kP2PClientInfoNetworkIDProperty, 1)
+              .Set(shill::kP2PClientInfoIPv4AddressProperty, "100.0.0.1"));
+      SetManagerProperty(shill::kP2PClientInfosProperty,
+                         base::Value(std::move(group_owner_info)));
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(callback), std::move(fake_success_result)));
+      return;
+    }
+    case FakeShillSimulatedResult::kFailure:
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(error_callback), "Error", "Fake failure"));
+      return;
+    case FakeShillSimulatedResult::kTimeout:
+      // No callbacks get executed and the caller should eventually timeout.
+      return;
+    case FakeShillSimulatedResult::kInProgress:
+      // No callbacks get executed in this case.
+      return;
+  }
+}
+
+void FakeShillManagerClient::DestroyP2PGroup(
+    const int shill_id,
+    base::OnceCallback<void(base::Value::Dict result)> callback,
+    ErrorCallback error_callback) {
+  recent_destroyed_group_id = shill_id;
+  switch (simulate_destroy_p2p_group_result_) {
+    case FakeShillSimulatedResult::kSuccess: {
+      auto fake_success_result = base::Value::Dict().Set(
+          shill::kP2PResultCode, simulate_destroy_p2p_group_result_code_);
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(callback), std::move(fake_success_result)));
+      return;
+    }
+    case FakeShillSimulatedResult::kFailure:
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(error_callback), "Error", "Fake failure"));
+      return;
+    case FakeShillSimulatedResult::kTimeout:
+      // No callbacks get executed and the caller should eventually timeout.
+      return;
+    case FakeShillSimulatedResult::kInProgress:
+      // No callbacks get executed in this case.
+      return;
+  }
+}
+
+int FakeShillManagerClient::GetRecentlyDestroyedP2PGroupId() {
+  return recent_destroyed_group_id;
+}
+
+void FakeShillManagerClient::DisconnectFromP2PGroup(
+    const int shill_id,
+    base::OnceCallback<void(base::Value::Dict result)> callback,
+    ErrorCallback error_callback) {
+  recent_disconnected_group_id = shill_id;
+  switch (simulate_disconnect_p2p_group_result_) {
+    case FakeShillSimulatedResult::kSuccess: {
+      auto fake_success_result = base::Value::Dict().Set(
+          shill::kP2PResultCode, simulate_disconnect_p2p_group_result_code_);
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(callback), std::move(fake_success_result)));
+      return;
+    }
+    case FakeShillSimulatedResult::kFailure:
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(error_callback), "Error", "Fake failure"));
+      return;
+    case FakeShillSimulatedResult::kTimeout:
+      // No callbacks get executed and the caller should eventually timeout.
+      return;
+    case FakeShillSimulatedResult::kInProgress:
+      // No callbacks get executed in this case.
+      return;
+  }
+}
+
+int FakeShillManagerClient::GetRecentlyDisconnectedP2PGroupId() {
+  return recent_disconnected_group_id;
 }
 
 ShillManagerClient::TestInterface* FakeShillManagerClient::GetTestInterface() {
@@ -694,6 +917,10 @@ void FakeShillManagerClient::ClearProperties() {
 void FakeShillManagerClient::SetManagerProperty(const std::string& key,
                                                 const base::Value& value) {
   SetProperty(key, value, base::DoNothing(), base::BindOnce(&LogErrorCallback));
+}
+
+base::Value::Dict FakeShillManagerClient::GetStubProperties() {
+  return stub_properties_.Clone();
 }
 
 void FakeShillManagerClient::AddManagerService(const std::string& service_path,
@@ -867,6 +1094,45 @@ void FakeShillManagerClient::SetSimulateCheckTetheringReadinessResult(
   }
 }
 
+void FakeShillManagerClient::SetSimulateCreateP2PGroupResult(
+    FakeShillSimulatedResult operation_result,
+    const std::string& result_code) {
+  simulate_create_p2p_group_result_ = operation_result;
+  if (simulate_create_p2p_group_result_ == FakeShillSimulatedResult::kSuccess) {
+    simulate_create_p2p_group_result_code_ = result_code;
+  }
+}
+
+void FakeShillManagerClient::SetSimulateDestroyP2PGroupResult(
+    FakeShillSimulatedResult operation_result,
+    const std::string& result_code) {
+  simulate_destroy_p2p_group_result_ = operation_result;
+  if (simulate_destroy_p2p_group_result_ ==
+      FakeShillSimulatedResult::kSuccess) {
+    simulate_destroy_p2p_group_result_code_ = result_code;
+  }
+}
+
+void FakeShillManagerClient::SetSimulateConnectToP2PGroupResult(
+    FakeShillSimulatedResult operation_result,
+    const std::string& result_code) {
+  simulate_connect_p2p_group_result_ = operation_result;
+  if (simulate_connect_p2p_group_result_ ==
+      FakeShillSimulatedResult::kSuccess) {
+    simulate_connect_p2p_group_result_code_ = result_code;
+  }
+}
+
+void FakeShillManagerClient::SetSimulateDisconnectFromP2PGroupResult(
+    FakeShillSimulatedResult operation_result,
+    const std::string& result_code) {
+  simulate_disconnect_p2p_group_result_ = operation_result;
+  if (simulate_disconnect_p2p_group_result_ ==
+      FakeShillSimulatedResult::kSuccess) {
+    simulate_disconnect_p2p_group_result_code_ = result_code;
+  }
+}
+
 void FakeShillManagerClient::SetupDefaultEnvironment() {
   // Bail out from setup if there is no message loop. This will be the common
   // case for tests that are not testing Shill.
@@ -914,10 +1180,8 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
   state = GetInitialStateForType(shill::kTypeEthernet, &enabled);
   if (state == shill::kStateOnline || state == shill::kStateIdle) {
     AddTechnology(shill::kTypeEthernet, enabled);
-    devices->AddDevice("/device/eth1", shill::kTypeEthernet,
-                       "stub_eth_device1");
-    SetInitialDeviceProperty("/device/eth1", shill::kAddressProperty,
-                             base::Value("0123456789ab"));
+    devices->AddDevice("/device/eth1", shill::kTypeEthernet, "stub_eth_device1",
+                       "0123456789ab");
     base::Value::List eth_ip_configs;
     eth_ip_configs.Append("ipconfig_v4_path");
     eth_ip_configs.Append("ipconfig_v6_path");
@@ -941,9 +1205,8 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
       state = shill::kStateIdle;
     }
     AddTechnology(shill::kTypeWifi, enabled);
-    devices->AddDevice("/device/wifi1", shill::kTypeWifi, "stub_wifi_device1");
-    SetInitialDeviceProperty("/device/wifi1", shill::kAddressProperty,
-                             base::Value("23456789abcd"));
+    devices->AddDevice("/device/wifi1", shill::kTypeWifi, "stub_wifi_device1",
+                       "23456789abcd");
     base::Value::List wifi_ip_configs;
     wifi_ip_configs.Append("ipconfig_v4_path");
     wifi_ip_configs.Append("ipconfig_v6_path");
@@ -1031,7 +1294,7 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
     }
     AddTechnology(shill::kTypeCellular, enabled);
     devices->AddDevice("/device/cellular1", shill::kTypeCellular,
-                       "stub_cellular_device1");
+                       "stub_cellular_device1", "23456789abcd");
     if (roaming_state_ == kRoamingRequired) {
       SetInitialDeviceProperty("/device/cellular1",
                                shill::kProviderRequiresRoamingProperty,
@@ -1161,10 +1424,60 @@ void FakeShillManagerClient::SetupDefaultEnvironment() {
   }
   shill_device_property_map_.clear();
 
+  SetDefaultProperties();
+
   SortManagerServices(/*notify=*/true);
 }
 
 // Private methods
+
+void FakeShillManagerClient::SetDefaultProperties() {
+  auto tethering_config =
+      base::Value::Dict()
+          .Set(shill::kTetheringConfAutoDisableProperty, true)
+          .Set(shill::kTetheringConfBandProperty, shill::kBandAll)
+          .Set(shill::kTetheringConfSecurityProperty, shill::kSecurityWpa2)
+          .Set(shill::kTetheringConfSSIDProperty,
+               base::HexEncode(kDefaultTetheringSSID))
+          .Set(shill::kTetheringConfPassphraseProperty,
+               kDefaultTetheringPassphrase)
+          .Set(shill::kTetheringConfMARProperty, true);
+  SetManagerProperty(shill::kTetheringConfigProperty,
+                     base::Value(std::move(tethering_config)));
+
+  auto tethering_capabilities =
+      base::Value::Dict()
+          .Set(shill::kTetheringCapUpstreamProperty,
+               base::Value::List().Append(shill::kTypeCellular))
+          .Set(shill::kTetheringCapDownstreamProperty,
+               base::Value::List().Append(shill::kTypeWifi))
+          .Set(shill::kTetheringCapSecurityProperty,
+               base::Value::List().Append(shill::kSecurityWpa2));
+  SetManagerProperty(shill::kTetheringCapabilitiesProperty,
+                     base::Value(std::move(tethering_capabilities)));
+
+  auto tethering_state =
+      base::Value::Dict()
+          .Set(shill::kTetheringStatusStateProperty, shill::kTetheringStateIdle)
+          .Set(shill::kTetheringStatusIdleReasonProperty,
+               shill::kTetheringIdleReasonInitialState);
+  SetManagerProperty(shill::kTetheringStatusProperty,
+                     base::Value(std::move(tethering_state)));
+
+  auto wifi_direct_capabilities =
+      base::Value::Dict()
+          .Set(shill::kP2PCapabilitiesP2PSupportedProperty, true)
+          .Set(shill::kP2PCapabilitiesGroupReadinessProperty,
+               shill::kP2PCapabilitiesGroupReadinessReady)
+          .Set(shill::kP2PCapabilitiesClientReadinessProperty,
+               shill::kP2PCapabilitiesClientReadinessReady)
+          .Set(shill::kP2PCapabilitiesSupportedChannelsProperty,
+               base::Value::List().Append(1).Append(2))
+          .Set(shill::kP2PCapabilitiesPreferredChannelsProperty,
+               base::Value::List().Append(1));
+  SetManagerProperty(shill::kP2PCapabilitiesProperty,
+                     base::Value(std::move(wifi_direct_capabilities)));
+}
 
 void FakeShillManagerClient::PassNullopt(
     chromeos::DBusMethodCallback<base::Value::Dict> callback) const {

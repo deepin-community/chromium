@@ -374,7 +374,7 @@ class ImeObserverChromeOS
         engine->AddPendingKeyEvent(component_id, std::move(callback));
 
     input_ime::KeyboardEvent keyboard_event;
-    keyboard_event.type = (event.type() == ui::ET_KEY_RELEASED)
+    keyboard_event.type = (event.type() == ui::EventType::kKeyReleased)
                               ? input_ime::KeyboardEventType::kKeyup
                               : input_ime::KeyboardEventType::kKeydown;
 
@@ -665,7 +665,7 @@ class ImeObserverChromeOS
   }
 
   // Returns true if there are any listeners on the given event.
-  // TODO(https://crbug.com/835699): Merge this with |ExtensionHasListener|.
+  // TODO(crbug.com/41384866): Merge this with |ExtensionHasListener|.
   bool HasListener(const std::string& event_name) const {
     return extensions::EventRouter::Get(profile_)->HasEventListener(event_name);
   }

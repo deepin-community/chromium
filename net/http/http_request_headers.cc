@@ -4,6 +4,7 @@
 
 #include "net/http/http_request_headers.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/logging.h"
@@ -69,19 +70,20 @@ const char HttpRequestHeaders::kProxyAuthorization[] = "Proxy-Authorization";
 const char HttpRequestHeaders::kProxyConnection[] = "Proxy-Connection";
 const char HttpRequestHeaders::kRange[] = "Range";
 const char HttpRequestHeaders::kReferer[] = "Referer";
+const char HttpRequestHeaders::kSecFetchStorageAccess[] =
+    "Sec-Fetch-Storage-Access";
 const char HttpRequestHeaders::kTransferEncoding[] = "Transfer-Encoding";
 const char HttpRequestHeaders::kUserAgent[] = "User-Agent";
 
 HttpRequestHeaders::HeaderKeyValuePair::HeaderKeyValuePair() = default;
 
 HttpRequestHeaders::HeaderKeyValuePair::HeaderKeyValuePair(
-    base::StringPiece key,
-    base::StringPiece value)
+    std::string_view key,
+    std::string_view value)
     : HeaderKeyValuePair(key, std::string(value)) {}
 
-HttpRequestHeaders::HeaderKeyValuePair::HeaderKeyValuePair(
-    base::StringPiece key,
-    std::string&& value)
+HttpRequestHeaders::HeaderKeyValuePair::HeaderKeyValuePair(std::string_view key,
+                                                           std::string&& value)
     : key(key), value(std::move(value)) {}
 
 HttpRequestHeaders::Iterator::Iterator(const HttpRequestHeaders& headers)
@@ -113,7 +115,7 @@ HttpRequestHeaders& HttpRequestHeaders::operator=(
 HttpRequestHeaders& HttpRequestHeaders::operator=(HttpRequestHeaders&& other) =
     default;
 
-bool HttpRequestHeaders::GetHeader(base::StringPiece key,
+bool HttpRequestHeaders::GetHeader(std::string_view key,
                                    std::string* out) const {
   auto it = FindHeader(key);
   if (it == headers_.end())
@@ -126,12 +128,12 @@ void HttpRequestHeaders::Clear() {
   headers_.clear();
 }
 
-void HttpRequestHeaders::SetHeader(base::StringPiece key,
-                                   base::StringPiece value) {
+void HttpRequestHeaders::SetHeader(std::string_view key,
+                                   std::string_view value) {
   SetHeader(key, std::string(value));
 }
 
-void HttpRequestHeaders::SetHeader(base::StringPiece key, std::string&& value) {
+void HttpRequestHeaders::SetHeader(std::string_view key, std::string&& value) {
   // Invalid header names or values could mean clients can attach
   // browser-internal headers.
   CHECK(HttpUtil::IsValidHeaderName(key)) << key;
@@ -141,13 +143,13 @@ void HttpRequestHeaders::SetHeader(base::StringPiece key, std::string&& value) {
 }
 
 void HttpRequestHeaders::SetHeaderWithoutCheckForTesting(
-    base::StringPiece key,
-    base::StringPiece value) {
+    std::string_view key,
+    std::string_view value) {
   SetHeaderInternal(key, std::string(value));
 }
 
-void HttpRequestHeaders::SetHeaderIfMissing(base::StringPiece key,
-                                            base::StringPiece value) {
+void HttpRequestHeaders::SetHeaderIfMissing(std::string_view key,
+                                            std::string_view value) {
   // Invalid header names or values could mean clients can attach
   // browser-internal headers.
   CHECK(HttpUtil::IsValidHeaderName(key));
@@ -157,13 +159,13 @@ void HttpRequestHeaders::SetHeaderIfMissing(base::StringPiece key,
     headers_.push_back(HeaderKeyValuePair(key, value));
 }
 
-void HttpRequestHeaders::RemoveHeader(base::StringPiece key) {
+void HttpRequestHeaders::RemoveHeader(std::string_view key) {
   auto it = FindHeader(key);
   if (it != headers_.end())
     headers_.erase(it);
 }
 
-void HttpRequestHeaders::AddHeaderFromString(base::StringPiece header_line) {
+void HttpRequestHeaders::AddHeaderFromString(std::string_view header_line) {
   DCHECK_EQ(std::string::npos, header_line.find("\r\n"))
       << "\"" << header_line << "\" contains CRLF.";
 
@@ -178,7 +180,7 @@ void HttpRequestHeaders::AddHeaderFromString(base::StringPiece header_line) {
     return;
   }
 
-  const base::StringPiece header_key(header_line.data(), key_end_index);
+  const std::string_view header_key = header_line.substr(0, key_end_index);
   if (!HttpUtil::IsValidHeaderName(header_key)) {
     LOG(DFATAL) << "\"" << header_line << "\" has invalid header key.";
     return;
@@ -187,8 +189,7 @@ void HttpRequestHeaders::AddHeaderFromString(base::StringPiece header_line) {
   const std::string::size_type value_index = key_end_index + 1;
 
   if (value_index < header_line.size()) {
-    base::StringPiece header_value(header_line.data() + value_index,
-                                   header_line.size() - value_index);
+    std::string_view header_value = header_line.substr(value_index);
     header_value = HttpUtil::TrimLWS(header_value);
     if (!HttpUtil::IsValidHeaderValue(header_value)) {
       LOG(DFATAL) << "\"" << header_line << "\" has invalid header value.";
@@ -198,12 +199,12 @@ void HttpRequestHeaders::AddHeaderFromString(base::StringPiece header_line) {
   } else if (value_index == header_line.size()) {
     SetHeader(header_key, "");
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 }
 
-void HttpRequestHeaders::AddHeadersFromString(base::StringPiece headers) {
-  for (base::StringPiece header : base::SplitStringPieceUsingSubstr(
+void HttpRequestHeaders::AddHeadersFromString(std::string_view headers) {
+  for (std::string_view header : base::SplitStringPieceUsingSubstr(
            headers, "\r\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
     AddHeaderFromString(header);
   }
@@ -297,7 +298,7 @@ void HttpRequestHeaders::SetAcceptEncodingIfMissing(
 }
 
 HttpRequestHeaders::HeaderVector::iterator HttpRequestHeaders::FindHeader(
-    base::StringPiece key) {
+    std::string_view key) {
   for (auto it = headers_.begin(); it != headers_.end(); ++it) {
     if (base::EqualsCaseInsensitiveASCII(key, it->key))
       return it;
@@ -307,7 +308,7 @@ HttpRequestHeaders::HeaderVector::iterator HttpRequestHeaders::FindHeader(
 }
 
 HttpRequestHeaders::HeaderVector::const_iterator HttpRequestHeaders::FindHeader(
-    base::StringPiece key) const {
+    std::string_view key) const {
   for (auto it = headers_.begin(); it != headers_.end(); ++it) {
     if (base::EqualsCaseInsensitiveASCII(key, it->key))
       return it;
@@ -316,7 +317,7 @@ HttpRequestHeaders::HeaderVector::const_iterator HttpRequestHeaders::FindHeader(
   return headers_.end();
 }
 
-void HttpRequestHeaders::SetHeaderInternal(base::StringPiece key,
+void HttpRequestHeaders::SetHeaderInternal(std::string_view key,
                                            std::string&& value) {
   auto it = FindHeader(key);
   if (it != headers_.end())

@@ -6,6 +6,9 @@
 
 #include <stddef.h>
 
+#include <string_view>
+
+#include "base/containers/fixed_flat_set.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_functions.h"
@@ -46,12 +49,6 @@ int GetSimilarLanguageGroupCode(const std::string& language) {
   return 0;
 }
 
-// Well-known languages which often have wrong server configuration of
-// Content-Language: en.
-const char* const kWellKnownCodesOnWrongConfiguration[] = {
-    "es",    "pt", "ja", "ru", "de", "zh-CN",
-    "zh-TW", "ar", "id", "fr", "it", "th"};
-
 // Applies a series of language code modification in proper order.
 void ApplyLanguageCodeCorrection(std::string* code) {
   // Correct well-known format errors.
@@ -89,7 +86,7 @@ std::string FilterDetectedLanguage(const std::string& utf8_text,
   // not supported.
   if (!is_detection_reliable)
     return translate::kUnknownLanguageCode;
-  // TODO(crbug.com/1178193): Determine if ar-Latn and hi-Latn need to be added
+  // TODO(crbug.com/40169055): Determine if ar-Latn and hi-Latn need to be added
   // for the TFLite-based detection model.
   if (detected_language == "bg-Latn" || detected_language == "el-Latn" ||
       detected_language == "ja-Latn" || detected_language == "ru-Latn" ||
@@ -268,13 +265,13 @@ void CorrectLanguageCodeTypo(std::string* code) {
 bool IsValidLanguageCode(const std::string& code) {
   // Roughly check if the language code follows /[a-zA-Z]{2,3}(-[a-zA-Z]{2})?/.
   // TODO(hajimehoshi): How about es-419, which is used as an Accept language?
-  std::vector<base::StringPiece> chunks = base::SplitStringPiece(
+  std::vector<std::string_view> chunks = base::SplitStringPiece(
       code, "-", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
   if (chunks.size() < 1 || 2 < chunks.size())
     return false;
 
-  const base::StringPiece& main_code = chunks[0];
+  std::string_view main_code = chunks[0];
 
   if (main_code.size() < 1 || 3 < main_code.size())
     return false;
@@ -287,7 +284,7 @@ bool IsValidLanguageCode(const std::string& code) {
   if (chunks.size() == 1)
     return true;
 
-  const base::StringPiece& sub_code = chunks[1];
+  std::string_view sub_code = chunks[1];
 
   if (sub_code.size() != 2)
     return false;
@@ -331,11 +328,13 @@ bool IsSameOrSimilarLanguages(const std::string& page_language,
 }
 
 bool IsServerWrongConfigurationLanguage(const std::string& language_code) {
-  for (size_t i = 0; i < std::size(kWellKnownCodesOnWrongConfiguration); ++i) {
-    if (language_code == kWellKnownCodesOnWrongConfiguration[i])
-      return true;
-  }
-  return false;
+  // Well-known languages which often have wrong server configuration of
+  // Content-Language: en.
+  constexpr auto kSet = base::MakeFixedFlatSet<std::string_view>(
+      {"es", "pt", "ja", "ru", "de", "zh-CN", "zh-TW", "ar", "id", "fr", "it",
+       "th"});
+
+  return kSet.contains(language_code);
 }
 
 bool MaybeServerWrongConfiguration(const std::string& page_language,

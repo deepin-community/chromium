@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "device/vr/android/cardboard/cardboard_image_transport.h"
 
 #include <memory>
@@ -40,7 +45,7 @@ CardboardImageTransport::CardboardImageTransport(
 CardboardImageTransport::~CardboardImageTransport() = default;
 
 void CardboardImageTransport::DoRuntimeInitialization() {
-  // TODO(https://crbug.com/1429088): Move this into helper classes rather than
+  // TODO(crbug.com/40900864): Move this into helper classes rather than
   // directly using the cardboard types here.
   CardboardOpenGlEsDistortionRendererConfig config = {
       CardboardSupportedOpenGlEsTextureType::kGlTextureExternalOes,
@@ -62,7 +67,7 @@ void CardboardImageTransport::DoRuntimeInitialization() {
 }
 
 void CardboardImageTransport::UpdateDistortionMesh() {
-  // TODO(https://crbug.com/1429088): Move this into helper classes rather than
+  // TODO(crbug.com/40900864): Move this into helper classes rather than
   // directly using the cardboard types here.
   auto params = CardboardDeviceParams::GetDeviceParams();
   CHECK(params.IsValid());

@@ -21,6 +21,7 @@
 #include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/password_manager/android/password_manager_android_util.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend_error.h"
 #include "components/password_manager/core/browser/password_store/split_stores_and_local_upm.h"
 #include "components/password_manager/core/browser/password_sync_util.h"
@@ -35,8 +36,6 @@ namespace password_manager {
 
 namespace {
 
-using sync_util::IsSyncFeatureEnabledIncludingPasswords;
-
 bool ShouldErrorResultInFallback(PasswordStoreBackendError error) {
   switch (error.recovery_type) {
     case PasswordStoreBackendErrorRecoveryType::kUnrecoverable:
@@ -45,7 +44,6 @@ bool ShouldErrorResultInFallback(PasswordStoreBackendError error) {
       return false;
   }
 }
-
 
 using MethodName = base::StrongAlias<struct MethodNameTag, std::string>;
 
@@ -59,17 +57,38 @@ std::string GetFallbackMetricNameForMethod(const MethodName& method_name) {
                        method_name.value(), ".Fallback"});
 }
 
+void RecordPasswordDeletionResult(PasswordChangesOrError result) {
+  bool is_operation_successful = true;
+  if (absl::holds_alternative<PasswordStoreBackendError>(result)) {
+    is_operation_successful = false;
+  }
+  base::UmaHistogramBoolean(
+      "PasswordManager.PasswordStoreProxyBackend.PasswordRemovalStatus",
+      is_operation_successful);
+  if (!is_operation_successful) {
+    return;
+  }
+
+  PasswordChanges changes = absl::get<PasswordChanges>(std::move(result));
+
+  if (changes.has_value()) {
+    base::UmaHistogramCounts1000(
+        "PasswordManager.PasswordStoreProxyBackend.RemovedPasswordCount",
+        changes.value().size());
+  }
+}
+
 }  // namespace
 
 PasswordStoreProxyBackend::PasswordStoreProxyBackend(
     std::unique_ptr<PasswordStoreBackend> built_in_backend,
     std::unique_ptr<PasswordStoreBackend> android_backend,
-    PrefService* prefs,
-    IsAccountStore is_account_store)
+    PrefService* prefs)
     : built_in_backend_(std::move(built_in_backend)),
       android_backend_(std::move(android_backend)),
-      prefs_(prefs),
-      is_account_store_(is_account_store) {}
+      prefs_(prefs) {
+  CHECK(!password_manager::UsesSplitStoresAndUPMForLocal(prefs_));
+}
 
 PasswordStoreProxyBackend::~PasswordStoreProxyBackend() = default;
 
@@ -107,6 +126,7 @@ void PasswordStoreProxyBackend::InitBackend(
 }
 
 void PasswordStoreProxyBackend::Shutdown(base::OnceClosure shutdown_completed) {
+  weak_ptr_factory_.InvalidateWeakPtrs();
   base::RepeatingClosure pending_shutdown_calls = base::BarrierClosure(
       /*num_closures=*/2, std::move(shutdown_completed));
   android_backend_->Shutdown(pending_shutdown_calls);
@@ -138,7 +158,7 @@ void PasswordStoreProxyBackend::GetAutofillableLoginsAsync(
 void PasswordStoreProxyBackend::GetAllLoginsForAccountAsync(
     std::string account,
     LoginsOrErrorReply callback) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void PasswordStoreProxyBackend::FillMatchingLoginsAsync(
@@ -234,15 +254,17 @@ void PasswordStoreProxyBackend::UpdateLoginAsync(
 }
 
 void PasswordStoreProxyBackend::RemoveLoginAsync(
+    const base::Location& location,
     const PasswordForm& form,
     PasswordChangesOrErrorReply callback) {
-  main_backend()->RemoveLoginAsync(form, std::move(callback));
+  main_backend()->RemoveLoginAsync(location, form, std::move(callback));
   if (UsesAndroidBackendAsMainBackend()) {
-    shadow_backend()->RemoveLoginAsync(form, base::DoNothing());
+    shadow_backend()->RemoveLoginAsync(location, form, base::DoNothing());
   }
 }
 
 void PasswordStoreProxyBackend::RemoveLoginsByURLAndTimeAsync(
+    const base::Location& location,
     const base::RepeatingCallback<bool(const GURL&)>& url_filter,
     base::Time delete_begin,
     base::Time delete_end,
@@ -253,31 +275,33 @@ void PasswordStoreProxyBackend::RemoveLoginsByURLAndTimeAsync(
   // later.
   CHECK(!sync_completion);
   main_backend()->RemoveLoginsByURLAndTimeAsync(
-      url_filter, delete_begin, delete_end, base::NullCallback(),
+      location, url_filter, delete_begin, delete_end, base::NullCallback(),
       std::move(callback));
   if (UsesAndroidBackendAsMainBackend()) {
     shadow_backend()->RemoveLoginsByURLAndTimeAsync(
-        url_filter, std::move(delete_begin), std::move(delete_end),
+        location, url_filter, std::move(delete_begin), std::move(delete_end),
         base::NullCallback(), base::DoNothing());
   }
 }
 
 void PasswordStoreProxyBackend::RemoveLoginsCreatedBetweenAsync(
+    const base::Location& location,
     base::Time delete_begin,
     base::Time delete_end,
     PasswordChangesOrErrorReply callback) {
-  main_backend()->RemoveLoginsCreatedBetweenAsync(delete_begin, delete_end,
-                                                  std::move(callback));
+  main_backend()->RemoveLoginsCreatedBetweenAsync(
+      location, delete_begin, delete_end, std::move(callback));
   if (UsesAndroidBackendAsMainBackend()) {
     shadow_backend()->RemoveLoginsCreatedBetweenAsync(
-        std::move(delete_begin), std::move(delete_end), base::DoNothing());
+        location, std::move(delete_begin), std::move(delete_end),
+        base::DoNothing());
   }
 }
 
 void PasswordStoreProxyBackend::DisableAutoSignInForOriginsAsync(
     const base::RepeatingCallback<bool(const GURL&)>& origin_filter,
     base::OnceClosure completion) {
-  // TODO(https://crbug.com/1278807): Implement error handling, when actual
+  // TODO(crbug.com/40208332): Implement error handling, when actual
   // store changes will be received from the store.
   main_backend()->DisableAutoSignInForOriginsAsync(origin_filter,
                                                    std::move(completion));
@@ -287,15 +311,8 @@ SmartBubbleStatsStore* PasswordStoreProxyBackend::GetSmartBubbleStatsStore() {
   return main_backend()->GetSmartBubbleStatsStore();
 }
 
-std::unique_ptr<syncer::ProxyModelTypeControllerDelegate>
+std::unique_ptr<syncer::ModelTypeControllerDelegate>
 PasswordStoreProxyBackend::CreateSyncControllerDelegate() {
-  if (base::FeatureList::IsEnabled(
-          features::kUnifiedPasswordManagerSyncUsingAndroidBackendOnly)) {
-    // The android backend (PasswordStoreAndroidBackend) creates a controller
-    // delegate that prevents sync from actually communicating with the sync
-    // server using the built in SyncEngine.
-    return android_backend_->CreateSyncControllerDelegate();
-  }
   return built_in_backend_->CreateSyncControllerDelegate();
 }
 
@@ -304,6 +321,13 @@ void PasswordStoreProxyBackend::OnSyncServiceInitialized(
   sync_service_ = sync_service;
   sync_service_->AddObserver(this);
   android_backend_->OnSyncServiceInitialized(sync_service);
+  MaybeClearBuiltInBackend();
+
+  if (!password_manager::sync_util::HasChosenToSyncPasswords(sync_service_)) {
+    // Reset initial UPM migration if password sync is disabled.
+    prefs_->SetInteger(prefs::kCurrentMigrationVersionToGoogleMobileServices,
+                       0);
+  }
 }
 
 void PasswordStoreProxyBackend::RecordAddLoginAsyncCalledFromTheStore() {
@@ -325,13 +349,6 @@ void PasswordStoreProxyBackend::MaybeFallbackOnOperation(
     const MethodName& method_name,
     base::OnceCallback<void(ResultT)> result_callback,
     ResultT result) {
-  if (password_manager::UsesSplitStoresAndUPMForLocal(prefs_)) {
-    // After store split the backend doesn't support unenrollment and as such
-    // doesn't support fallbacks.
-    std::move(result_callback).Run(std::move(result));
-    return;
-  }
-
   if (absl::holds_alternative<PasswordStoreBackendError>(result) &&
       ShouldErrorResultInFallback(
           absl::get<PasswordStoreBackendError>(result))) {
@@ -353,6 +370,14 @@ PasswordStoreBackend* PasswordStoreProxyBackend::shadow_backend() {
                                            : android_backend_.get();
 }
 
+void PasswordStoreProxyBackend::OnStateChanged(syncer::SyncService* sync) {
+  if (!password_manager::sync_util::HasChosenToSyncPasswords(sync_service_)) {
+    // Reset initial UPM migration if password sync is disabled.
+    prefs_->SetInteger(prefs::kCurrentMigrationVersionToGoogleMobileServices,
+                       0);
+  }
+}
+
 void PasswordStoreProxyBackend::OnSyncShutdown(
     syncer::SyncService* sync_service) {
   sync_service->RemoveObserver(this);
@@ -372,38 +397,69 @@ void PasswordStoreProxyBackend::OnRemoteFormChangesReceived(
 }
 
 bool PasswordStoreProxyBackend::UsesAndroidBackendAsMainBackend() {
-  CHECK(sync_service_, base::NotFatalUntil::M123);
-  if (is_account_store_) {
-    // The account store shouldn't be used unless the split happened.
-    CHECK(password_manager::UsesSplitStoresAndUPMForLocal(prefs_));
-    return UsesAndroidBackendAsMainBackendForAccount();
+  CHECK(sync_service_);
+  if (!password_manager::sync_util::HasChosenToSyncPasswords(sync_service_)) {
+    return false;
   }
-  return UsesAndroidBackendAsMainBackendForProfile();
-}
 
-bool PasswordStoreProxyBackend::UsesAndroidBackendAsMainBackendForAccount() {
-  CHECK(is_account_store_);
-  return !prefs_->GetBoolean(
-      prefs::kUnenrolledFromGoogleMobileServicesDueToErrors);
-}
+  bool is_unenrolled =
+      prefs_->GetBoolean(prefs::kUnenrolledFromGoogleMobileServicesDueToErrors);
 
-bool PasswordStoreProxyBackend::UsesAndroidBackendAsMainBackendForProfile() {
-  CHECK(!is_account_store_);
-  if (password_manager::UsesSplitStoresAndUPMForLocal(prefs_)) {
+  if (!base::FeatureList::IsEnabled(
+          features::kUnifiedPasswordManagerSyncOnlyInGMSCore)) {
+    // If M4 feature flag is disabled use `android_backend` as long as there was
+    // no unenrollment.
+    return !is_unenrolled;
+  }
+
+  // If there are no passwords in the `LoginDatabase` UPM can be enabled
+  // regardless of other factors since if there are no passwords no migration is
+  // required.
+  if (prefs_->GetBoolean(prefs::kEmptyProfileStoreLoginDatabase)) {
     return true;
   }
 
-  // If this is the profile store being used prior to the store split,
-  // then it would use the Android backend only for enrolled syncing users.
-  if (prefs_->GetBoolean(
-          prefs::kUnenrolledFromGoogleMobileServicesDueToErrors)) {
+  // There are passwords in the `LoginDatabase`. In order to ensure that those
+  // passwords are available in the `android_backend_` the user has to not be
+  // unrolled and has to have finished the initial migration.
+  if (is_unenrolled ||
+      prefs_->GetInteger(
+          prefs::kCurrentMigrationVersionToGoogleMobileServices) == 0) {
     return false;
   }
 
-  if (!IsSyncFeatureEnabledIncludingPasswords(sync_service_)) {
-    return false;
-  }
   return true;
+}
+
+void PasswordStoreProxyBackend::MaybeClearBuiltInBackend() {
+  CHECK(!password_manager::UsesSplitStoresAndUPMForLocal(prefs_));
+
+  // Don't do anything if `kUnifiedPasswordManagerSyncOnlyInGMSCore` feature is
+  // not enabled.
+  if (!base::FeatureList::IsEnabled(
+          features::kUnifiedPasswordManagerSyncOnlyInGMSCore)) {
+    return;
+  }
+
+  // Don't do anything if password syncing is not enabled.
+  if (!password_manager::sync_util::HasChosenToSyncPasswords(sync_service_)) {
+    return;
+  }
+
+  // Don't do anything if the user didn't complete initial UPM migration or was
+  // unenrolled in the past.
+  if (prefs_->GetInteger(
+          prefs::kCurrentMigrationVersionToGoogleMobileServices) == 0 ||
+      prefs_->GetBoolean(
+          prefs::kUnenrolledFromGoogleMobileServicesDueToErrors)) {
+    return;
+  }
+
+  if (base::FeatureList::IsEnabled(features::kClearLoginDatabaseForUPMUsers)) {
+    built_in_backend_->RemoveLoginsCreatedBetweenAsync(
+        FROM_HERE, base::Time(), base::Time::Max(),
+        base::BindOnce(&RecordPasswordDeletionResult));
+  }
 }
 
 }  // namespace password_manager

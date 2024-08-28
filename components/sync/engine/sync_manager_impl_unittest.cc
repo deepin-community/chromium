@@ -148,8 +148,7 @@ class ComponentsFactory : public TestEngineComponentsFactory {
       const std::string& name,
       SyncCycleContext* context,
       CancelationSignal* stop_handle,
-      bool local_sync_backend_enabled,
-      bool sync_poll_immediately_on_every_startup) override {
+      bool local_sync_backend_enabled) override {
     DCHECK(scheduler_to_use_);
     return std::move(scheduler_to_use_);
   }
@@ -257,12 +256,12 @@ TEST_F(SyncManagerImplTest, ShouldSetHasPendingInvalidations) {
 
   sync_manager()->SetHasPendingInvalidations(
       BOOKMARKS, /*has_pending_invalidations=*/true);
-  EXPECT_EQ(status.invalidated_data_types.Size(), 1u);
+  EXPECT_EQ(status.invalidated_data_types.size(), 1u);
   EXPECT_TRUE(status.invalidated_data_types.Has(BOOKMARKS));
 
   sync_manager()->SetHasPendingInvalidations(
       BOOKMARKS, /*has_pending_invalidations=*/false);
-  EXPECT_TRUE(status.invalidated_data_types.Empty());
+  EXPECT_TRUE(status.invalidated_data_types.empty());
 }
 
 }  // namespace

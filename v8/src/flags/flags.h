@@ -18,15 +18,6 @@
 
 namespace v8::internal {
 
-class V8_EXPORT_PRIVATE FlagHelpers {
- public:
-  static char NormalizeChar(char ch);
-
-  static int FlagNamesCmp(const char* a, const char* b);
-
-  static bool EqualNames(const char* a, const char* b);
-};
-
 // The value of a single flag (this is the type of all v8_flags.* fields).
 template <typename T>
 class FlagValue {
@@ -47,6 +38,7 @@ class FlagValue {
                 std::is_same_v<const char*, T>);
 
  public:
+  using underlying_type = T;
   explicit constexpr FlagValue(T value) : value_(value) {}
 
   // Implicitly convert to a {T}. Not marked {constexpr} so we do not get

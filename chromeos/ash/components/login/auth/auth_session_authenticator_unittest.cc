@@ -4,6 +4,7 @@
 
 #include "chromeos/ash/components/login/auth/auth_session_authenticator.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -13,8 +14,6 @@
 #include "ash/constants/ash_switches.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/functional/callback_helpers.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
@@ -22,23 +21,19 @@
 #include "base/test/test_future.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
+#include "chromeos/ash/components/dbus/cryptohome/auth_factor.pb.h"
 #include "chromeos/ash/components/dbus/cryptohome/key.pb.h"
-#include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/ash/components/dbus/userdataauth/cryptohome_misc_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/mock_userdataauth_client.h"
-#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/login/auth/auth_events_recorder.h"
+#include "chromeos/ash/components/login/auth/authenticator.h"
 #include "chromeos/ash/components/login/auth/mock_auth_status_consumer.h"
 #include "chromeos/ash/components/login/auth/mock_safe_mode_delegate.h"
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "chromeos/ash/components/login/auth/public/cryptohome_key_constants.h"
-#include "chromeos/ash/components/login/auth/public/key.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/account_id/account_id.h"
-#include "components/prefs/pref_service_factory.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/prefs/testing_pref_store.h"
-#include "components/user_manager/user_directory_integrity_manager.h"
 #include "components/user_manager/user_type.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -53,8 +48,6 @@ using user_data_auth::AUTH_FACTOR_TYPE_KIOSK;
 using user_data_auth::AUTH_FACTOR_TYPE_PASSWORD;
 using user_data_auth::AUTH_INTENT_DECRYPT;
 using user_data_auth::AUTH_INTENT_VERIFY_ONLY;
-using user_data_auth::AUTH_SESSION_FLAGS_EPHEMERAL_USER;
-using user_data_auth::AUTH_SESSION_FLAGS_NONE;
 using user_data_auth::AuthenticateAuthFactorReply;
 using user_data_auth::AuthFactor;
 using user_data_auth::CreatePersistentUserReply;
@@ -63,7 +56,6 @@ using user_data_auth::PrepareEphemeralVaultReply;
 using user_data_auth::PrepareGuestVaultReply;
 using user_data_auth::PreparePersistentVaultReply;
 using user_data_auth::RemoveReply;
-using user_data_auth::RestoreDeviceKeyReply;
 using user_data_auth::StartAuthSessionReply;
 
 namespace ash {
@@ -90,11 +82,18 @@ MATCHER(WithAccountId, "") {
   return arg.account_id().account_id() == kEmail;
 }
 
-// Matcher for `StartAuthSessionRequest` that checks its account_id, flags and
-// intent.
-MATCHER_P2(WithAccountIdAndFlags, flags, intent, "") {
-  return arg.account_id().account_id() == kEmail &&
-         arg.flags() == static_cast<unsigned>(flags) && arg.intent() == intent;
+// Matcher for `StartAuthSessionRequest` that checks its account_id, intent, and
+// that the user is persistent.
+MATCHER_P(WithPersistentAccountId, intent, "") {
+  return arg.account_id().account_id() == kEmail && !arg.is_ephemeral_user() &&
+         arg.intent() == intent;
+}
+
+// Matcher for `StartAuthSessionRequest` that checks its account_id, intent, and
+// that the user is ephemeral.
+MATCHER_P(WithEphemeralAccountId, intent, "") {
+  return arg.account_id().account_id() == kEmail && arg.is_ephemeral_user() &&
+         arg.intent() == intent;
 }
 
 // Matcher for `AuthenticateAuthFactorRequest` that verify the key properties.
@@ -102,7 +101,8 @@ MATCHER_P(WithPasswordFactorAuth, expected_label, "") {
   if (!arg.auth_input().has_password_input()) {
     return false;
   }
-  if (arg.auth_factor_label() != expected_label) {
+  if (arg.auth_factor_labels().size() != 1 ||
+      arg.auth_factor_labels(0) != expected_label) {
     return false;
   }
 
@@ -153,7 +153,8 @@ MATCHER(WithKioskFactorAuth, "") {
   if (!arg.auth_input().has_kiosk_input()) {
     return false;
   }
-  if (arg.auth_factor_label() != kCryptohomePublicMountLabel) {
+  if (arg.auth_factor_labels().size() != 1 ||
+      arg.auth_factor_labels(0) != kCryptohomePublicMountLabel) {
     return false;
   }
   return true;
@@ -174,6 +175,13 @@ StartAuthSessionReply BuildStartReply(const std::string& auth_session_id,
   reply.set_user_exists(user_exists);
   for (const auto& factor : factors) {
     (*reply.add_auth_factors()) = factor;
+
+    auto* factor_with_status = reply.add_configured_auth_factors_with_status();
+    factor_with_status->mutable_status_info();
+    *factor_with_status->mutable_auth_factor() = factor;
+    factor_with_status->mutable_status_info()->set_time_available_in(0);
+    factor_with_status->mutable_status_info()->set_time_expiring_in(
+        std::numeric_limits<uint64_t>::max());
   }
   return reply;
 }
@@ -299,7 +307,8 @@ class AuthSessionAuthenticatorTest : public testing::Test,
     RegisterPrefs();
     authenticator_ = base::MakeRefCounted<AuthSessionAuthenticator>(
         &auth_status_consumer_, std::move(owned_safe_mode_delegate),
-        /*user_recorder=*/base::DoNothing(), &local_state_);
+        /*user_recorder=*/base::DoNothing(), /* new_user_can_be_owner=*/false,
+        &local_state_);
   }
 
   MockUserDataAuthClient& userdataauth() { return userdataauth_; }
@@ -343,7 +352,7 @@ class AuthSessionAuthenticatorTest : public testing::Test,
   std::unique_ptr<AuthEventsRecorder> auth_events_recorder_;
 };
 
-INSTANTIATE_TEST_SUITE_P(All,
+INSTANTIATE_TEST_SUITE_P(,
                          AuthSessionAuthenticatorTest,
                          /*local_passwords_feature_enabled=*/testing::Bool());
 
@@ -355,9 +364,7 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginRegularNew) {
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
   EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
+              StartAuthSession(WithPersistentAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(kFirstAuthSessionId,
                                           /*user_exists=*/false,
                                           /*factors=*/{})));
@@ -390,44 +397,6 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginRegularNew) {
   EXPECT_EQ(got_user_context.GetAuthSessionId(), kFirstAuthSessionId);
 }
 
-// Test the `RestoreDeviceKey()` method for the key eviction on the user
-// session.
-TEST_P(AuthSessionAuthenticatorTest, RestoreDeviceKeyOnLockScreen) {
-  // Arrange.
-
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kRestoreKeyOnLockScreen);
-
-  CreateAuthenticator();
-  auto user_context = std::make_unique<UserContext>(
-      user_manager::UserType::kRegular, kAccountId);
-  user_context->SetKey(Key(kPassword));
-  EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
-      .WillOnce(ReplyWith(BuildStartReply(
-          kFirstAuthSessionId, /*user_exists=*/true,
-          /*factors=*/{PasswordFactor(kCryptohomeGaiaKeyLabel)})));
-  EXPECT_CALL(userdataauth(),
-              AuthenticateAuthFactor(
-                  AllOf(WithFirstAuthSessionId(),
-                        WithPasswordFactorAuth(kCryptohomeGaiaKeyLabel)),
-                  _))
-      .WillOnce(ReplyWith(BuildAuthenticateFactorSuccessReply()));
-  EXPECT_CALL(userdataauth(), RestoreDeviceKey(WithFirstAuthSessionId(), _))
-      .WillOnce(ReplyWith(RestoreDeviceKeyReply()));
-
-  // Act.
-  authenticator().AuthenticateToUnlock(/*ephemeral=*/false,
-                                       std::move(user_context));
-  const UserContext got_user_context = on_auth_success_future().Get();
-
-  // Assert.
-  EXPECT_EQ(got_user_context.GetAccountId(), kAccountId);
-  EXPECT_EQ(got_user_context.GetAuthSessionId(), kFirstAuthSessionId);
-}
-
 // Test the `CompleteLogin()` method in the existing regular user scenario.
 TEST_P(AuthSessionAuthenticatorTest, CompleteLoginRegularExisting) {
   // Arrange.
@@ -436,9 +405,7 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginRegularExisting) {
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
   EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
+              StartAuthSession(WithPersistentAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId, /*user_exists=*/true,
           /*factors=*/{PasswordFactor(kCryptohomeGaiaKeyLabel)})));
@@ -451,6 +418,15 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginRegularExisting) {
   EXPECT_CALL(userdataauth(),
               PreparePersistentVault(WithFirstAuthSessionId(), _))
       .WillOnce(ReplyWith(PreparePersistentVaultReply()));
+
+  user_data_auth::ListAuthFactorsReply reply;
+  auto* factor = reply.add_configured_auth_factors();
+  factor->set_type(user_data_auth::AUTH_FACTOR_TYPE_PASSWORD);
+  factor->set_label(kCryptohomeGaiaKeyLabel);
+  reply.add_supported_auth_factors(user_data_auth::AUTH_FACTOR_TYPE_PASSWORD);
+  reply.add_supported_auth_factors(user_data_auth::AUTH_FACTOR_TYPE_PIN);
+  EXPECT_CALL(userdataauth(), ListAuthFactors(WithAccountId(), _))
+      .WillOnce(ReplyWith(reply));
 
   // Act.
   authenticator().CompleteLogin(/*ephemeral=*/false, std::move(user_context));
@@ -471,9 +447,7 @@ TEST_P(AuthSessionAuthenticatorTest,
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
   EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
+              StartAuthSession(WithPersistentAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId,
           /*user_exists=*/true,
@@ -504,11 +478,8 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginEphemeral) {
   auto user_context = std::make_unique<UserContext>(
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
-  EXPECT_CALL(
-      userdataauth(),
-      StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                             AUTH_INTENT_DECRYPT),
-                       _))
+  EXPECT_CALL(userdataauth(),
+              StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(kFirstAuthSessionId,
                                           /*user_exists=*/false,
                                           /*factors=*/{})));
@@ -516,16 +487,14 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginEphemeral) {
               PrepareEphemeralVault(WithFirstAuthSessionId(), _))
       .WillOnce(ReplyWith(BuildPrepareEphemeralVaultReply()));
 
-  if (!GetParam()) {
-    // We do not call `AddAuthFactor` during complete login if local passwords
-    // are enabled.
-    EXPECT_CALL(
-        userdataauth(),
-        AddAuthFactor(AllOf(WithFirstAuthSessionId(),
-                            WithPasswordFactorAdd(kCryptohomeGaiaKeyLabel)),
-                      _))
-        .WillOnce(ReplyWith(AddAuthFactorReply()));
-  }
+  // TODO(b/344603210): restore parameter once we have
+  // long-term implementation.
+  EXPECT_CALL(
+      userdataauth(),
+      AddAuthFactor(AllOf(WithFirstAuthSessionId(),
+                          WithPasswordFactorAdd(kCryptohomeGaiaKeyLabel)),
+                    _))
+      .WillOnce(ReplyWith(AddAuthFactorReply()));
   EXPECT_CALL(userdataauth(), ListAuthFactors(WithAccountId(), _))
       .WillOnce(ReplyWith(ListAuthFactorsReply()));
 
@@ -548,22 +517,18 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginEphemeralStaleData) {
   user_context->SetKey(Key(kPassword));
   {
     testing::InSequence seq;
-    EXPECT_CALL(userdataauth(),
-                StartAuthSession(
-                    WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                          AUTH_INTENT_DECRYPT),
-                    _))
+    EXPECT_CALL(
+        userdataauth(),
+        StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_DECRYPT), _))
         .WillOnce(
             ReplyWith(BuildStartReply(kFirstAuthSessionId, /*user_exists=*/true,
                                       /*factors=*/{})))
         .RetiresOnSaturation();
     EXPECT_CALL(userdataauth(), Remove(WithFirstAuthSessionId(), _))
         .WillOnce(ReplyWith(RemoveReply()));
-    EXPECT_CALL(userdataauth(),
-                StartAuthSession(
-                    WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                          AUTH_INTENT_DECRYPT),
-                    _))
+    EXPECT_CALL(
+        userdataauth(),
+        StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_DECRYPT), _))
         .WillOnce(ReplyWith(BuildStartReply(kSecondAuthSessionId,
                                             /*user_exists=*/false,
                                             /*factors=*/{})));
@@ -571,16 +536,14 @@ TEST_P(AuthSessionAuthenticatorTest, CompleteLoginEphemeralStaleData) {
                 PrepareEphemeralVault(WithSecondAuthSessionId(), _))
         .WillOnce(ReplyWith(BuildPrepareEphemeralVaultReply()));
 
-    if (!GetParam()) {
-      // We do not call `AddAuthFactor` during complete login if local passwords
-      // are enabled.
-      EXPECT_CALL(
-          userdataauth(),
-          AddAuthFactor(AllOf(WithSecondAuthSessionId(),
-                              WithPasswordFactorAdd(kCryptohomeGaiaKeyLabel)),
-                        _))
-          .WillOnce(ReplyWith(AddAuthFactorReply()));
-    }
+    // TODO(b/344603210): restore parameter once we have
+    // long-term implementation.
+    EXPECT_CALL(
+        userdataauth(),
+        AddAuthFactor(AllOf(WithSecondAuthSessionId(),
+                            WithPasswordFactorAdd(kCryptohomeGaiaKeyLabel)),
+                      _))
+        .WillOnce(ReplyWith(AddAuthFactorReply()));
     EXPECT_CALL(userdataauth(), ListAuthFactors(WithAccountId(), _))
         .WillOnce(ReplyWith(ListAuthFactorsReply()));
   }
@@ -602,9 +565,7 @@ TEST_P(AuthSessionAuthenticatorTest, AuthenticateToLogin) {
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
   EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
+              StartAuthSession(WithPersistentAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId,
           /*user_exists=*/true,
@@ -638,9 +599,7 @@ TEST_P(AuthSessionAuthenticatorTest, AuthenticateToLoginAuthFailure) {
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
   EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
+              StartAuthSession(WithPersistentAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId, /*user_exists=*/true,
           /*factors=*/{PasswordFactor(kCryptohomeGaiaKeyLabel)})));
@@ -677,11 +636,8 @@ TEST_P(AuthSessionAuthenticatorTest, LoginAsPublicSession) {
   // Arrange.
   CreateAuthenticator();
   UserContext user_context(user_manager::UserType::kPublicAccount, kAccountId);
-  EXPECT_CALL(
-      userdataauth(),
-      StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                             AUTH_INTENT_DECRYPT),
-                       _))
+  EXPECT_CALL(userdataauth(),
+              StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(kFirstAuthSessionId,
                                           /*user_exists=*/false,
                                           /*factors=*/{})));
@@ -704,9 +660,7 @@ TEST_P(AuthSessionAuthenticatorTest, LoginAsKioskAccountNew) {
   // Arrange.
   CreateAuthenticator();
   EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
+              StartAuthSession(WithPersistentAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(
           ReplyWith(BuildStartReply(kFirstAuthSessionId, /*user_exists=*/false,
                                     /*factors=*/{})));
@@ -739,9 +693,7 @@ TEST_P(AuthSessionAuthenticatorTest, LoginAsKioskAccountExisting) {
   KeyData key_data;
   key_data.set_type(KeyData::KEY_TYPE_KIOSK);
   EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_DECRYPT),
-                               _))
+              StartAuthSession(WithPersistentAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(
           ReplyWith(BuildStartReply(kFirstAuthSessionId, /*user_exists=*/true,
                                     /*factors=*/{KioskFactor()})));
@@ -766,11 +718,8 @@ TEST_P(AuthSessionAuthenticatorTest, LoginAsKioskAccountExisting) {
 TEST_P(AuthSessionAuthenticatorTest, LoginAsKioskAccountEphemeral) {
   // Arrange.
   CreateAuthenticator();
-  EXPECT_CALL(
-      userdataauth(),
-      StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                             AUTH_INTENT_DECRYPT),
-                       _))
+  EXPECT_CALL(userdataauth(),
+              StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_DECRYPT), _))
       .WillOnce(ReplyWith(BuildStartReply(kFirstAuthSessionId,
                                           /*user_exists=*/false,
                                           /*factors=*/{})));
@@ -794,22 +743,18 @@ TEST_P(AuthSessionAuthenticatorTest, LoginAsKioskAccountEphemeralStaleData) {
   CreateAuthenticator();
   {
     testing::InSequence seq;
-    EXPECT_CALL(userdataauth(),
-                StartAuthSession(
-                    WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                          AUTH_INTENT_DECRYPT),
-                    _))
+    EXPECT_CALL(
+        userdataauth(),
+        StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_DECRYPT), _))
         .WillOnce(ReplyWith(BuildStartReply(kFirstAuthSessionId,
                                             /*user_exists=*/true,
                                             /*factors=*/{})))
         .RetiresOnSaturation();
     EXPECT_CALL(userdataauth(), Remove(WithFirstAuthSessionId(), _))
         .WillOnce(ReplyWith(RemoveReply()));
-    EXPECT_CALL(userdataauth(),
-                StartAuthSession(
-                    WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                          AUTH_INTENT_DECRYPT),
-                    _))
+    EXPECT_CALL(
+        userdataauth(),
+        StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_DECRYPT), _))
         .WillOnce(ReplyWith(BuildStartReply(kSecondAuthSessionId,
                                             /*user_exists=*/false,
                                             /*factors=*/{})));
@@ -834,10 +779,9 @@ TEST_P(AuthSessionAuthenticatorTest, AuthenticateToUnlock) {
   auto user_context = std::make_unique<UserContext>(
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
-  EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_VERIFY_ONLY),
-                               _))
+  EXPECT_CALL(
+      userdataauth(),
+      StartAuthSession(WithPersistentAccountId(AUTH_INTENT_VERIFY_ONLY), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId,
           /*user_exists=*/true,
@@ -869,9 +813,7 @@ TEST_P(AuthSessionAuthenticatorTest, AuthenticateToUnlockEphemeral) {
   user_context->SetKey(Key(kPassword));
   EXPECT_CALL(
       userdataauth(),
-      StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                             AUTH_INTENT_VERIFY_ONLY),
-                       _))
+      StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_VERIFY_ONLY), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId,
           /*user_exists=*/true,
@@ -902,9 +844,7 @@ TEST_P(AuthSessionAuthenticatorTest, AuthenticateToUnlockMgs) {
       user_manager::UserType::kPublicAccount, kAccountId);
   EXPECT_CALL(
       userdataauth(),
-      StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_EPHEMERAL_USER,
-                                             AUTH_INTENT_VERIFY_ONLY),
-                       _))
+      StartAuthSession(WithEphemeralAccountId(AUTH_INTENT_VERIFY_ONLY), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId,
           /*user_exists=*/true,
@@ -934,10 +874,9 @@ TEST_P(AuthSessionAuthenticatorTest, AuthenticateToUnlockinAuthFailure) {
   auto user_context = std::make_unique<UserContext>(
       user_manager::UserType::kRegular, kAccountId);
   user_context->SetKey(Key(kPassword));
-  EXPECT_CALL(userdataauth(),
-              StartAuthSession(WithAccountIdAndFlags(AUTH_SESSION_FLAGS_NONE,
-                                                     AUTH_INTENT_VERIFY_ONLY),
-                               _))
+  EXPECT_CALL(
+      userdataauth(),
+      StartAuthSession(WithPersistentAccountId(AUTH_INTENT_VERIFY_ONLY), _))
       .WillOnce(ReplyWith(BuildStartReply(
           kFirstAuthSessionId, /*user_exists=*/true,
           /*factors=*/{PasswordFactor(kCryptohomeGaiaKeyLabel)})));

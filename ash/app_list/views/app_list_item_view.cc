@@ -11,10 +11,12 @@
 #include <utility>
 #include <vector>
 
+#include "ash/app_list/app_collections_constants.h"
 #include "ash/app_list/app_list_item_util.h"
 #include "ash/app_list/app_list_metrics.h"
 #include "ash/app_list/app_list_util.h"
 #include "ash/app_list/app_list_view_delegate.h"
+#include "ash/app_list/apps_collections_controller.h"
 #include "ash/app_list/model/app_list_folder_item.h"
 #include "ash/app_list/model/app_list_item.h"
 #include "ash/app_list/model/folder_image.h"
@@ -24,6 +26,7 @@
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/app_list/app_list_features.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
+#include "ash/public/cpp/app_menu_constants.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/style/color_provider.h"
 #include "ash/resources/vector_icons/vector_icons.h"
@@ -108,8 +111,8 @@ constexpr int kMouseDragUIDelayInMs = 200;
 
 // Delay in milliseconds of when the dragging UI should be shown for touch drag.
 // Note: For better user experience, this is made shorter than
-// ET_GESTURE_LONG_PRESS delay, which is too long for this case, e.g., about
-// 650ms.
+// EventType::kGestureLongPress delay, which is too long for this case, e.g.,
+// about 650ms.
 constexpr int kTouchLongpressDelayInMs = 300;
 
 // For touch initiated dragging, shift the cursor anchor point of the scaled
@@ -290,6 +293,14 @@ bool IsIndexMovingToDifferentRow(GridIndex old_index,
                                  int cols) {
   return old_index.slot / cols != new_index.slot / cols ||
          old_index.page != new_index.page;
+}
+
+bool IsReorderCommand(int command_id) {
+  CommandId command = static_cast<CommandId>(command_id);
+
+  return (command == CommandId::REORDER_BY_NAME_ALPHABETICAL ||
+          command == CommandId::REORDER_BY_NAME_REVERSE_ALPHABETICAL ||
+          command == CommandId::REORDER_BY_COLOR);
 }
 
 }  // namespace
@@ -529,18 +540,65 @@ class AppListItemView::FolderIconView : public views::View,
   std::string dragged_item_id_;
 };
 
+// An AppMenuAdapter specific to AppListItems that are shown in the context of
+// the AppsCollections. The adapter intercepts sort requests and delegates them
+// to AppsCollectionsController.
+class AppsCollectionsMenuModelAdapter : public AppListMenuModelAdapter {
+ public:
+  AppsCollectionsMenuModelAdapter(
+      const std::string& app_id,
+      std::unique_ptr<ui::SimpleMenuModel> menu_model,
+      views::Widget* widget_owner,
+      ui::MenuSourceType source_type,
+      const AppLaunchedMetricParams& metric_params,
+      AppListViewAppType type,
+      base::OnceClosure on_menu_closed_callback,
+      bool is_tablet_mode,
+      AppCollection collection)
+      : AppListMenuModelAdapter(app_id,
+                                std::move(menu_model),
+                                widget_owner,
+                                source_type,
+                                metric_params,
+                                type,
+                                std::move(on_menu_closed_callback),
+                                is_tablet_mode,
+                                collection) {}
+
+  AppsCollectionsMenuModelAdapter(const AppsCollectionsMenuModelAdapter&) =
+      delete;
+  AppsCollectionsMenuModelAdapter& operator=(
+      const AppsCollectionsMenuModelAdapter&) = delete;
+
+  ~AppsCollectionsMenuModelAdapter() override = default;
+
+  void ExecuteCommand(int id, int mouse_event_flags) override {
+    // Intercept Reorder commands to show the reorder confirmation dialog.
+    if (IsReorderCommand(id)) {
+      AppsCollectionsController::Get()->RequestAppReorder(
+          static_cast<CommandId>(id) == CommandId::REORDER_BY_COLOR
+              ? AppListSortOrder::kColor
+              : AppListSortOrder::kNameAlphabetical);
+      return;
+    }
+
+    // Note that ExecuteCommand might delete us.
+    AppListMenuModelAdapter::ExecuteCommand(id, mouse_event_flags);
+  }
+};
+
 BEGIN_METADATA(AppListItemView, FolderIconView)
 END_METADATA
 
 AppListItemView::AppListItemView(const AppListConfig* app_list_config,
-                                 GridDelegate* grid_delegate,
+                                 AppListItemViewGridDelegate* grid_delegate,
                                  AppListItem* item,
                                  AppListViewDelegate* view_delegate,
                                  Context context)
-    : views::Button(
-          base::BindRepeating(&GridDelegate::OnAppListItemViewActivated,
-                              base::Unretained(grid_delegate),
-                              base::Unretained(this))),
+    : views::Button(base::BindRepeating(
+          &AppListItemViewGridDelegate::OnAppListItemViewActivated,
+          base::Unretained(grid_delegate),
+          base::Unretained(this))),
       app_list_config_(app_list_config),
       is_folder_(item->GetItemType() == AppListFolderItem::kItemType),
       item_weak_(item),
@@ -553,7 +611,7 @@ AppListItemView::AppListItemView(const AppListConfig* app_list_config,
   DCHECK(view_delegate_);
   SetFocusBehavior(FocusBehavior::ALWAYS);
   set_suppress_default_focus_handling();
-  GetViewAccessibility().OverrideIsLeaf(true);
+  GetViewAccessibility().SetIsLeaf(true);
 
   is_promise_app_ =
       item_weak_->GetMetadata()->app_status == AppStatus::kPending ||
@@ -675,7 +733,8 @@ AppListItemView::AppListItemView(const AppListConfig* app_list_config,
   item->AddObserver(this);
 
   if (is_folder_) {
-    context_menu_for_folder_ = std::make_unique<AppsGridContextMenu>();
+    context_menu_for_folder_ = std::make_unique<AppsGridContextMenu>(
+        AppsGridContextMenu::GridType::kAppsGrid);
     set_context_menu_controller(context_menu_for_folder_.get());
   } else {
     set_context_menu_controller(this);
@@ -685,14 +744,22 @@ AppListItemView::AppListItemView(const AppListConfig* app_list_config,
 
   preview_circle_radius_ = 0;
 
-  if (features::IsUserEducationEnabled() && context == Context::kAppsGridView) {
-    if (std::optional<ui::ElementIdentifier> element_identifier =
-            UserEducationController::Get()->GetElementIdentifierForAppId(
-                item->id())) {
-      // NOTE: Set `kHelpBubbleContextKey` before `views::kElementIdentifierKey`
-      // in case registration causes a help bubble to be created synchronously.
-      SetProperty(kHelpBubbleContextKey, HelpBubbleContext::kAsh);
-      SetProperty(views::kElementIdentifierKey, *element_identifier);
+  if (UserEducationController::Get()) {
+    switch (context) {
+      case Context::kRecentAppsView:
+        break;
+      case Context::kAppsGridView:
+      case Context::kAppsCollection:
+        if (std::optional<ui::ElementIdentifier> element_identifier =
+                UserEducationController::Get()->GetElementIdentifierForAppId(
+                    item->id())) {
+          // NOTE: Set `kHelpBubbleContextKey` before
+          // `views::kElementIdentifierKey` in case registration causes a help
+          // bubble to be created synchronously.
+          SetProperty(kHelpBubbleContextKey, HelpBubbleContext::kAsh);
+          SetProperty(views::kElementIdentifierKey, *element_identifier);
+        }
+        break;
     }
   }
 }
@@ -1129,6 +1196,13 @@ void AppListItemView::OnDragDone() {
   OnDragEnded();
 }
 
+void AppListItemView::ScrollRectToVisible(const gfx::Rect& rect) {
+  gfx::Rect enlarged_rect = rect;
+  enlarged_rect.Outset(8);
+
+  views::Button::ScrollRectToVisible(enlarged_rect);
+}
+
 void AppListItemView::CancelContextMenu() {
   if (item_menu_model_adapter_) {
     menu_close_initiated_from_drag_ = true;
@@ -1168,7 +1242,7 @@ void AppListItemView::SetItemName(const std::u16string& display_name,
   }
 
   // Use full name for accessibility.
-  SetAccessibleName(
+  GetViewAccessibility().SetName(
       is_folder_ ? l10n_util::GetStringFUTF16(
                        IDS_APP_LIST_FOLDER_BUTTON_ACCESSIBILE_NAME,
                        full_name.empty() ? folder_name_placeholder : full_name)
@@ -1177,7 +1251,7 @@ void AppListItemView::SetItemName(const std::u16string& display_name,
 }
 
 void AppListItemView::SetItemAccessibleName(const std::u16string& name) {
-  SetAccessibleName(name);
+  GetViewAccessibility().SetName(name);
 }
 
 void AppListItemView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
@@ -1229,6 +1303,10 @@ void AppListItemView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   }
   if (!app_status_description.empty()) {
     descriptions.push_back(app_status_description);
+  }
+
+  if (context_ == Context::kAppsCollection) {
+    descriptions.push_back(GetAppCollectionName(item_weak_->collection_id()));
   }
 
   // Set the concatenated descriptions.
@@ -1295,6 +1373,13 @@ void AppListItemView::OnContextMenuModelReceived(
       metric_params.launched_from = AppListLaunchedFrom::kLaunchedFromGrid;
       metric_params.launch_type = AppListLaunchType::kApp;
       break;
+    case Context::kAppsCollection:
+      app_type =
+          AppListMenuModelAdapter::PRODUCTIVITY_LAUNCHER_APPS_COLLECTIONS;
+      metric_params.launched_from =
+          AppListLaunchedFrom::kLaunchedFromAppsCollections;
+      metric_params.launch_type = AppListLaunchType::kApp;
+      break;
     case Context::kRecentAppsView:
       app_type = AppListMenuModelAdapter::PRODUCTIVITY_LAUNCHER_RECENT_APP;
       metric_params.launched_from =
@@ -1304,12 +1389,23 @@ void AppListItemView::OnContextMenuModelReceived(
   }
   view_delegate_->GetAppLaunchedMetricParams(&metric_params);
 
-  item_menu_model_adapter_ = std::make_unique<AppListMenuModelAdapter>(
-      item_weak_->GetMetadata()->id, std::move(menu_model), GetWidget(),
-      source_type, metric_params, app_type,
-      base::BindOnce(&AppListItemView::OnMenuClosed,
-                     weak_ptr_factory_.GetWeakPtr()),
-      view_delegate_->IsInTabletMode());
+  if (context_ == Context::kAppsCollection) {
+    item_menu_model_adapter_ =
+        std::make_unique<AppsCollectionsMenuModelAdapter>(
+            item_weak_->GetMetadata()->id, std::move(menu_model), GetWidget(),
+            source_type, metric_params, app_type,
+            base::BindOnce(&AppListItemView::OnMenuClosed,
+                           weak_ptr_factory_.GetWeakPtr()),
+            view_delegate_->IsInTabletMode(), item_weak_->collection_id());
+
+  } else {
+    item_menu_model_adapter_ = std::make_unique<AppListMenuModelAdapter>(
+        item_weak_->GetMetadata()->id, std::move(menu_model), GetWidget(),
+        source_type, metric_params, app_type,
+        base::BindOnce(&AppListItemView::OnMenuClosed,
+                       weak_ptr_factory_.GetWeakPtr()),
+        view_delegate_->IsInTabletMode(), item_weak_->collection_id());
+  }
 
   item_menu_model_adapter_->Run(
       anchor_rect, views::MenuAnchorPosition::kBubbleRight, run_types);
@@ -1341,11 +1437,21 @@ void AppListItemView::ShowContextMenuForViewImpl(
   views::InkDrop::Get(this)->AnimateToState(views::InkDropState::ACTIVATED,
                                             nullptr);
 
-  // When the context menu comes from the apps grid it has sorting options. When
-  // it comes from recent apps it has an option to hide the continue section.
-  AppListItemContext item_context = context_ == Context::kAppsGridView
-                                        ? AppListItemContext::kAppsGrid
-                                        : AppListItemContext::kRecentApps;
+  // When the context menu comes from the apps grid or the apps collections grid
+  // it has sorting options. When it comes from recent apps it has an option to
+  // hide the continue section.
+  AppListItemContext item_context;
+  switch (context_) {
+    case Context::kAppsGridView:
+      item_context = AppListItemContext::kAppsGrid;
+      break;
+    case Context::kAppsCollection:
+      item_context = AppListItemContext::kAppsCollectionsGrid;
+      break;
+    case Context::kRecentAppsView:
+      item_context = AppListItemContext::kRecentApps;
+      break;
+  }
   view_delegate_->GetContextMenuModel(
       item_weak_->id(), item_context,
       base::BindOnce(&AppListItemView::OnContextMenuModelReceived,
@@ -1356,9 +1462,9 @@ bool AppListItemView::ShouldEnterPushedState(const ui::Event& event) {
   if (drag_state_ != DragState::kNone) {
     return false;
   }
-  // Don't enter pushed state for ET_GESTURE_TAP_DOWN so that hover gray
+  // Don't enter pushed state for EventType::kGestureTapDown so that hover gray
   // background does not show up during scroll.
-  if (event.type() == ui::ET_GESTURE_TAP_DOWN) {
+  if (event.type() == ui::EventType::kGestureTapDown) {
     return false;
   }
 
@@ -1399,7 +1505,9 @@ void AppListItemView::Layout(PassKey) {
   SetBackgroundExtendedState(is_icon_extended_, /*animate=*/false);
 
   gfx::Rect title_bounds = GetTitleBoundsForTargetViewBounds(
-      app_list_config_, rect, title_->GetPreferredSize(), icon_scale_);
+      app_list_config_, rect,
+      title_->GetPreferredSize(views::SizeBounds(title_->width(), {})),
+      icon_scale_);
   if (new_install_dot_ && new_install_dot_->GetVisible()) {
     // If the new install dot is showing, and the dot would extend outside the
     // left edge of the tile, inset the title bounds to make space for the dot.
@@ -1436,7 +1544,8 @@ void AppListItemView::Layout(PassKey) {
   }
 }
 
-gfx::Size AppListItemView::CalculatePreferredSize() const {
+gfx::Size AppListItemView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(app_list_config_->grid_tile_width(),
                    app_list_config_->grid_tile_height());
 }
@@ -1599,7 +1708,7 @@ void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
       app_list_features::IsDragAndDropRefactorEnabled();
 
   switch (event->type()) {
-    case ui::ET_GESTURE_SCROLL_BEGIN:
+    case ui::EventType::kGestureScrollBegin:
       if (touch_dragging_) {
         if (is_drag_and_drop_enabled) {
           OnDragStarted();
@@ -1611,7 +1720,7 @@ void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
         touch_drag_timer_.Stop();
       }
       break;
-    case ui::ET_GESTURE_SCROLL_UPDATE:
+    case ui::EventType::kGestureScrollUpdate:
       if (touch_dragging_ && drag_state_ != DragState::kNone) {
         if (is_drag_and_drop_enabled &&
             MaybeStartTouchDrag(event->location())) {
@@ -1622,8 +1731,8 @@ void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
         }
       }
       break;
-    case ui::ET_GESTURE_SCROLL_END:
-    case ui::ET_SCROLL_FLING_START:
+    case ui::EventType::kGestureScrollEnd:
+    case ui::EventType::kScrollFlingStart:
       if (touch_dragging_) {
         if (!is_drag_and_drop_enabled) {
           SetTouchDragging(false);
@@ -1631,7 +1740,7 @@ void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
         }
       }
       break;
-    case ui::ET_GESTURE_TAP_DOWN:
+    case ui::EventType::kGestureTapDown:
       if (GetState() != STATE_DISABLED && IsItemDraggable()) {
         SetState(STATE_PRESSED);
         touch_drag_timer_.Start(
@@ -1642,15 +1751,15 @@ void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
         event->SetHandled();
       }
       break;
-    case ui::ET_GESTURE_TAP:
-    case ui::ET_GESTURE_TAP_CANCEL:
+    case ui::EventType::kGestureTap:
+    case ui::EventType::kGestureTapCancel:
       if (GetState() != STATE_DISABLED) {
         touch_drag_timer_.Stop();
         SetState(STATE_NORMAL);
       }
       break;
-    case ui::ET_GESTURE_LONG_TAP:
-    case ui::ET_GESTURE_END:
+    case ui::EventType::kGestureLongTap:
+    case ui::EventType::kGestureEnd:
       if (is_drag_and_drop_enabled && drag_state_ == DragState::kInitialized) {
         // Reset `drag_state_` if there was an attempt to initiate it (i.e. the
         // touch drag timer fired) but was not properly started (i.e. the app
@@ -1663,7 +1772,7 @@ void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
         grid_delegate_->SetSelectedView(this);
       }
       break;
-    case ui::ET_GESTURE_LONG_PRESS:
+    case ui::EventType::kGestureLongPress:
       if (is_drag_and_drop_enabled) {
         // Handle the long press event on long press to avoid RootView to
         // trigger View::DoDrag for this view before the item is dragged.
@@ -1673,7 +1782,7 @@ void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
         event->SetHandled();
       }
       break;
-    case ui::ET_GESTURE_TWO_FINGER_TAP:
+    case ui::EventType::kGestureTwoFingerTap:
       if (touch_dragging_) {
         SetTouchDragging(false);
       } else {
@@ -1784,7 +1893,7 @@ bool AppListItemView::IsShowingAppMenu() const {
 }
 
 bool AppListItemView::IsItemDraggable() const {
-  return context_ != Context::kRecentAppsView;
+  return context_ == Context::kAppsGridView;
 }
 
 bool AppListItemView::IsNotificationIndicatorShownForTest() const {
@@ -1798,7 +1907,8 @@ void AppListItemView::SetContextMenuShownCallbackForTest(
 
 gfx::Rect AppListItemView::GetDefaultTitleBoundsForTest() {
   return GetTitleBoundsForTargetViewBounds(
-      app_list_config_, GetContentsBounds(), title_->GetPreferredSize(),
+      app_list_config_, GetContentsBounds(),
+      title_->GetPreferredSize(views::SizeBounds(title_->width(), {})),
       icon_scale_);
 }
 

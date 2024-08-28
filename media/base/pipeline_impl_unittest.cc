@@ -116,7 +116,7 @@ class PipelineImplTest : public ::testing::Test {
 
     // SetDemuxerExpectations() adds overriding expectations for expected
     // non-NULL streams.
-    std::vector<raw_ptr<DemuxerStream, VectorExperimental>> empty;
+    std::vector<DemuxerStream*> empty;
     EXPECT_CALL(*demuxer_, GetAllStreams()).WillRepeatedly(Return(empty));
 
     EXPECT_CALL(*demuxer_, GetTimelineOffset())
@@ -365,7 +365,7 @@ class PipelineImplTest : public ::testing::Test {
   base::WeakPtr<MockRenderer> renderer_;
   std::unique_ptr<StrictMock<MockDemuxerStream>> audio_stream_;
   std::unique_ptr<StrictMock<MockDemuxerStream>> video_stream_;
-  std::vector<raw_ptr<DemuxerStream, VectorExperimental>> streams_;
+  std::vector<DemuxerStream*> streams_;
   // This field is not a raw_ptr<> because it was filtered by the rewriter for:
   // #addr-of
   RAW_PTR_EXCLUSION RendererClient* renderer_client_ = nullptr;
@@ -893,7 +893,7 @@ TEST_F(PipelineImplTest, GetMediaTime) {
   EXPECT_EQ(kMediaTime, pipeline_->GetMediaTime());
 
   // Media time should not go backwards even if the renderer returns an
-  // errorneous value. PipelineImpl should clamp it to last reported value.
+  // erroneous value. PipelineImpl should clamp it to last reported value.
   EXPECT_CALL(*renderer_, GetMediaTime())
       .WillRepeatedly(Return(base::Seconds(1)));
   EXPECT_EQ(kMediaTime, pipeline_->GetMediaTime());
@@ -1139,7 +1139,7 @@ class PipelineTeardownTest : public PipelineImplTest {
       return;
     }
 
-    NOTREACHED() << "State not supported: " << state;
+    NOTREACHED_IN_MIGRATION() << "State not supported: " << state;
   }
 
   void DoSuspend(TeardownState state, StopOrError stop_or_error) {
@@ -1178,7 +1178,7 @@ class PipelineTeardownTest : public PipelineImplTest {
             .WillOnce(Stop(pipeline_.get()));
       }
     } else if (state != kSuspended && state != kSuspending) {
-      NOTREACHED() << "State not supported: " << state;
+      NOTREACHED_IN_MIGRATION() << "State not supported: " << state;
     }
   }
 

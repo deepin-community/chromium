@@ -31,7 +31,7 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/profile_metrics/browser_profile_type.h"
-#include "components/search_engines/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engines_pref_names.h"
 #include "components/variations/variations.mojom.h"
 #include "components/variations/variations_client.h"
@@ -229,16 +229,26 @@ std::string Profile::OTRProfileID::Serialize() const {
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
-Profile::Profile() {
+Profile::Profile(const OTRProfileID* otr_profile_id)
+    : otr_profile_id_(otr_profile_id ? std::make_optional(*otr_profile_id)
+                                     : std::nullopt) {
 #if DCHECK_IS_ON()
   base::AutoLock lock(g_profile_instances_lock.Get());
   g_profile_instances.Get().insert(this);
 #endif  // DCHECK_IS_ON()
 
   BrowserContextDependencyManager::GetInstance()->MarkBrowserContextLive(this);
+
+#if BUILDFLAG(IS_ANDROID)
+  InitJavaObject();
+#endif
 }
 
 Profile::~Profile() {
+#if BUILDFLAG(IS_ANDROID)
+  DestroyJavaObject();
+#endif
+
 #if DCHECK_IS_ON()
   base::AutoLock lock(g_profile_instances_lock.Get());
   g_profile_instances.Get().erase(this);
@@ -346,8 +356,6 @@ void Profile::RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterDictionaryPref(prefs::kPartitionDefaultZoomLevel);
   registry->RegisterDictionaryPref(prefs::kPartitionPerHostZoomLevels);
   registry->RegisterStringPref(prefs::kPreinstalledApps, "install");
-  registry->RegisterBooleanPref(prefs::kSpeechRecognitionFilterProfanities,
-                                true);
   registry->RegisterIntegerPref(prefs::kProfileIconVersion, 0);
   registry->RegisterBooleanPref(prefs::kAllowDinosaurEasterEgg, true);
 #if BUILDFLAG(IS_CHROMEOS)
@@ -440,7 +448,8 @@ bool Profile::IsMainProfilePath(base::FilePath profile_path) {
 #endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
 bool Profile::IsPrimaryOTRProfile() const {
-  return IsOffTheRecord() && GetOTRProfileID() == OTRProfileID::PrimaryID();
+  return otr_profile_id_.has_value() &&
+         otr_profile_id_.value() == OTRProfileID::PrimaryID();
 }
 
 bool Profile::CanUseDiskWhenOffTheRecord() {
@@ -538,6 +547,11 @@ Profile* Profile::GetPrimaryOTRProfile(bool create_if_needed) {
   return GetOffTheRecordProfile(OTRProfileID::PrimaryID(), create_if_needed);
 }
 
+const Profile::OTRProfileID& Profile::GetOTRProfileID() const {
+  DCHECK(IsOffTheRecord());
+  return otr_profile_id_.value();
+}
+
 bool Profile::HasPrimaryOTRProfile() {
   return HasOffTheRecordProfile(OTRProfileID::PrimaryID());
 }
@@ -559,6 +573,10 @@ class Profile::ChromeVariationsClient : public variations::VariationsClient {
  private:
   raw_ptr<Profile> profile_;
 };
+
+bool Profile::IsOffTheRecord() {
+  return otr_profile_id_.has_value();
+}
 
 variations::VariationsClient* Profile::GetVariationsClient() {
   if (!chrome_variations_client_)

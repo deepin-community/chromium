@@ -95,6 +95,7 @@ AxisEdge AxisEdgeFromItemPosition(GridTrackSizingDirection track_direction,
       }
       return is_for_columns ? logical.InlineEnd() : logical.BlockEnd();
     }
+    case ItemPosition::kAnchorCenter:
     case ItemPosition::kCenter:
       return AxisEdge::kCenter;
     case ItemPosition::kFlexStart:
@@ -124,11 +125,8 @@ AxisEdge AxisEdgeFromItemPosition(GridTrackSizingDirection track_direction,
       return AxisEdge::kStart;
     case ItemPosition::kLegacy:
     case ItemPosition::kAuto:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return AxisEdge::kStart;
-    case ItemPosition::kAnchorCenter:
-      NOTREACHED();
-      return AxisEdge::kCenter;
   }
 }
 
@@ -270,13 +268,13 @@ void GridItemData::SetAlignmentFallback(
           is_parallel_with_root_grid == (track_direction == kForRows);
 
       if (is_parallel_to_baseline_axis) {
-        return !item_style.LogicalHeight().IsPercentOrCalcOrStretch() &&
-               !item_style.LogicalMinHeight().IsPercentOrCalcOrStretch() &&
-               !item_style.LogicalMaxHeight().IsPercentOrCalcOrStretch();
+        return !item_style.LogicalHeight().HasPercentOrStretch() &&
+               !item_style.LogicalMinHeight().HasPercentOrStretch() &&
+               !item_style.LogicalMaxHeight().HasPercentOrStretch();
       } else {
-        return !item_style.LogicalWidth().IsPercentOrCalcOrStretch() &&
-               !item_style.LogicalMinWidth().IsPercentOrCalcOrStretch() &&
-               !item_style.LogicalMaxWidth().IsPercentOrCalcOrStretch();
+        return !item_style.LogicalWidth().HasPercentOrStretch() &&
+               !item_style.LogicalMinWidth().HasPercentOrStretch() &&
+               !item_style.LogicalMaxWidth().HasPercentOrStretch();
       }
     }
     return true;

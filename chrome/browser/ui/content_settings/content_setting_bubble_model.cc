@@ -75,7 +75,7 @@
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "ppapi/buildflags/buildflags.h"
 #include "services/device/public/cpp/device_features.h"
-#include "services/device/public/cpp/geolocation/geolocation_manager.h"
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #include "services/device/public/cpp/geolocation/location_system_permission_status.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -91,19 +91,19 @@
 #include "ui/resources/grit/ui_resources.h"
 
 #if BUILDFLAG(IS_MAC)
+#include "base/apple/bundle_locations.h"
 #include "base/mac/mac_util.h"
 #include "chrome/browser/media/webrtc/system_media_capture_permissions_mac.h"
+#include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_mac.h"
+#include "chrome/browser/web_applications/web_app_tab_helper.h"
 #endif
 
 using base::UserMetricsAction;
 using content::WebContents;
 using content_settings::PageSpecificContentSettings;
-using content_settings::SessionModel;
-using content_settings::SETTING_SOURCE_NONE;
-using content_settings::SETTING_SOURCE_USER;
 using content_settings::SettingInfo;
 using content_settings::SettingSource;
-using device::LocationSystemPermissionStatus;
+using content_settings::mojom::SessionModel;
 
 namespace {
 using ContentSettingBubbleAction =
@@ -145,11 +145,12 @@ bool GetSettingManagedByUser(const GURL& url,
   SettingInfo info;
   ContentSetting setting;
   if (type == ContentSettingsType::COOKIES) {
-    // TODO(crbug.com/1386190): Consider whether the following check should
+    // TODO(crbug.com/40247160): Consider whether the following check should
     // somehow determine real CookieSettingOverrides rather than default to
     // none.
     setting = CookieSettingsFactory::GetForProfile(profile)->GetCookieSetting(
-        url, url, net::CookieSettingOverrides(), &info);
+        url, net::SiteForCookies::FromUrl(url), url,
+        net::CookieSettingOverrides(), &info);
   } else {
     setting = map->GetContentSetting(url, url, type, &info);
   }
@@ -159,7 +160,7 @@ bool GetSettingManagedByUser(const GURL& url,
 
   // Prevent creation of content settings for illegal urls like about:blank by
   // disallowing user management.
-  return info.source == SETTING_SOURCE_USER &&
+  return info.source == SettingSource::kUser &&
          map->CanSetNarrowestContentSetting(url, url, type);
 }
 
@@ -306,7 +307,7 @@ void ContentSettingSimpleBubbleModel::SetMessage() {
   PageSpecificContentSettings* content_settings =
       PageSpecificContentSettings::GetForFrame(&GetPage().GetMainDocument());
 
-  // TODO(https://crbug.com/978882): Make the two arrays below static again once
+  // TODO(crbug.com/40633805): Make the two arrays below static again once
   // we no longer need to check base::FeatureList.
   const ContentSettingsTypeIdEntry kBlockedMessageIDs[] = {
       {ContentSettingsType::COOKIES, IDS_BLOCKED_ON_DEVICE_SITE_DATA_MESSAGE},
@@ -564,7 +565,7 @@ void ContentSettingRPHBubbleModel::PerformActionForSelectedItem() {
   else if (selected_item() == RPH_IGNORE)
     IgnoreProtocolHandler();
   else
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
 }
 
 // ContentSettingSingleRadioGroup ----------------------------------------------
@@ -727,7 +728,7 @@ ContentSettingStorageAccessBubbleModel::ContentSettingStorageAccessBubbleModel(
                         ContentSettingBubbleAction::kOpened);
   set_title(l10n_util::GetStringUTF16(IDS_SITE_SETTINGS_TYPE_STORAGE_ACCESS));
 
-  // TODO(crbug.com/1433644): Consider to add subtitles to all permissions.
+  // TODO(crbug.com/40064079): Consider to add subtitles to all permissions.
   set_subtitle(url_formatter::FormatUrlForSecurityDisplay(
       web_contents->GetURL(),
       url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC));
@@ -1298,44 +1299,51 @@ ContentSettingGeolocationBubbleModel::ContentSettingGeolocationBubbleModel(
                                      web_contents,
                                      ContentSettingsType::GEOLOCATION) {
   SetCustomLink();
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  // Get the stored geolocation content setting and the system permission state
-  // to determine whether geolocation is blocked by a system permission.
-  //
-  // The content setting must be read from HostContentSettingsMap.
-  // PageSpecificContentSettings cannot be used because it combines the
-  // site-level and system-level permissions, indicating the feature is blocked
-  // if either the site-level or system-level permission is not granted. We need
-  // to distinguish these cases to ensure the bubble that launches the system
-  // dialog is not shown if the site-level permission was not granted.
-  const GURL& url = web_contents->GetPrimaryMainFrame()->GetLastCommittedURL();
-  ContentSetting content_setting =
-      HostContentSettingsMapFactory::GetForProfile(GetProfile())
-          ->GetContentSetting(url, url, ContentSettingsType::GEOLOCATION);
-  if (content_setting == CONTENT_SETTING_ALLOW &&
-      device::GeolocationManager::GetInstance()->GetSystemPermission() !=
-          LocationSystemPermissionStatus::kAllowed) {
-    // If the permission is turned off in MacOS system preferences, overwrite
-    // the bubble to enable the user to trigger the system dialog.
-    InitializeSystemGeolocationPermissionBubble();
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  if (features::IsOsLevelGeolocationPermissionSupportEnabled()) {
+    // Get the stored geolocation content setting and the system permission
+    // state to determine whether geolocation is blocked by a system permission.
+    //
+    // The content setting must be read from HostContentSettingsMap.
+    // PageSpecificContentSettings cannot be used because it combines the
+    // site-level and system-level permissions, indicating the feature is
+    // blocked if either the site-level or system-level permission is not
+    // granted. We need to distinguish these cases to ensure the bubble that
+    // launches the system dialog is not shown if the site-level permission was
+    // not granted.
+    const GURL& url =
+        web_contents->GetPrimaryMainFrame()->GetLastCommittedURL();
+    ContentSetting content_setting =
+        HostContentSettingsMapFactory::GetForProfile(GetProfile())
+            ->GetContentSetting(url, url, ContentSettingsType::GEOLOCATION);
+    auto* geolocation_system_permission_manager =
+        device::GeolocationSystemPermissionManager::GetInstance();
+    DCHECK(geolocation_system_permission_manager);
+    if (content_setting == CONTENT_SETTING_ALLOW &&
+        geolocation_system_permission_manager->GetSystemPermission() !=
+            device::LocationSystemPermissionStatus::kAllowed) {
+      // If the permission is turned off in system preferences, overwrite the
+      // bubble to enable the user to trigger the system dialog.
+      InitializeSystemGeolocationPermissionBubble();
+    }
   }
-#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 }
 
 ContentSettingGeolocationBubbleModel::~ContentSettingGeolocationBubbleModel() =
     default;
 
 void ContentSettingGeolocationBubbleModel::OnDoneButtonClicked() {
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  if (show_system_geolocation_bubble_) {
+  if (features::IsOsLevelGeolocationPermissionSupportEnabled() &&
+      show_system_geolocation_bubble_) {
     base::RecordAction(UserMetricsAction(
         "ContentSettings.GeolocationDialog.OpenPreferencesClicked"));
 
-    auto* geolocation_manager = device::GeolocationManager::GetInstance();
-    DCHECK(geolocation_manager);
-    geolocation_manager->OpenSystemPermissionSetting();
+    auto* geolocation_system_permission_manager =
+        device::GeolocationSystemPermissionManager::GetInstance();
+    DCHECK(geolocation_system_permission_manager);
+    geolocation_system_permission_manager->OpenSystemPermissionSetting();
   }
-#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
 }
 
 void ContentSettingGeolocationBubbleModel::OnManageButtonClicked() {
@@ -1349,31 +1357,33 @@ void ContentSettingGeolocationBubbleModel::CommitChanges() {
   ContentSettingSingleRadioGroup::CommitChanges();
 }
 
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 void ContentSettingGeolocationBubbleModel::
     InitializeSystemGeolocationPermissionBubble() {
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+  if (features::IsOsLevelGeolocationPermissionSupportEnabled()) {
 #if BUILDFLAG(IS_MAC)
-  if (base::FeatureList::IsEnabled(features::kLocationPermissionsExperiment)) {
-    set_title(l10n_util::GetStringUTF16(
-        IDS_GEOLOCATION_TURNED_OFF_IN_MACOS_SETTINGS));
-  } else {
-    set_title(l10n_util::GetStringUTF16(IDS_GEOLOCATION_TURNED_OFF_IN_MACOS));
-  }
+      set_title(l10n_util::GetStringUTF16(IDS_GEOLOCATION_TURNED_OFF_IN_MACOS));
+#elif BUILDFLAG(IS_WIN)
+    set_title(l10n_util::GetStringUTF16(IDS_GEOLOCATION_TURNED_OFF_IN_WINDOWS));
+#elif BUILDFLAG(IS_CHROMEOS)
+    set_title(l10n_util::GetStringUTF16(IDS_GEOLOCATION_TURNED_OFF_IN_OS));
 #else
-  set_title(l10n_util::GetStringUTF16(IDS_GEOLOCATION_TURNED_OFF_IN_OS));
+    // The system-level location permission is not supported on Linux.
+    NOTREACHED_NORETURN();
 #endif
 
-  clear_message();
-  AddListItem(ContentSettingBubbleModel::ListItem(
-      &vector_icons::kLocationOnIcon,
-      l10n_util::GetStringUTF16(IDS_GEOLOCATION),
-      l10n_util::GetStringUTF16(IDS_TURNED_OFF), false, true, 0));
-  set_manage_text_style(ContentSettingBubbleModel::ManageTextStyle::kNone);
-  set_done_button_text(l10n_util::GetStringUTF16(IDS_OPEN_SETTINGS_LINK));
-  set_radio_group(RadioGroup());
-  show_system_geolocation_bubble_ = true;
-#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+    clear_message();
+    AddListItem(ContentSettingBubbleModel::ListItem(
+        &vector_icons::kLocationOnIcon,
+        l10n_util::GetStringUTF16(IDS_GEOLOCATION),
+        l10n_util::GetStringUTF16(IDS_TURNED_OFF), false, true, 0));
+    set_manage_text_style(ContentSettingBubbleModel::ManageTextStyle::kNone);
+    set_done_button_text(l10n_util::GetStringUTF16(IDS_OPEN_SETTINGS_LINK));
+    set_radio_group(RadioGroup());
+    show_system_geolocation_bubble_ = true;
+  }
 }
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
 void ContentSettingGeolocationBubbleModel::SetCustomLink() {
   auto* map = HostContentSettingsMapFactory::GetForProfile(
@@ -1382,10 +1392,45 @@ void ContentSettingGeolocationBubbleModel::SetCustomLink() {
   const GURL url =
       GetPage().GetMainDocument().GetLastCommittedOrigin().GetURL();
   map->GetWebsiteSetting(url, url, ContentSettingsType::GEOLOCATION, &info);
-  if (info.metadata.session_model() == SessionModel::OneTime) {
+  if (info.metadata.session_model() == SessionModel::ONE_TIME) {
     set_custom_link(l10n_util::GetStringUTF16(IDS_GEOLOCATION_WILL_ASK_AGAIN));
   }
 }
+
+// ContentSettingNotificationsBubbleModel ------------------------------------
+
+#if BUILDFLAG(IS_MAC)
+ContentSettingNotificationsBubbleModel::ContentSettingNotificationsBubbleModel(
+    Delegate* delegate,
+    content::WebContents* web_contents)
+    : ContentSettingSimpleBubbleModel(delegate,
+                                      web_contents,
+                                      ContentSettingsType::NOTIFICATIONS) {
+  set_title(l10n_util::GetStringUTF16(IDS_NOTIFICATIONS_TURNED_OFF_IN_MACOS));
+  AddListItem(ContentSettingBubbleModel::ListItem(
+      &vector_icons::kNotificationsOffChromeRefreshIcon,
+      l10n_util::GetStringUTF16(IDS_NOTIFICATIONS),
+      l10n_util::GetStringUTF16(IDS_TURNED_OFF), /*has_link=*/false,
+      /*has_blocked_badge=*/false, 0));
+  set_manage_text_style(ContentSettingBubbleModel::ManageTextStyle::kNone);
+  set_done_button_text(l10n_util::GetStringUTF16(IDS_OPEN_SETTINGS_LINK));
+}
+
+ContentSettingNotificationsBubbleModel::
+    ~ContentSettingNotificationsBubbleModel() = default;
+
+void ContentSettingNotificationsBubbleModel::OnDoneButtonClicked() {
+  std::string bundle_identifier = base::apple::MainBundleIdentifier();
+  if (std::optional<webapps::AppId> app_id =
+          web_app::WebAppTabHelper::GetAppIdForNotificationAttribution(
+              web_contents());
+      app_id.has_value()) {
+    bundle_identifier = web_app::GetBundleIdentifierForShim(*app_id);
+  }
+  base::mac::OpenSystemSettingsPane(
+      base::mac::SystemSettingsPane::kNotifications, bundle_identifier);
+}
+#endif
 
 // ContentSettingSubresourceFilterBubbleModel ----------------------------------
 
@@ -1515,7 +1560,7 @@ void ContentSettingDownloadsBubbleModel::SetRadioGroup() {
       radio_group.default_item = 1;
       break;
     case DownloadRequestLimiter::DOWNLOAD_UI_DEFAULT:
-      DUMP_WILL_BE_NOTREACHED_NORETURN();
+      DUMP_WILL_BE_NOTREACHED();
       return;
   }
   set_radio_group(radio_group);
@@ -1592,7 +1637,7 @@ ContentSettingQuietRequestBubbleModel::ContentSettingQuietRequestBubbleModel(
     Delegate* delegate,
     WebContents* web_contents)
     : ContentSettingBubbleModel(delegate, web_contents) {
-  // TODO(crbug.com/1030633): This block is more defensive than it needs to be
+  // TODO(crbug.com/40110076): This block is more defensive than it needs to be
   // because ContentSettingImageModelBrowserTest exercises it without setting up
   // the correct PermissionRequestManager state. Fix that.
   permissions::PermissionRequestManager* manager =
@@ -1613,7 +1658,7 @@ ContentSettingQuietRequestBubbleModel::ContentSettingQuietRequestBubbleModel(
       bubble_title_string_id = IDS_GEOLOCATION_QUIET_PERMISSION_BUBBLE_TITLE;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   set_title(l10n_util::GetStringUTF16(bubble_title_string_id));
   switch (*quiet_ui_reason) {
@@ -1645,7 +1690,7 @@ ContentSettingQuietRequestBubbleModel::ContentSettingQuietRequestBubbleModel(
       DCHECK_EQ(request_type, permissions::RequestType::kNotifications);
       set_message(l10n_util::GetStringUTF16(
           IDS_NOTIFICATIONS_QUIET_PERMISSION_BUBBLE_ABUSIVE_DESCRIPTION));
-      // TODO(crbug.com/1082738): It is rather confusing to have the `Cancel`
+      // TODO(crbug.com/40131070): It is rather confusing to have the `Cancel`
       // button allow the permission, but we want the primary to block.
       set_cancel_button_text(l10n_util::GetStringUTF16(
           IDS_NOTIFICATIONS_QUIET_PERMISSION_BUBBLE_COMPACT_ALLOW_BUTTON));
@@ -1687,7 +1732,7 @@ ContentSettingQuietRequestBubbleModel::ContentSettingQuietRequestBubbleModel(
               IDS_GEOLOCATION_QUIET_PERMISSION_BUBBLE_ALLOW_BUTTON;
           break;
         default:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
       }
       set_message(l10n_util::GetStringUTF16(bubble_message_string_id));
       set_done_button_text(
@@ -1733,7 +1778,7 @@ void ContentSettingQuietRequestBubbleModel::OnManageButtonClicked() {
             "Permissions.Prompt.QuietBubble.Geolocation.ManageClicked"));
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
 }
@@ -1866,8 +1911,8 @@ ContentSettingBubbleModel::CreateContentSettingBubbleModel(
       return std::make_unique<ContentSettingStorageAccessBubbleModel>(
           delegate, web_contents);
     default:
-      NOTREACHED() << "No bubble for the content type "
-                   << static_cast<int32_t>(content_type) << ".";
+      NOTREACHED_IN_MIGRATION() << "No bubble for the content type "
+                                << static_cast<int32_t>(content_type) << ".";
   }
   return nullptr;
 }

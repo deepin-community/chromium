@@ -21,7 +21,6 @@
 #include "third_party/blink/renderer/platform/graphics/paint/cull_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_chunk_subset.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller_test.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/testing/paint_test_configurations.h"
 
 namespace blink {
@@ -110,7 +109,7 @@ class PaintControllerPaintTestBase : public RenderingTest {
   // hit test, visual viewport, overlays, etc. Includes LayoutView scrolling
   // background.
   PaintChunkSubset ContentPaintChunks() {
-    const auto& chunks = RootPaintController().PaintChunks();
+    const auto& chunks = RootPaintController().GetPaintChunks();
     wtf_size_t begin_index = 0;
     wtf_size_t end_index = chunks.size();
     while (begin_index < end_index) {
@@ -125,7 +124,7 @@ class PaintControllerPaintTestBase : public RenderingTest {
            IsNotContentType(chunks[end_index - 1].id.type)) {
       end_index--;
     }
-    auto artifact = RootPaintController().GetPaintArtifactShared();
+    const auto& artifact = RootPaintController().GetPaintArtifact();
     PaintChunkSubset subset(artifact, chunks[begin_index]);
     for (wtf_size_t i = begin_index + 1; i < end_index; i++) {
       subset.Merge(PaintChunkSubset(artifact, chunks[i]));

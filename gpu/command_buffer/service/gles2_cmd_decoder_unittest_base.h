@@ -26,7 +26,6 @@
 #include "gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h"
 #include "gpu/command_buffer/service/gles2_query_manager.h"
 #include "gpu/command_buffer/service/gpu_tracer.h"
-#include "gpu/command_buffer/service/mailbox_manager_impl.h"
 #include "gpu/command_buffer/service/passthrough_discardable_manager.h"
 #include "gpu/command_buffer/service/program_manager.h"
 #include "gpu/command_buffer/service/renderbuffer_manager.h"
@@ -218,8 +217,8 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
     InitState(const InitState& other);
     InitState& operator=(const InitState& other);
 
-    std::string extensions = "GL_EXT_framebuffer_object";
-    std::string gl_version = "2.1";
+    std::string extensions;
+    std::string gl_version = "OpenGL ES 3.0";
     bool has_alpha = false;
     bool has_depth = false;
     bool has_stencil = false;
@@ -299,10 +298,14 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
   void DoBindBuffer(GLenum target, GLuint client_id, GLuint service_id);
   void DoBindFramebuffer(GLenum target, GLuint client_id, GLuint service_id);
   void DoBindRenderbuffer(GLenum target, GLuint client_id, GLuint service_id);
+  void SetupExpectationsForInternalFormatSampleCountsHelper(
+      GLenum target,
+      GLenum internal_format,
+      GLint expected_num_sample_counts,
+      GLint expected_sample0);
   void DoRenderbufferStorageMultisampleCHROMIUM(GLenum target,
                                                 GLsizei samples,
                                                 GLenum internal_format,
-                                                GLenum gl_format,
                                                 GLsizei width,
                                                 GLsizei height,
                                                 bool expect_bind);
@@ -381,9 +384,11 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
                         GLsizei width,
                         GLsizei height,
                         GLint border);
-  void DoRenderbufferStorage(
-      GLenum target, GLenum internal_format, GLenum actual_format,
-      GLsizei width, GLsizei height, GLenum error);
+  void DoRenderbufferStorage(GLenum target,
+                             GLenum internal_format,
+                             GLsizei width,
+                             GLsizei height,
+                             GLenum error);
   void DoFramebufferRenderbuffer(
       GLenum target,
       GLenum attachment,
@@ -514,12 +519,6 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
       bool stencil_enabled);
 
   void SetupExpectationsForApplyingDefaultDirtyState();
-
-  void AddExpectationsForSimulatedAttrib0WithError(
-      GLsizei num_vertices, GLuint buffer_id, GLenum error);
-
-  void AddExpectationsForSimulatedAttrib0(
-      GLsizei num_vertices, GLuint buffer_id);
 
   void AddExpectationsForGenVertexArraysOES();
   void AddExpectationsForDeleteVertexArraysOES();
@@ -793,7 +792,6 @@ class GLES2DecoderTestBase : public ::testing::TestWithParam<bool>,
   void SetupMockGLBehaviors();
 
   GpuPreferences gpu_preferences_;
-  MailboxManagerImpl mailbox_manager_;
   ShaderTranslatorCache shader_translator_cache_;
   FramebufferCompletenessCache framebuffer_completeness_cache_;
   ServiceDiscardableManager discardable_manager_;
@@ -1019,7 +1017,6 @@ class GLES2DecoderPassthroughTestBase : public testing::Test,
  private:
   ContextCreationAttribs context_creation_attribs_;
   GpuPreferences gpu_preferences_;
-  MailboxManagerImpl mailbox_manager_;
   ShaderTranslatorCache shader_translator_cache_;
   FramebufferCompletenessCache framebuffer_completeness_cache_;
   ServiceDiscardableManager discardable_manager_;

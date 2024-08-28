@@ -127,8 +127,7 @@ OverlayProcessorInterface::CreateOverlayProcessor(
   if (overlay_manager) {
     overlay_candidates =
         overlay_manager->CreateOverlayCandidates(surface_handle);
-    if (features::ShouldUseRealBuffersForPageFlipTest() &&
-        overlay_manager->allow_sync_and_real_buffer_page_flip_testing()) {
+    if (overlay_manager->allow_sync_and_real_buffer_page_flip_testing()) {
       sii = shared_image_interface;
       CHECK(shared_image_interface);
     }
@@ -175,7 +174,7 @@ OverlayProcessorInterface::OutputSurfaceOverlayPlane
 OverlayProcessorInterface::ProcessOutputSurfaceAsOverlay(
     const gfx::Size& viewport_size,
     const gfx::Size& resource_size,
-    const gfx::BufferFormat& buffer_format,
+    const SharedImageFormat si_format,
     const gfx::ColorSpace& color_space,
     bool has_alpha,
     float opacity,
@@ -187,7 +186,7 @@ OverlayProcessorInterface::ProcessOutputSurfaceAsOverlay(
       viewport_size.width() / static_cast<float>(resource_size.width()),
       viewport_size.height() / static_cast<float>(resource_size.height()));
   overlay_plane.resource_size = resource_size;
-  overlay_plane.format = buffer_format;
+  overlay_plane.format = si_format;
   overlay_plane.color_space = color_space;
   overlay_plane.enable_blending = has_alpha;
   overlay_plane.opacity = opacity;
@@ -217,6 +216,10 @@ gfx::CALayerResult OverlayProcessorInterface::GetCALayerErrorCode() const {
 
 gfx::RectF OverlayProcessorInterface::GetUnassignedDamage() const {
   return gfx::RectF();
+}
+
+bool OverlayProcessorInterface::SupportsFlipRotateTransform() const {
+  return false;
 }
 
 }  // namespace viz

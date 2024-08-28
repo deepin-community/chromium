@@ -236,16 +236,15 @@ TEST_F(ShellTest, CreateWindow) {
 }
 
 // Verifies that a window with a preferred size is created centered on the
-// default display for new windows. Mojo apps like shortcut_viewer rely on this
-// behavior.
+// default display for new windows.
 TEST_F(ShellTest, CreateWindowWithPreferredSize) {
   UpdateDisplay("1024x768,800x600");
 
   aura::Window* secondary_root = Shell::GetAllRootWindows()[1];
   display::ScopedDisplayForNewWindows scoped_display(secondary_root);
 
-  views::Widget::InitParams params;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   // Don't specify bounds, parent or context.
   {
     auto delegate = std::make_unique<views::WidgetDelegateView>();
@@ -564,7 +563,8 @@ TEST_F(ShellTest, NoWindowTabFocus) {
   ShelfNavigationWidget* home_button = GetPrimaryShelf()->navigation_widget();
 
   // Create a normal window.  It is not maximized.
-  auto widget = CreateTestWidget();
+  auto widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
 
   // Hit tab with window open, and expect that focus is not on the navigation
   // widget or status widget.
@@ -595,19 +595,37 @@ TEST_F(ShellTest, NoWindowTabFocus) {
   EXPECT_TRUE(status_area_widget->GetNativeView()->HasFocus());
 }
 
-class ShellPickerDisabledTest : public AshTestBase {
+class ShellPickerIncorrectKeyTest : public AshTestBase {
  public:
-  ShellPickerDisabledTest() {
+  ShellPickerIncorrectKeyTest() {
+    feature_list_.InitWithFeatures({features::kPicker},
+                                   {features::kPickerDogfood});
+
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     command_line->AppendSwitchASCII(switches::kPickerFeatureKey, "hello");
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_{features::kPicker};
+  base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_F(ShellPickerDisabledTest, NoPickerControllerIfFeatureKeyIsWrong) {
+TEST_F(ShellPickerIncorrectKeyTest, NoPickerControllerIfFeatureKeyIsWrong) {
   EXPECT_FALSE(Shell::Get()->picker_controller());
+}
+
+class ShellPickerDogfoodTest : public AshTestBase {
+ public:
+  ShellPickerDogfoodTest() {
+    feature_list_.InitWithFeatures(
+        {features::kPicker, features::kPickerDogfood}, {});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(ShellPickerDogfoodTest, PickerControllerExistsIfDogfooding) {
+  EXPECT_TRUE(Shell::Get()->picker_controller());
 }
 
 // This verifies WindowObservers are removed when a window is destroyed after

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "storage/browser/file_system/obfuscated_file_util_memory_delegate.h"
 
 #include <algorithm>
@@ -556,7 +561,7 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
 // (crbug.com/986608)
 #if !BUILDFLAG(IS_FUCHSIA)
     if (last_position >= partition_alloc::MaxDirectMapped() / 2) {
-      // TODO(https://crbug.com/1043914): Allocated memory is rounded up to
+      // TODO(crbug.com/40669351): Allocated memory is rounded up to
       // 100MB blocks to reduce memory allocation delays. Switch to a more
       // proper container to remove this dependency.
       const size_t round_up_size = 100 * 1024 * 1024;

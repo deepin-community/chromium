@@ -39,7 +39,7 @@ class AutocompleteResult {
  public:
   typedef ACMatches::const_iterator const_iterator;
   typedef ACMatches::iterator iterator;
-  using MatchDedupComparator = ACMatchKey<std::string, bool>;
+  using MatchDedupComparator = ACMatchKey<std::string, bool, bool>;
 
   // Max number of matches we'll show from the various providers. This limit
   // may be different for zero suggest and non zero suggest. Does not take into
@@ -413,11 +413,8 @@ class AutocompleteResult {
   void MergeMatchesByProvider(ACMatches* old_matches,
                               const ACMatches& new_matches);
 
-  // This pulls the relevant fields out of a match for comparison with other
-  // matches for the purpose of deduping. It uses the stripped URL, so that we
-  // collapse similar URLs if necessary, and whether the match is a calculator
-  // suggestion, because we don't want to dedupe them against URLs that simply
-  // happen to go to the same destination.
+  // Returns a tuple encompassing all attributes relevant to determining whether a match should
+  // be deduplicated with another match.
   static MatchDedupComparator GetMatchComparisonFields(
       const AutocompleteMatch& match);
 
@@ -449,8 +446,8 @@ class AutocompleteResult {
 
   // The session data irrespective of the current result set. Cleared on
   // `Reset()`.
-  // TODO(crbug.com/1307142): This is a bandaid solution for storing the session
-  // data. It relies on `ClearMatches()`, `SwapMatchesWith()`, and
+  // TODO(crbug.com/40218651): This is a bandaid solution for storing the
+  // session data. It relies on `ClearMatches()`, `SwapMatchesWith()`, and
   // `CopyMatchesFrom()` to only modify the current result set and not the
   // session data; and for `Reset()` to be called once during the autocomplete
   // session. Ideally, this should be replaced with a more general solution such

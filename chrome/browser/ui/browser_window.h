@@ -26,14 +26,15 @@
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_type.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
-#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/translate/partial_translate_bubble_model.h"
 #include "chrome/common/buildflags.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/translate/core/common/translate_errors.h"
 #include "components/user_education/common/feature_promo_controller.h"
 #include "components/user_education/common/feature_promo_specification.h"
+#include "components/user_education/common/new_badge_controller.h"
 #include "ui/base/base_window.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/window_open_disposition.h"
@@ -95,6 +96,7 @@ class ThemeProvider;
 
 namespace views {
 class Button;
+class WebView;
 }  // namespace views
 
 namespace web_modal {
@@ -342,7 +344,7 @@ class BrowserWindow : public ui::BaseWindow {
 
   // Called when a link is opened in the window from a user gesture.
   // Link will be opened with |disposition|.
-  // TODO(crbug.com/1129028): see if this can't be piped through TabStripModel
+  // TODO(crbug.com/40719979): see if this can't be piped through TabStripModel
   // events instead.
   virtual void LinkOpeningFromGesture(WindowOpenDisposition disposition) = 0;
 
@@ -487,6 +489,9 @@ class BrowserWindow : public ui::BaseWindow {
   // can happen if the new download bubble UI is enabled.
   virtual DownloadShelf* GetDownloadShelf() = 0;
 
+  // Returns the TopContainerView.
+  virtual views::View* GetTopContainer() = 0;
+
   // Returns the DownloadBubbleUIController. Returns null if Download Bubble
   // UI is not enabled, or if the download toolbar button does not exist.
   virtual DownloadBubbleUIController* GetDownloadBubbleUIController() = 0;
@@ -509,12 +514,12 @@ class BrowserWindow : public ui::BaseWindow {
   // Allows the BrowserWindow object to handle the specified keyboard event
   // before sending it to the renderer.
   virtual content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
-      const content::NativeWebKeyboardEvent& event) = 0;
+      const input::NativeWebKeyboardEvent& event) = 0;
 
   // Allows the BrowserWindow object to handle the specified keyboard event,
   // if the renderer did not process it.
   virtual bool HandleKeyboardEvent(
-      const content::NativeWebKeyboardEvent& event) = 0;
+      const input::NativeWebKeyboardEvent& event) = 0;
 
   // Clipboard commands applied to the whole browser window.
   virtual void CutCopyPaste(int command_id) = 0;
@@ -534,6 +539,8 @@ class BrowserWindow : public ui::BaseWindow {
                                             bool in_tab_dragging);
 
   virtual void ShowAvatarBubbleFromAvatarButton(bool is_source_accelerator) = 0;
+
+  virtual void ShowBubbleFromManagementToolbarButton() = 0;
 
   // Attempts showing the In-Produce-Help for profile Switching. This is called
   // after creating a new profile or opening an existing profile. If the profile
@@ -650,11 +657,19 @@ class BrowserWindow : public ui::BaseWindow {
   // `NotifyFeaturePromoFeatureUsed()` for clarity instead.
   virtual void NotifyFeatureEngagementEvent(const char* event_name) = 0;
 
-  // Records that the user has engaged the specific feature associated with
-  // the promo `iph_feature`; this information is used to determine whether to
-  // show the promo in the future. Prefer this to
-  // `NotifyFeatureEngagementEvent()` where possible.
-  virtual void NotifyPromoFeatureUsed(const base::Feature& iph_feature) = 0;
+  // Records that the user has engaged the specific `feature` associated with an
+  // IPH promo or "New" Badge; this information is used to determine whether to
+  // show the promo or badge in the future. Prefer this to
+  // `NotifyFeatureEngagementEvent()` whenever possible (that will only apply to
+  // specific IPH).
+  virtual void NotifyPromoFeatureUsed(const base::Feature& feature) = 0;
+
+  // Returns whether a "New" Badge should be shown on the entry point for
+  // `feature`; the badge must be registered for the feature in
+  // browser_user_education_service.cc. Call exactly once per time the surface
+  // containing the badge will be shown to the user.
+  virtual user_education::DisplayNewBadge MaybeShowNewBadgeFor(
+      const base::Feature& feature) = 0;
 
   // Shows an Incognito clear browsing data dialog.
   virtual void ShowIncognitoClearBrowsingDataDialog() = 0;
@@ -679,6 +694,9 @@ class BrowserWindow : public ui::BaseWindow {
 
   // Shows the Chrome Labs bubble if enabled.
   virtual void ShowChromeLabs() = 0;
+
+  // Returns the WebView backing the tab-contents area of the BrowserWindow.
+  virtual views::WebView* GetContentsWebView() = 0;
 
  protected:
   friend class BrowserCloseManager;

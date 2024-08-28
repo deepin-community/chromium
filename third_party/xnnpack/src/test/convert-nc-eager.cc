@@ -3,12 +3,13 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 #include <gtest/gtest.h>
-
 #include "convert-operator-tester.h"
-
 
 TEST(CONVERT_NC_F16_F32, unit_batch) {
   for (size_t channels = 1; channels < 100; channels++) {

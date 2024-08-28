@@ -9,8 +9,8 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/payments/offer_notification_bubble_controller.h"
+#include "chrome/browser/ui/views/autofill/autofill_location_bar_bubble.h"
 #include "chrome/browser/ui/views/controls/page_switcher_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/views/controls/styled_label.h"
 
@@ -29,8 +29,7 @@ DECLARE_ELEMENT_IDENTIFIER_VALUE(kOfferNotificationBubbleElementId);
 // rewards linked to the current page domain. This can include card-linked
 // offers, for which "Pay with [card] at checkout" is shown, or merchant promo
 // code offers, which shows the code the user should apply at checkout.
-class OfferNotificationBubbleViews : public AutofillBubbleBase,
-                                     public LocationBarBubbleDelegateView {
+class OfferNotificationBubbleViews : public AutofillLocationBarBubble {
  public:
   // Bubble will be anchored to |anchor_view|.
   OfferNotificationBubbleViews(views::View* anchor_view,
@@ -42,7 +41,7 @@ class OfferNotificationBubbleViews : public AutofillBubbleBase,
       delete;
 
  private:
-  // TODO(crbug.com/1507113) : Remove these friended test and convert the test
+  // TODO(crbug.com/40947801) : Remove these friended test and convert the test
   // to use Kombucha framework.
   FRIEND_TEST_ALL_PREFIXES(OfferNotificationBubbleViewsInteractiveUiTest,
                            CopyPromoCode);
@@ -111,7 +110,7 @@ class OfferNotificationBubbleViews : public AutofillBubbleBase,
 
   raw_ptr<OfferNotificationBubbleController> controller_;
 
-  // TODO(crbug.com/1334806): Replace tests with Pixel tests.
+  // TODO(crbug.com/40228302): Replace tests with Pixel tests.
   raw_ptr<views::StyledLabel> promo_code_label_ = nullptr;
 
   raw_ptr<views::Label> instructions_label_ = nullptr;

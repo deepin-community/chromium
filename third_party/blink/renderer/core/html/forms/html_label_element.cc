@@ -177,6 +177,8 @@ bool HTMLLabelElement::DefaultEventHandlerInternal(Event& evt) {
 
     bool is_label_text_selected = false;
 
+    GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kInput);
+
     // If the click is not simulated and the text of the label element
     // is selected by dragging over it, then return without passing the
     // click event to control element.
@@ -188,9 +190,7 @@ bool HTMLLabelElement::DefaultEventHandlerInternal(Event& evt) {
         // Check if there is a selection and click is not on the
         // selection.
         if (GetLayoutObject() && GetLayoutObject()->IsSelectable() &&
-            frame->Selection()
-                .ComputeVisibleSelectionInDOMTreeDeprecated()
-                .IsRange() &&
+            frame->Selection().ComputeVisibleSelectionInDOMTree().IsRange() &&
             !frame->GetEventHandler()
                  .GetSelectionController()
                  .MouseDownWasSingleClickInSelection() &&
@@ -210,9 +210,9 @@ bool HTMLLabelElement::DefaultEventHandlerInternal(Event& evt) {
     }
 
     processing_click_ = true;
-
-    GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kInput);
-    if (element->IsFocusable()) {
+    if (element->IsFocusable() ||
+        (element->IsShadowHostWithDelegatesFocus() &&
+         RuntimeEnabledFeatures::LabelAndDelegatesFocusNewHandlingEnabled())) {
       // If the label is *not* selected, or if the click happened on
       // selection of label, only then focus the control element.
       // In case of double click or triple click, selection will be there,

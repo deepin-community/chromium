@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ash/accelerators/accelerator_prefs_delegate.h"
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/game_dashboard/game_dashboard_delegate.h"
@@ -30,6 +29,7 @@
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/assistant/assistant_util.h"
+#include "chrome/browser/ash/crosapi/browser_manager.h"
 #include "chrome/browser/ash/crosapi/crosapi_ash.h"
 #include "chrome/browser/ash/crosapi/crosapi_manager.h"
 #include "chrome/browser/ash/crosapi/desk_profiles_ash.h"
@@ -50,6 +50,7 @@
 #include "chrome/browser/ui/ash/chrome_accessibility_delegate.h"
 #include "chrome/browser/ui/ash/clipboard_history_controller_delegate_impl.h"
 #include "chrome/browser/ui/ash/desks/chrome_saved_desk_delegate.h"
+#include "chrome/browser/ui/ash/focus_mode/chrome_focus_mode_delegate.h"
 #include "chrome/browser/ui/ash/game_dashboard/chrome_game_dashboard_delegate.h"
 #include "chrome/browser/ui/ash/global_media_controls/media_notification_provider_impl.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_ui.h"
@@ -120,18 +121,22 @@ content::WebContents* GetActiveWebContentsForNativeBrowserWindow(
   return tab_strip_model ? tab_strip_model->GetActiveWebContents() : nullptr;
 }
 
-chrome::FeedbackSource ToChromeFeedbackSource(
+feedback::FeedbackSource ToChromeFeedbackSource(
     ash::ShellDelegate::FeedbackSource source) {
   switch (source) {
+    case ash::ShellDelegate::FeedbackSource::kBirch:
+      return feedback::FeedbackSource::kFeedbackSourceBirch;
     case ash::ShellDelegate::FeedbackSource::kFocusMode:
-      return chrome::FeedbackSource::kFeedbackSourceFocusMode;
+      return feedback::FeedbackSource::kFeedbackSourceFocusMode;
     case ash::ShellDelegate::FeedbackSource::kGameDashboard:
-      return chrome::FeedbackSource::kFeedbackSourceGameDashboard;
+      return feedback::FeedbackSource::kFeedbackSourceGameDashboard;
+    case ash::ShellDelegate::FeedbackSource::kOverview:
+      return feedback::FeedbackSource::kFeedbackSourceOverview;
     case ash::ShellDelegate::FeedbackSource::kWindowLayoutMenu:
-      return chrome::FeedbackSource::kFeedbackSourceWindowLayoutMenu;
+      return feedback::FeedbackSource::kFeedbackSourceWindowLayoutMenu;
   }
-  NOTREACHED_NORETURN()
-      << "Unable to retrieve FeedbackSource due to unknown source type.";
+  NOTREACHED_NORETURN() << "Unable to retrieve feedback::FeedbackSource due to "
+                           "unknown source type.";
 }
 
 }  // namespace
@@ -203,13 +208,18 @@ ChromeShellDelegate::CreateTasksDelegate() const {
   return std::make_unique<ash::api::ChromeTasksDelegate>();
 }
 
+std::unique_ptr<ash::FocusModeDelegate>
+ChromeShellDelegate::CreateFocusModeDelegate() const {
+  return std::make_unique<ChromeFocusModeDelegate>();
+}
+
 std::unique_ptr<ash::UserEducationDelegate>
 ChromeShellDelegate::CreateUserEducationDelegate() const {
   return std::make_unique<ChromeUserEducationDelegate>();
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
-ChromeShellDelegate::GetGeolocationUrlLoaderFactory() const {
+ChromeShellDelegate::GetBrowserProcessUrlLoaderFactory() const {
   return g_browser_process->shared_url_loader_factory();
 }
 
@@ -320,7 +330,7 @@ void ChromeShellDelegate::SetUpEnvironmentForLockedFullscreen(
   ui::Clipboard::GetForCurrentThread()->Clear(ui::ClipboardBuffer::kCopyPaste);
   content::DevToolsAgentHost::DetachAllClients();
 
-  // TODO(crbug/1243104): This might be interesting for DLP to change.
+  // TODO(crbug.com/40195284): This might be interesting for DLP to change.
   // Disable both screenshots and video screen captures via the capture mode
   // feature.
   ChromeCaptureModeDelegate::Get()->SetIsScreenCaptureLocked(locked);
@@ -395,10 +405,11 @@ base::FilePath ChromeShellDelegate::GetPrimaryUserDownloadsFolder() const {
 
 void ChromeShellDelegate::OpenFeedbackDialog(
     ShellDelegate::FeedbackSource source,
-    const std::string& description_template) {
+    const std::string& description_template,
+    const std::string& category_tag) {
   chrome::OpenFeedbackDialog(/*browser=*/nullptr,
                              ToChromeFeedbackSource(source),
-                             description_template);
+                             description_template, category_tag);
 }
 
 void ChromeShellDelegate::OpenProfileManager() {
@@ -475,8 +486,16 @@ ash::DeskProfilesDelegate* ChromeShellDelegate::GetDeskProfilesDelegate() {
 }
 
 void ChromeShellDelegate::OpenMultitaskingSettings() {
+  const auto& sub_page_path =
+      ash::features::IsOsSettingsRevampWayfindingEnabled()
+          ? chromeos::settings::mojom::kSystemPreferencesSectionPath
+          : chromeos::settings::mojom::kPersonalizationSectionPath;
   chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-      ProfileManager::GetActiveUserProfile(),
-      chromeos::settings::mojom::kSystemPreferencesSectionPath,
+      ProfileManager::GetActiveUserProfile(), sub_page_path,
       chromeos::settings::mojom::Setting::kSnapWindowSuggestions);
+}
+
+bool ChromeShellDelegate::IsNoFirstRunSwitchOn() const {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      ::switches::kNoFirstRun);
 }

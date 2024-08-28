@@ -1,4 +1,4 @@
-// Copyright 2023 The Chromium Authors
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,6 +27,7 @@ chrome.automation.EventType = {
   ALERT: 'alert',
   ARIA_ATTRIBUTE_CHANGED_DEPRECATED: 'ariaAttributeChangedDeprecated',
   ARIA_CURRENT_CHANGED: 'ariaCurrentChanged',
+  ARIA_NOTIFICATIONS_POSTED: 'ariaNotificationsPosted',
   ATOMIC_CHANGED: 'atomicChanged',
   AUTO_COMPLETE_CHANGED: 'autoCompleteChanged',
   AUTOCORRECTION_OCCURED: 'autocorrectionOccured',
@@ -37,7 +38,6 @@ chrome.automation.EventType = {
   CHECKED_STATE_CHANGED: 'checkedStateChanged',
   CHECKED_STATE_DESCRIPTION_CHANGED: 'checkedStateDescriptionChanged',
   CHILDREN_CHANGED: 'childrenChanged',
-  CLASS_NAME_CHANGED: 'classNameChanged',
   CLICKED: 'clicked',
   COLLAPSED: 'collapsed',
   CONTROLS_CHANGED: 'controlsChanged',
@@ -85,7 +85,7 @@ chrome.automation.EventType = {
   MEDIA_STOPPED_PLAYING: 'mediaStoppedPlaying',
   MENU_END: 'menuEnd',
   MENU_ITEM_SELECTED: 'menuItemSelected',
-  MENU_LIST_VALUE_CHANGED: 'menuListValueChanged',
+  MENU_LIST_VALUE_CHANGED_DEPRECATED: 'menuListValueChangedDeprecated',
   MENU_POPUP_END: 'menuPopupEnd',
   MENU_POPUP_START: 'menuPopupStart',
   MENU_START: 'menuStart',
@@ -99,10 +99,8 @@ chrome.automation.EventType = {
   NAME_CHANGED: 'nameChanged',
   OBJECT_ATTRIBUTE_CHANGED: 'objectAttributeChanged',
   ORIENTATION_CHANGED: 'orientationChanged',
-  OTHER_ATTRIBUTE_CHANGED: 'otherAttributeChanged',
   PARENT_CHANGED: 'parentChanged',
   PLACEHOLDER_CHANGED: 'placeholderChanged',
-  PORTAL_ACTIVATED: 'portalActivated',
   POSITION_IN_SET_CHANGED: 'positionInSetChanged',
   RANGE_VALUE_CHANGED: 'rangeValueChanged',
   RANGE_VALUE_MAX_CHANGED: 'rangeValueMaxChanged',
@@ -179,12 +177,12 @@ chrome.automation.RoleType = {
   DATE_TIME: 'dateTime',
   DEFINITION: 'definition',
   DESCRIPTION_LIST: 'descriptionList',
-  DESCRIPTION_LIST_DETAIL: 'descriptionListDetail',
-  DESCRIPTION_LIST_TERM: 'descriptionListTerm',
+  DESCRIPTION_LIST_DETAIL_DEPRECATED: 'descriptionListDetailDeprecated',
+  DESCRIPTION_LIST_TERM_DEPRECATED: 'descriptionListTermDeprecated',
   DESKTOP: 'desktop',
   DETAILS: 'details',
   DIALOG: 'dialog',
-  DIRECTORY: 'directory',
+  DIRECTORY_DEPRECATED: 'directoryDeprecated',
   DISCLOSURE_TRIANGLE: 'disclosureTriangle',
   DISCLOSURE_TRIANGLE_GROUPED: 'disclosureTriangleGrouped',
   DOC_ABSTRACT: 'docAbstract',
@@ -242,6 +240,7 @@ chrome.automation.RoleType = {
   GRAPHICS_OBJECT: 'graphicsObject',
   GRAPHICS_SYMBOL: 'graphicsSymbol',
   GRID: 'grid',
+  GRID_CELL: 'gridCell',
   GROUP: 'group',
   HEADER: 'header',
   HEADER_AS_NON_LANDMARK: 'headerAsNonLandmark',
@@ -309,7 +308,7 @@ chrome.automation.RoleType = {
   PDF_ROOT: 'pdfRoot',
   PLUGIN_OBJECT: 'pluginObject',
   POP_UP_BUTTON: 'popUpButton',
-  PORTAL: 'portal',
+  PORTAL_DEPRECATED: 'portalDeprecated',
   PRE_DEPRECATED: 'preDeprecated',
   PROGRESS_INDICATOR: 'progressIndicator',
   RADIO_BUTTON: 'radioButton',
@@ -326,6 +325,7 @@ chrome.automation.RoleType = {
   SEARCH: 'search',
   SEARCH_BOX: 'searchBox',
   SECTION: 'section',
+  SECTION_WITHOUT_NAME: 'sectionWithoutName',
   SLIDER: 'slider',
   SPIN_BUTTON: 'spinButton',
   SPLITTER: 'splitter',
@@ -458,6 +458,7 @@ chrome.automation.NameFromType = {
   CONTENTS: 'contents',
   PLACEHOLDER: 'placeholder',
   POPOVER_ATTRIBUTE: 'popoverAttribute',
+  PROHIBITED: 'prohibited',
   RELATED_ELEMENT: 'relatedElement',
   TITLE: 'title',
   VALUE: 'value',
@@ -589,6 +590,7 @@ chrome.automation.IntentInputEventType = {
   INSERT_TRANSPOSE: 'insertTranspose',
   INSERT_REPLACEMENT_TEXT: 'insertReplacementText',
   INSERT_COMPOSITION_TEXT: 'insertCompositionText',
+  INSERT_LINK: 'insertLink',
   DELETE_WORD_BACKWARD: 'deleteWordBackward',
   DELETE_WORD_FORWARD: 'deleteWordForward',
   DELETE_SOFT_LINE_BACKWARD: 'deleteSoftLineBackward',
@@ -1326,6 +1328,13 @@ chrome.automation.AutomationNode.prototype.imageAnnotation;
  * @see https://developer.chrome.com/extensions/automation#type-value
  */
 chrome.automation.AutomationNode.prototype.value;
+
+/**
+ * The HTML id for this element, if this node is an HTML element.
+ * @type {(string|undefined)}
+ * @see https://developer.chrome.com/extensions/automation#type-htmlId
+ */
+chrome.automation.AutomationNode.prototype.htmlId;
 
 /**
  * The HTML tag for this element, if this node is an HTML element.

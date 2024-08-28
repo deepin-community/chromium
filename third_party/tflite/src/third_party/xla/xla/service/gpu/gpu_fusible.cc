@@ -16,21 +16,31 @@ limitations under the License.
 #include "xla/service/gpu/gpu_fusible.h"
 
 #include <algorithm>
-#include <iterator>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stack>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/permutation_util.h"
 #include "xla/service/gpu/backend_configs.pb.h"
+#include "xla/service/gpu/hlo_traversal.h"
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/service/gpu/reduction_utils.h"
+#include "xla/service/hlo_dataflow_analysis.h"
 #include "xla/service/instruction_fusion.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/util.h"
 
 namespace xla {
@@ -107,22 +117,53 @@ bool IsPhysicallyTransposing(const HloInstruction& instr) {
                                          instr.shape(), instr.dimensions()));
 }
 
+namespace {
+std::pair<int64_t, int64_t> MostMinorNonTrivialDimension(const Shape& shape) {
+  int64_t position_of_first_non_trivial_dim = 0;
+  for (int64_t dim : shape.layout().minor_to_major()) {
+    if (shape.dimensions()[dim] > 1) {
+      return {dim, position_of_first_non_trivial_dim};
+    }
+    ++position_of_first_non_trivial_dim;
+  }
+  return {-1, position_of_first_non_trivial_dim};
+}
+}  // namespace
+
 bool TransposesMinorDimension(const HloInstruction* instr) {
   switch (instr->opcode()) {
     case HloOpcode::kFusion:
       return absl::c_any_of(instr->fused_instructions(),
                             TransposesMinorDimension);
-    case HloOpcode::kCopy:
-      return instr->shape().layout().minor_to_major(0) !=
-             instr->operand(0)->shape().layout().minor_to_major(0);
+    // TODO(akuegel): This can be simplified by just calling
+    // GetDescriptionForTiledTransposeEmitter() once it returns a value for all
+    // transposes that affect the most minor non-trivial dimension. Right now,
+    // there are also cases with transposes that affect the most minor
+    // non-trivial dimension which are not supported by the transpose emitter,
+    // so GetDescriptionForTiledTransposeEmitter would return std::nullopt.
+    case HloOpcode::kCopy: {
+      int64_t first_non_trivial_operand_dim =
+          MostMinorNonTrivialDimension(instr->operand(0)->shape()).first;
+      int64_t first_non_trivial_output_dim =
+          MostMinorNonTrivialDimension(instr->shape()).first;
+      return first_non_trivial_operand_dim != first_non_trivial_output_dim;
+    }
     case HloOpcode::kTranspose: {
-      // We have an input ([a,b,c]{x,y,z}) that's being transposed. We need to
-      // check if the minor-most dimension (x) is still the minor-most dimension
-      // after the transpose.
-      int64_t minor_input =
-          instr->operand(0)->shape().layout().minor_to_major(0);
-      int64_t minor_output = instr->shape().layout().minor_to_major(0);
-      return minor_input != instr->dimensions().at(minor_output);
+      auto position_in_minor_to_major = InversePermutation(
+          instr->operand(0)->shape().layout().minor_to_major());
+      int64_t position_of_first_non_trivial_dim =
+          MostMinorNonTrivialDimension(instr->operand(0)->shape()).second;
+      for (int64_t output_dim : instr->shape().layout().minor_to_major()) {
+        if (instr->shape().dimensions()[output_dim] == 1) {
+          continue;
+        }
+        int64_t operand_dim = instr->dimensions().at(output_dim);
+        // Check if there is any operand dimension with size > 1 that is more
+        // minor than 'operand_dim'
+        return position_in_minor_to_major[operand_dim] >
+               position_of_first_non_trivial_dim;
+      }
+      return false;
     }
     default:
       return false;
@@ -159,8 +200,7 @@ bool IsInputFusibleTranspose(const HloInstruction& instr) {
   if (instr.opcode() == HloOpcode::kFusion) {
     return HasAnyTiledTransposeRoot(*instr.fused_instructions_computation());
   }
-  auto& hero = FindNonTrivialHero(instr);
-  return GetDescriptionForTiledTransposeEmitter(instr, hero).has_value();
+  return GetDescriptionForTiledTransposeEmitter(instr, instr).has_value();
 }
 
 const HloInstruction* GetRealHeroForMultiOutputFusion(
@@ -266,7 +306,9 @@ FusionDecision ShapesCompatibleForMultiOutputFusion(
     // Special-case reduction-to-vector ops: The loop dimensions are determined
     // by the shape of the first operand.
     // TODO(jreiffers): Compute the non-trivial hero only once here.
-    const auto& hero = FindNonTrivialHero(*element_instr);
+    const auto& hero = element_instr->parent()->IsFusionComputation()
+                           ? FindNonTrivialHero(*element_instr)
+                           : *element_instr;
     if (IsReductionFromOrToContiguousDimensions(*element_instr) ||
         GetDescriptionForTiledTransposeEmitter(*element_instr, hero)
             .has_value()) {
@@ -320,8 +362,7 @@ bool IsInputFusible(const HloInstruction& instr) {
 
 // Returns true if `instr` can be fused as a producer or as a consumer into a
 // kLoop fusion.
-bool IsUniversallyLoopFusible(const HloInstruction& instr,
-                              const HloInstruction& hero) {
+bool IsUniversallyLoopFusible(const HloInstruction& instr) {
   // NOTE: this check is done before the switch below, because a fusion instr
   // can also be elementwise, even if it's not a kLoop.
   if (instr.IsElementwise() && instr.operand_count() > 0 &&
@@ -331,7 +372,7 @@ bool IsUniversallyLoopFusible(const HloInstruction& instr,
 
   switch (instr.opcode()) {
     case HloOpcode::kCopy:
-      return !GetDescriptionForTiledTransposeEmitter(instr, hero).has_value();
+      return !GetDescriptionForTiledTransposeEmitter(instr, instr).has_value();
 
     case HloOpcode::kFusion:
       return instr.fusion_kind() == HloInstruction::FusionKind::kLoop;
@@ -355,8 +396,7 @@ bool IsUniversallyLoopFusible(const HloInstruction& instr,
 }
 
 // Returns true if `instr` can be fused as a consumer into a kLoop fusion.
-bool IsLoopFusibleAsConsumer(const HloInstruction& instr,
-                             const HloInstruction& hero) {
+bool IsLoopFusibleAsConsumer(const HloInstruction& instr) {
   // Instr should be fusible.
   if (!instr.IsFusible()) return false;
 
@@ -368,12 +408,19 @@ bool IsLoopFusibleAsConsumer(const HloInstruction& instr,
   // Any reduction can be fused as a consumer.
   if (instr.opcode() == HloOpcode::kReduce) return true;
 
-  return IsUniversallyLoopFusible(instr, hero);
+  // We may have input fusions which effectively have turned into loop
+  // fusions. Those should still be considered as loop fusible consumers,
+  // but they are not universally loop fusible.
+  if (!IsInputFusible(instr) && instr.opcode() == HloOpcode::kFusion &&
+      instr.fusion_kind() == HloInstruction::FusionKind::kInput) {
+    return true;
+  }
+
+  return IsUniversallyLoopFusible(instr);
 }
 
 // Returns true if `instr` can be fused as a producer into a kLoop fusion.
-bool IsLoopFusibleAsProducer(const HloInstruction& instr,
-                             const HloInstruction& hero) {
+bool IsLoopFusibleAsProducer(const HloInstruction& instr) {
   // Instr should be fusible.
   if (!instr.IsFusible()) return false;
 
@@ -385,7 +432,7 @@ bool IsLoopFusibleAsProducer(const HloInstruction& instr,
       // Non-variadic reductions can be fused as producers.
       return !instr.shape().IsTuple();
     default:
-      return IsUniversallyLoopFusible(instr, hero);
+      return IsUniversallyLoopFusible(instr);
   }
 }
 
@@ -430,12 +477,8 @@ FusionDecision CanEmitInputFusedScatter(const HloInstruction& producer,
 
 FusionDecision IsProducerConsumerFusible(const HloInstruction& producer,
                                          const HloInstruction& consumer) {
-  const auto& producer_hero = FindNonTrivialHero(producer);
-  const auto& consumer_hero = FindNonTrivialHero(consumer);
-  if (!IsLoopFusibleAsProducer(producer, producer_hero) &&
-      !(GetDescriptionForTiledTransposeEmitter(producer, producer_hero)
-            .has_value() &&
-        &consumer_hero == &producer)) {
+  if (!IsLoopFusibleAsProducer(producer) &&
+      !IsInputFusibleTranspose(producer)) {
     return "the producer is not loop-fusible";
   }
 
@@ -446,12 +489,10 @@ FusionDecision IsProducerConsumerFusible(const HloInstruction& producer,
              .xla_gpu_enable_reduction_epilogue_fusion()) {
       return "Reduction epilogue fusion is not enabled.";
     }
-    // TODO(akuegel): Remove workaround when producer_hero is computed
-    // correctly.
     const HloInstruction& reduce_hero =
-        producer_hero.opcode() == HloOpcode::kFusion
-            ? FindNonTrivialHero(*producer_hero.fused_expression_root())
-            : producer_hero;
+        producer.opcode() == HloOpcode::kFusion
+            ? FindNonTrivialHero(*producer.fused_expression_root())
+            : producer;
     if (!ReductionIsRaceFree(
             reduce_hero.GetModule()->config(),
             GetReductionKindAndContiguousComponents(reduce_hero))) {
@@ -472,8 +513,7 @@ FusionDecision IsProducerConsumerFusible(const HloInstruction& producer,
     return can_fuse;
   }
 
-  if (!IsInputFusible(consumer) &&
-      !IsLoopFusibleAsConsumer(consumer, consumer_hero)) {
+  if (!IsInputFusible(consumer) && !IsLoopFusibleAsConsumer(consumer)) {
     return "the consumer is not input-fusible and not loop-fusible";
   }
 
@@ -534,7 +574,7 @@ FusionDecision IsProducerMultiOutputFusible(const HloInstruction& producer) {
     return "In-place operations are present";
   }
 
-  if (!IsLoopFusibleAsProducer(producer, FindNonTrivialHero(producer))) {
+  if (!IsLoopFusibleAsProducer(producer)) {
     return "producer is not loop-fusible";
   }
 
@@ -545,11 +585,18 @@ FusionDecision IsProducerMultiOutputFusible(const HloInstruction& producer) {
   return {};
 }
 
-// Returns shared memory usage for a given instruction in bytes.
+// Returns an estimate of the shared memory usage for a given instruction in
+// bytes.
 static int64_t SharedMemoryUsageNoCache(const HloInstruction& instr) {
-  // For now we are only fusing reductions.
-  if (instr.opcode() == HloOpcode::kReduce &&
-      IsReductionFromOrToContiguousDimensions(instr)) {
+  if (instr.opcode() == HloOpcode::kFusion) {
+    int64_t sum = 0;
+    for (const HloInstruction* hlo :
+         instr.fused_instructions_computation()->instructions()) {
+      sum += SharedMemoryUsageNoCache(*hlo);
+    }
+    return sum;
+  } else if (instr.opcode() == HloOpcode::kReduce &&
+             IsReductionFromOrToContiguousDimensions(instr)) {
     ReductionDimensions reduction_info =
         GetReductionKindAndContiguousComponents(instr);
     int64_t primitive_size = ShapeUtil::ByteSizeOfPrimitiveType(
@@ -560,24 +607,15 @@ static int64_t SharedMemoryUsageNoCache(const HloInstruction& instr) {
       // __shared__[32] is used for row reduction.
       return 32 * primitive_size * num_variadic;
     } else {
-      // __shared__[2][32][33] cache is used for column reduction ("2" comes
+      // __shared__[4][32][33] cache is used for column reduction ("4" comes
       // from potential x-tiling).
-      return 2 * 32 * 33 * primitive_size * num_variadic;
+      return 4 * 32 * 33 * primitive_size * num_variadic;
     }
-  } else if (GetDescriptionForTiledTransposeEmitter(instr,
-                                                    FindNonTrivialHero(instr))
-                 .has_value()) {
+  } else if (GetDescriptionForTiledTransposeEmitter(instr, instr).has_value()) {
     // Tile size for transposition.
     int64_t primitive_size =
         ShapeUtil::ByteSizeOfPrimitiveType(instr.shape().element_type());
     return 32 * 33 * primitive_size;
-  } else if (instr.opcode() == HloOpcode::kFusion) {
-    int64_t sum = 0;
-    for (const HloInstruction* hlo :
-         instr.fused_instructions_computation()->instructions()) {
-      sum += SharedMemoryUsageNoCache(*hlo);
-    }
-    return sum;
   }
   // Other fused expressions for now don't need the shared memory budget.
   return 0;
@@ -600,25 +638,6 @@ int64_t SharedMemoryUsage(const HloInstruction& instr, FusionInfoCache* cache) {
     it->second = SharedMemoryUsageNoCache(instr);
   }
   return it->second;
-}
-
-int64_t ReductionProjectedShmemUsageBytes(
-    const ReductionDimensions& reduction_dimensions,
-    const std::vector<std::vector<const HloInstruction*>>& instr_index_groups) {
-  int64_t out = 0;
-  // Different groups are computed in parallel on different blocks, so they are
-  // not sharing the shmem budget. The overall usage is given by the largest
-  // one.
-  for (const auto& group : instr_index_groups) {
-    int64_t sum = 0;
-    for (const HloInstruction* root : group) {
-      if (IsReductionFromOrToContiguousDimensions(*root)) {
-        sum += SharedMemoryUsage(*root);
-      }
-    }
-    out = std::max(out, sum);
-  }
-  return out;
 }
 
 // Codegen'ing unnested reductions requires a lot of registers, so a MOF
@@ -734,10 +753,9 @@ FusionDecision FusionFitsInBudget(const HloInstruction& instr1,
       MaxOperandsAndOutputsPerFusion()) {
     return {};
   } else {
-    VLOG(5) << "Operand count of "
-            << "(" << instr1.ToString() << " ) = " << instr1.operand_count()
-            << " and ( " << instr2.ToString()
-            << " ) = " << instr2.operand_count()
+    VLOG(5) << "Operand count of " << "(" << instr1.ToString()
+            << " ) = " << instr1.operand_count() << " and ( "
+            << instr2.ToString() << " ) = " << instr2.operand_count()
             << " and num_output_buffers = " << num_output_buffers
             << " is bigger than the bound of "
             << MaxOperandsAndOutputsPerFusion();
@@ -845,9 +863,11 @@ bool IsFusibleAsMultiOutputFusionRoot(const HloInstruction& instr) {
           instr.IsElementwise());
 }
 
-HloInstruction::FusionKind ChooseFusionKind(const HloInstruction& consumer) {
-  return IsInputFusible(consumer) ? HloInstruction::FusionKind::kInput
-                                  : HloInstruction::FusionKind::kLoop;
+HloInstruction::FusionKind ChooseFusionKind(const HloInstruction& producer,
+                                            const HloInstruction& consumer) {
+  return (IsInputFusible(consumer) || IsInputFusible(producer))
+             ? HloInstruction::FusionKind::kInput
+             : HloInstruction::FusionKind::kLoop;
 }
 
 bool IsConsumerTheOnlyNonRootUser(const HloInstruction& instr,
@@ -893,16 +913,17 @@ size_t GetOutputSizeOfFusible(const HloInstruction& instr) {
 // Recursive helper for GetFusionRoots below.
 static void GetFusionRootsRec(const HloInstruction* root,
                               std::vector<const HloInstruction*>& out) {
-  if (root->opcode() == HloOpcode::kGetTupleElement) {
-    return GetFusionRootsRec(root->operand(0), out);
+  if (root->opcode() == HloOpcode::kGetTupleElement &&
+      root->operand(0)->opcode() == HloOpcode::kTuple) {
+    return GetFusionRootsRec(root->operand(0)->operand(root->tuple_index()),
+                             out);
+  } else if (root->opcode() == HloOpcode::kGetTupleElement) {
+    out.push_back(root->operand(0));
   } else if (root->opcode() == HloOpcode::kTuple) {
     for (int i = 0; i < root->operand_count(); i++) {
       GetFusionRootsRec(root->operand(i), out);
     }
   } else {
-    if (!out.empty() && out.back() == root) {
-      return;
-    }
     CHECK(!absl::c_linear_search(out, root))
         << "Fusion root contains instruction " << root->ToString()
         << " multiple times";
@@ -917,13 +938,14 @@ std::vector<const HloInstruction*> GetFusionRoots(
   return out;
 }
 
-bool IsTritonSoftmaxFusion(const HloInstruction& instr) {
+bool IsGenericTritonFusion(const HloInstruction& instr) {
+  // TODO(b/332649307): Eventually turn this into a generic fusion.
   return instr.opcode() == HloOpcode::kFusion &&
          instr.fusion_kind() == HloInstruction::FusionKind::kCustom &&
          instr.backend_config<GpuBackendConfig>().ok() &&
          instr.backend_config<GpuBackendConfig>()
                  ->fusion_backend_config()
-                 .kind() == kTritonSoftmaxFusionKind;
+                 .kind() == kTritonFusionKind;
 }
 
 bool MayPreventVectorization(const HloFusionAdaptor& fusion) {
@@ -950,6 +972,36 @@ bool MayPreventVectorization(const HloFusionAdaptor& fusion) {
         return false;
     }
   });
+}
+
+std::vector<HloComputation*> GetFusibleComputations(
+    const HloModule& module,
+    const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  auto result = module.MakeComputationPostOrder(execution_threads);
+  absl::flat_hash_set<const HloComputation*> computations_not_to_fuse;
+  for (const auto* computation : result) {
+    for (const auto* instr : computation->instructions()) {
+      // Don't fuse within called computations, unless they are for control
+      // flow. See also fusion_wrapper.cc, which does the same.
+      if (HloInstruction::MightHaveCalledComputations(instr->opcode()) &&
+          instr->opcode() != HloOpcode::kWhile &&
+          instr->opcode() != HloOpcode::kConditional &&
+          // No need to add fusion computations, just check the flag.
+          instr->opcode() != HloOpcode::kFusion) {
+        for (auto* called : instr->called_computations()) {
+          computations_not_to_fuse.insert(called);
+        }
+      }
+    }
+  }
+  result.erase(
+      std::remove_if(result.begin(), result.end(),
+                     [&](HloComputation* computation) {
+                       return computation->IsFusionComputation() ||
+                              computations_not_to_fuse.contains(computation);
+                     }),
+      result.end());
+  return result;
 }
 
 }  // namespace gpu

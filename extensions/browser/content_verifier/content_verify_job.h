@@ -69,6 +69,7 @@ class ContentVerifyJob : public base::RefCountedThreadSafe<ContentVerifyJob> {
                    const base::Version& extension_version,
                    const base::FilePath& extension_root,
                    const base::FilePath& relative_path,
+                   int manifest_version,
                    FailureCallback failure_callback);
 
   ContentVerifyJob(const ContentVerifyJob&) = delete;
@@ -81,14 +82,13 @@ class ContentVerifyJob : public base::RefCountedThreadSafe<ContentVerifyJob> {
   // Call this to add more bytes to verify. If at any point the read bytes
   // don't match the expected hashes, this will dispatch the failure callback.
   // The failure callback will only be run once even if more bytes are read.
-  // Make sure to call Done so that any final bytes that were read that didn't
-  // align exactly on a block size boundary get their hash checked as well.
-  void Read(const char* data, int count, MojoResult read_result);
+  // Make sure to call DoneReading so that any final bytes that were read that
+  // didn't align exactly on a block size boundary get their hash checked as
+  // well.
+  void BytesRead(const char* data, int count, MojoResult read_result);
 
   // Call once when finished adding bytes via OnDone.
-  // TODO(lazyboy): A more descriptive name of this method is warranted, "Done"
-  // is not so appropriate.
-  void Done();
+  void DoneReading();
 
   class TestObserver : public base::RefCountedThreadSafe<TestObserver> {
    public:
@@ -119,8 +119,8 @@ class ContentVerifyJob : public base::RefCountedThreadSafe<ContentVerifyJob> {
 
   void DidGetContentHashOnIO(scoped_refptr<const ContentHash> hash);
 
-  // Same as Read, but is run without acquiring lock.
-  void ReadImpl(const char* data, int count, MojoResult read_result);
+  // Same as BytesRead, but is run without acquiring lock.
+  void BytesReadImpl(const char* data, int count, MojoResult read_result);
 
   // Called each time we're done adding bytes for the current block, and are
   // ready to finish the hash operation for those bytes and make sure it
@@ -133,6 +133,9 @@ class ContentVerifyJob : public base::RefCountedThreadSafe<ContentVerifyJob> {
 
   // Called when our ContentHashReader has finished initializing.
   void OnHashesReady(std::unique_ptr<const ContentHashReader> hash_reader);
+
+  // Reports the job has completed (successfully or with a failure).
+  void ReportJobFinished(FailureReason reason);
 
   // True if BytesRead has seen some errors that can be ignored from content
   // verification's perspective.
@@ -170,6 +173,10 @@ class ContentVerifyJob : public base::RefCountedThreadSafe<ContentVerifyJob> {
   const base::FilePath relative_path_;
 
   base::TimeDelta time_spent_;
+
+  // The manifest version of the extension associated with the verify job.
+  // Used only for metrics purposes.
+  const int manifest_version_;
 
   // Called once if verification fails.
   FailureCallback failure_callback_;

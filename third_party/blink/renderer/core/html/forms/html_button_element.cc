@@ -35,10 +35,11 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/form_data.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_listbox_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_list_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
-#include "third_party/blink/renderer/core/layout/forms/layout_button.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
@@ -62,7 +63,13 @@ LayoutObject* HTMLButtonElement::CreateLayoutObject(
       display == EDisplay::kInlineLayoutCustom ||
       display == EDisplay::kLayoutCustom)
     return HTMLFormControlElement::CreateLayoutObject(style);
-  return MakeGarbageCollected<LayoutButton>(this);
+  return MakeGarbageCollected<LayoutBlockFlow>(this);
+}
+
+void HTMLButtonElement::AdjustStyle(ComputedStyleBuilder& builder) {
+  builder.SetShouldIgnoreOverflowPropertyForInlineBlockBaseline();
+  builder.SetInlineBlockBaselineEdge(EInlineBlockBaselineEdge::kContentBox);
+  HTMLFormControlElement::AdjustStyle(builder);
 }
 
 FormControlType HTMLButtonElement::FormControlType() const {
@@ -126,6 +133,14 @@ void HTMLButtonElement::ParseAttribute(
                EqualIgnoringASCIICase(params.new_value, "popover")) {
       type_ = kPopover;
     } else {
+      if (!params.new_value.IsNull()) {
+        if (params.new_value.empty()) {
+          UseCounter::Count(GetDocument(),
+                            WebFeature::kButtonTypeAttrEmptyString);
+        } else if (!EqualIgnoringASCIICase(params.new_value, "submit")) {
+          UseCounter::Count(GetDocument(), WebFeature::kButtonTypeAttrInvalid);
+        }
+      }
       type_ = kSubmit;
     }
     UpdateWillValidateCache();
@@ -144,10 +159,12 @@ void HTMLButtonElement::DefaultEventHandler(Event& event) {
       if (Form() && type_ == kSubmit) {
         Form()->PrepareForSubmission(&event, this);
         event.SetDefaultHandled();
+        return;
       }
       if (Form() && type_ == kReset) {
         Form()->reset();
         event.SetDefaultHandled();
+        return;
       }
     }
   }
@@ -163,8 +180,15 @@ void HTMLButtonElement::DefaultEventHandler(Event& event) {
     CHECK(RuntimeEnabledFeatures::StylableSelectEnabled());
     // For native popups, use HTMLSelectElement's codepath. For <datalist>
     // popover popups, use the HTMLFormControlElement popover code path.
-    if (!select->SlottedDatalist()) {
+    if (select->IsAppearanceBaseSelect()) {
+      CHECK(!event.DefaultHandled())
+          << " We shouldn't run HTMLSelectElement::DefaultEventHandler here if "
+             "the default has already been handled. event.type(): "
+          << event.type();
       select->DefaultEventHandler(event);
+      if (event.DefaultHandled()) {
+        return;
+      }
     }
   }
 
@@ -283,6 +307,11 @@ HTMLSelectElement* HTMLButtonElement::OwnerSelect() const {
   }
   if (auto* select = DynamicTo<HTMLSelectElement>(parentNode())) {
     return select;
+  }
+  if (auto* root = ContainingShadowRoot()) {
+    if (auto* select = DynamicTo<HTMLSelectElement>(root->host())) {
+      return select;
+    }
   }
   return nullptr;
 }

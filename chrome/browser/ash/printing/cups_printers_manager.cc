@@ -8,7 +8,6 @@
 #include <optional>
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_set.h"
@@ -24,12 +23,12 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/printing/automatic_usb_printer_configurer.h"
 #include "chrome/browser/ash/printing/cups_printer_status_creator.h"
-#include "chrome/browser/ash/printing/enterprise_printers_provider.h"
+#include "chrome/browser/ash/printing/enterprise/enterprise_printers_provider.h"
+#include "chrome/browser/ash/printing/enterprise/print_servers_policy_provider.h"
+#include "chrome/browser/ash/printing/enterprise/print_servers_provider.h"
 #include "chrome/browser/ash/printing/oauth2/client_ids_database.h"
 #include "chrome/browser/ash/printing/ppd_provider_factory.h"
 #include "chrome/browser/ash/printing/ppd_resolution_tracker.h"
-#include "chrome/browser/ash/printing/print_servers_policy_provider.h"
-#include "chrome/browser/ash/printing/print_servers_provider.h"
 #include "chrome/browser/ash/printing/printer_configurer.h"
 #include "chrome/browser/ash/printing/printer_event_tracker.h"
 #include "chrome/browser/ash/printing/printer_event_tracker_factory.h"
@@ -42,13 +41,13 @@
 #include "chrome/browser/ash/printing/usb_printer_notification_controller.h"
 #include "chrome/browser/ash/printing/zeroconf_printer_detector.h"
 #include "chrome/browser/ash/scanning/zeroconf_scanner_detector.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/printing/print_preview_sticky_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/printscanmgr/printscanmgr_client.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/printing/cups_printer_status.h"
 #include "chromeos/printing/printing_constants.h"
 #include "chromeos/printing/uri.h"
@@ -727,8 +726,6 @@ class CupsPrintersManagerImpl
   void QueryPrinterForAutoConf(
       const Printer& printer,
       base::OnceCallback<void(bool)> callback) override {
-    CHECK(ash::features::IsPrintPreviewDiscoveredPrintersEnabled());
-
     if (!IsIppUri(printer.uri())) {
       std::move(callback).Run(false);
       return;

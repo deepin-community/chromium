@@ -16,11 +16,9 @@ limitations under the License.
 #include "xla/service/while_loop_unroller.h"
 
 #include <cstdint>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -49,8 +47,6 @@ class WhileLoopUnrollerTest : public HloTestBase {
   [[nodiscard]] std::unique_ptr<VerifiedHloModule>
   MakeModuleWithNestedLoopBodyIndirectInc(int num_iters);
   [[nodiscard]] std::unique_ptr<VerifiedHloModule>
-  MakeModuleWithLoopBodyNestedCopyIndVar(int num_iters);
-  [[nodiscard]] std::unique_ptr<VerifiedHloModule>
   MakeModuleWithWhileFeedingAnotherWhile(int num_iters);
   [[nodiscard]] std::unique_ptr<VerifiedHloModule>
   MakeModuleWithSimpleLoopAllReduce(int num_iters);
@@ -58,11 +54,13 @@ class WhileLoopUnrollerTest : public HloTestBase {
  public:
   void UnrollAndCompare(std::unique_ptr<HloModule> module,
                         absl::Span<Literal* const> arguments,
-                        int64_t unroll_factor = -1) {
+                        int64_t unroll_factor = -1, bool wrap_in_loop = false) {
     Literal before_unroll = ExecuteAndTransfer(module->Clone(), arguments);
     VLOG(2) << "before unroll value: " << before_unroll.ToString();
 
-    EXPECT_TRUE(WhileLoopUnroller(unroll_factor).Run(module.get()).value());
+    EXPECT_TRUE(WhileLoopUnroller(unroll_factor, wrap_in_loop)
+                    .Run(module.get())
+                    .value());
 
     Literal after_unroll = ExecuteAndTransfer(std::move(module), arguments);
     VLOG(2) << "after unroll value: " << after_unroll.ToString();
@@ -78,25 +76,25 @@ WhileLoopUnrollerTest::MakeModuleWithSimpleLoop(int num_iters) {
   std::string hlo_string_template = R"(
   HloModule SimpleLoop
   SimpleLoop.body {
-    loop_var.1 = (s32[], s32[3]{0}) parameter(0)
-    get-tuple-element.1 = s32[] get-tuple-element(loop_var.1), index=0
-    constant.1 = s32[] constant(1)
-    idx = s32[] add(get-tuple-element.1, constant.1)
+    loop_var.1 = (s32[]{:T(128)}, s32[3]{0}) parameter(0)
+    get-tuple-element.1 = s32[]{:T(128)} get-tuple-element(loop_var.1), index=0
+    constant.1 = s32[]{:T(128)} constant(1)
+    idx = s32[]{:T(128)} add(get-tuple-element.1, constant.1)
     get-tuple-element.2 = s32[3]{0} get-tuple-element(loop_var.1), index=1
     output = s32[3]{0} add(get-tuple-element.2, get-tuple-element.2)
-    ROOT tuple = (s32[], s32[3]{0}) tuple(idx, output)
+    ROOT tuple = (s32[]{:T(128)}, s32[3]{0}) tuple(idx, output)
   }
   SimpleLoop.condition {
-    loop_var.2 = (s32[], s32[3]{0}) parameter(0)
+    loop_var.2 = (s32[]{:T(128)}, s32[3]{0}) parameter(0)
     get-tuple-element.3 = s32[] get-tuple-element(loop_var.2), index=0
-    constant.2 = s32[] constant({{LOOP_BOUND}})
+    constant.2 = s32[]{:T(128)} constant({{LOOP_BOUND}})
     ROOT less-than = pred[] compare(get-tuple-element.3, constant.2), direction=LT
   }
   ENTRY SimpleLoop {
-    constant.3 = s32[] constant(0)
+    constant.3 = s32[]{:T(128)} constant(0)
     constant.4 = s32[3]{0} constant({0, 1, 2})
-    tuple.1 = (s32[], s32[3]{0}) tuple(constant.3, constant.4)
-    ROOT while = (s32[], s32[3]{0}) while(tuple.1), condition=
+    tuple.1 = (s32[]{:T(128)}, s32[3]{0}) tuple(constant.3, constant.4)
+    ROOT while = (s32[]{:T(128)}, s32[3]{0}) while(tuple.1), condition=
       SimpleLoop.condition, body=SimpleLoop.body
   }
   )";
@@ -116,41 +114,6 @@ WhileLoopUnrollerTest::MakeModuleWithLoopBodyIndirectInc(int num_iters) {
     get-tuple-element.3 = s32[3]{0} get-tuple-element(loop_var.1), index=2
     output = s32[3]{0} add(get-tuple-element.3, get-tuple-element.3)
     inc = s32[] add(get-tuple-element.1, get-tuple-element.2)
-    ROOT tuple = (s32[], s32[], s32[3]{0}) tuple(inc, get-tuple-element.2, output)
-  }
-  SimpleLoop.condition {
-    loop_var.2 = (s32[], s32[], s32[3]{0}) parameter(0)
-    get-tuple-element.3 = s32[] get-tuple-element(loop_var.2), index=0
-    constant.2 = s32[] constant({{LOOP_BOUND}})
-    ROOT less-than = pred[] compare(get-tuple-element.3, constant.2), direction=LT
-  }
-  ENTRY SimpleLoop {
-    constant.1 = s32[] constant(1)
-    constant.3 = s32[] constant(0)
-    constant.4 = s32[3]{0} constant({0, 1, 2})
-    tuple.1 = (s32[], s32[], s32[3]{0}) tuple(constant.3, constant.1, constant.4)
-    ROOT while = (s32[], s32[], s32[3]{0}) while(tuple.1), condition=
-      SimpleLoop.condition, body=SimpleLoop.body
-  }
-  )";
-  std::string hlo_string = absl::StrReplaceAll(
-      hlo_string_template, {{"{{LOOP_BOUND}}", absl::StrCat(num_iters)}});
-  return ParseAndReturnVerifiedModule(hlo_string).value();
-}
-
-std::unique_ptr<VerifiedHloModule>
-WhileLoopUnrollerTest::MakeModuleWithLoopBodyNestedCopyIndVar(int num_iters) {
-  std::string hlo_string_template = R"(
-  HloModule SimpleLoop
-  SimpleLoop.body {
-    loop_var.1 = (s32[], s32[], s32[3]{0}) parameter(0)
-    get-tuple-element.1 = s32[] get-tuple-element(loop_var.1), index=0
-    inner-copy = s32[] copy(get-tuple-element.1)
-    outer-copy = s32[] reshape(inner-copy)
-    get-tuple-element.2 = s32[] get-tuple-element(loop_var.1), index=1
-    get-tuple-element.3 = s32[3]{0} get-tuple-element(loop_var.1), index=2
-    output = s32[3]{0} add(get-tuple-element.3, get-tuple-element.3)
-    inc = s32[] add(outer-copy, get-tuple-element.2)
     ROOT tuple = (s32[], s32[], s32[3]{0}) tuple(inc, get-tuple-element.2, output)
   }
   SimpleLoop.condition {
@@ -347,7 +310,84 @@ WhileLoopUnrollerTest::MakeModuleWithSimpleLoopAllReduce(int num_iters) {
 }
 
 TEST_F(WhileLoopUnrollerTest, SimpleLoopUnroll) {
-  UnrollAndCompare(MakeModuleWithSimpleLoop(/*num_iters=*/5), {});
+  UnrollAndCompare(MakeModuleWithSimpleLoop(/*num_iters=*/5), {}, -1, false);
+  UnrollAndCompare(MakeModuleWithSimpleLoop(/*num_iters=*/5), {}, -1, true);
+}
+
+// This test passes because we run WhileLoopConstantSinking before unrolling.
+TEST_F(WhileLoopUnrollerTest, SimpleLoopUnrollNeedPrepare) {
+  std::string hlo_string = R"(
+  HloModule SimpleLoop
+  SimpleLoop.body {
+    loop_var.1 = (s64[], s32[3]{0}, s64[]) parameter(0)
+    get-tuple-element.1 = s64[] get-tuple-element(loop_var.1), index=0
+    get-tuple-element.2 = s32[3]{0} get-tuple-element(loop_var.1), index=1
+    get-tuple-element.3 = s64[] get-tuple-element(loop_var.1), index=2
+    add = s64[] add(get-tuple-element.1, get-tuple-element.3)
+    multiply = s32[3]{0} add(get-tuple-element.2, get-tuple-element.2)
+    ROOT tuple = (s64[], s32[3]{0}, s64[]) tuple(add, multiply, get-tuple-element.3)
+  }
+  SimpleLoop.condition {
+    loop_var.2 = (s64[], s32[3]{0}, s64[]) parameter(0)
+    get-tuple-element.3 = s64[] get-tuple-element(loop_var.2), index=0
+    /* number of iterations is 10 */
+    constant.2 = s64[] constant(10)
+    ROOT less-than = pred[] compare(get-tuple-element.3, constant.2), direction=LT
+  }
+  ENTRY SimpleLoop {
+    constant.3 = s64[] constant(0)
+    one = s64[] constant(1)
+    constant.4 = s32[3]{0} constant({0, 1, 2})
+    tuple.1 = (s64[], s32[3]{0}, s64[]) tuple(constant.3, constant.4, one)
+    while = (s64[], s32[3]{0}, s64[]) while(tuple.1), condition=
+      SimpleLoop.condition, body=SimpleLoop.body
+    ROOT result = s32[3]{0} get-tuple-element(while), index=1
+  }
+  )";
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   false);
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   true);
+}
+
+// This test passes because we run TupleSimplifier before unrolling.
+TEST_F(WhileLoopUnrollerTest, SimpleLoopUnrollNeedPrepare2) {
+  std::string hlo_string = R"(
+  HloModule SimpleLoop
+  SimpleLoop.body {
+    loop_var.1 = (s64[], s32[3]{0}, s64[]) parameter(0)
+    get-tuple-element.1 = s64[] get-tuple-element(loop_var.1), index=0
+    get-tuple-element.2 = s32[3]{0} get-tuple-element(loop_var.1), index=1
+    get-tuple-element.3 = s64[] get-tuple-element(loop_var.1), index=2
+    add = s64[] add(get-tuple-element.1, get-tuple-element.3)
+    multiply = s32[3]{0} add(get-tuple-element.2, get-tuple-element.2)
+    ROOT tuple = (s64[], s32[3]{0}, s64[]) tuple(add, multiply, get-tuple-element.3)
+  }
+  SimpleLoop.condition {
+    loop_var.2 = (s64[], s32[3]{0}, s64[]) parameter(0)
+    get-tuple-element.3 = s64[] get-tuple-element(loop_var.2), index=0
+    /* number of iterations is 10 */
+    constant.2 = s64[] constant(10)
+    ROOT less-than = pred[] compare(get-tuple-element.3, constant.2), direction=LT
+  }
+  ENTRY SimpleLoop {
+    constant.3 = s64[] constant(0)
+    one = s64[] constant(1)
+    constant.4 = s32[3]{0} constant({0, 1, 2})
+    tuple.1 = (s64[], s32[3]{0}, s64[]) tuple(constant.3, constant.4, one)
+    gte1 = s64[] get-tuple-element(tuple.1), index=0
+    gte2 = s32[3]{0} get-tuple-element(tuple.1), index=1
+    gte3 = s64[] get-tuple-element(tuple.1), index=2
+    tuple = (s64[], s32[3]{0}, s64[]) tuple(gte1, gte2, gte3)
+    while = (s64[], s32[3]{0}, s64[]) while(tuple), condition=
+      SimpleLoop.condition, body=SimpleLoop.body
+    ROOT result = s32[3]{0} get-tuple-element(while), index=1
+  }
+  )";
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   false);
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   true);
 }
 
 TEST_F(WhileLoopUnrollerTest, SimpleLoopNotRoot) {
@@ -378,7 +418,10 @@ TEST_F(WhileLoopUnrollerTest, SimpleLoopNotRoot) {
     ROOT result = s32[3]{0} get-tuple-element(while), index=1
   }
   )";
-  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {});
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   false);
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   true);
 }
 
 TEST_F(WhileLoopUnrollerTest, GetUnrollableLoops) {
@@ -450,17 +493,10 @@ TEST_F(WhileLoopUnrollerTest, GetUnrollableLoops) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(hlo_string));
 
-  HloInstruction* while1 =
-      module->entry_computation()->GetInstructionWithName("while1");
-  HloInstruction* while2 =
-      module->entry_computation()->GetInstructionWithName("while2");
-  HloInstruction* while3 =
-      module->entry_computation()->GetInstructionWithName("while3");
-
-  auto unrollable_loops = GetUnrollableLoops(module.get(), {});
-  EXPECT_TRUE(unrollable_loops.contains(while1));
-  EXPECT_TRUE(unrollable_loops.contains(while2));
-  EXPECT_FALSE(unrollable_loops.contains(while3));
+  auto unrollable_loops =
+      WhileLoopUnroller::GetUnrollableLoops(module.get(), {});
+  // Only while1 and while2 are unrollable
+  EXPECT_EQ(unrollable_loops.size(), 2);
 }
 
 TEST_F(WhileLoopUnrollerTest, UnrollMutipleLoops) {
@@ -516,13 +552,11 @@ TEST_F(WhileLoopUnrollerTest, UnrollMutipleLoops) {
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnVerifiedModule(hlo_string));
 
-  // UnrollAndCompare(module->Clone(), {}, -1);
-
   // Unroll the first loop
   TF_ASSERT_OK_AND_ASSIGN(
       bool unrolled1,
-      Unroll(module->entry_computation()->GetInstructionWithName("while1"),
-             -1));
+      WhileLoopUnroller::Unroll(
+          module->entry_computation()->GetInstructionWithName("while1")));
   EXPECT_TRUE(unrolled1);
 
   // There should be no call instructions after unrolling either loops since we
@@ -537,8 +571,8 @@ TEST_F(WhileLoopUnrollerTest, UnrollMutipleLoops) {
   // Unroll the second loop
   TF_ASSERT_OK_AND_ASSIGN(
       bool unrolled2,
-      Unroll(module->entry_computation()->GetInstructionWithName("while2"),
-             -1));
+      WhileLoopUnroller::Unroll(
+          module->entry_computation()->GetInstructionWithName("while2")));
   EXPECT_TRUE(unrolled2);
   std::vector<HloInstruction*> call_instrs_2;
   for (auto* comp : module->MakeComputationPostOrder()) {
@@ -563,7 +597,6 @@ TEST_F(WhileLoopUnrollerTest, SimpleLoopNonZeroInit) {
   SimpleLoop.condition {
     loop_var.2 = (s64[], s32[3]{0}) parameter(0)
     get-tuple-element.3 = s64[] get-tuple-element(loop_var.2), index=0
-    /* number of iterations is 10 */
     constant.2 = s64[] constant(10)
     ROOT less-than = pred[] compare(get-tuple-element.3, constant.2), direction=LT
   }
@@ -576,7 +609,10 @@ TEST_F(WhileLoopUnrollerTest, SimpleLoopNonZeroInit) {
     ROOT result = s32[3]{0} get-tuple-element(while), index=1
   }
   )";
-  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {});
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   false);
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   true);
 }
 
 TEST_F(WhileLoopUnrollerTest, SimpleLoopS16IndVar) {
@@ -606,7 +642,10 @@ TEST_F(WhileLoopUnrollerTest, SimpleLoopS16IndVar) {
       SimpleLoop.condition, body=SimpleLoop.body
   }
   )";
-  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {});
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   false);
+  UnrollAndCompare(ParseAndReturnVerifiedModule(hlo_string).value(), {}, -1,
+                   true);
 }
 
 TEST_F(WhileLoopUnrollerTest, LoopWithControlDep) {
@@ -651,17 +690,26 @@ TEST_F(WhileLoopUnrollerTest, SimpleLoopPartialUnroll) {
 TEST_F(WhileLoopUnrollerTest, IndirectBodyInc) {
   std::unique_ptr<HloModule> module =
       MakeModuleWithLoopBodyIndirectInc(/*num_iters=*/5);
-  UnrollAndCompare(std::move(module), {});
+  UnrollAndCompare(MakeModuleWithLoopBodyIndirectInc(/*num_iters=*/5), {}, -1,
+                   false);
+  UnrollAndCompare(MakeModuleWithLoopBodyIndirectInc(/*num_iters=*/5), {}, -1,
+                   true);
 }
 
 TEST_F(WhileLoopUnrollerTest, NestedIndirectBodyInc) {
   std::unique_ptr<HloModule> module =
       MakeModuleWithNestedLoopBodyIndirectInc(/*num_iters=*/5);
-  UnrollAndCompare(std::move(module), {});
+  UnrollAndCompare(MakeModuleWithNestedLoopBodyIndirectInc(/*num_iters=*/5), {},
+                   -1, false);
+  UnrollAndCompare(MakeModuleWithNestedLoopBodyIndirectInc(/*num_iters=*/5), {},
+                   -1, true);
 }
 
 TEST_F(WhileLoopUnrollerTest, WhileFeedingWhile) {
-  UnrollAndCompare(MakeModuleWithWhileFeedingAnotherWhile(/*num_iters=*/5), {});
+  UnrollAndCompare(MakeModuleWithWhileFeedingAnotherWhile(/*num_iters=*/5), {},
+                   -1, false);
+  UnrollAndCompare(MakeModuleWithWhileFeedingAnotherWhile(/*num_iters=*/5), {},
+                   -1, true);
 }
 
 TEST_F(WhileLoopUnrollerTest, LoopWithCollective) {
@@ -880,6 +928,107 @@ TEST_F(WhileLoopUnrollerTest, LoopWithCollective2) {
   // The total number of fusions in the unrolled version in the entry must be
   // equal to loop_trip_count * fusion_instr_count
   EXPECT_EQ(fusion_instr_count * 4, fusion_instr_count_after_unroll);
+}
+
+TEST_F(WhileLoopUnrollerTest, MatchShapeCoveringDS) {
+  std::string hlo_string_template = R"(
+  HloModule SimpleLoop
+  SimpleLoop.body {
+    loop_var.1 = (s32[]{:T(128)}, s32[3,10]{1,0}) parameter(0)
+    get-tuple-element.1 = s32[]{:T(128)} get-tuple-element(loop_var.1), index=0
+    constant.1 = s32[]{:T(128)} constant(1)
+    idx = s32[]{:T(128)} add(get-tuple-element.1, constant.1)
+    get-tuple-element.2 = s32[3,10]{1,0} get-tuple-element(loop_var.1), index=1
+    zero = s32[] constant(0)
+    slice = s32[1,10] dynamic-slice(get-tuple-element.2, get-tuple-element.1, zero), dynamic_slice_sizes={1,10}
+    output = s32[3,10]{1,0} add(get-tuple-element.2, get-tuple-element.2)
+    ROOT tuple = (s32[]{:T(128)}, s32[3,10]{1,0}) tuple(idx, output)
+  }
+  SimpleLoop.condition {
+    loop_var.2 = (s32[]{:T(128)}, s32[3,10]{1,0}) parameter(0)
+    get-tuple-element.3 = s32[] get-tuple-element(loop_var.2), index=0
+    constant.2 = s32[]{:T(128)} constant({{LOOP_BOUND}})
+    ROOT less-than = pred[] compare(get-tuple-element.3, constant.2), direction=LT
+  }
+  ENTRY SimpleLoop {
+    constant.3 = s32[]{:T(128)} constant(0)
+    constant.4 = s32[3,10]{1,0} constant({...})
+    tuple.1 = (s32[]{:T(128)}, s32[3,10]{1,0}) tuple(constant.3, constant.4)
+    ROOT while = (s32[]{:T(128)}, s32[3,10]{1,0}) while(tuple.1), condition=
+      SimpleLoop.condition, body=SimpleLoop.body
+  }
+  )";
+
+  std::string hlo_string = absl::StrReplaceAll(
+      hlo_string_template, {{"{{LOOP_BOUND}}", absl::StrCat(3)}});
+  auto module = ParseAndReturnVerifiedModule(hlo_string).value();
+  HloInstruction* loop = module->entry_computation()->root_instruction();
+  auto config = WhileLoopUnroller::IsLoopUnrollable(loop);
+  EXPECT_TRUE(config.has_value());
+  HloComputation* body = module->GetComputationWithName("SimpleLoop.body");
+  HloInstruction* input = body->GetInstructionWithName("get-tuple-element.2");
+  HloInstruction* instr = body->GetInstructionWithName("slice");
+  EXPECT_TRUE(MatchShapeCoveringDynamicIndexInstruction(
+                  instr, input, HloOpcode::kDynamicSlice, config.value())
+                  .has_value());
+}
+
+TEST_F(WhileLoopUnrollerTest, MatchShapeCoveringDSNested) {
+  std::string hlo_string_template = R"(
+  HloModule SimpleLoop
+  %fused_computation.slice (param_0.51117: s32[3,10], p1: s32[]) -> s32[10] {
+    %param_0.51117 = s32[3,10] parameter(0)
+    p1 = s32[] parameter(1)
+    %constant.85694 = s32[] constant(0)
+    slice = s32[1,10] dynamic-slice(s32[3,10] %param_0.51117, p1, s32[] %constant.85694), dynamic_slice_sizes={1,10}
+    ROOT %bitcast.31250 = s32[10] bitcast(s32[1,10] slice)
+  }
+
+  %fused_computation.outer (param_1.30691: s32[3,10], p2: s32[]) -> s32[10] {
+    %param_1.30691 = s32[3,10] parameter(0)
+    p2 = s32[] parameter(1)
+    inner.fusion = s32[10] fusion(s32[3,10] %param_1.30691, p2), kind=kLoop, calls=%fused_computation.slice
+    ROOT out = s32[10] add(inner.fusion, inner.fusion)
+  }
+  SimpleLoop.body {
+    loop_var.1 = (s32[]{:T(128)}, s32[3,10]{1,0}) parameter(0)
+    get-tuple-element.1 = s32[]{:T(128)} get-tuple-element(loop_var.1), index=0
+    constant.1 = s32[]{:T(128)} constant(1)
+    idx = s32[]{:T(128)} add(get-tuple-element.1, constant.1)
+    get-tuple-element.2 = s32[3,10]{1,0} get-tuple-element(loop_var.1), index=1
+    zero = s32[] constant(0)
+    outer.fusion = s32[10] fusion(get-tuple-element.2, get-tuple-element.1), kind=kOutput, calls=%fused_computation.outer
+    output = s32[3,10]{1,0} add(get-tuple-element.2, get-tuple-element.2)
+    ROOT tuple = (s32[]{:T(128)}, s32[3,10]{1,0}) tuple(idx, output)
+  }
+  SimpleLoop.condition {
+    loop_var.2 = (s32[]{:T(128)}, s32[3,10]{1,0}) parameter(0)
+    get-tuple-element.3 = s32[] get-tuple-element(loop_var.2), index=0
+    constant.2 = s32[]{:T(128)} constant({{LOOP_BOUND}})
+    ROOT less-than = pred[] compare(get-tuple-element.3, constant.2), direction=LT
+  }
+  ENTRY SimpleLoop {
+    constant.3 = s32[]{:T(128)} constant(0)
+    constant.4 = s32[3,10]{1,0} constant({...})
+    tuple.1 = (s32[]{:T(128)}, s32[3,10]{1,0}) tuple(constant.3, constant.4)
+    ROOT while = (s32[]{:T(128)}, s32[3,10]{1,0}) while(tuple.1), condition=
+      SimpleLoop.condition, body=SimpleLoop.body
+  }
+  )";
+
+  std::string hlo_string = absl::StrReplaceAll(
+      hlo_string_template, {{"{{LOOP_BOUND}}", absl::StrCat(3)}});
+  auto module = ParseAndReturnVerifiedModule(hlo_string).value();
+  HloInstruction* loop = module->entry_computation()->root_instruction();
+  auto config = WhileLoopUnroller::IsLoopUnrollable(loop);
+  EXPECT_TRUE(config.has_value());
+  HloComputation* inner_fusion_comp =
+      module->GetComputationWithName("fused_computation.slice");
+  HloInstruction* instr = inner_fusion_comp->GetInstructionWithName("slice");
+  EXPECT_TRUE(MatchShapeCoveringDynamicIndexInstruction(
+                  instr, inner_fusion_comp->parameter_instruction(0),
+                  HloOpcode::kDynamicSlice, config.value())
+                  .has_value());
 }
 
 }  // namespace

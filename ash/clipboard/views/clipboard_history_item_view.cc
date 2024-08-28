@@ -38,6 +38,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/layout_types.h"
 #include "ui/views/metadata/view_factory_internal.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_targeter_delegate.h"
@@ -140,6 +141,8 @@ class ClipboardHistoryItemView::DisplayView
       AddChildView(
           views::Builder<views::View>()
               .SetLayoutManager(std::make_unique<views::FillLayout>())
+              .SetProperty(views::kBoxLayoutFlexKey,
+                           views::BoxLayoutFlexSpecification())
               .AddChildren(
                   views::Builder<views::BoxLayoutView>()
                       .SetOrientation(views::BoxLayout::Orientation::kVertical)
@@ -170,9 +173,12 @@ class ClipboardHistoryItemView::DisplayView
     } else {
       // Add the item's contents and a delete button that, when visible, takes
       // away some of the contents' horizontal space.
-      AddChildView(views::Builder<views::View>(container->CreateContentsView())
+      AddChildView(views::Builder<views::BoxLayoutView>()
+                       .SetOrientation(views::LayoutOrientation::kVertical)
                        .AddChild(views::Builder<views::View>(
-                           container->CreateDeleteButton()))
+                                     container->CreateContentsView())
+                                     .AddChild(views::Builder<views::View>(
+                                         container->CreateDeleteButton())))
                        .Build());
     }
   }
@@ -256,7 +262,8 @@ ClipboardHistoryItemView::ClipboardHistoryItemView(
     views::MenuItemView* container)
     : item_id_(item_id),
       clipboard_history_(clipboard_history),
-      container_(container) {}
+      container_(container) {
+}
 
 bool ClipboardHistoryItemView::AdvancePseudoFocus(bool reverse) {
   if (pseudo_focus_ == PseudoFocus::kEmpty) {
@@ -309,8 +316,9 @@ void ClipboardHistoryItemView::HandleMainButtonPressEvent(
 
   // When an item view is under gesture tap, it may be not under pseudo
   // focus yet.
-  if (event.type() == ui::ET_GESTURE_TAP)
+  if (event.type() == ui::EventType::kGestureTap) {
     pseudo_focus_ = PseudoFocus::kMainButton;
+  }
 
   Activate(CalculateActionForMainButtonClick(), event.flags());
 }
@@ -324,19 +332,20 @@ void ClipboardHistoryItemView::MaybeHandleGestureEventFromMainButton(
     ui::GestureEvent* event) {
   // `event` is always handled here if the menu item view is under the gesture
   // long press. It prevents other event handlers from introducing side effects.
-  // For example, if `main_button_` handles the ui::ET_GESTURE_END event,
-  // `main_button_`'s state will be reset. However, `main_button_` is expected
-  // to be at the "hovered" state when the menu item is selected.
+  // For example, if `main_button_` handles the ui::EventType::kGestureEnd
+  // event, `main_button_`'s state will be reset. However, `main_button_` is
+  // expected to be at the "hovered" state when the menu item is selected.
   if (under_gesture_long_press_) {
-    DCHECK_NE(ui::ET_GESTURE_LONG_PRESS, event->type());
-    if (event->type() == ui::ET_GESTURE_END)
+    DCHECK_NE(ui::EventType::kGestureLongPress, event->type());
+    if (event->type() == ui::EventType::kGestureEnd) {
       under_gesture_long_press_ = false;
+    }
 
     event->SetHandled();
     return;
   }
 
-  if (event->type() == ui::ET_GESTURE_LONG_PRESS) {
+  if (event->type() == ui::EventType::kGestureLongPress) {
     under_gesture_long_press_ = true;
     switch (pseudo_focus_) {
       case PseudoFocus::kEmpty:
@@ -356,7 +365,7 @@ void ClipboardHistoryItemView::MaybeHandleGestureEventFromMainButton(
         DCHECK(delete_button_->GetVisible());
         break;
       case PseudoFocus::kMaxValue:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
     event->SetHandled();
@@ -398,17 +407,20 @@ const ClipboardHistoryItem* ClipboardHistoryItemView::GetClipboardHistoryItem()
   return GetClipboardHistoryItemImpl(item_id_, clipboard_history_);
 }
 
-gfx::Size ClipboardHistoryItemView::CalculatePreferredSize() const {
+gfx::Size ClipboardHistoryItemView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   const int preferred_width =
       clipboard_history_util::GetPreferredItemViewWidth();
-  return gfx::Size(preferred_width, GetHeightForWidth(preferred_width));
+  return gfx::Size(
+      preferred_width,
+      GetLayoutManager()->GetPreferredHeightForWidth(this, preferred_width));
 }
 
 void ClipboardHistoryItemView::GetAccessibleNodeData(ui::AXNodeData* data) {
   // A valid role must be set in the AXNodeData prior to setting the name
   // via AXNodeData::SetName.
+  View::GetAccessibleNodeData(data);
   data->role = ax::mojom::Role::kMenuItem;
-  data->SetNameChecked(GetAccessibleName());
 
   // In fitting with existing conventions for menu items, we treat clipboard
   // history items as "selected" from an accessibility standpoint if pressing
@@ -463,7 +475,7 @@ Action ClipboardHistoryItemView::CalculateActionForMainButtonClick() const {
       return Action::kDelete;
     case PseudoFocus::kEmpty:
     case PseudoFocus::kMaxValue:
-      DUMP_WILL_BE_NOTREACHED_NORETURN();
+      DUMP_WILL_BE_NOTREACHED();
       return Action::kEmpty;
   }
 }

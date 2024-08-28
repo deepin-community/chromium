@@ -20,6 +20,8 @@
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -38,6 +40,7 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/test/focus_manager_test.h"
 #include "ui/views/test/native_widget_factory.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/touchui/touch_selection_controller_impl.h"
 #include "ui/views/widget/root_view.h"
@@ -48,10 +51,14 @@
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/wm/public/activation_client.h"
 
+#if BUILDFLAG(ENABLE_DESKTOP_AURA)
+#include "ui/aura/env.h"
+#include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
+#endif
+
 #if BUILDFLAG(IS_WIN)
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
-#include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/win/hwnd_util.h"
 #endif
 
@@ -107,7 +114,7 @@ class ExitLoopOnRelease : public View {
 BEGIN_METADATA(ExitLoopOnRelease)
 END_METADATA
 
-// A view that does a capture on ui::ET_GESTURE_TAP_DOWN events.
+// A view that does a capture on ui::EventType::kGestureTapDown events.
 class GestureCaptureView : public View {
   METADATA_HEADER(GestureCaptureView, View)
 
@@ -122,7 +129,7 @@ class GestureCaptureView : public View {
  private:
   // View:
   void OnGestureEvent(ui::GestureEvent* event) override {
-    if (event->type() == ui::ET_GESTURE_TAP_DOWN) {
+    if (event->type() == ui::EventType::kGestureTapDown) {
       GetWidget()->SetCapture(this);
       event->StopPropagation();
     }
@@ -216,6 +223,123 @@ class NestedLoopCaptureView : public View {
 BEGIN_METADATA(NestedLoopCaptureView)
 END_METADATA
 
+#if BUILDFLAG(ENABLE_DESKTOP_AURA)
+// A view that runs closures in response to drag events.
+class DragView : public View, public DragController {
+  METADATA_HEADER(DragView, View)
+
+ public:
+  DragView(base::OnceClosure on_drag_enter,
+           base::OnceClosure on_drag_exit,
+           base::OnceClosure on_capture_lost,
+           base::OnceClosure on_mouse_exit)
+      : on_drag_enter_(std::move(on_drag_enter)),
+        on_drag_exit_(std::move(on_drag_exit)),
+        on_capture_lost_(std::move(on_capture_lost)),
+        on_mouse_exit_(std::move(on_mouse_exit)) {
+    set_drag_controller(this);
+  }
+
+  DragView(const DragView&) = delete;
+  DragView& operator=(const DragView&) = delete;
+
+  ~DragView() override = default;
+
+ private:
+  // DragController:
+  bool CanStartDragForView(views::View* sender,
+                           const gfx::Point& press_pt,
+                           const gfx::Point& current_pt) override {
+    EXPECT_EQ(sender, this);
+    return true;
+  }
+
+  int GetDragOperationsForView(views::View* sender,
+                               const gfx::Point& press_pt) override {
+    EXPECT_EQ(sender, this);
+    return ui::DragDropTypes::DRAG_COPY;
+  }
+
+  void WriteDragDataForView(views::View* sender,
+                            const gfx::Point& press_pt,
+                            ui::OSExchangeData* data) override {
+    data->provider().SetString(u"test");
+
+    // Without this, Lacros won't add the chromium/x-data-transfer-endpoint MIME
+    // type to the list of available types, and without that Exo won't start a
+    // drag session.
+    data->SetSource(
+        std::make_unique<ui::DataTransferEndpoint>(ui::EndpointType::kDefault));
+  }
+
+  // View:
+
+  // See the comment for `received_drag_event_` for why this is Lacros-only.
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (event->type() == ui::EventType::kMouseDragged) {
+      received_drag_event_ = true;
+    }
+    View::OnMouseEvent(event);
+  }
+#endif
+
+  bool GetDropFormats(
+      int* formats,
+      std::set<ui::ClipboardFormatType>* format_types) override {
+    *formats = ui::OSExchangeData::STRING;
+    return true;
+  }
+
+  bool CanDrop(const OSExchangeData& data) override { return true; }
+
+  void OnDragEntered(const ui::DropTargetEvent& event) override {
+    if (on_drag_enter_) {
+      std::move(on_drag_enter_).Run();
+    }
+  }
+
+  void OnDragExited() override {
+    if (on_drag_exit_) {
+      std::move(on_drag_exit_).Run();
+    }
+  }
+
+  void OnMouseCaptureLost() override {
+    if (on_capture_lost_) {
+      std::move(on_capture_lost_).Run();
+    }
+  }
+
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    // Depending on the initial mouse position and the timing when the OS
+    // informs us about it, we might get an extra mouse exit event that is
+    // unrelated to DnD.
+    if (received_drag_event_ && on_mouse_exit_) {
+      std::move(on_mouse_exit_).Run();
+    }
+  }
+
+  // Whether we've received an EventType::kMouseDragged event yet.
+  //
+  // This is needed on Lacros, where we sometimes get an EventType::kMouseExited
+  // event that's unrelated to DnD. To prevent that from messing up the test
+  // flow, we ignore all such events until we receive an
+  // EventType::kMouseDragged event. On all other platforms, initializing it to
+  // true disables this workaround.
+#if BUILDFLAG(IS_CHROMEOS_LACROS)
+  bool received_drag_event_ = false;
+#else
+  bool received_drag_event_ = true;
+#endif
+  base::OnceClosure on_drag_enter_, on_drag_exit_, on_capture_lost_,
+      on_mouse_exit_;
+};
+
+BEGIN_METADATA(DragView)
+END_METADATA
+#endif  // BUILDFLAG(ENABLE_DESKTOP_AURA)
+
 ui::WindowShowState GetWidgetShowState(const Widget* widget) {
   // Use IsMaximized/IsMinimized/IsFullScreen instead of GetWindowPlacement
   // because the former is implemented on all platforms but the latter is not.
@@ -244,17 +368,15 @@ void RunPendingMessagesForActiveStatusChange() {
 // this is just an activation. For other widgets, it means activating and then
 // spinning the run loop until the OS has activated the window.
 void ActivateSync(Widget* widget) {
-  views::test::WidgetActivationWaiter waiter(widget, true);
   widget->Activate();
-  waiter.Wait();
+  views::test::WaitForWidgetActive(widget, true);
 }
 
 // Like for ActivateSync(), wait for a widget to become active, but Show() the
 // widget rather than calling Activate().
 void ShowSync(Widget* widget) {
-  views::test::WidgetActivationWaiter waiter(widget, true);
   widget->Show();
-  waiter.Wait();
+  views::test::WaitForWidgetActive(widget, true);
 }
 
 void DeactivateSync(Widget* widget) {
@@ -271,9 +393,8 @@ void DeactivateSync(Widget* widget) {
   stealer->CloseNow();
   widget->widget_delegate()->SetCanActivate(true);
 #else
-  views::test::WidgetActivationWaiter waiter(widget, false);
   widget->Deactivate();
-  waiter.Wait();
+  views::test::WaitForWidgetActive(widget, false);
 #endif
 }
 
@@ -297,7 +418,7 @@ std::unique_ptr<Textfield> CreateTextfield() {
   // Focusable views must have an accessible name in order to pass the
   // accessibility paint checks. The name can be literal text, placeholder
   // text or an associated label.
-  textfield->SetAccessibleName(u"Foo");
+  textfield->GetViewAccessibility().SetName(u"Foo");
   return textfield;
 }
 
@@ -435,8 +556,9 @@ class TouchEventHandler : public ui::EventHandler {
  private:
   // ui::EventHandler:
   void OnTouchEvent(ui::TouchEvent* event) override {
-    if (event->type() == ui::ET_TOUCH_PRESSED)
+    if (event->type() == ui::EventType::kTouchPressed) {
       ActivateViaMouse();
+    }
   }
 
   raw_ptr<Widget> widget_;
@@ -480,23 +602,23 @@ TEST_F(WidgetTestInteractive, CheckResizeControllerEvents) {
 
   // Move to an outside position.
   gfx::Point p1(200, 200);
-  ui::MouseEvent moved_out(ui::ET_MOUSE_MOVED, p1, p1, ui::EventTimeForNow(),
-                           ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent moved_out(ui::EventType::kMouseMoved, p1, p1,
+                           ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
   toplevel->OnMouseEvent(&moved_out);
   EXPECT_EQ(0, view->EnteredCalls());
   EXPECT_EQ(0, view->ExitedCalls());
 
   // Move onto the active view.
   gfx::Point p2(95, 95);
-  ui::MouseEvent moved_over(ui::ET_MOUSE_MOVED, p2, p2, ui::EventTimeForNow(),
-                            ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent moved_over(ui::EventType::kMouseMoved, p2, p2,
+                            ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
   toplevel->OnMouseEvent(&moved_over);
   EXPECT_EQ(1, view->EnteredCalls());
   EXPECT_EQ(0, view->ExitedCalls());
 
   // Move onto the outer resizing border.
   gfx::Point p3(102, 95);
-  ui::MouseEvent moved_resizer(ui::ET_MOUSE_MOVED, p3, p3,
+  ui::MouseEvent moved_resizer(ui::EventType::kMouseMoved, p3, p3,
                                ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
   toplevel->OnMouseEvent(&moved_resizer);
   EXPECT_EQ(0, view->EnteredCalls());
@@ -573,7 +695,7 @@ TEST_F(WidgetTestInteractive, ZOrderCheckBetweenTopWindows) {
 }
 
 // Test z-order of child widgets relative to their parent.
-// TODO(crbug.com/1227009): Disabled on Mac due to flake
+// TODO(crbug.com/40776787): Disabled on Mac due to flake
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_ChildStackedRelativeToParent DISABLED_ChildStackedRelativeToParent
 #else
@@ -648,10 +770,13 @@ TEST_F(WidgetTestInteractive, MAYBE_ChildStackedRelativeToParent) {
 
 TEST_F(WidgetTestInteractive, ChildWidgetStackAbove) {
   WidgetAutoclosePtr toplevel(CreateTopLevelPlatformWidget());
-  Widget* children[] = {CreateChildPlatformWidget(toplevel->GetNativeView()),
-                        CreateChildPlatformWidget(toplevel->GetNativeView()),
-                        CreateChildPlatformWidget(toplevel->GetNativeView())};
-  int order[] = {0, 1, 2};
+  auto children = std::to_array<Widget*>(
+      {CreateChildPlatformWidget(toplevel->GetNativeView()),
+       CreateChildPlatformWidget(toplevel->GetNativeView()),
+       CreateChildPlatformWidget(toplevel->GetNativeView())});
+  auto order = std::to_array<size_t>({0, 1, 2});
+
+  static_assert(children.size() == order.size());
 
   children[0]->ShowInactive();
   children[1]->ShowInactive();
@@ -661,23 +786,29 @@ TEST_F(WidgetTestInteractive, ChildWidgetStackAbove) {
   do {
     children[order[1]]->StackAboveWidget(children[order[0]]);
     children[order[2]]->StackAboveWidget(children[order[1]]);
-    for (int i = 0; i < 3; i++)
-      for (int j = 0; j < 3; j++)
-        if (i < j)
+    for (size_t i = 0; i < order.size(); i++) {
+      for (size_t j = 0; j < order.size(); j++) {
+        if (i < j) {
           EXPECT_FALSE(
               IsWindowStackedAbove(children[order[i]], children[order[j]]));
-        else if (i > j)
+        } else if (i > j) {
           EXPECT_TRUE(
               IsWindowStackedAbove(children[order[i]], children[order[j]]));
-  } while (std::next_permutation(order, order + 3));
+        }
+      }
+    }
+  } while (std::next_permutation(order.begin(), order.end()));
 }
 
 TEST_F(WidgetTestInteractive, ChildWidgetStackAtTop) {
   WidgetAutoclosePtr toplevel(CreateTopLevelPlatformWidget());
-  Widget* children[] = {CreateChildPlatformWidget(toplevel->GetNativeView()),
-                        CreateChildPlatformWidget(toplevel->GetNativeView()),
-                        CreateChildPlatformWidget(toplevel->GetNativeView())};
-  int order[] = {0, 1, 2};
+  auto children = std::to_array<Widget*>(
+      {CreateChildPlatformWidget(toplevel->GetNativeView()),
+       CreateChildPlatformWidget(toplevel->GetNativeView()),
+       CreateChildPlatformWidget(toplevel->GetNativeView())});
+  auto order = std::to_array<size_t>({0, 1, 2});
+
+  static_assert(children.size() == order.size());
 
   children[0]->ShowInactive();
   children[1]->ShowInactive();
@@ -687,15 +818,18 @@ TEST_F(WidgetTestInteractive, ChildWidgetStackAtTop) {
   do {
     children[order[1]]->StackAtTop();
     children[order[2]]->StackAtTop();
-    for (int i = 0; i < 3; i++)
-      for (int j = 0; j < 3; j++)
-        if (i < j)
+    for (size_t i = 0; i < order.size(); i++) {
+      for (size_t j = 0; j < order.size(); j++) {
+        if (i < j) {
           EXPECT_FALSE(
               IsWindowStackedAbove(children[order[i]], children[order[j]]));
-        else if (i > j)
+        } else if (i > j) {
           EXPECT_TRUE(
               IsWindowStackedAbove(children[order[i]], children[order[j]]));
-  } while (std::next_permutation(order, order + 3));
+        }
+      }
+    }
+  } while (std::next_permutation(order.begin(), order.end()));
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -950,9 +1084,8 @@ TEST_F(DesktopWidgetTestInteractive, WindowModalWindowDestroyedActivationTest) {
 #if BUILDFLAG(IS_MAC)
   // Window modal dialogs on Mac are "sheets", which animate to close before
   // activating their parent widget.
-  views::test::WidgetActivationWaiter waiter(top_level_widget.get(), true);
   modal_dialog_widget->Close();
-  waiter.Wait();
+  views::test::WaitForWidgetActive(top_level_widget.get(), true);
 #else
   views::test::WidgetDestroyedWaiter waiter(modal_dialog_widget);
   modal_dialog_widget->Close();
@@ -1120,12 +1253,12 @@ TEST_F(WidgetTestInteractive, ShowAfterShowInactive) {
 }
 
 TEST_F(WidgetTestInteractive, WidgetShouldBeActiveWhenShow) {
-  // TODO(crbug/1217331): This test fails if put under NativeWidgetAuraTest.
+  // TODO(crbug.com/40185137): This test fails if put under
+  // NativeWidgetAuraTest.
   WidgetAutoclosePtr anchor_widget(CreateTopLevelNativeWidget());
 
-  test::WidgetActivationWaiter waiter(anchor_widget.get(), true);
   anchor_widget->Show();
-  waiter.Wait();
+  test::WaitForWidgetActive(anchor_widget.get(), true);
   EXPECT_TRUE(anchor_widget->IsActive());
 #if !BUILDFLAG(IS_MAC)
   EXPECT_TRUE(anchor_widget->GetNativeWindow()->HasFocus());
@@ -1319,6 +1452,84 @@ TEST_F(DesktopWidgetTestInteractive, MinimizeAndActivateFocus) {
   EXPECT_TRUE(widget_window->CanFocus());
 }
 
+class SyntheticMouseMoveCounter : public ui::EventHandler {
+ public:
+  explicit SyntheticMouseMoveCounter(Widget* widget) : widget_(widget) {
+    widget_->GetNativeWindow()->AddPreTargetHandler(this);
+  }
+
+  SyntheticMouseMoveCounter(const SyntheticMouseMoveCounter&) = delete;
+  SyntheticMouseMoveCounter& operator=(const SyntheticMouseMoveCounter&) =
+      delete;
+
+  ~SyntheticMouseMoveCounter() override {
+    widget_->GetNativeWindow()->RemovePreTargetHandler(this);
+  }
+
+  // ui::EventHandler:
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (event->type() == ui::EventType::kMouseMoved && event->IsSynthesized()) {
+      ++count_;
+    }
+  }
+
+  int num_synthetic_mouse_moves() const { return count_; }
+
+ private:
+  int count_ = 0;
+  raw_ptr<Widget> widget_;
+};
+
+#if BUILDFLAG(ENABLE_DESKTOP_AURA)
+TEST_F(DesktopWidgetTestInteractive,
+       // TODO(crbug.com/335767870): Re-enable this test
+       DISABLED_DoNotSynthesizeMouseMoveOnVisibilityChangeIfOccluded) {
+  // Create a top-level widget.
+  WidgetAutoclosePtr widget_below(CreateTopLevelPlatformDesktopWidget());
+  widget_below->SetBounds(gfx::Rect(300, 300));
+  widget_below->Show();
+
+  // Dispatch a mouse event to place cursor inside window bounds.
+  base::RunLoop run_loop;
+  ui_controls::SendMouseMoveNotifyWhenDone(150, 150, run_loop.QuitClosure());
+  run_loop.Run();
+
+  // Create a child widget.
+  UniqueWidgetPtr child = std::make_unique<Widget>();
+  Widget::InitParams child_params =
+      CreateParams(Widget::InitParams::TYPE_WINDOW);
+  child_params.parent = widget_below->GetNativeView();
+  child_params.context = widget_below->GetNativeWindow();
+  child->Init(std::move(child_params));
+  child->SetBounds(gfx::Rect(300, 300));
+  child->Show();
+  base::RunLoop().RunUntilIdle();
+
+  SyntheticMouseMoveCounter counter_below(widget_below.get());
+  EXPECT_EQ(0, counter_below.num_synthetic_mouse_moves());
+
+  // Update the child window's visibility. This should trigger a synthetic
+  // mouse move event.
+  child->Hide();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, counter_below.num_synthetic_mouse_moves());
+
+  // Occlude the existing widget with a new top-level widget.
+  WidgetAutoclosePtr widget_above(CreateTopLevelPlatformDesktopWidget());
+  widget_above->SetBounds(gfx::Rect(300, 300));
+  widget_above->Show();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(widget_above->AsWidget()->IsStackedAbove(
+      widget_below->AsWidget()->GetNativeView()));
+
+  // Update the child window's visibility again, but this should not trigger a
+  // synthetic mouse move event, since there's another widget under the cursor.
+  child->Show();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, counter_below.num_synthetic_mouse_moves());
+}
+#endif  // BUILDFLAG(ENABLE_DESKTOP_AURA)
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(ENABLE_DESKTOP_AURA) || BUILDFLAG(IS_MAC)
@@ -1614,9 +1825,9 @@ TEST_F(WidgetCaptureTest, CaptureAutoReset) {
 
   // By default, mouse release removes capture.
   gfx::Point click_location(45, 15);
-  ui::MouseEvent release(ui::ET_MOUSE_RELEASED, click_location, click_location,
-                         ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
-                         ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent release(ui::EventType::kMouseReleased, click_location,
+                         click_location, ui::EventTimeForNow(),
+                         ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
   toplevel->OnMouseEvent(&release);
   EXPECT_FALSE(toplevel->HasCapture());
 
@@ -1646,22 +1857,23 @@ TEST_F(WidgetCaptureTest, ResetCaptureOnGestureEnd) {
   toplevel->Show();
 
   // Start a gesture on |gesture|.
-  ui::GestureEvent tap_down(15, 15, 0, base::TimeTicks(),
-                            ui::GestureEventDetails(ui::ET_GESTURE_TAP_DOWN));
+  ui::GestureEvent tap_down(
+      15, 15, 0, base::TimeTicks(),
+      ui::GestureEventDetails(ui::EventType::kGestureTapDown));
   ui::GestureEvent end(15, 15, 0, base::TimeTicks(),
-                       ui::GestureEventDetails(ui::ET_GESTURE_END));
+                       ui::GestureEventDetails(ui::EventType::kGestureEnd));
   toplevel->OnGestureEvent(&tap_down);
 
   // Now try to click on |mouse|. Since |gesture| will have capture, |mouse|
   // will not receive the event.
   gfx::Point click_location(45, 15);
 
-  ui::MouseEvent press(ui::ET_MOUSE_PRESSED, click_location, click_location,
-                       ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
-                       ui::EF_LEFT_MOUSE_BUTTON);
-  ui::MouseEvent release(ui::ET_MOUSE_RELEASED, click_location, click_location,
-                         ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
-                         ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent press(ui::EventType::kMousePressed, click_location,
+                       click_location, ui::EventTimeForNow(),
+                       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent release(ui::EventType::kMouseReleased, click_location,
+                         click_location, ui::EventTimeForNow(),
+                         ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
 
   EXPECT_TRUE(toplevel->HasCapture());
 
@@ -1706,12 +1918,12 @@ TEST_F(WidgetCaptureTest, DisableCaptureWidgetFromMousePress) {
   gfx::Point location(20, 20);
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
-      base::BindOnce(
-          &Widget::OnMouseEvent, base::Unretained(second),
-          base::Owned(new ui::MouseEvent(
-              ui::ET_MOUSE_RELEASED, location, location, ui::EventTimeForNow(),
-              ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON))));
-  ui::MouseEvent press(ui::ET_MOUSE_PRESSED, location, location,
+      base::BindOnce(&Widget::OnMouseEvent, base::Unretained(second),
+                     base::Owned(new ui::MouseEvent(
+                         ui::EventType::kMouseReleased, location, location,
+                         ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+                         ui::EF_LEFT_MOUSE_BUTTON))));
+  ui::MouseEvent press(ui::EventType::kMousePressed, location, location,
                        ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                        ui::EF_LEFT_MOUSE_BUTTON);
   first->OnMouseEvent(&press);
@@ -1721,7 +1933,8 @@ TEST_F(WidgetCaptureTest, DisableCaptureWidgetFromMousePress) {
 // Tests some grab/ungrab events. Only one Widget can have capture at any given
 // time.
 TEST_F(WidgetCaptureTest, GrabUngrab) {
-  auto top_level = CreateTestWidget();
+  auto top_level =
+      CreateTestWidget(Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   top_level->SetContentsView(std::make_unique<MouseView>());
 
   Widget* child1 = new Widget;
@@ -2013,8 +2226,9 @@ TEST_F(WidgetCaptureTest, MouseEventDispatchedToRightWindow) {
   widget2->GetAndClearGotMouseEvent();
   // Send a mouse event to the RootWindow associated with |widget1|. Even though
   // |widget2| has capture, |widget1| should still get the event.
-  ui::MouseEvent mouse_event(ui::ET_MOUSE_EXITED, gfx::Point(), gfx::Point(),
-                             ui::EventTimeForNow(), ui::EF_NONE, ui::EF_NONE);
+  ui::MouseEvent mouse_event(ui::EventType::kMouseExited, gfx::Point(),
+                             gfx::Point(), ui::EventTimeForNow(), ui::EF_NONE,
+                             ui::EF_NONE);
   ui::EventDispatchDetails details =
       widget1->GetNativeWindow()->GetHost()->GetEventSink()->OnEventFromSource(
           &mouse_event);
@@ -2210,7 +2424,8 @@ TEST_F(WidgetInputMethodInteractiveTest, AcceleratorInTextfield) {
   textfield_ptr->SetTextInputType(ui::TEXT_INPUT_TYPE_TEXT);
   textfield_ptr->RequestFocus();
 
-  ui::KeyEvent key_event(ui::ET_KEY_PRESSED, ui::VKEY_F, ui::EF_ALT_DOWN);
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_F,
+                         ui::EF_ALT_DOWN);
   ui::Accelerator accelerator(key_event);
   widget->GetFocusManager()->RegisterAccelerator(
       accelerator, ui::AcceleratorManager::kNormalPriority, textfield_ptr);
@@ -2224,5 +2439,132 @@ TEST_F(WidgetInputMethodInteractiveTest, AcceleratorInTextfield) {
   widget->OnKeyEvent(&key_event2);
   EXPECT_FALSE(key_event2.stopped_propagation());
 }
+
+#if BUILDFLAG(ENABLE_DESKTOP_AURA)
+
+class DesktopWidgetDragTestInteractive : public DesktopWidgetTestInteractive,
+                                         public WidgetObserver {
+ public:
+  DesktopWidgetDragTestInteractive() = default;
+
+  DesktopWidgetDragTestInteractive(const DesktopWidgetDragTestInteractive&) =
+      delete;
+  DesktopWidgetDragTestInteractive& operator=(
+      const DesktopWidgetDragTestInteractive&) = delete;
+
+  ~DesktopWidgetDragTestInteractive() override = default;
+
+ protected:
+  static constexpr gfx::Rect bounds = gfx::Rect(0, 0, 200, 200);
+
+  void InitWidget(Widget* widget,
+                  base::OnceClosure on_drag_enter,
+                  base::OnceClosure on_drag_exit,
+                  base::OnceClosure on_capture_lost) {
+    widget->AddObserver(this);
+
+    Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+    params.native_widget = new DesktopNativeWidgetAura(widget);
+    params.bounds = bounds;
+    widget->Init(std::move(params));
+
+    // On X11 and Lacros, we need another mouse event after the drag has started
+    // for `DragView::OnDragEntered()` to be called. The best way to wait for
+    // the drag to start seems to be to wait for `DragView::OnMouseExited()`,
+    // which on these platforms happens only after the drag has started.
+    auto on_mouse_exit = base::BindLambdaForTesting([]() {
+      gfx::Point target_location =
+          aura::Env::GetInstance()->last_mouse_location();
+      target_location += gfx::Vector2d(1, 1);
+      EXPECT_TRUE(
+          ui_controls::SendMouseMove(target_location.x(), target_location.y()));
+    });
+
+    widget->client_view()->AddChildView(std::make_unique<DragView>(
+        std::move(on_drag_enter), std::move(on_drag_exit),
+        std::move(on_capture_lost), std::move(on_mouse_exit)));
+
+    // Update view layout to make sure `DragView` is sized correctly. Else it
+    // might still have empty bounds when the drag event is received, preventing
+    // it from receiving the event.
+    widget->LayoutRootViewIfNecessary();
+
+    ShowSync(widget);
+  }
+
+  void StartDrag() {
+    // Move the mouse to the widget's center, press the left mouse button, and
+    // drag the mouse a bit.
+    gfx::Point start_location(bounds.width() / 2, bounds.height() / 2);
+    gfx::Point target_location = start_location + gfx::Vector2d(10, 10);
+    base::RunLoop move_loop;
+    EXPECT_TRUE(ui_controls::SendMouseMoveNotifyWhenDone(
+        start_location.x(), start_location.y(), move_loop.QuitClosure()));
+    move_loop.Run();
+    base::RunLoop press_loop;
+    EXPECT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+        ui_controls::MouseButton::LEFT, ui_controls::MouseButtonState::DOWN,
+        press_loop.QuitClosure()));
+    press_loop.Run();
+
+    // `SendMouseMoveNotifyWhenDone()` might not call the closure until the drag
+    // ends.
+    EXPECT_TRUE(
+        ui_controls::SendMouseMove(target_location.x(), target_location.y()));
+  }
+
+  void WaitForDragEnd() {
+    drag_wait_loop_.Run();
+    EXPECT_TRUE(drag_entered_);
+  }
+
+  bool drag_entered_ = false;
+
+ private:
+  // WidgetObserver:
+  void OnWidgetDragComplete(Widget* widget) override { drag_wait_loop_.Quit(); }
+
+  base::RunLoop drag_wait_loop_;
+};
+
+// Cancels a DnD session started by `RunShellDrag()`.
+TEST_F(DesktopWidgetDragTestInteractive, CancelShellDrag) {
+  WidgetAutoclosePtr widget(new Widget);
+
+  auto cancel = [&]() {
+    drag_entered_ = true;
+
+    widget->CancelShellDrag(widget->client_view());
+
+#if BUILDFLAG(IS_WIN)
+    // On Windows we can't just cancel the drag when we want, only the next time
+    // the drag is updated. Send another mouse move to give us a chance to
+    // cancel the drag.
+    gfx::Point target_location =
+        aura::Env::GetInstance()->last_mouse_location();
+    target_location += gfx::Vector2d(1, 1);
+    EXPECT_TRUE(
+        ui_controls::SendMouseMove(target_location.x(), target_location.y()));
+#endif  // BUILDFLAG(IS_WIN)
+  };
+
+  // See the comment in `DesktopWidgetDragTestInteractive::StartDrag()`.
+#if BUILDFLAG(IS_WIN)
+  base::OnceClosure on_capture_lost = base::BindLambdaForTesting(cancel);
+#else
+  base::OnceClosure on_capture_lost = base::DoNothing();
+#endif  // BUILDFLAG(IS_WIN)
+
+  InitWidget(widget.get(), /*on_drag_enter=*/base::BindLambdaForTesting(cancel),
+             /*on_drag_exit=*/base::DoNothing(), std::move(on_capture_lost));
+
+  StartDrag();
+
+  // Wait for the drag to be cancelled by `DragView::OnDragEntered()` /
+  // `DragView::OnMouseCaptureLost()`.
+  WaitForDragEnd();
+}
+
+#endif  // BUILDFLAG(ENABLE_DESKTOP_AURA)
 
 }  // namespace views::test

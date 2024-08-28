@@ -13,7 +13,7 @@
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
-import {androidAppsVisible, isArcVmEnabled, isCrostiniSupported, isGuest, isInputDeviceSettingsSplitEnabled, isKerberosEnabled, isPluginVmAvailable, isPowerwashAllowed, isRevampWayfindingEnabled} from './common/load_time_booleans.js';
+import {androidAppsVisible, isAppParentalControlsFeatureAvailable, isArcVmEnabled, isCrostiniSupported, isGuest, isInputDeviceSettingsSplitEnabled, isKerberosEnabled, isPluginVmAvailable, isPowerwashAllowed, isRevampWayfindingEnabled} from './common/load_time_booleans.js';
 import * as routesMojom from './mojom-webui/routes.mojom-webui.js';
 
 /**
@@ -38,7 +38,15 @@ export class Route {
    * The document title that should be displayed for this route.
    */
   title: string|undefined;
+
+  /**
+   * The parent route, or null if this is a root route.
+   */
   parent: Route|null;
+
+  /**
+   * The URL path starting with a forward slash. e.g. `/internet`.
+   */
   path: string;
 
   constructor(path: string, title?: string) {
@@ -95,6 +103,23 @@ export class Route {
     return !this.isNavigableDialog && !!this.parent && this.section !== null &&
         this.parent.section === this.section;
   }
+
+  /**
+   * Returns the top-most ancestor Route for this route's `section`. If this
+   * route has no `section` then returns null.
+   */
+  getSectionAncestor(): Route|null {
+    if (this.section === null) {
+      return null;
+    }
+
+    let curr: Route = this;
+    while (curr.parent && curr.parent.section !== null) {
+      curr = curr.parent;
+    }
+
+    return curr;
+  }
 }
 
 interface MinimumRoutes {
@@ -126,6 +151,7 @@ export interface OsSettingsRoutes extends MinimumRoutes {
   APP_MANAGEMENT_DETAIL: Route;
   APP_MANAGEMENT_PLUGIN_VM_SHARED_PATHS: Route;
   APP_MANAGEMENT_PLUGIN_VM_SHARED_USB_DEVICES: Route;
+  APP_PARENTAL_CONTROLS: Route;
   APPS: Route;
   ANDROID_APPS_DETAILS: Route;
   ANDROID_APPS_DETAILS_ARC_VM_SHARED_USB_DEVICES: Route;
@@ -172,8 +198,7 @@ export interface OsSettingsRoutes extends MinimumRoutes {
   KNOWN_NETWORKS: Route;
   LOCK_SCREEN: Route;
   MANAGE_ACCESSIBILITY: Route;
-  MANAGE_FACEGAZE_CURSOR_SETTINGS: Route;
-  MANAGE_FACEGAZE_FACIAL_EXPRESSIONS_SETTINGS: Route;
+  MANAGE_FACEGAZE_SETTINGS: Route;
   MANAGE_ISOLATED_WEB_APPS: Route;
   MANAGE_SWITCH_ACCESS_SETTINGS: Route;
   MANAGE_TTS_SETTINGS: Route;
@@ -211,6 +236,7 @@ export interface OsSettingsRoutes extends MinimumRoutes {
   PRIVACY_HUB: Route;
   PRIVACY_HUB_CAMERA: Route;
   PRIVACY_HUB_GEOLOCATION: Route;
+  PRIVACY_HUB_GEOLOCATION_ADVANCED: Route;
   PRIVACY_HUB_MICROPHONE: Route;
   SEARCH: Route;
   SEARCH_SUBPAGE: Route;
@@ -221,6 +247,9 @@ export interface OsSettingsRoutes extends MinimumRoutes {
   SYNC: Route;
   SYNC_ADVANCED: Route;
   SYSTEM_PREFERENCES: Route;
+
+  // Internal routes
+  INTERNAL_STORYBOOK: Route;
 }
 
 function createSection(
@@ -271,10 +300,9 @@ export function createRoutes(): OsSettingsRoutes {
   r.KNOWN_NETWORKS = createSubpage(
       r.INTERNET, routesMojom.KNOWN_NETWORKS_SUBPAGE_PATH,
       Subpage.kKnownNetworks);
-  if (loadTimeData.getBoolean('isHotspotEnabled')) {
-    r.HOTSPOT_DETAIL = createSubpage(
-        r.INTERNET, routesMojom.HOTSPOT_SUBPAGE_PATH, Subpage.kHotspotDetails);
-  }
+  r.HOTSPOT_DETAIL = createSubpage(
+      r.INTERNET, routesMojom.HOTSPOT_SUBPAGE_PATH, Subpage.kHotspotDetails);
+
   if (loadTimeData.getBoolean('isApnRevampEnabled')) {
     r.APN =
         createSubpage(r.INTERNET, routesMojom.APN_SUBPAGE_PATH, Subpage.kApn);
@@ -320,10 +348,11 @@ export function createRoutes(): OsSettingsRoutes {
   if (!isGuest()) {
     r.OS_PEOPLE = createSection(
         r.BASIC, routesMojom.PEOPLE_SECTION_PATH, Section.kPeople);
-    r.ACCOUNT_MANAGER = createSubpage(
-        r.OS_PEOPLE, routesMojom.MY_ACCOUNTS_SUBPAGE_PATH, Subpage.kMyAccounts);
 
     if (!isRevampWayfindingEnabled()) {
+      r.ACCOUNT_MANAGER = createSubpage(
+          r.OS_PEOPLE, routesMojom.MY_ACCOUNTS_SUBPAGE_PATH,
+          Subpage.kMyAccounts);
       // TODO(b/305747266) : Disambiguate the names for OS_SYNC and SYNC.
       r.OS_SYNC = createSubpage(
           r.OS_PEOPLE, routesMojom.SYNC_SUBPAGE_PATH, Subpage.kSync);
@@ -390,11 +419,9 @@ export function createRoutes(): OsSettingsRoutes {
   }
 
   // Personalization section.
-  if (!isGuest()) {
-    r.PERSONALIZATION = createSection(
-        r.BASIC, routesMojom.PERSONALIZATION_SECTION_PATH,
-        Section.kPersonalization);
-  }
+  r.PERSONALIZATION = createSection(
+      r.BASIC, routesMojom.PERSONALIZATION_SECTION_PATH,
+      Section.kPersonalization);
 
   // Apps section.
   r.APPS = createSection(r.BASIC, routesMojom.APPS_SECTION_PATH, Section.kApps);
@@ -433,6 +460,11 @@ export function createRoutes(): OsSettingsRoutes {
   r.MANAGE_ISOLATED_WEB_APPS = createSubpage(
       r.APPS, routesMojom.MANAGE_ISOLATED_WEB_APPS_SUBPAGE_PATH,
       Subpage.kManageIsolatedWebApps);
+  if (isAppParentalControlsFeatureAvailable()) {
+    r.APP_PARENTAL_CONTROLS = createSubpage(
+        r.APPS, routesMojom.APP_PARENTAL_CONTROLS_SUBPAGE_PATH,
+        Subpage.kAppParentalControls);
+  }
 
   // Accessibility section.
   r.OS_ACCESSIBILITY = createSection(
@@ -471,14 +503,9 @@ export function createRoutes(): OsSettingsRoutes {
       r.A11Y_KEYBOARD_AND_TEXT_INPUT,
       routesMojom.SWITCH_ACCESS_OPTIONS_SUBPAGE_PATH,
       Subpage.kSwitchAccessOptions);
-  r.MANAGE_FACEGAZE_CURSOR_SETTINGS = createSubpage(
-      r.A11Y_CURSOR_AND_TOUCHPAD,
-      routesMojom.FACE_GAZE_CURSOR_SETTINGS_SUBPAGE_PATH,
-      Subpage.kFaceGazeCursorSettings);
-  r.MANAGE_FACEGAZE_FACIAL_EXPRESSIONS_SETTINGS = createSubpage(
-      r.A11Y_CURSOR_AND_TOUCHPAD,
-      routesMojom.FACE_GAZE_FACIAL_EXPRESSIONS_SETTINGS_SUBPAGE_PATH,
-      Subpage.kFaceGazeFacialExpressionsSettings);
+  r.MANAGE_FACEGAZE_SETTINGS = createSubpage(
+      r.A11Y_CURSOR_AND_TOUCHPAD, routesMojom.FACE_GAZE_SETTINGS_SUBPAGE_PATH,
+      Subpage.kFaceGazeSettings);
 
   // Privacy and Security section.
   r.OS_PRIVACY = createSection(
@@ -504,6 +531,10 @@ export function createRoutes(): OsSettingsRoutes {
   r.PRIVACY_HUB_GEOLOCATION = createSubpage(
       r.OS_PRIVACY, routesMojom.PRIVACY_HUB_GEOLOCATION_SUBPAGE_PATH,
       Subpage.kPrivacyHubGeolocation);
+  r.PRIVACY_HUB_GEOLOCATION_ADVANCED = createSubpage(
+      r.PRIVACY_HUB_GEOLOCATION,
+      routesMojom.PRIVACY_HUB_GEOLOCATION_ADVANCED_SUBPAGE_PATH,
+      Subpage.kPrivacyHubGeolocationAdvanced);
   r.PRIVACY_HUB_CAMERA = createSubpage(
       r.OS_PRIVACY, routesMojom.PRIVACY_HUB_CAMERA_SUBPAGE_PATH,
       Subpage.kPrivacyHubCamera);
@@ -515,6 +546,11 @@ export function createRoutes(): OsSettingsRoutes {
   r.ABOUT_DETAILED_BUILD_INFO = createSubpage(
       r.ABOUT, routesMojom.DETAILED_BUILD_INFO_SUBPAGE_PATH,
       Subpage.kDetailedBuildInfo);
+
+  // Internal pages (under About section).
+  r.INTERNAL_STORYBOOK = createSubpage(
+      r.ABOUT, routesMojom.INTERNAL_STORYBOOK_SUBPAGE_PATH,
+      Subpage.kInternalStorybook);
 
   if (isRevampWayfindingEnabled()) {
     // Device section, Input subpages.
@@ -760,3 +796,34 @@ export function createRoutes(): OsSettingsRoutes {
 
   return r as OsSettingsRoutes;
 }
+
+const PATH_REDIRECT_PAIRS: Array<[string, string]> = [
+  [
+    routesMojom.MY_ACCOUNTS_SUBPAGE_PATH,
+    routesMojom.PEOPLE_SECTION_PATH,
+  ],
+  [
+    routesMojom.DATE_AND_TIME_SECTION_PATH,
+    routesMojom.SYSTEM_PREFERENCES_SECTION_PATH,
+  ],
+  [
+    routesMojom.FILES_SECTION_PATH,
+    routesMojom.SYSTEM_PREFERENCES_SECTION_PATH,
+  ],
+  // TODO(b/309808834) Remove this pair once the Bluetooth L1 page is revamped
+  // with up-leveled content.
+  [
+    routesMojom.BLUETOOTH_SECTION_PATH,
+    routesMojom.BLUETOOTH_DEVICES_SUBPAGE_PATH,
+  ],
+];
+
+/**
+ * An object of path redirects. The key represents a given path and the value
+ * represents the resulting path that should be redirected to. Path strings
+ * always include a leading slash.
+ */
+export const PATH_REDIRECTS =
+    Object.fromEntries(PATH_REDIRECT_PAIRS.map(([path, redirectPath]) => {
+      return [`/${path}`, `/${redirectPath}`];
+    }));

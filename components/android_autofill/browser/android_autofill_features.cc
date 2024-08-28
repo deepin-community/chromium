@@ -7,6 +7,8 @@
 #include <jni.h>
 
 #include "base/feature_list.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/android_autofill/browser/jni_headers_features/AndroidAutofillFeatures_jni.h"
 
 namespace autofill::features {
@@ -16,7 +18,6 @@ namespace {
 const base::Feature* kFeaturesExposedToJava[] = {
     &kAndroidAutofillBottomSheetWorkaround,
     &kAndroidAutofillPrefillRequestsForLoginForms,
-    &kAndroidAutofillSupportVisibilityChanges,
     &kAndroidAutofillUsePwmPredictionsForOverrides,
 };
 
@@ -36,6 +37,13 @@ BASE_FEATURE(kAndroidAutofillBottomSheetWorkaround,
 // session.
 BASE_FEATURE(kAndroidAutofillCancelSessionOnNavigation,
              "AndroidAutofillCancelSessionOnNavigation",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// If enabled, we stop relying on `known_success` in FormSubmitted signal to
+// decide whether to defer submission on not, and instead we directly inform the
+// provider of submission.
+BASE_FEATURE(kAndroidAutofillDirectFormSubmission,
+             "AndroidAutofillDirectFormSubmission",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // If enabled, prefill requests (i.e. calls to
@@ -45,17 +53,7 @@ BASE_FEATURE(kAndroidAutofillCancelSessionOnNavigation,
 // Future features may extend prefill requests to more form types.
 BASE_FEATURE(kAndroidAutofillPrefillRequestsForLoginForms,
              "AndroidAutofillPrefillRequestsForLoginForms",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// If enabled, visibility changes of form fields of the form of an ongoing
-// Autofill session are communicated to Android's `AutofillManager` by calling
-// `AutofillManager.notifyViewVisibilityChanged()`.
-// See
-// https://developer.android.com/reference/android/view/autofill/AutofillManager#notifyViewVisibilityChanged(android.view.View,%20int,%20boolean)
-// for more details on the API.
-BASE_FEATURE(kAndroidAutofillSupportVisibilityChanges,
-             "AndroidAutofillSupportVisibilityChanges",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // If enabled, username and password field predictions are taken from
 // `password_manager::FormDataParser` and overwrite Autofill's native
@@ -65,6 +63,15 @@ BASE_FEATURE(kAndroidAutofillSupportVisibilityChanges,
 // `FormDataParser` predictions.
 BASE_FEATURE(kAndroidAutofillUsePwmPredictionsForOverrides,
              "AndroidAutofillUsePwmPredictionsForOverrides",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// If enabled, offer prefill requests (i.e. calls to
+// `AutofillManager.notifyVirtualViewsReady`) to change
+// password forms as well. A form can't be login and change password at the same
+// time so order of the check whether it's login or change password shouldn't
+// matter.
+BASE_FEATURE(kAndroidAutofillPrefillRequestsForChangePassword,
+             "AndroidAutofillPrefillRequestsForChangePassword",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 static jlong JNI_AndroidAutofillFeatures_GetFeature(JNIEnv* env, jint ordinal) {

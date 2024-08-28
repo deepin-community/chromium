@@ -137,7 +137,7 @@ x11::Atom DragOperationToAtom(DragOperation operation) {
     case DragOperation::kLink:
       return x11::GetAtom(kXdndActionLink);
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return x11::Atom::None;
 }
 
@@ -363,7 +363,7 @@ void XDragDropClient::OnXdndPosition(const x11::ClientMessageEvent& event) {
   x11::Atom suggested_action = static_cast<x11::Atom>(event.data.data32[4]);
 
   if (!target_current_context()) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 
@@ -634,7 +634,8 @@ x11::Window XDragDropClient::FindWindowFor(const gfx::Point& screen_point) {
     return x11::Window::None;
   }
 
-  // TODO(crbug/651775): The proxy window should be reported separately from the
+  // TODO(crbug.com/41278320): The proxy window should be reported separately
+  // from the
   //     target window. XDND messages should be sent to the proxy, and their
   //     window field should point to the target.
 

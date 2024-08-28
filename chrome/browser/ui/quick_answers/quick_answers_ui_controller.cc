@@ -6,15 +6,20 @@
 
 #include <optional>
 
+#include "base/check_is_test.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/ui/chromeos/read_write_cards/read_write_cards_ui_controller.h"
 #include "chrome/browser/ui/quick_answers/quick_answers_controller_impl.h"
 #include "chrome/browser/ui/quick_answers/ui/quick_answers_util.h"
+#include "chrome/browser/ui/quick_answers/ui/quick_answers_view.h"
 #include "chrome/browser/ui/quick_answers/ui/rich_answers_definition_view.h"
 #include "chrome/browser/ui/quick_answers/ui/rich_answers_translation_view.h"
 #include "chrome/browser/ui/quick_answers/ui/rich_answers_unit_conversion_view.h"
 #include "chrome/browser/ui/quick_answers/ui/rich_answers_view.h"
+#include "chromeos/components/quick_answers/public/cpp/controller/quick_answers_controller.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
@@ -68,6 +73,8 @@ void OpenUrl(Profile* profile, const GURL& url) {
 
 }  // namespace
 
+using chromeos::ReadWriteCardsUiController;
+
 QuickAnswersUiController::QuickAnswersUiController(
     QuickAnswersControllerImpl* controller)
     : controller_(controller) {}
@@ -75,10 +82,34 @@ QuickAnswersUiController::QuickAnswersUiController(
 QuickAnswersUiController::~QuickAnswersUiController() = default;
 
 void QuickAnswersUiController::CreateQuickAnswersView(Profile* profile,
-                                                      const gfx::Rect& bounds,
                                                       const std::string& title,
                                                       const std::string& query,
                                                       bool is_internal) {
+  CreateQuickAnswersViewInternal(
+      profile, query,
+      {
+          .title = title,
+          .design = quick_answers::QuickAnswersView::Design::kCurrent,
+          // Use `kDefinition` as a placeholder for now. `Design::kCurrent`
+          // doesn't care intent.
+          // TODO(b/340628664): wire the correct intent.
+          .intent = quick_answers::QuickAnswersView::Intent::kDefinition,
+          .is_internal = is_internal,
+      });
+}
+
+void QuickAnswersUiController::CreateQuickAnswersViewForPixelTest(
+    Profile* profile,
+    const std::string& query,
+    quick_answers::QuickAnswersView::Params params) {
+  CHECK_IS_TEST();
+  CreateQuickAnswersViewInternal(profile, query, params);
+}
+
+void QuickAnswersUiController::CreateQuickAnswersViewInternal(
+    Profile* profile,
+    const std::string& query,
+    quick_answers::QuickAnswersView::Params params) {
   // Currently there are timing issues that causes the quick answers view is not
   // dismissed. TODO(updowndota): Remove the special handling after the root
   // cause is found.
@@ -90,24 +121,25 @@ void QuickAnswersUiController::CreateQuickAnswersView(Profile* profile,
   DCHECK(!IsShowingUserConsentView());
   SetActiveQuery(profile, query);
 
-  // Owned by view hierarchy.
-  quick_answers_widget_ = quick_answers::QuickAnswersView::CreateWidget(
-      bounds, title, is_internal, weak_factory_.GetWeakPtr());
-  quick_answers_widget_->ShowInactive();
+  auto* view = GetReadWriteCardsUiController().SetQuickAnswersUi(
+      std::make_unique<quick_answers::QuickAnswersView>(
+          params,
+          /*controller=*/weak_factory_.GetWeakPtr()));
+  quick_answers_view_.SetView(view);
 }
 
 void QuickAnswersUiController::CreateRichAnswersView() {
   CHECK(controller_->quick_answer());
 
   views::UniqueWidgetPtr widget = quick_answers::RichAnswersView::CreateWidget(
-      quick_answers_view()->GetAnchorViewBounds(), weak_factory_.GetWeakPtr(),
+      controller_->anchor_bounds(), weak_factory_.GetWeakPtr(),
       *controller_->quick_answer(), *controller_->structured_result());
 
   if (!widget) {
     // If the rich card widget cannot be created, fall-back to open the query
     // in Google Search.
     OpenUrl(profile_, quick_answers::GetDetailsUrlForQuery(query_));
-    controller_->OnQuickAnswerClick();
+    controller_->OnQuickAnswersResultClick();
   }
 
   rich_answers_widget_ = std::move(widget);
@@ -127,20 +159,24 @@ void QuickAnswersUiController::OnQuickAnswersViewPressed() {
     return;
   }
 
-  OpenUrl(profile_, quick_answers::GetDetailsUrlForQuery(query_));
-  controller_->OnQuickAnswerClick();
+  OpenWebUrl(quick_answers::GetDetailsUrlForQuery(query_));
+
+  if (controller_->quick_answers_session()) {
+    controller_->OnQuickAnswersResultClick();
+  }
 }
 
 void QuickAnswersUiController::OnGoogleSearchLabelPressed() {
-  OpenUrl(profile_, quick_answers::GetDetailsUrlForQuery(query_));
+  OpenWebUrl(quick_answers::GetDetailsUrlForQuery(query_));
 
   // Route dismissal through |controller_| for logging impressions.
   controller_->DismissQuickAnswers(QuickAnswersExitPoint::kUnspecified);
 }
 
 bool QuickAnswersUiController::CloseQuickAnswersView() {
-  if (IsShowingQuickAnswersView()) {
-    quick_answers_widget_->Close();
+  if (controller_->GetQuickAnswersVisibility() ==
+      QuickAnswersVisibility::kQuickAnswersVisible) {
+    GetReadWriteCardsUiController().RemoveQuickAnswersUi();
     return true;
   }
   return false;
@@ -155,18 +191,32 @@ bool QuickAnswersUiController::CloseRichAnswersView() {
 }
 
 void QuickAnswersUiController::OnRetryLabelPressed() {
+  if (!fake_on_retry_label_pressed_callback_.is_null()) {
+    CHECK_IS_TEST();
+    fake_on_retry_label_pressed_callback_.Run();
+    return;
+  }
+
   controller_->OnRetryQuickAnswersRequest();
 }
 
+void QuickAnswersUiController::SetFakeOnRetryLabelPressedCallbackForTesting(
+    QuickAnswersUiController::FakeOnRetryLabelPressedCallback
+        fake_on_retry_label_pressed_callback) {
+  CHECK_IS_TEST();
+  CHECK(!fake_on_retry_label_pressed_callback.is_null());
+  CHECK(fake_on_retry_label_pressed_callback_.is_null());
+  fake_on_retry_label_pressed_callback_ = fake_on_retry_label_pressed_callback;
+}
+
 void QuickAnswersUiController::RenderQuickAnswersViewWithResult(
-    const gfx::Rect& anchor_bounds,
-    const QuickAnswer& quick_answer) {
+    const quick_answers::StructuredResult& structured_result) {
   if (!IsShowingQuickAnswersView())
     return;
 
   // QuickAnswersView was initiated with a loading page and will be updated
   // when quick answers result from server side is ready.
-  quick_answers_view()->UpdateView(anchor_bounds, quick_answer);
+  quick_answers_view()->SetResult(structured_result);
 }
 
 void QuickAnswersUiController::SetActiveQuery(Profile* profile,
@@ -182,37 +232,38 @@ void QuickAnswersUiController::ShowRetry() {
   quick_answers_view()->ShowRetryView();
 }
 
-void QuickAnswersUiController::UpdateQuickAnswersBounds(
-    const gfx::Rect& anchor_bounds) {
-  if (IsShowingQuickAnswersView())
-    quick_answers_view()->UpdateAnchorViewBounds(anchor_bounds);
-
-  if (IsShowingUserConsentView())
-    user_consent_view()->UpdateAnchorViewBounds(anchor_bounds);
-}
-
 void QuickAnswersUiController::CreateUserConsentView(
     const gfx::Rect& anchor_bounds,
     const std::u16string& intent_type,
     const std::u16string& intent_text) {
-  DCHECK(!IsShowingQuickAnswersView());
-  DCHECK(!IsShowingUserConsentView());
+  CHECK_EQ(controller_->GetQuickAnswersVisibility(),
+           QuickAnswersVisibility::kPending);
 
-  // Owned by view hierarchy.
-  user_consent_widget_ = quick_answers::UserConsentView::CreateWidget(
-      anchor_bounds, intent_type, intent_text, weak_factory_.GetWeakPtr());
-  user_consent_widget_->ShowInactive();
+  auto* view = GetReadWriteCardsUiController().SetQuickAnswersUi(
+      std::make_unique<quick_answers::UserConsentView>(
+          intent_type, intent_text, weak_factory_.GetWeakPtr()));
+  user_consent_view_.SetView(view);
 }
 
 void QuickAnswersUiController::CloseUserConsentView() {
-  if (IsShowingUserConsentView()) {
-    user_consent_widget_->Close();
-  }
+  CHECK_EQ(controller_->GetQuickAnswersVisibility(),
+           QuickAnswersVisibility::kUserConsentVisible);
+  GetReadWriteCardsUiController().RemoveQuickAnswersUi();
 }
 
 void QuickAnswersUiController::OnSettingsButtonPressed() {
   // Route dismissal through |controller_| for logging impressions.
   controller_->DismissQuickAnswers(QuickAnswersExitPoint::kSettingsButtonClick);
+
+  OpenSettings();
+}
+
+void QuickAnswersUiController::OpenSettings() {
+  if (!fake_open_settings_callback_.is_null()) {
+    CHECK_IS_TEST();
+    fake_open_settings_callback_.Run();
+    return;
+  }
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   OpenUrl(profile_, GURL(kQuickAnswersSettingsUrl));
@@ -228,12 +279,39 @@ void QuickAnswersUiController::OnSettingsButtonPressed() {
 #endif
 }
 
+void QuickAnswersUiController::SetFakeOpenSettingsCallbackForTesting(
+    QuickAnswersUiController::FakeOpenSettingsCallback
+        fake_open_settings_callback) {
+  CHECK_IS_TEST();
+  CHECK(!fake_open_settings_callback.is_null());
+  CHECK(fake_open_settings_callback_.is_null());
+  fake_open_settings_callback_ = fake_open_settings_callback;
+}
+
 void QuickAnswersUiController::OnReportQueryButtonPressed() {
   controller_->DismissQuickAnswers(
       QuickAnswersExitPoint::kReportQueryButtonClick);
 
-  auto feedback_template =
-      base::StringPrintf(kFeedbackDescriptionTemplate, query_.c_str());
+  OpenFeedbackPage(
+      base::StringPrintf(kFeedbackDescriptionTemplate, query_.c_str()));
+}
+
+void QuickAnswersUiController::SetFakeOpenFeedbackPageCallbackForTesting(
+    QuickAnswersUiController::FakeOpenFeedbackPageCallback
+        fake_open_feedback_page_callback) {
+  CHECK_IS_TEST();
+  CHECK(!fake_open_feedback_page_callback.is_null());
+  CHECK(fake_open_feedback_page_callback_.is_null());
+  fake_open_feedback_page_callback_ = fake_open_feedback_page_callback;
+}
+
+void QuickAnswersUiController::OpenFeedbackPage(
+    const std::string& feedback_template) {
+  if (!fake_open_feedback_page_callback_.is_null()) {
+    CHECK_IS_TEST();
+    fake_open_feedback_page_callback_.Run(feedback_template);
+    return;
+  }
 
   // TODO(b/229007013): Merge the logics after resolve the deps cycle with
   // //c/b/ui in ash chrome build.
@@ -244,8 +322,27 @@ void QuickAnswersUiController::OnReportQueryButtonPressed() {
 #elif BUILDFLAG(IS_CHROMEOS_LACROS)
   chrome::OpenFeedbackDialog(
       chrome::FindBrowserWithActiveWindow(),
-      chrome::FeedbackSource::kFeedbackSourceQuickAnswers, feedback_template);
+      feedback::FeedbackSource::kFeedbackSourceQuickAnswers, feedback_template);
 #endif
+}
+
+void QuickAnswersUiController::SetFakeOpenWebUrlForTesting(
+    QuickAnswersUiController::FakeOpenWebUrlCallback
+        fake_open_web_url_callback) {
+  CHECK_IS_TEST();
+  CHECK(!fake_open_web_url_callback.is_null());
+  CHECK(fake_open_web_url_callback_.is_null());
+  fake_open_web_url_callback_ = fake_open_web_url_callback;
+}
+
+void QuickAnswersUiController::OpenWebUrl(const GURL& url) {
+  if (!fake_open_web_url_callback_.is_null()) {
+    CHECK_IS_TEST();
+    fake_open_web_url_callback_.Run(url);
+    return;
+  }
+
+  OpenUrl(profile_, url);
 }
 
 void QuickAnswersUiController::OnUserConsentResult(bool consented) {
@@ -257,16 +354,31 @@ void QuickAnswersUiController::OnUserConsentResult(bool consented) {
 }
 
 bool QuickAnswersUiController::IsShowingUserConsentView() const {
-  return user_consent_widget_ && !user_consent_widget_->IsClosed() &&
-         user_consent_widget_->GetContentsView();
+  if (user_consent_view_) {
+    CHECK_EQ(controller_->GetQuickAnswersVisibility(),
+             QuickAnswersVisibility::kUserConsentVisible);
+    return true;
+  }
+
+  return false;
 }
 
 bool QuickAnswersUiController::IsShowingQuickAnswersView() const {
-  return quick_answers_widget_ && !quick_answers_widget_->IsClosed() &&
-         quick_answers_widget_->GetContentsView();
+  if (quick_answers_view_) {
+    CHECK_EQ(controller_->GetQuickAnswersVisibility(),
+             QuickAnswersVisibility::kQuickAnswersVisible);
+    return true;
+  }
+
+  return false;
 }
 
 bool QuickAnswersUiController::IsShowingRichAnswersView() const {
   return rich_answers_widget_ && !rich_answers_widget_->IsClosed() &&
          rich_answers_widget_->GetContentsView();
+}
+
+chromeos::ReadWriteCardsUiController&
+QuickAnswersUiController::GetReadWriteCardsUiController() const {
+  return controller_->read_write_cards_ui_controller();
 }

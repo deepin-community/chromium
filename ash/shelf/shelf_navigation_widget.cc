@@ -36,6 +36,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/transform_util.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/bounds_animator.h"
 #include "ui/views/view.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -185,7 +186,7 @@ class ASH_EXPORT NavigationButtonAnimationMetricsReporter {
                 smoothness);
             break;
           default:
-            NOTREACHED();
+            NOTREACHED_IN_MIGRATION();
             break;
         }
         break;
@@ -204,7 +205,7 @@ class ASH_EXPORT NavigationButtonAnimationMetricsReporter {
                 smoothness);
             break;
           default:
-            NOTREACHED();
+            NOTREACHED_IN_MIGRATION();
             break;
         }
         break;
@@ -223,12 +224,12 @@ class ASH_EXPORT NavigationButtonAnimationMetricsReporter {
                 smoothness);
             break;
           default:
-            NOTREACHED();
+            NOTREACHED_IN_MIGRATION();
             break;
         }
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }
@@ -319,6 +320,7 @@ ShelfNavigationWidget::Delegate::Delegate(Shelf* shelf, ShelfView* shelf_view)
         ax::mojom::Event::kChildrenChanged, true);
   }
 
+  GetViewAccessibility().SetRole(ax::mojom::Role::kToolbar);
   RefreshAccessibilityWidgetNextPreviousFocus(shelf->shelf_widget());
 }
 
@@ -351,8 +353,8 @@ views::View* ShelfNavigationWidget::Delegate::GetDefaultFocusableChild() {
 
 void ShelfNavigationWidget::Delegate::
     RefreshAccessibilityWidgetNextPreviousFocus(ShelfWidget* shelf) {
-  GetViewAccessibility().OverrideNextFocus(shelf->hotseat_widget());
-  GetViewAccessibility().OverridePreviousFocus(shelf->status_area_widget());
+  GetViewAccessibility().SetNextFocus(shelf->hotseat_widget());
+  GetViewAccessibility().SetPreviousFocus(shelf->status_area_widget());
 }
 
 ShelfNavigationWidget::TestApi::TestApi(ShelfNavigationWidget* widget)
@@ -407,11 +409,11 @@ ShelfNavigationWidget::~ShelfNavigationWidget() {
 void ShelfNavigationWidget::Initialize(aura::Window* container) {
   DCHECK(container);
   views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.name = "ShelfNavigationWidget";
   params.delegate = delegate_.get();
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.parent = container;
   Init(std::move(params));
   set_focus_on_creation(false);
@@ -712,8 +714,8 @@ gfx::Size ShelfNavigationWidget::CalculateIdealSize(
     controls_space +=
         home_button_shown
             ? (shelf_->IsHorizontalAlignment()
-                   ? GetHomeButton()->CalculatePreferredSize().width()
-                   : GetHomeButton()->CalculatePreferredSize().height())
+                   ? GetHomeButton()->CalculatePreferredSize({}).width()
+                   : GetHomeButton()->CalculatePreferredSize({}).height())
             : 0;
     controls_space += back_button_shown ? control_size : 0;
     controls_space +=

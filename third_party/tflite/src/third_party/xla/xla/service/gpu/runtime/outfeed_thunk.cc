@@ -15,10 +15,25 @@ limitations under the License.
 
 #include "xla/service/gpu/runtime/outfeed_thunk.h"
 
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "xla/service/buffer_assignment.h"
+#include "xla/service/gpu/buffer_allocations.h"
 #include "xla/service/gpu/outfeed_manager.h"
+#include "xla/service/gpu/runtime/thunk.h"
+#include "xla/shape.h"
+#include "xla/shape_tree.h"
+#include "xla/shape_util.h"
+#include "xla/status_macros.h"
+#include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
+#include "tsl/platform/errors.h"
 
 namespace xla {
 namespace gpu {
@@ -88,10 +103,9 @@ absl::Status OutfeedThunk::ExecuteOnStream(const ExecuteParams& params) {
 
     // TODO(b/111309141): Run this on a separate stream so it doesn't block
     // the GPU from doing work during the transfer.
-    stream
-        .ThenMemcpy(buffer->destination()->untyped_data(), data_address,
-                    buffer->length())
-        .ThenDoHostCallback([&buffer]() { buffer->Done(); });
+    TF_RETURN_IF_ERROR(stream.Memcpy(buffer->destination()->untyped_data(),
+                                     data_address, buffer->length()));
+    TF_RETURN_IF_ERROR(stream.DoHostCallback([&buffer]() { buffer->Done(); }));
   }
 
   absl::Status block_status = stream.BlockHostUntilDone();

@@ -14,11 +14,15 @@ bool IsNameEnabled();
 BASE_DECLARE_FEATURE(kNearbySharing);
 BASE_DECLARE_FEATURE(kNearbySharingDeviceContacts);
 BASE_DECLARE_FEATURE(kNearbySharingOnePageOnboarding);
+BASE_DECLARE_FEATURE(kNearbySharingRestrictToContacts);
+bool IsRestrictToContactsEnabled();
 BASE_DECLARE_FEATURE(kNearbySharingSelfShare);
 bool IsSelfShareEnabled();
 BASE_DECLARE_FEATURE(kNearbySharingVisibilityReminder);
 BASE_DECLARE_FEATURE(kNearbySharingWebRtc);
 BASE_DECLARE_FEATURE(kNearbySharingWifiLan);
+BASE_DECLARE_FEATURE(kQuickShareV2);
+bool IsQuickShareV2Enabled();
 
 }  // namespace features
 

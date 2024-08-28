@@ -7,9 +7,9 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
-#include "third_party/blink/renderer/bindings/core/v8/observable_array.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/observable_array.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
@@ -158,7 +158,7 @@ class ObservableArrayExoticObjectHandler {
           V8SetReturnValue(info, false);
           return;
         }
-        ScriptState* script_state = ScriptState::From(current_context);
+        ScriptState* script_state = ScriptState::From(isolate, current_context);
         ExceptionState exception_state(
             isolate, ExceptionContextType::kOperationInvoke,
             BackingListWrappable::ObservableArrayNameInIDL(), "deleteProperty");
@@ -207,7 +207,7 @@ class ObservableArrayExoticObjectHandler {
           V8SetReturnValue(info, v8::Undefined(isolate));
           return;
         }
-        ScriptState* script_state = ScriptState::From(current_context);
+        ScriptState* script_state = ScriptState::From(isolate, current_context);
         v8::Local<v8::Value> v8_element =
             ToV8Traits<ElementIdlType>::ToV8(script_state, backing_list[index]);
         V8SetReturnValue(info, v8_element);
@@ -252,7 +252,7 @@ class ObservableArrayExoticObjectHandler {
           V8SetReturnValue(info, v8::Undefined(isolate));
           return;
         }
-        ScriptState* script_state = ScriptState::From(current_context);
+        ScriptState* script_state = ScriptState::From(isolate, current_context);
         v8::Local<v8::Value> v8_element =
             ToV8Traits<ElementIdlType>::ToV8(script_state, backing_list[index]);
         v8::PropertyDescriptor prop_desc(v8_element, true);
@@ -343,7 +343,7 @@ class ObservableArrayExoticObjectHandler {
       keys_vector.push_back(String::Number(index));
     v8::Local<v8::Value> own_keys_as_value =
         ToV8Traits<IDLSequence<IDLString>>::ToV8(
-            ScriptState::From(current_context), keys_vector);
+            ScriptState::From(isolate, current_context), keys_vector);
     v8::Local<v8::Array> own_keys = own_keys_as_value.As<v8::Array>();
 
     // 6. Extend keys with ! O.[[OwnPropertyKeys]]().
@@ -465,10 +465,8 @@ class ObservableArrayExoticObjectHandler {
  private:
   static BackingListWrappable& ToWrappableOrDie(v8::Isolate* isolate,
                                                 v8::Local<v8::Array> target) {
-    bindings::ObservableArrayBase* base =
-        bindings::ObservableArrayExoticObjectImpl::
-            ProxyTargetToObservableArrayBaseOrDie(isolate, target);
-    return *static_cast<BackingListWrappable*>(base);
+    return *ObservableArrayExoticObject::ProxyTargetToObservableArray<
+        BackingListWrappable>(isolate, target);
   }
 
   // https://webidl.spec.whatwg.org/#observable-array-exotic-object-set-the-length
@@ -510,7 +508,7 @@ class ObservableArrayExoticObjectHandler {
     if (backing_list.size() == 0)
       return true;
 
-    ScriptState* script_state = ScriptState::From(current_context);
+    ScriptState* script_state = ScriptState::From(isolate, current_context);
     uint32_t index_to_delete = backing_list.size() - 1;
     while (length <= index_to_delete) {
       if (!RunDeleteAlgorithm(script_state, backing_list, index_to_delete,
@@ -546,7 +544,7 @@ class ObservableArrayExoticObjectHandler {
     if (exception_state.HadException())
       return false;
 
-    ScriptState* script_state = ScriptState::From(current_context);
+    ScriptState* script_state = ScriptState::From(isolate, current_context);
     if (index < backing_list.size()) {
       if (!RunDeleteAlgorithm(script_state, backing_list, index,
                               exception_state)) {

@@ -134,6 +134,13 @@ class TestInputController : public ui::InputController {
 
   bool GetAccelerationSuspended() { return acceleration_suspended_; }
 
+  bool AreInputDevicesEnabled() const override { return true; }
+  std::unique_ptr<ui::ScopedDisableInputDevices> DisableInputDevices()
+      override {
+    return nullptr;
+  }
+  void DisableKeyboardImposterCheck() override {}
+
  private:
   // member variable used to keep track of mouse acceleration suspension
   bool acceleration_suspended_ = false;

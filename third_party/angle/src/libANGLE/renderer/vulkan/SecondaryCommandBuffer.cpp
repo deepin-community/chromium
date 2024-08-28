@@ -98,6 +98,8 @@ const char *GetCommandString(CommandID id)
             return "FillBuffer";
         case CommandID::ImageBarrier:
             return "ImageBarrier";
+        case CommandID::ImageWaitEvent:
+            return "ImageWaitEvent";
         case CommandID::InsertDebugUtilsLabel:
             return "InsertDebugUtilsLabel";
         case CommandID::MemoryBarrier:
@@ -521,6 +523,17 @@ void SecondaryCommandBuffer::executeCommands(PrimaryCommandBuffer *primary)
                                          0, nullptr, 0, nullptr, 1, imageMemoryBarriers);
                     break;
                 }
+                case CommandID::ImageWaitEvent:
+                {
+                    const ImageWaitEventParams *params =
+                        getParamPtr<ImageWaitEventParams>(currentCommand);
+                    const VkImageMemoryBarrier *imageMemoryBarriers =
+                        GetFirstArrayParameter<VkImageMemoryBarrier>(params);
+                    vkCmdWaitEvents(cmdBuffer, 1, &(params->event), params->srcStageMask,
+                                    params->dstStageMask, 0, nullptr, 0, nullptr, 1,
+                                    imageMemoryBarriers);
+                    break;
+                }
                 case CommandID::InsertDebugUtilsLabel:
                 {
                     const DebugUtilsLabelParams *params =
@@ -660,7 +673,8 @@ void SecondaryCommandBuffer::executeCommands(PrimaryCommandBuffer *primary)
                     const VkExtent2D fragmentSize = {params->fragmentWidth, params->fragmentHeight};
                     const VkFragmentShadingRateCombinerOpKHR ops[2] = {
                         VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
-                        VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+                        static_cast<VkFragmentShadingRateCombinerOpKHR>(
+                            params->vkFragmentShadingRateCombinerOp1)};
                     vkCmdSetFragmentShadingRateKHR(cmdBuffer, &fragmentSize, ops);
                     break;
                 }

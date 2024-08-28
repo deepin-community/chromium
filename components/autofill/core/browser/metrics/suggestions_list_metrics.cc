@@ -6,40 +6,44 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "base/notreached.h"
 #include "components/autofill/core/browser/filling_product.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 
 namespace autofill::autofill_metrics {
-namespace {
 
-ManageSuggestionType ToManageSuggestionType(FillingProduct popup_type) {
-  switch (popup_type) {
+void LogSuggestionsCount(size_t num_suggestions,
+                         FillingProduct filling_product) {
+  switch (filling_product) {
     case FillingProduct::kAddress:
-      return ManageSuggestionType::kAddresses;
+      base::UmaHistogramCounts100("Autofill.SuggestionsCount.Address",
+                                  num_suggestions);
+      break;
     case FillingProduct::kCreditCard:
-      return ManageSuggestionType::kPaymentMethodsCreditCards;
-    case FillingProduct::kIban:
-      return ManageSuggestionType::kPaymentMethodsIbans;
-    case FillingProduct::kAutocomplete:
-    case FillingProduct::kCompose:
-    case FillingProduct::kMerchantPromoCode:
-    case FillingProduct::kPassword:
-    case FillingProduct::kPlusAddresses:
+      base::UmaHistogramCounts100("Autofill.SuggestionsCount.CreditCard",
+                                  num_suggestions);
+      break;
     case FillingProduct::kNone:
-      return ManageSuggestionType::kOther;
+    case FillingProduct::kMerchantPromoCode:
+    case FillingProduct::kIban:
+    case FillingProduct::kAutocomplete:
+    case FillingProduct::kPassword:
+    case FillingProduct::kCompose:
+    case FillingProduct::kPlusAddresses:
+    case FillingProduct::kStandaloneCvc:
+      NOTREACHED_NORETURN();
   }
 }
 
-}  // anonymous namespace
-
-void LogAutofillSuggestionAcceptedIndex(int index,
-                                        FillingProduct filling_product,
-                                        bool off_the_record) {
+void LogSuggestionAcceptedIndex(int index,
+                                FillingProduct filling_product,
+                                bool off_the_record) {
   const int uma_index = std::min(index, kMaxBucketsCount);
   base::UmaHistogramSparse("Autofill.SuggestionAcceptedIndex", uma_index);
 
   switch (filling_product) {
     case FillingProduct::kCreditCard:
+    case FillingProduct::kStandaloneCvc:
       base::UmaHistogramSparse("Autofill.SuggestionAcceptedIndex.CreditCard",
                                uma_index);
       break;
@@ -53,6 +57,9 @@ void LogAutofillSuggestionAcceptedIndex(int index,
                                uma_index);
       break;
     case FillingProduct::kAutocomplete:
+      base::UmaHistogramSparse("Autofill.SuggestionAcceptedIndex.Autocomplete",
+                               uma_index);
+      break;
     case FillingProduct::kIban:
     case FillingProduct::kCompose:
     case FillingProduct::kPlusAddresses:
@@ -65,12 +72,6 @@ void LogAutofillSuggestionAcceptedIndex(int index,
 
   base::UmaHistogramBoolean("Autofill.SuggestionAccepted.OffTheRecord",
                             off_the_record);
-}
-
-void LogAutofillSelectedManageEntry(FillingProduct filling_product) {
-  const ManageSuggestionType uma_type = ToManageSuggestionType(filling_product);
-  base::UmaHistogramEnumeration("Autofill.SuggestionsListManageClicked",
-                                uma_type);
 }
 
 void LogAutofillShowCardsFromGoogleAccountButtonEventMetric(

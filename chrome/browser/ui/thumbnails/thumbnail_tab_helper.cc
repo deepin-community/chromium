@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
 
 #include <stdint.h>
+
 #include <algorithm>
 #include <optional>
 #include <set>
@@ -162,7 +163,7 @@ class ThumbnailTabHelper::TabStateTracker
     if (!scoped_capture_) {
       scoped_capture_ = web_contents()->IncrementCapturerCount(
           gfx::Size(), /*stay_hidden=*/true,
-          /*stay_awake=*/false);
+          /*stay_awake=*/false, /*is_activity=*/true);
     }
   }
 
@@ -181,7 +182,7 @@ class ThumbnailTabHelper::TabStateTracker
 
   void PrimaryMainFrameRenderProcessGone(
       base::TerminationStatus status) override {
-    // TODO(crbug.com/1073141): determine if there are other ways to
+    // TODO(crbug.com/40686155): determine if there are other ways to
     // lose the view.
     capture_driver_.SetCanCapture(false);
   }

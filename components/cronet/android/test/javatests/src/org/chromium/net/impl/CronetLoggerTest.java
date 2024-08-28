@@ -10,6 +10,7 @@ import static android.os.Process.THREAD_PRIORITY_DEFAULT;
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.chromium.net.CronetEngine.Builder.HTTP_CACHE_DISK_NO_HTTP;
+import static org.chromium.net.truth.UrlResponseInfoSubject.assertThat;
 
 import android.content.Context;
 import android.os.Build;
@@ -38,7 +39,10 @@ import org.chromium.net.CronetTestRule.CronetImplementation;
 import org.chromium.net.CronetTestRule.IgnoreFor;
 import org.chromium.net.CronetTestRule.RequiresMinAndroidApi;
 import org.chromium.net.ExperimentalCronetEngine;
+import org.chromium.net.Http2TestServer;
 import org.chromium.net.NativeTestServer;
+import org.chromium.net.TestBidirectionalStreamCallback;
+import org.chromium.net.TestUploadDataProvider;
 import org.chromium.net.TestUrlRequestCallback;
 import org.chromium.net.UrlRequest;
 import org.chromium.net.httpflags.FlagValue;
@@ -51,12 +55,14 @@ import org.chromium.net.impl.CronetLogger.CronetVersion;
 
 import java.time.Duration;
 import java.util.AbstractMap;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -70,7 +76,8 @@ import java.util.concurrent.atomic.AtomicReference;
         reason = "CronetLoggerTestRule is supported only by the native implementation.")
 public final class CronetLoggerTest {
     private final CronetTestRule mTestRule = CronetTestRule.withManualEngineStartup();
-    private final CronetLoggerTestRule mLoggerTestRule = new CronetLoggerTestRule(TestLogger.class);
+    private final CronetLoggerTestRule<TestLogger> mLoggerTestRule =
+            new CronetLoggerTestRule<>(TestLogger.class);
 
     @Rule public final RuleChain chain = RuleChain.outerRule(mTestRule).around(mLoggerTestRule);
 
@@ -80,7 +87,7 @@ public final class CronetLoggerTest {
     @Before
     public void setUp() {
         mContext = mTestRule.getTestFramework().getContext();
-        mTestLogger = (TestLogger) mLoggerTestRule.mTestLogger;
+        mTestLogger = mLoggerTestRule.mTestLogger;
         assertThat(NativeTestServer.startNativeTestServer(mContext)).isTrue();
     }
 
@@ -242,7 +249,7 @@ public final class CronetLoggerTest {
         // The test framework bypasses the logic in CronetEngine.Builder, so we have to call it
         // directly. We want to use the test framework context though for things like
         // intercepting manifest reads.
-        // TODO(https://crbug.com/1521393): this is ugly. Ideally the test framework should be
+        // TODO(crbug.com/41494362): this is ugly. Ideally the test framework should be
         // refactored to stop violating the Single Responsibility Principle (e.g. Context
         // management and implementation selection should be separated)
         var builder = new CronetEngine.Builder(mTestRule.getTestFramework().getContext());
@@ -311,7 +318,7 @@ public final class CronetLoggerTest {
                             builder.setThreadPriority(threadPriority);
                         });
 
-        CronetEngine engine = mTestRule.getTestFramework().startEngine();
+        mTestRule.getTestFramework().startEngine();
         final CronetEngineBuilderInfo builderInfo = mTestLogger.getLastCronetEngineBuilderInfo();
         final CronetVersion version = mTestLogger.getLastCronetVersion();
         final CronetSource source = mTestLogger.getLastCronetSource();
@@ -595,11 +602,9 @@ public final class CronetLoggerTest {
     public void testMultipleEngineCreationAndTrafficInfoEngineId() throws Exception {
         final String url = "www.example.com";
         ExperimentalCronetEngine.Builder engineBuilder =
-                (ExperimentalCronetEngine.Builder)
-                        mTestRule
-                                .getTestFramework()
-                                .createNewSecondaryBuilder(
-                                        mTestRule.getTestFramework().getContext());
+                mTestRule
+                        .getTestFramework()
+                        .createNewSecondaryBuilder(mTestRule.getTestFramework().getContext());
 
         CronetEngine engine1 = engineBuilder.build();
         final long engine1Id = mTestLogger.getLastCronetEngineId();
@@ -640,7 +645,7 @@ public final class CronetLoggerTest {
     @Test
     @SmallTest
     public void testSuccessfulRequestNative() throws Exception {
-        final String url = NativeTestServer.getEchoBodyURL();
+        final String url = NativeTestServer.getEchoMethodURL();
         CronetEngine engine = mTestRule.getTestFramework().startEngine();
 
         TestUrlRequestCallback callback = new TestUrlRequestCallback();
@@ -664,6 +669,13 @@ public final class CronetLoggerTest {
         assertThat(trafficInfo.getNegotiatedProtocol()).isNotNull();
         assertThat(trafficInfo.wasConnectionMigrationAttempted()).isFalse();
         assertThat(trafficInfo.didConnectionMigrationSucceed()).isFalse();
+        assertThat(trafficInfo.getTerminalState())
+                .isEqualTo(CronetTrafficInfo.RequestTerminalState.SUCCEEDED);
+        assertThat(trafficInfo.getNonfinalUserCallbackExceptionCount()).isEqualTo(0);
+        assertThat(trafficInfo.getReadCount()).isGreaterThan(0);
+        assertThat(trafficInfo.getOnUploadReadCount()).isEqualTo(0);
+        assertThat(trafficInfo.getIsBidiStream()).isFalse();
+        assertThat(trafficInfo.getFinalUserCallbackThrew()).isFalse();
 
         assertThat(mTestLogger.callsToLogCronetEngineCreation()).isEqualTo(1);
         assertThat(mTestLogger.callsToLogCronetTrafficInfo()).isEqualTo(1);
@@ -697,9 +709,60 @@ public final class CronetLoggerTest {
         assertThat(trafficInfo.getNegotiatedProtocol()).isEmpty();
         assertThat(trafficInfo.wasConnectionMigrationAttempted()).isFalse();
         assertThat(trafficInfo.didConnectionMigrationSucceed()).isFalse();
+        assertThat(trafficInfo.getTerminalState())
+                .isEqualTo(CronetTrafficInfo.RequestTerminalState.ERROR);
+        assertThat(trafficInfo.getNonfinalUserCallbackExceptionCount()).isEqualTo(0);
+        assertThat(trafficInfo.getReadCount()).isEqualTo(0);
+        assertThat(trafficInfo.getOnUploadReadCount()).isEqualTo(0);
+        assertThat(trafficInfo.getIsBidiStream()).isFalse();
+        assertThat(trafficInfo.getFinalUserCallbackThrew()).isFalse();
 
         assertThat(mTestLogger.callsToLogCronetEngineCreation()).isEqualTo(1);
         assertThat(mTestLogger.callsToLogCronetTrafficInfo()).isEqualTo(1);
+    }
+
+    @Test
+    @SmallTest
+    public void testNonfinalUserCallbackExceptionNative() throws Exception {
+        var callback = new TestUrlRequestCallback();
+        callback.setFailure(
+                TestUrlRequestCallback.FailureType.THROW_SYNC,
+                TestUrlRequestCallback.ResponseStep.ON_RESPONSE_STARTED);
+        mTestRule
+                .getTestFramework()
+                .startEngine()
+                .newUrlRequestBuilder(
+                        NativeTestServer.getEchoMethodURL(), callback, callback.getExecutor())
+                .build()
+                .start();
+        callback.blockForDone();
+        mTestLogger.waitForLogCronetTrafficInfo();
+
+        final CronetTrafficInfo trafficInfo = mTestLogger.getLastCronetTrafficInfo();
+        assertThat(trafficInfo.getNonfinalUserCallbackExceptionCount()).isEqualTo(1);
+        assertThat(trafficInfo.getFinalUserCallbackThrew()).isFalse();
+    }
+
+    @Test
+    @SmallTest
+    public void testFinalUserCallbackExceptionNative() throws Exception {
+        var callback = new TestUrlRequestCallback();
+        callback.setFailure(
+                TestUrlRequestCallback.FailureType.THROW_SYNC,
+                TestUrlRequestCallback.ResponseStep.ON_SUCCEEDED);
+        mTestRule
+                .getTestFramework()
+                .startEngine()
+                .newUrlRequestBuilder(
+                        NativeTestServer.getEchoMethodURL(), callback, callback.getExecutor())
+                .build()
+                .start();
+        callback.blockForDone();
+        mTestLogger.waitForLogCronetTrafficInfo();
+
+        final CronetTrafficInfo trafficInfo = mTestLogger.getLastCronetTrafficInfo();
+        assertThat(trafficInfo.getNonfinalUserCallbackExceptionCount()).isEqualTo(0);
+        assertThat(trafficInfo.getFinalUserCallbackThrew()).isTrue();
     }
 
     @Test
@@ -732,6 +795,13 @@ public final class CronetLoggerTest {
         assertThat(trafficInfo.getNegotiatedProtocol()).isEmpty();
         assertThat(trafficInfo.wasConnectionMigrationAttempted()).isFalse();
         assertThat(trafficInfo.didConnectionMigrationSucceed()).isFalse();
+        assertThat(trafficInfo.getTerminalState())
+                .isEqualTo(CronetTrafficInfo.RequestTerminalState.CANCELLED);
+        assertThat(trafficInfo.getNonfinalUserCallbackExceptionCount()).isEqualTo(0);
+        assertThat(trafficInfo.getReadCount()).isEqualTo(0);
+        assertThat(trafficInfo.getOnUploadReadCount()).isEqualTo(0);
+        assertThat(trafficInfo.getIsBidiStream()).isFalse();
+        assertThat(trafficInfo.getFinalUserCallbackThrew()).isFalse();
 
         assertThat(mTestLogger.callsToLogCronetEngineCreation()).isEqualTo(1);
         assertThat(mTestLogger.callsToLogCronetTrafficInfo()).isEqualTo(1);
@@ -739,49 +809,113 @@ public final class CronetLoggerTest {
 
     @Test
     @SmallTest
+    public void testUploadNative() throws Exception {
+        var callback = new TestUrlRequestCallback();
+        var dataProvider =
+                new TestUploadDataProvider(
+                        TestUploadDataProvider.SuccessCallbackMode.SYNC, callback.getExecutor());
+        dataProvider.addRead("test".getBytes());
+        mTestRule
+                .getTestFramework()
+                .startEngine()
+                .newUrlRequestBuilder(
+                        NativeTestServer.getEchoBodyURL(), callback, callback.getExecutor())
+                .setUploadDataProvider(dataProvider, callback.getExecutor())
+                .addHeader("Content-Type", "useless/string")
+                .build()
+                .start();
+        callback.blockForDone();
+
+        mTestLogger.waitForLogCronetTrafficInfo();
+        assertThat(mTestLogger.getLastCronetTrafficInfo().getOnUploadReadCount()).isGreaterThan(0);
+    }
+
+    @Test
+    @SmallTest
+    public void testBidirectionalStream() throws Exception {
+        assertThat(Http2TestServer.startHttp2TestServer(mTestRule.getTestFramework().getContext()))
+                .isTrue();
+        try {
+            var callback = new TestBidirectionalStreamCallback();
+            callback.addWriteData(
+                    ("test long write data which has to be long so that the response "
+                                    + "body size is non-zero; see b/328737465")
+                            .getBytes());
+            var stream =
+                    mTestRule
+                            .getTestFramework()
+                            .startEngine()
+                            .newBidirectionalStreamBuilder(
+                                    Http2TestServer.getEchoStreamUrl(),
+                                    callback,
+                                    callback.getExecutor())
+                            .addHeader("Content-Type", "test/contenttype")
+                            .build();
+            stream.start();
+            callback.blockForDone();
+            assertThat(stream.isDone()).isTrue();
+            assertThat(callback.getResponseInfoWithChecks()).hasHttpStatusCodeThat().isEqualTo(200);
+            mTestLogger.waitForLogCronetTrafficInfo();
+
+            var trafficInfo = mTestLogger.getLastCronetTrafficInfo();
+            assertThat(trafficInfo.getRequestHeaderSizeInBytes()).isNotEqualTo(0);
+            assertThat(trafficInfo.getRequestBodySizeInBytes()).isNotEqualTo(0);
+            assertThat(trafficInfo.getResponseHeaderSizeInBytes()).isNotEqualTo(0);
+            assertThat(trafficInfo.getResponseBodySizeInBytes()).isNotEqualTo(0);
+            assertThat(trafficInfo.getResponseStatusCode()).isEqualTo(200);
+            assertThat(trafficInfo.getHeadersLatency()).isNotEqualTo(Duration.ofSeconds(0));
+            assertThat(trafficInfo.getTotalLatency()).isNotEqualTo(Duration.ofSeconds(0));
+            assertThat(trafficInfo.getNegotiatedProtocol()).isNotNull();
+            assertThat(trafficInfo.wasConnectionMigrationAttempted()).isFalse();
+            assertThat(trafficInfo.didConnectionMigrationSucceed()).isFalse();
+            assertThat(trafficInfo.getTerminalState())
+                    .isEqualTo(CronetTrafficInfo.RequestTerminalState.SUCCEEDED);
+            assertThat(trafficInfo.getNonfinalUserCallbackExceptionCount()).isEqualTo(0);
+            assertThat(trafficInfo.getReadCount()).isGreaterThan(0);
+            assertThat(trafficInfo.getOnUploadReadCount()).isGreaterThan(0);
+            assertThat(trafficInfo.getIsBidiStream()).isTrue();
+            assertThat(trafficInfo.getFinalUserCallbackThrew()).isFalse();
+
+            assertThat(mTestLogger.callsToLogCronetEngineCreation()).isEqualTo(1);
+            assertThat(mTestLogger.callsToLogCronetTrafficInfo()).isEqualTo(1);
+        } finally {
+            assertThat(Http2TestServer.shutdownHttp2TestServer()).isTrue();
+        }
+    }
+
+    @Test
+    @SmallTest
     public void testEmptyHeadersSizeNative() {
         Map<String, List<String>> headers = Collections.emptyMap();
-        assertThat(CronetUrlRequest.estimateHeadersSizeInBytes(headers)).isEqualTo(0);
+        assertThat(CronetRequestCommon.estimateHeadersSizeInBytes(headers)).isEqualTo(0);
         headers = null;
-        assertThat(CronetUrlRequest.estimateHeadersSizeInBytes(headers)).isEqualTo(0);
+        assertThat(CronetRequestCommon.estimateHeadersSizeInBytes(headers)).isEqualTo(0);
 
-        CronetUrlRequest.HeadersList headersList = new CronetUrlRequest.HeadersList();
-        assertThat(CronetUrlRequest.estimateHeadersSizeInBytes(headersList)).isEqualTo(0);
+        ArrayList<Entry<String, String>> headersList = new ArrayList<>();
+        assertThat(CronetRequestCommon.estimateHeadersSizeInBytes(headersList)).isEqualTo(0);
         headersList = null;
-        assertThat(CronetUrlRequest.estimateHeadersSizeInBytes(headersList)).isEqualTo(0);
+        assertThat(CronetRequestCommon.estimateHeadersSizeInBytes(headersList)).isEqualTo(0);
     }
 
     @Test
     @SmallTest
     public void testNonEmptyHeadersSizeNative() {
-        Map<String, List<String>> headers =
-                new HashMap<String, List<String>>() {
-                    {
-                        put("header1", Arrays.asList("value1", "value2")); // 7 + 6 + 6 = 19
-                        put("header2", null); // 19 + 7 = 26
-                        put("header3", Collections.emptyList()); // 26 + 7 + 0 = 33
-                        put(null, Arrays.asList("")); // 33 + 0 + 0 = 33
-                    }
-                };
-        assertThat(CronetUrlRequest.estimateHeadersSizeInBytes(headers)).isEqualTo(33);
+        Map<String, List<String>> headers = new HashMap<>();
+        headers.put("header1", Arrays.asList("value1", "value2")); // 7 + 6 + 6 = 19
+        headers.put("header2", null); // 19 + 7 = 26
+        headers.put("header3", Collections.emptyList()); // 26 + 7 + 0 = 33
+        headers.put(null, Arrays.asList("")); // 33 + 0 + 0 = 33
 
-        CronetUrlRequest.HeadersList headersList = new CronetUrlRequest.HeadersList();
+        assertThat(CronetRequestCommon.estimateHeadersSizeInBytes(headers)).isEqualTo(33);
+
+        ArrayList<Map.Entry<String, String>> headersList = new ArrayList<>();
+        headersList.add(new AbstractMap.SimpleImmutableEntry<>("header1", "value1")); // 7 + 6 = 13
         headersList.add(
-                new AbstractMap.SimpleImmutableEntry<String, String>(
-                        "header1", "value1") // 7 + 6 = 13
-                );
-        headersList.add(
-                new AbstractMap.SimpleImmutableEntry<String, String>(
-                        "header1", "value2") // 13 + 7 + 6 = 26
-                );
-        headersList.add(
-                new AbstractMap.SimpleImmutableEntry<String, String>(
-                        "header2", null) // 26 + 7 + 0 = 33
-                );
-        headersList.add(
-                new AbstractMap.SimpleImmutableEntry<String, String>(null, "") // 33 + 0 + 0 = 33
-                );
-        assertThat(CronetUrlRequest.estimateHeadersSizeInBytes(headersList)).isEqualTo(33);
+                new AbstractMap.SimpleImmutableEntry<>("header1", "value2")); // 13 + 7 + 6 = 26
+        headersList.add(new AbstractMap.SimpleImmutableEntry<>("header2", null)); // 26 + 7 + 0 = 33
+        headersList.add(new AbstractMap.SimpleImmutableEntry<>(null, "")); // 33 + 0 + 0 = 33
+
+        assertThat(CronetRequestCommon.estimateHeadersSizeInBytes(headersList)).isEqualTo(33);
     }
 
     /** Records the last engine creation (and traffic info) call it has received. */

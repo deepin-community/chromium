@@ -84,6 +84,15 @@ AssertPageLoadMetricsObserver::OnPreviewStart(
 }
 
 PageLoadMetricsObserver::ObservePolicy
+AssertPageLoadMetricsObserver::OnNavigationHandleTimingUpdated(
+    content::NavigationHandle* navigation_handle) {
+  CHECK(started_);
+  CHECK(!committed_);
+
+  return CONTINUE_OBSERVING;
+}
+
+PageLoadMetricsObserver::ObservePolicy
 AssertPageLoadMetricsObserver::OnRedirect(
     content::NavigationHandle* navigation_handle) {
   CHECK(started_);
@@ -182,6 +191,11 @@ AssertPageLoadMetricsObserver::ShouldObserveMimeTypeByDefault(
   return PageLoadMetricsObserver::IsStandardWebPageMimeType(mime_type)
              ? CONTINUE_OBSERVING
              : STOP_OBSERVING;
+}
+
+PageLoadMetricsObserver::ObservePolicy
+AssertPageLoadMetricsObserver::ShouldObserveScheme(const GURL& url) const {
+  return url.SchemeIsHTTPOrHTTPS() ? CONTINUE_OBSERVING : STOP_OBSERVING;
 }
 
 PageLoadMetricsObserver::ObservePolicy

@@ -16,13 +16,15 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.ActivityStateListener;
+import org.chromium.base.ObserverList;
 import org.chromium.base.UnownedUserData;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeSupplier;
-import org.chromium.components.browser_ui.widget.InsetObserver;
+import org.chromium.ui.InsetObserver;
 import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
@@ -39,7 +41,8 @@ public class SnackbarManager
         implements OnClickListener,
                 ActivityStateListener,
                 UnownedUserData,
-                InsetObserver.WindowInsetObserver {
+                InsetObserver.WindowInsetObserver,
+                SnackbarStateProvider {
     /** Interface that shows the ability to provide a snackbar manager. */
     public interface SnackbarManageable {
         /**
@@ -69,11 +72,13 @@ public class SnackbarManager
     public static final int DEFAULT_SNACKBAR_DURATION_MS = 3000;
     // For snackbars with long strings where a longer duration is favorable.
     public static final int DEFAULT_SNACKBAR_DURATION_LONG_MS = 8000;
+    public static final int DEFAULT_TYPE_ACTION_SNACKBAR_DURATION_MS = 10000;
     private static final int ACCESSIBILITY_MODE_SNACKBAR_DURATION_MS = 30000;
 
     // Used instead of the constant so tests can override the value.
     private static int sSnackbarDurationMs = DEFAULT_SNACKBAR_DURATION_MS;
     private static int sAccessibilitySnackbarDurationMs = ACCESSIBILITY_MODE_SNACKBAR_DURATION_MS;
+    private static int sTypeActionSnackbarDurationsMs = DEFAULT_TYPE_ACTION_SNACKBAR_DURATION_MS;
 
     private Activity mActivity;
     private SnackbarView mView;
@@ -95,6 +100,7 @@ public class SnackbarManager
             };
     private final ObservableSupplierImpl<Boolean> mIsShowingSupplier =
             new ObservableSupplierImpl<>();
+    protected ObserverList<SnackbarStateProvider.Observer> mObservers = new ObserverList<>();
 
     /**
      * Constructs a SnackbarManager to show snackbars in the given window.
@@ -203,9 +209,9 @@ public class SnackbarManager
     }
 
     /**
-     * After an infobar is added, brings snackbar view above it.
-     * TODO(crbug/1028382): Currently SnackbarManager doesn't observe InfobarContainer events.
-     * Restore this functionality, only without references to Infobar classes.
+     * After an infobar is added, brings snackbar view above it. TODO(crbug.com/40109125): Currently
+     * SnackbarManager doesn't observe InfobarContainer events. Restore this functionality, only
+     * without references to Infobar classes.
      */
     public void onAddInfoBar() {
         // Bring Snackbars to the foreground so that it's not blocked by infobars.
@@ -284,7 +290,8 @@ public class SnackbarManager
                                 currentSnackbar,
                                 mSnackbarParentView,
                                 mWindowAndroid,
-                                mEdgeToEdgeSupplier);
+                                mEdgeToEdgeSupplier,
+                                isTablet());
                 mView.show();
 
                 // If there is a temporary parent set, reparent accordingly. We override here
@@ -307,20 +314,58 @@ public class SnackbarManager
             }
         }
 
+        for (Observer observer : mObservers) {
+            if (isShowing()) {
+                observer.onSnackbarStateChanged(true, mView.getBackgroundColor());
+            } else {
+                observer.onSnackbarStateChanged(false, null);
+            }
+        }
         mIsShowingSupplier.set(isShowing());
     }
 
+    private boolean isTablet() {
+        return DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
+    }
+
+    // ============================================================================================
+    // SnackbarStateProvider
+    // ============================================================================================
+
+    @Override
+    public void addObserver(Observer observer) {
+        mObservers.addObserver(observer);
+    }
+
+    @Override
+    public void removeObserver(Observer observer) {
+        mObservers.removeObserver(observer);
+    }
+
+    @Override
+    public boolean isFullWidth() {
+        return !isTablet();
+    }
+
+    // ============================================================================================
+    // Testing
+    // ============================================================================================
+
     @VisibleForTesting
     int getDuration(Snackbar snackbar) {
-        int durationMs = snackbar.getDuration();
-        if (durationMs == 0) durationMs = sSnackbarDurationMs;
+        int durationMs = Math.max(snackbar.getDuration(), sSnackbarDurationMs);
+        if (snackbar.isTypeAction()) {
+            durationMs = Math.max(sTypeActionSnackbarDurationsMs, durationMs);
+        }
 
-        // If no a11y service that can perform gestures is enabled, use the set duration. Otherwise
-        // multiply the duration by the recommended multiplier and use that with a minimum of 30s.
-        return !AccessibilityState.isPerformGesturesEnabled()
-                ? durationMs
-                : AccessibilityState.getRecommendedTimeoutMillis(
-                        sAccessibilitySnackbarDurationMs, durationMs);
+        // If a11y is on, set a longer minimum duration; otherwise, use the recommended timeout
+        // duration.
+        int minDuration =
+                AccessibilityState.isPerformGesturesEnabled()
+                        ? sAccessibilitySnackbarDurationMs
+                        : durationMs;
+
+        return AccessibilityState.getRecommendedTimeoutMillis(minDuration, durationMs);
     }
 
     /** Disables the snackbar manager. This is only intended for testing purposes. */
@@ -335,12 +380,14 @@ public class SnackbarManager
     public static void setDurationForTesting(int durationMs) {
         sSnackbarDurationMs = durationMs;
         sAccessibilitySnackbarDurationMs = durationMs;
+        sTypeActionSnackbarDurationsMs = durationMs;
     }
 
     /** Clears any overrides set for testing. */
     public static void resetDurationForTesting() {
         sSnackbarDurationMs = DEFAULT_SNACKBAR_DURATION_MS;
         sAccessibilitySnackbarDurationMs = ACCESSIBILITY_MODE_SNACKBAR_DURATION_MS;
+        sTypeActionSnackbarDurationsMs = DEFAULT_TYPE_ACTION_SNACKBAR_DURATION_MS;
     }
 
     static int getDefaultDurationForTesting() {
@@ -349,6 +396,10 @@ public class SnackbarManager
 
     static int getDefaultA11yDurationForTesting() {
         return sAccessibilitySnackbarDurationMs;
+    }
+
+    static int getDefaultTypeActionSnackbarDuration() {
+        return sTypeActionSnackbarDurationsMs;
     }
 
     /**

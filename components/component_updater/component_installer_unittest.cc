@@ -356,6 +356,7 @@ TEST_F(ComponentInstallerTest, RegisterComponent) {
   EXPECT_STREQ("fake name", component.name.c_str());
   EXPECT_EQ(expected_attrs, component.installer_attributes);
   EXPECT_TRUE(component.requires_network_encryption);
+  EXPECT_TRUE(component.updates_enabled);
 }
 
 // Tests that `ComponentInstallerPolicy::ComponentReady` and the completion
@@ -617,7 +618,7 @@ TEST_F(ComponentInstallerTest, Uninstall) {
   EXPECT_TRUE(base::CreateDirectory(base_dir));
 
   installer->Register(
-      component_updater(), base::BindLambdaForTesting([&]() {
+      component_updater(), base::BindLambdaForTesting([&] {
         installer->Install(
             unpack_path, update_client::jebg_public_key, nullptr,
             base::DoNothing(),

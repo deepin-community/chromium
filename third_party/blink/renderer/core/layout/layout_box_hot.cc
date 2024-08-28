@@ -9,6 +9,8 @@
 #include "third_party/blink/renderer/core/layout/disable_layout_side_effects_scope.h"
 #include "third_party/blink/renderer/core/layout/fragmentation_utils.h"
 #include "third_party/blink/renderer/core/layout/geometry/fragment_geometry.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/layout_utils.h"
@@ -149,6 +151,11 @@ const LayoutResult* LayoutBox::CachedLayoutResult(
     // needing re-layout, either in cached result or in new constraint space.
     if (!cached_layout_result->GetExclusionSpace().IsEmpty() ||
         new_space.HasFloats()) {
+      return nullptr;
+    }
+
+    // If we've shifted our children we can't rely on their position.
+    if (physical_fragment.HasMovedChildrenInBlockDirection()) {
       return nullptr;
     }
 

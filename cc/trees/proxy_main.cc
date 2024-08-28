@@ -11,14 +11,17 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
+#include "base/types/optional_ref.h"
 #include "cc/base/completion_event.h"
 #include "cc/base/devtools_instrumentation.h"
 #include "cc/base/features.h"
 #include "cc/benchmarks/benchmark_instrumentation.h"
+#include "cc/input/browser_controls_offset_tags_info.h"
 #include "cc/paint/paint_worklet_layer_painter.h"
 #include "cc/resources/ui_resource_manager.h"
 #include "cc/trees/latency_info_swap_promise.h"
@@ -75,11 +78,6 @@ void ProxyMain::DestroyProxyImplOnImplThread(
   DCHECK(task_runner_provider_->IsImplThread());
   proxy_impl_.reset();
   completion_event->Signal();
-}
-
-void ProxyMain::DidReceiveCompositorFrameAck() {
-  DCHECK(IsMainThread());
-  layer_tree_host_->DidReceiveCompositorFrameAck();
 }
 
 void ProxyMain::BeginMainFrameNotExpectedSoon() {
@@ -152,6 +150,9 @@ void ProxyMain::BeginMainFrame(
   // We need to issue image decode callbacks whether or not we will abort this
   // update and commit, since the request ids are only stored in
   // |begin_main_frame_state|.
+  DCHECK(!base::FeatureList::IsEnabled(
+             features::kSendExplicitDecodeRequestsImmediately) ||
+         begin_main_frame_state->completed_image_decode_requests.empty());
   layer_tree_host_->ImageDecodesFinished(
       std::move(begin_main_frame_state->completed_image_decode_requests));
 
@@ -327,13 +328,13 @@ void ProxyMain::BeginMainFrame(
   }
 
   // The devtools "Commit" step includes the update layers pipeline stage
-  // through to the actual commit to the impl thread. This is done for
-  // simplicity and it follows
-  // https://developer.chrome.com/articles/renderingng-architecture.
-  //
-  // TODO(paint-dev): It is not clear how to best show the interlacing of main
-  // thread tasks with commit (non-blocking commit) (crbug.com/1277952).
-  commit_trace_ = std::make_unique<devtools_instrumentation::ScopedCommitTrace>(
+  // through to the main thread handoff to the compositor thread:
+  //     https://developer.chrome.com/articles/renderingng-architecture
+  // TODO(paint-dev): This omits time that the main thread is blocked on commit
+  // *after* BeginMainFrame has finished, i.e., all call paths into
+  // LayerTreeHost::WaitForCommitCompletion that don't pass through
+  // BeginMainFrame. There probably ought to be a separate trace event for that.
+  devtools_instrumentation::ScopedCommitTrace commit_trace(
       layer_tree_host_->GetId(), frame_args.frame_id.sequence_number);
 
   // If UI resources were evicted on the impl thread, we need a commit.
@@ -416,7 +417,6 @@ void ProxyMain::BeginMainFrame(
     layer_tree_host_->RecordEndOfFrameMetrics(
         begin_main_frame_start_time,
         begin_main_frame_state->active_sequence_trackers);
-    commit_trace_.reset();
     return;
   }
 
@@ -474,8 +474,6 @@ void ProxyMain::BeginMainFrame(
   layer_tree_host_->RecordEndOfFrameMetrics(
       begin_main_frame_start_time,
       begin_main_frame_state->active_sequence_trackers);
-  if (blocking)
-    commit_trace_.reset();
 }
 
 void ProxyMain::DidCompleteCommit(int source_frame_number,
@@ -484,19 +482,18 @@ void ProxyMain::DidCompleteCommit(int source_frame_number,
     return;
   if (layer_tree_host_)
     layer_tree_host_->CommitComplete(source_frame_number, commit_timestamps);
-  commit_trace_.reset();
 }
 
 void ProxyMain::DidPresentCompositorFrame(
     uint32_t frame_token,
     std::vector<PresentationTimeCallbackBuffer::Callback>
         presentation_callbacks,
-    std::vector<PresentationTimeCallbackBuffer::SuccessfulCallback>
+    std::vector<PresentationTimeCallbackBuffer::SuccessfulCallbackWithDetails>
         sucessful_presentation_callbacks,
-    const gfx::PresentationFeedback& feedback) {
+    const viz::FrameTimingDetails& frame_timing_details) {
   layer_tree_host_->DidPresentCompositorFrame(
       frame_token, std::move(presentation_callbacks),
-      std::move(sucessful_presentation_callbacks), feedback);
+      std::move(sucessful_presentation_callbacks), frame_timing_details);
 }
 
 void ProxyMain::NotifyThroughputTrackerResults(CustomTrackerResults results) {
@@ -509,6 +506,13 @@ void ProxyMain::DidObserveFirstScrollDelay(
     base::TimeTicks first_scroll_timestamp) {
   layer_tree_host_->DidObserveFirstScrollDelay(
       source_frame_number, first_scroll_delay, first_scroll_timestamp);
+}
+
+void ProxyMain::NotifyImageDecodeRequestFinished(int request_id,
+                                                 bool decode_succeeded) {
+  DCHECK(base::FeatureList::IsEnabled(
+      features::kSendExplicitDecodeRequestsImmediately));
+  layer_tree_host_->NotifyImageDecodeFinished(request_id, decode_succeeded);
 }
 
 void ProxyMain::NotifyTransitionRequestFinished(uint32_t sequence_id) {
@@ -534,6 +538,13 @@ void ProxyMain::SetVisible(bool visible) {
   ImplThreadTaskRunner()->PostTask(
       FROM_HERE, base::BindOnce(&ProxyImpl::SetVisibleOnImpl,
                                 base::Unretained(proxy_impl_.get()), visible));
+}
+
+void ProxyMain::SetShouldWarmUp() {
+  TRACE_EVENT0("cc", "ProxyMain::SetShouldWarmUp");
+  ImplThreadTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(&ProxyImpl::SetShouldWarmUpOnImpl,
+                                base::Unretained(proxy_impl_.get())));
 }
 
 void ProxyMain::SetNeedsAnimate() {
@@ -760,6 +771,14 @@ void ProxyMain::Stop() {
   started_ = false;
 }
 
+void ProxyMain::QueueImageDecode(int request_id, const PaintImage& image) {
+  TRACE_EVENT1("cc", "ProxyMain::QueueImageDecode", "request_id", request_id);
+  ImplThreadTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(&ProxyImpl::QueueImageDecodeOnImpl,
+                                base::Unretained(proxy_impl_.get()), request_id,
+                                std::make_unique<PaintImage>(image)));
+}
+
 void ProxyMain::SetMutator(std::unique_ptr<LayerTreeMutator> mutator) {
   TRACE_EVENT0("cc", "ProxyMain::SetMutator");
   ImplThreadTaskRunner()->PostTask(
@@ -804,14 +823,17 @@ void ProxyMain::ReleaseLayerTreeFrameSink() {
   completion.Wait();
 }
 
-void ProxyMain::UpdateBrowserControlsState(BrowserControlsState constraints,
-                                           BrowserControlsState current,
-                                           bool animate) {
+void ProxyMain::UpdateBrowserControlsState(
+    BrowserControlsState constraints,
+    BrowserControlsState current,
+    bool animate,
+    base::optional_ref<const BrowserControlsOffsetTagsInfo> offset_tags_info) {
   DCHECK(IsMainThread());
   ImplThreadTaskRunner()->PostTask(
-      FROM_HERE, base::BindOnce(&ProxyImpl::UpdateBrowserControlsStateOnImpl,
-                                base::Unretained(proxy_impl_.get()),
-                                constraints, current, animate));
+      FROM_HERE,
+      base::BindOnce(&ProxyImpl::UpdateBrowserControlsStateOnImpl,
+                     base::Unretained(proxy_impl_.get()), constraints, current,
+                     animate, offset_tags_info));
 }
 
 void ProxyMain::RequestBeginMainFrameNotExpected(bool new_state) {

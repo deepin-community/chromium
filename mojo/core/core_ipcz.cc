@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "mojo/core/core_ipcz.h"
 
 #include <algorithm>
@@ -104,7 +109,7 @@ MojoResult GetMojoWriteResultForIpczPut(IpczResult result) {
 extern "C" {
 
 MojoResult MojoInitializeIpcz(const struct MojoInitializeOptions* options) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return MOJO_RESULT_OK;
 }
 
@@ -276,6 +281,15 @@ MojoResult MojoSerializeMessageIpcz(
     const MojoSerializeMessageOptions* options) {
   if (auto* m = ipcz_driver::MojoMessage::FromHandle(message)) {
     return m->Serialize();
+  }
+  return MOJO_RESULT_INVALID_ARGUMENT;
+}
+
+MojoResult MojoReserveMessageCapacityIpcz(MojoMessageHandle message,
+                                          uint32_t payload_buffer_size,
+                                          uint32_t* buffer_size) {
+  if (auto* m = ipcz_driver::MojoMessage::FromHandle(message)) {
+    return m->ReserveCapacity(payload_buffer_size, buffer_size);
   }
   return MOJO_RESULT_INVALID_ARGUMENT;
 }
@@ -720,7 +734,7 @@ MojoResult MojoUnwrapPlatformSharedMemoryRegionIpcz(
       break;
     default:
       *access_mode = MOJO_PLATFORM_SHARED_MEMORY_REGION_ACCESS_MODE_READ_ONLY;
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   std::ignore = ipcz_driver::SharedBuffer::Unbox(mojo_handle);
@@ -835,7 +849,7 @@ MojoResult MojoQueryQuotaIpcz(MojoHandle handle,
 }
 
 MojoResult MojoShutdownIpcz(const MojoShutdownOptions* options) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return MOJO_RESULT_OK;
 }
 
@@ -894,7 +908,8 @@ MojoSystemThunks2 g_mojo_ipcz_thunks = {
     MojoSetQuotaIpcz,
     MojoQueryQuotaIpcz,
     MojoShutdownIpcz,
-    MojoSetDefaultProcessErrorHandlerIpcz};
+    MojoSetDefaultProcessErrorHandlerIpcz,
+    MojoReserveMessageCapacityIpcz};
 
 }  // namespace
 

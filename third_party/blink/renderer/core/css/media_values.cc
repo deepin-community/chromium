@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/core/css/media_values.h"
 
 #include "third_party/blink/public/common/css/scripting.h"
-#include "third_party/blink/public/platform/web_theme_engine.h"
 #include "third_party/blink/renderer/core/css/css_resolution_units.h"
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/css/media_feature_overrides.h"
@@ -29,7 +28,6 @@
 #include "third_party/blink/renderer/core/preferences/preference_overrides.h"
 #include "third_party/blink/renderer/platform/graphics/color_space_gamut.h"
 #include "third_party/blink/renderer/platform/network/network_state_notifier.h"
-#include "third_party/blink/renderer/platform/theme/web_theme_engine_helper.h"
 #include "third_party/blink/renderer/platform/widget/frame_widget.h"
 #include "ui/display/screen_info.h"
 
@@ -42,7 +40,7 @@ ForcedColors CSSValueIDToForcedColors(CSSValueID id) {
     case CSSValueID::kNone:
       return ForcedColors::kNone;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return ForcedColors::kNone;
   }
 }
@@ -55,7 +53,7 @@ mojom::blink::PreferredColorScheme CSSValueIDToPreferredColorScheme(
     case CSSValueID::kDark:
       return mojom::blink::PreferredColorScheme::kDark;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return mojom::blink::PreferredColorScheme::kLight;
   }
 }
@@ -71,7 +69,7 @@ mojom::blink::PreferredContrast CSSValueIDToPreferredContrast(CSSValueID id) {
     case CSSValueID::kCustom:
       return mojom::blink::PreferredContrast::kCustom;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return mojom::blink::PreferredContrast::kNoPreference;
   }
 }
@@ -88,6 +86,20 @@ std::optional<double> MediaValues::BlockSize() const {
     return Height();
   }
   return Width();
+}
+
+bool MediaValues::SnappedBlock() const {
+  if (blink::IsHorizontalWritingMode(GetWritingMode())) {
+    return SnappedY();
+  }
+  return SnappedX();
+}
+
+bool MediaValues::SnappedInline() const {
+  if (blink::IsHorizontalWritingMode(GetWritingMode())) {
+    return SnappedX();
+  }
+  return SnappedY();
 }
 
 MediaValues* MediaValues::CreateDynamicIfFrameExists(LocalFrame* frame) {
@@ -497,7 +509,7 @@ ForcedColors MediaValues::CalculateForcedColors(LocalFrame* frame) {
   std::optional<ForcedColors> override_value =
       overrides ? overrides->GetForcedColors() : std::nullopt;
   return override_value.value_or(
-      WebThemeEngineHelper::GetNativeThemeEngine()->GetForcedColors());
+      frame->GetDocument()->GetStyleEngine().GetForcedColors());
 }
 
 NavigationControls MediaValues::CalculateNavigationControls(LocalFrame* frame) {
@@ -511,10 +523,10 @@ int MediaValues::CalculateHorizontalViewportSegments(LocalFrame* frame) {
     return 1;
   }
 
-  WebVector<gfx::Rect> window_segments =
-      frame->GetWidgetForLocalRoot()->WindowSegments();
+  WebVector<gfx::Rect> viewport_segments =
+      frame->GetWidgetForLocalRoot()->ViewportSegments();
   WTF::HashSet<int> unique_x;
-  for (const auto& segment : window_segments) {
+  for (const auto& segment : viewport_segments) {
     // HashSet can't have 0 as a key, so add 1 to all the values we see.
     unique_x.insert(segment.x() + 1);
   }
@@ -527,10 +539,10 @@ int MediaValues::CalculateVerticalViewportSegments(LocalFrame* frame) {
     return 1;
   }
 
-  WebVector<gfx::Rect> window_segments =
-      frame->GetWidgetForLocalRoot()->WindowSegments();
+  WebVector<gfx::Rect> viewport_segments =
+      frame->GetWidgetForLocalRoot()->ViewportSegments();
   WTF::HashSet<int> unique_y;
-  for (const auto& segment : window_segments) {
+  for (const auto& segment : viewport_segments) {
     // HashSet can't have 0 as a key, so add 1 to all the values we see.
     unique_y.insert(segment.y() + 1);
   }

@@ -35,6 +35,7 @@
     <!-- Confirm reset settings dialog. -->
     <cr-dialog id="confirmResetSettings" close-text="$i18n{close}"
         on-close="onResetSettingsDialogClosed_">
+      <div slot="title">$i18n{siteSettingsSiteResetDialogTitle}</div>
       <div slot="body">
         [[i18n('siteSettingsSiteResetConfirmation', pageTitle)]]
       </div>
@@ -282,4 +283,30 @@
             label="$i18n{siteSettingsAutoPictureInPicture}">
         </site-details-permission>
       </template>
+      <template is="dom-if" if="[[capturedSurfaceControlEnabled_]]">
+        <site-details-permission
+            category="[[contentSettingsTypesEnum_.CAPTURED_SURFACE_CONTROL]]"
+            icon="settings:touchpad-mouse"
+            label="$i18n{siteSettingsCapturedSurfaceControl}">
+        </site-details-permission>
+      </template>
+      <template is="dom-if" if="[[enableAutomaticFullscreenContentSetting_]]">
+        <site-details-permission
+            category="[[contentSettingsTypesEnum_.AUTOMATIC_FULLSCREEN]]"
+            icon="cr:fullscreen"
+            label="$i18n{siteSettingsAutomaticFullscreen}">
+        </site-details-permission>
+      </template>
+      <template is="dom-if" if="[[enableKeyboardAndPointerLockPrompt_]]">
+        <site-details-permission
+            category="[[contentSettingsTypesEnum_.KEYBOARD_LOCK]]"
+            icon="settings20:keyboard-lock"
+            label="$i18n{siteSettingsKeyboardLock}">
+        </site-details-permission>
+        <site-details-permission
+            category="[[contentSettingsTypesEnum_.POINTER_LOCK]]"
+            icon="settings20:pointer-lock"
+            label="$i18n{siteSettingsPointerLock}">
+        </site-details-permission>
+    </template>
     </div>

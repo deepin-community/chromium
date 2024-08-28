@@ -18,6 +18,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/test_future.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/attestation/mock_tpm_challenge_key_subtle.h"
@@ -205,6 +206,10 @@ GetNextInstructionResult NextInstructionProofOfPossession() {
   em::CertProvGetNextInstructionResponse next_instruction_response;
   next_instruction_response.mutable_proof_of_possession_instruction()
       ->set_data_to_sign(GetDataToSignStr());
+  next_instruction_response.mutable_proof_of_possession_instruction()
+      ->set_signature_algorithm(
+          enterprise_management::CertProvSignatureAlgorithm::
+              SIGNATURE_ALGORITHM_RSA_PKCS1_V1_5_NO_HASH);
 
   return next_instruction_response;
 }
@@ -344,14 +349,6 @@ CertProvisioningClient::Error InstructionNotYetAvailable() {
         .WillOnce(RunOnceCallback<2>(Status::kSuccess)); \
   }
 
-// A mock for observing the result callback of the worker.
-class CallbackObserver {
- public:
-  MOCK_METHOD(void,
-              Callback,
-              (const CertProfile profile, CertProvisioningWorkerState state));
-};
-
 // A mock for observing the state change callback of the worker.
 class StateChangeCallbackObserver {
  public:
@@ -369,9 +366,6 @@ class CertProvisioningWorkerDynamicTest : public ::testing::Test {
 
   void SetUp() override {
     AttestationClient::InitializeFake();
-    // There should not be any calls to callback before this expect is
-    // overridden.
-    EXPECT_CALL(callback_observer_, Callback).Times(0);
 
     RegisterProfilePrefs(testing_pref_service_.registry());
     RegisterLocalStatePrefs(testing_pref_service_.registry());
@@ -445,8 +439,7 @@ class CertProvisioningWorkerDynamicTest : public ::testing::Test {
   }
 
   CertProvisioningWorkerCallback GetResultCallback() {
-    return base::BindOnce(&CallbackObserver::Callback,
-                          base::Unretained(&callback_observer_));
+    return callback_observer_.GetCallback();
   }
 
   Profile* GetProfile() { return profile_helper_for_testing_.GetProfile(); }
@@ -466,7 +459,8 @@ class CertProvisioningWorkerDynamicTest : public ::testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
   StrictMock<StateChangeCallbackObserver> state_change_callback_observer_;
-  StrictMock<CallbackObserver> callback_observer_;
+  base::test::TestFuture<CertProfile, std::string, CertProvisioningWorkerState>
+      callback_observer_;
   ProfileHelperForTesting profile_helper_for_testing_;
   TestingPrefServiceSimple testing_pref_service_;
 
@@ -484,19 +478,24 @@ class CertProvisioningWorkerDynamicTest : public ::testing::Test {
 TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllSteps) {
   base::HistogramTester histogram_tester;
 
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
+  const std::string listener_type = MakeInvalidationListenerType(process_id);
+  EXPECT_LE(listener_type.size(), 128u);
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   MockCertProvisioningInvalidator* mock_invalidator = nullptr;
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(&mock_invalidator),
-      GetStateChangeCallback(), GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_,
+      MakeInvalidator(&mock_invalidator), GetStateChangeCallback(),
+      GetResultCallback());
 
   OnInvalidationEventCallback on_invalidation_event_callback;
 
@@ -522,8 +521,9 @@ TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllSteps) {
     EXPECT_START(Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
                  StartResultOk());
 
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _))
-        .WillOnce(SaveArg<1>(&on_invalidation_event_callback));
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .WillOnce(SaveArg<2>(&on_invalidation_event_callback));
 
     // kReadyForNextOperation
     EXPECT_CALL(state_change_callback_observer_, StateChangeCallback())
@@ -679,13 +679,13 @@ TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllSteps) {
 
     EXPECT_CALL(*mock_invalidator, Unregister()).Times(1);
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
-
     on_invalidation_event_callback.Run(
         InvalidationEvent::kInvalidationReceived);
     EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 
   histogram_tester.ExpectUniqueSample(
@@ -716,19 +716,23 @@ TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllSteps) {
 TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllStepsNoWaiting) {
   base::HistogramTester histogram_tester;
 
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
+  const std::string listener_type = MakeInvalidationListenerType(process_id);
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   MockCertProvisioningInvalidator* mock_invalidator = nullptr;
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(&mock_invalidator),
-      GetStateChangeCallback(), GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_,
+      MakeInvalidator(&mock_invalidator), GetStateChangeCallback(),
+      GetResultCallback());
 
   auto VerifyNoBackendErrorsSeen = [&worker]() {
     EXPECT_EQ(worker.GetLastBackendServerError(), std::nullopt);
@@ -753,8 +757,9 @@ TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllStepsNoWaiting) {
                  StartResultOk());
 
     OnInvalidationEventCallback on_invalidation_event_callback;
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _))
-        .WillOnce(SaveArg<1>(&on_invalidation_event_callback));
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .WillOnce(SaveArg<2>(&on_invalidation_event_callback));
 
     // kReadyForNextOperation
     EXPECT_CALL(state_change_callback_observer_, StateChangeCallback())
@@ -842,12 +847,12 @@ TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllStepsNoWaiting) {
 
     EXPECT_CALL(*mock_invalidator, Unregister()).Times(1);
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
-
     worker.DoStep();
     EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 
   histogram_tester.ExpectUniqueSample(
@@ -868,18 +873,20 @@ TEST_F(CertProvisioningWorkerDynamicTest, SuccessWithAllStepsNoWaiting) {
 // enabled.
 TEST_F(CertProvisioningWorkerDynamicTest, VaChallengeRequired) {
   const CertScope kCertScope = CertScope::kUser;
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -900,33 +907,36 @@ TEST_F(CertProvisioningWorkerDynamicTest, VaChallengeRequired) {
     EXPECT_GET_NEXT_INSTRUCTION(
         GetNextInstruction(Eq(std::ref(provisioning_process)), /*callback=*/_),
         NextInstructionProofOfPossession());
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker.DoStep();
   FastForwardBy(base::Seconds(1));
 
   VerifyDeleteKeyCalledOnce(kCertScope);
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
 }
 
 // Checks that omitting the "proof of possession" step works fine.
 TEST_F(CertProvisioningWorkerDynamicTest, NoProofOfPossession) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   MockCertProvisioningInvalidator* mock_invalidator = nullptr;
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(&mock_invalidator),
-      GetStateChangeCallback(), GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_,
+      MakeInvalidator(&mock_invalidator), GetStateChangeCallback(),
+      GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -976,12 +986,12 @@ TEST_F(CertProvisioningWorkerDynamicTest, NoProofOfPossession) {
 
     EXPECT_CALL(*mock_invalidator, Unregister()).Times(1);
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
-
     worker.DoStep();
     EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 }
 
@@ -989,17 +999,19 @@ TEST_F(CertProvisioningWorkerDynamicTest, NoProofOfPossession) {
 // success scenario when VA challenge is not enabled.
 // Provides one proof of possession .
 TEST_F(CertProvisioningWorkerDynamicTest, NoVaSuccess) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1045,30 +1057,32 @@ TEST_F(CertProvisioningWorkerDynamicTest, NoVaSuccess) {
 
     EXPECT_IMPORT_CERTIFICATE_OK(
         ImportCertificate(TokenId::kUser, /*certificate=*/_, /*callback=*/_));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
   }
 
   worker.DoStep();
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kSucceeded);
 }
 
 // Checks that the worker fails if the server requests more than 1
 // proof-of-possession signatures in the "verified access" case.
 TEST_F(CertProvisioningWorkerDynamicTest, VaTooManyTwoProofsOfPossession) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1132,29 +1146,108 @@ TEST_F(CertProvisioningWorkerDynamicTest, VaTooManyTwoProofsOfPossession) {
                   /*public_key_spki_der=*/GetPublicKeyBin(), /*callback=*/_))
         .Times(1)
         .WillOnce(RunOnceCallback<2>(Status::kSuccess));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker.DoStep();
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
+}
+
+// Checks that the worker correctly handles a "proof of possession" instruction
+// that doesn't explicitly specify any signature algorithm.
+TEST_F(CertProvisioningWorkerDynamicTest,
+       ProofOfPossessionNoSignatureAlgorithm) {
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
+  const CertProvisioningClient::ProvisioningProcess provisioning_process(
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
+
+  CertProvisioningWorkerDynamic worker(
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
+
+  EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
+      .Times(AtLeast(1));
+  {
+    testing::InSequence seq;
+
+    EXPECT_CALL(*platform_keys_service_,
+                GenerateRSAKey(TokenId::kUser, kNonVaKeyModulusLengthBits,
+                               /*sw_backed=*/false,
+                               /*callback=*/_))
+        .Times(1)
+        .WillOnce(RunOnceCallback<3>(GetPublicKeyBin(), Status::kSuccess));
+
+    EXPECT_CALL(*key_permissions_manager_,
+                AllowKeyForUsage(/*callback=*/_, KeyUsage::kCorporate,
+                                 GetPublicKeyBin()));
+
+    EXPECT_SET_ATTRIBUTE_FOR_KEY_OK(
+        SetAttributeForKey(TokenId::kUser, GetPublicKeyBin(),
+                           KeyAttributeType::kCertificateProvisioningId,
+                           GetCertProfileIdBin(), _));
+
+    EXPECT_START(Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
+                 StartResultOk());
+
+    em::CertProvGetNextInstructionResponse proof_of_possession_instruction;
+    proof_of_possession_instruction.mutable_proof_of_possession_instruction()
+        ->set_data_to_sign(GetDataToSignStr());
+    // Do not set `signature_algorithm` on `proof_of_possession_instruction`.
+
+    EXPECT_GET_NEXT_INSTRUCTION(
+        GetNextInstruction(Eq(std::ref(provisioning_process)), /*callback=*/_),
+        std::move(proof_of_possession_instruction));
+
+    EXPECT_SIGN_RSAPKC1_RAW_OK(
+        SignRSAPKCS1Raw(::testing::Optional(TokenId::kUser), GetDataToSignBin(),
+                        GetPublicKeyBin(), /*callback=*/_));
+
+    EXPECT_UPLOAD_PROOF_OF_POSSESSION(
+        UploadProofOfPossession(Eq(std::ref(provisioning_process)),
+                                GetSignatureStr(),
+                                /*callback=*/_),
+        NoDataResultOk());
+
+    EXPECT_GET_NEXT_INSTRUCTION(
+        GetNextInstruction(Eq(std::ref(provisioning_process)), /*callback=*/_),
+        NextInstructionImportCertificate(kFakeCertificate));
+
+    EXPECT_IMPORT_CERTIFICATE_OK(
+        ImportCertificate(TokenId::kUser, /*certificate=*/_, /*callback=*/_));
+  }
+
+  worker.DoStep();
+  EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kSucceeded);
 }
 
 // Checks that the worker fails if the server requests more than one
 // proof-of-possession signatures in the "no verified access" case.
 TEST_F(CertProvisioningWorkerDynamicTest, NoVaTooManyTwoProofsOfPossession) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1204,30 +1297,32 @@ TEST_F(CertProvisioningWorkerDynamicTest, NoVaTooManyTwoProofsOfPossession) {
                   /*public_key_spki_der=*/GetPublicKeyBin(), /*callback=*/_))
         .Times(1)
         .WillOnce(RunOnceCallback<2>(Status::kSuccess));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker.DoStep();
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
 }
 
 // Checks that the worker makes all necessary requests to other modules during
 // success scenario when VA challenge is not enabled.
 // Provides one proof of possession .
 TEST_F(CertProvisioningWorkerDynamicTest, PublicKeyMismatch) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1277,31 +1372,32 @@ TEST_F(CertProvisioningWorkerDynamicTest, PublicKeyMismatch) {
                   /*public_key_spki_der=*/GetPublicKeyBin(), /*callback=*/_))
         .Times(1)
         .WillOnce(RunOnceCallback<2>(Status::kSuccess));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker.DoStep();
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
 }
 
 // Checks that when the server returns INSTRUCTION_NOT_YET_AVAILABLE, the
 // worker will retry a request when it asked to continue the provisioning.
 TEST_F(CertProvisioningWorkerDynamicTest, TryLaterManualRetry) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kDevice, kCertProfileId, kCertProfileVersion,
+      process_id, CertScope::kDevice, kCertProfileId, kCertProfileVersion,
       GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      CertScope::kDevice, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kDevice, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1412,30 +1508,32 @@ TEST_F(CertProvisioningWorkerDynamicTest, TryLaterManualRetry) {
     EXPECT_IMPORT_CERTIFICATE_OK(
         ImportCertificate(TokenId::kSystem, /*certificate=*/_, /*callback=*/_));
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
-
     worker.DoStep();
     EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 }
 
 // Checks that when the server returns INSTRUCTION_NOT_YET_AVAILABLE, the worker
 // will automatically retry a request after some time.
 TEST_F(CertProvisioningWorkerDynamicTest, TryLaterWait) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   const base::TimeDelta small_delay = base::Milliseconds(500);
 
@@ -1536,11 +1634,12 @@ TEST_F(CertProvisioningWorkerDynamicTest, TryLaterWait) {
     EXPECT_IMPORT_CERTIFICATE_OK(
         ImportCertificate(TokenId::kUser, /*certificate=*/_, /*callback=*/_));
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
     FastForwardBy(kDefaultTryLaterDelay + small_delay);
     EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 }
 
@@ -1548,18 +1647,20 @@ TEST_F(CertProvisioningWorkerDynamicTest, TryLaterWait) {
 // will enter an error state and stop the provisioning.
 TEST_F(CertProvisioningWorkerDynamicTest, StatusErrorHandling) {
   const CertScope kCertScope = CertScope::kUser;
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1577,16 +1678,16 @@ TEST_F(CertProvisioningWorkerDynamicTest, StatusErrorHandling) {
     EXPECT_START(
         Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
         base::unexpected(DmStatusError(policy::DM_STATUS_REQUEST_INVALID)));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker.DoStep();
   FastForwardBy(base::Seconds(1));
 
   VerifyDeleteKeyCalledOnce(kCertScope);
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
 }
 
 // Checks that when the server returns an error encoded in the proto response ,
@@ -1596,18 +1697,20 @@ TEST_F(CertProvisioningWorkerDynamicTest, ResponseErrorHandling) {
   const CertScope kCertScope = CertScope::kUser;
   base::HistogramTester histogram_tester;
 
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      kCertScope, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, kCertScope, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   auto worker = CertProvisioningWorkerFactory::Get()->Create(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1625,16 +1728,16 @@ TEST_F(CertProvisioningWorkerDynamicTest, ResponseErrorHandling) {
     EXPECT_START(
         Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
         base::unexpected(BackendError(em::CertProvBackendError::CA_FAILURE)));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker->DoStep();
   FastForwardBy(base::Seconds(1));
 
   VerifyDeleteKeyCalledOnce(kCertScope);
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
 
   histogram_tester.ExpectBucketCount(
       "ChromeOS.CertProvisioning.Result.Dynamic.User",
@@ -1648,18 +1751,20 @@ TEST_F(CertProvisioningWorkerDynamicTest, ResponseErrorHandling) {
 
 TEST_F(CertProvisioningWorkerDynamicTest, InconsistentDataErrorHandling) {
   const CertScope kCertScope = CertScope::kUser;
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      kCertScope, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, kCertScope, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   auto worker = CertProvisioningWorkerFactory::Get()->Create(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1677,33 +1782,34 @@ TEST_F(CertProvisioningWorkerDynamicTest, InconsistentDataErrorHandling) {
     EXPECT_START(Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
                  base::unexpected(BackendError(
                      em::CertProvBackendError::INCONSISTENT_DATA)));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile,
-                         CertProvisioningWorkerState::kInconsistentDataError))
-        .Times(1);
   }
 
   worker->DoStep();
   FastForwardBy(base::Seconds(1));
 
   VerifyDeleteKeyCalledOnce(kCertScope);
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kInconsistentDataError);
 }
 
 TEST_F(CertProvisioningWorkerDynamicTest, ProfileNotFoundErrorHandling) {
   const CertScope kCertScope = CertScope::kUser;
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      kCertScope, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, kCertScope, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   auto worker = CertProvisioningWorkerFactory::Get()->Create(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1721,36 +1827,36 @@ TEST_F(CertProvisioningWorkerDynamicTest, ProfileNotFoundErrorHandling) {
     EXPECT_START(Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
                  base::unexpected(BackendError(
                      em::CertProvBackendError::PROFILE_NOT_FOUND)));
-
-    // PROFILE_NOT_FOUND is also mapped to kInconsistentDataError on the client.
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile,
-                         CertProvisioningWorkerState::kInconsistentDataError))
-        .Times(1);
   }
 
   worker->DoStep();
   FastForwardBy(base::Seconds(1));
 
   VerifyDeleteKeyCalledOnce(kCertScope);
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  // PROFILE_NOT_FOUND is also mapped to kInconsistentDataError on the client.
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kInconsistentDataError);
 }
 
 // Checks that when the server returns TEMPORARY_UNAVAILABLE status code, the
 // worker will automatically retry a request using exponential backoff strategy.
 TEST_F(CertProvisioningWorkerDynamicTest, BackoffStrategy) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
-
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   base::TimeDelta next_delay = base::Seconds(30);
   const base::TimeDelta small_delay = base::Milliseconds(500);
@@ -1808,18 +1914,20 @@ TEST_F(CertProvisioningWorkerDynamicTest, BackoffStrategy) {
 // Checks that the worker retries Authorize if it failed with a server-side
 // temporary error.
 TEST_F(CertProvisioningWorkerDynamicTest, RetryAuthorize) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1879,30 +1987,32 @@ TEST_F(CertProvisioningWorkerDynamicTest, RetryAuthorize) {
     EXPECT_IMPORT_CERTIFICATE_OK(
         ImportCertificate(TokenId::kUser, /*certificate=*/_, /*callback=*/_));
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
-
     // Initial backoff strategy time
     FastForwardBy(base::Seconds(30) + base::Milliseconds(100));
     EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 }
 
 // Checks that the worker retries UploadProofOfPossession if it failed with a
 // server-side temporary error.
 TEST_F(CertProvisioningWorkerDynamicTest, RetryUploadProofOfPossession) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/false, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -1961,31 +2071,33 @@ TEST_F(CertProvisioningWorkerDynamicTest, RetryUploadProofOfPossession) {
     EXPECT_IMPORT_CERTIFICATE_OK(
         ImportCertificate(TokenId::kUser, /*certificate=*/_, /*callback=*/_));
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
-
     // Initial backoff strategy time
     FastForwardBy(base::Seconds(30) + base::Milliseconds(100));
     EXPECT_EQ(worker.GetState(), CertProvisioningWorkerState::kSucceeded);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 }
 
 // Checks that when the server returns TEMPORARY_UNAVAILABLE status code, the
 // worker will update its BackendServerError attribute.
 TEST_F(CertProvisioningWorkerDynamicTest, ProcessBackendServerErrorResponse) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   {
     testing::InSequence seq;
@@ -2040,19 +2152,23 @@ TEST_F(CertProvisioningWorkerDynamicTest, ProcessBackendServerErrorResponse) {
 TEST_F(CertProvisioningWorkerDynamicTest, RemoveRegisteredKey) {
   base::HistogramTester histogram_tester;
 
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
+  const std::string listener_type = MakeInvalidationListenerType(process_id);
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   MockCertProvisioningInvalidator* mock_invalidator = nullptr;
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(&mock_invalidator),
-      GetStateChangeCallback(), GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_,
+      MakeInvalidator(&mock_invalidator), GetStateChangeCallback(),
+      GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -2070,7 +2186,9 @@ TEST_F(CertProvisioningWorkerDynamicTest, RemoveRegisteredKey) {
     EXPECT_START(Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
                  StartResultOk());
 
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _)).Times(1);
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .Times(1);
 
     EXPECT_GET_NEXT_INSTRUCTION(
         GetNextInstruction(Eq(std::ref(provisioning_process)), /*callback=*/_),
@@ -2099,14 +2217,14 @@ TEST_F(CertProvisioningWorkerDynamicTest, RemoveRegisteredKey) {
                   /*public_key_spki_der=*/GetPublicKeyBin(), /*callback=*/_))
         .Times(1)
         .WillOnce(RunOnceCallback<2>(Status::kSuccess));
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker.DoStep();
   FastForwardBy(base::Seconds(1));
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
 
   histogram_tester.ExpectBucketCount(
       "ChromeOS.CertProvisioning.Result.Dynamic.User",
@@ -2119,16 +2237,18 @@ TEST_F(CertProvisioningWorkerDynamicTest, RemoveRegisteredKey) {
 }
 
 TEST_F(CertProvisioningWorkerDynamicTest, ResetWorker) {
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      CertScope::kUser, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, CertScope::kUser, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
   CertProvisioningWorkerDynamic worker(
-      CertScope::kUser, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, CertScope::kUser, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   worker.MarkWorkerForReset();
   ASSERT_EQ(worker.IsWorkerMarkedForReset(), true);
@@ -2161,13 +2281,15 @@ class PrefServiceObserver {
 
 TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
   const base::TimeDelta kRenewalPeriod = base::Seconds(1200300);
-  CertProfile cert_profile(
+  const CertProfile cert_profile(
       kCertProfileId, kCertProfileName, kCertProfileVersion,
       /*is_va_enabled=*/true, kRenewalPeriod, ProtocolVersion::kDynamic);
   const CertScope kCertScope = CertScope::kUser;
-
+  const std::string process_id = GenerateCertProvisioningId();
+  const std::string listener_type = MakeInvalidationListenerType(process_id);
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      kCertScope, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, kCertScope, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   std::unique_ptr<MockCertProvisioningInvalidator> mock_invalidator_obj;
   MockCertProvisioningInvalidator* mock_invalidator = nullptr;
@@ -2175,9 +2297,10 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   std::unique_ptr<CertProvisioningWorker> worker =
       CertProvisioningWorkerFactory::Get()->Create(
-          kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-          &cert_provisioning_client_, MakeInvalidator(&mock_invalidator),
-          GetStateChangeCallback(), GetResultCallback());
+          process_id, kCertScope, GetProfile(), &testing_pref_service_,
+          cert_profile, &cert_provisioning_client_,
+          MakeInvalidator(&mock_invalidator), GetStateChangeCallback(),
+          GetResultCallback());
 
   StrictMock<PrefServiceObserver> pref_observer(
       &testing_pref_service_, GetPrefNameForSerialization(kCertScope));
@@ -2213,6 +2336,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "cert_scope": 0,
             "invalidation_topic": "",
             "key_location": 1,
+            "process_id": "%s",
             "attempted_va_challenge": false,
             "attempted_proof_of_possession": false,
             "proof_of_possession_signature": "",
@@ -2220,13 +2344,15 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "state": 1
           }
         })",
-        kPublicKeyBase64));
+        process_id.c_str(), kPublicKeyBase64));
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
 
     EXPECT_START(Start(Eq(std::ref(provisioning_process)), /*callback=*/_),
                  StartResultOk());
 
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _)).Times(1);
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .Times(1);
 
     // Serialized in kReadyForNextOperation = 12 state
     pref_val = ParseJsonDict(base::StringPrintf(
@@ -2243,6 +2369,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "cert_scope": 0,
             "invalidation_topic": "fake_invalidation_topic_1",
             "key_location": 1,
+            "process_id": "%s",
             "attempted_va_challenge": false,
             "attempted_proof_of_possession": false,
             "proof_of_possession_signature": "",
@@ -2250,7 +2377,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "state": 12
           }
         })",
-        kPublicKeyBase64));
+        process_id.c_str(), kPublicKeyBase64));
 
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
     EXPECT_GET_NEXT_INSTRUCTION_NO_OP(
@@ -2264,7 +2391,9 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
     testing::InSequence seq;
 
     mock_invalidator_obj = MakeInvalidator(&mock_invalidator);
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _)).Times(1);
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .Times(1);
 
     mock_tpm_challenge_key = PrepareTpmChallengeKey();
 
@@ -2327,6 +2456,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "cert_scope": 0,
             "invalidation_topic": "fake_invalidation_topic_1",
             "key_location": 2,
+            "process_id": "%s",
             "attempted_va_challenge": true,
             "attempted_proof_of_possession": false,
             "proof_of_possession_signature": "",
@@ -2334,7 +2464,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "state": 12
           }
         })",
-        kPublicKeyBase64));
+        process_id.c_str(), kPublicKeyBase64));
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
 
     EXPECT_GET_NEXT_INSTRUCTION(
@@ -2349,7 +2479,9 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
     testing::InSequence seq;
 
     mock_invalidator_obj = MakeInvalidator(&mock_invalidator);
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _)).Times(1);
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .Times(1);
 
     worker = CertProvisioningWorkerFactory::Get()->Deserialize(
         kCertScope, GetProfile(), &testing_pref_service_,
@@ -2387,6 +2519,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "cert_scope": 0,
             "invalidation_topic": "fake_invalidation_topic_1",
             "key_location": 2,
+            "process_id": "%s",
             "attempted_va_challenge": true,
             "attempted_proof_of_possession": true,
             "proof_of_possession_signature": "%s",
@@ -2394,7 +2527,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "state": 6
           }
         })",
-        kSignatureBase64, kPublicKeyBase64));
+        process_id.c_str(), kSignatureBase64, kPublicKeyBase64));
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
 
     EXPECT_UPLOAD_PROOF_OF_POSSESSION(
@@ -2411,7 +2544,9 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
     testing::InSequence seq;
 
     mock_invalidator_obj = MakeInvalidator(&mock_invalidator);
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _)).Times(1);
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .Times(1);
 
     worker = CertProvisioningWorkerFactory::Get()->Deserialize(
         kCertScope, GetProfile(), &testing_pref_service_,
@@ -2443,6 +2578,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "cert_scope": 0,
             "invalidation_topic": "fake_invalidation_topic_1",
             "key_location": 2,
+            "process_id": "%s",
             "attempted_va_challenge": true,
             "attempted_proof_of_possession": true,
             "proof_of_possession_signature": "",
@@ -2450,7 +2586,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
             "state": 12
           }
         })",
-        kPublicKeyBase64));
+        process_id.c_str(), kPublicKeyBase64));
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
 
     EXPECT_GET_NEXT_INSTRUCTION(
@@ -2465,7 +2601,9 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
     testing::InSequence seq;
 
     mock_invalidator_obj = MakeInvalidator(&mock_invalidator);
-    EXPECT_CALL(*mock_invalidator, Register(kInvalidationTopic, _)).Times(1);
+    EXPECT_CALL(*mock_invalidator,
+                Register(kInvalidationTopic, listener_type, _))
+        .Times(1);
 
     worker = CertProvisioningWorkerFactory::Get()->Deserialize(
         kCertScope, GetProfile(), &testing_pref_service_,
@@ -2492,27 +2630,30 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationSuccess) {
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
     EXPECT_CALL(*mock_invalidator, Unregister()).Times(1);
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kSucceeded))
-        .Times(1);
     worker->DoStep();
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kSucceeded);
   }
 }
 
 TEST_F(CertProvisioningWorkerDynamicTest, SerializationOnFailure) {
   const CertScope kCertScope = CertScope::kUser;
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      kCertScope, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, kCertScope, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   auto worker = CertProvisioningWorkerFactory::Get()->Create(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   PrefServiceObserver pref_observer(&testing_pref_service_,
                                     GetPrefNameForSerialization(kCertScope));
@@ -2544,6 +2685,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationOnFailure) {
             "cert_scope": 0,
             "invalidation_topic": "",
             "key_location": 1,
+            "process_id": "%s",
             "attempted_va_challenge": false,
             "attempted_proof_of_possession": false,
             "proof_of_possession_signature": "",
@@ -2551,7 +2693,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationOnFailure) {
             "state": 1
           }
         })",
-        kPublicKeyBase64));
+        process_id.c_str(), kPublicKeyBase64));
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
 
     EXPECT_START(
@@ -2560,32 +2702,34 @@ TEST_F(CertProvisioningWorkerDynamicTest, SerializationOnFailure) {
 
     pref_val = ParseJsonDict("{}");
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
-
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
   }
 
   worker->DoStep();
   FastForwardBy(base::Seconds(1));
 
   VerifyDeleteKeyCalledOnce(kCertScope);
+
+  EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+  EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+            CertProvisioningWorkerState::kFailed);
 }
 
 TEST_F(CertProvisioningWorkerDynamicTest, InformationalGetters) {
   const CertScope kCertScope = CertScope::kUser;
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      kCertScope, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, kCertScope, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   CertProvisioningWorkerDynamic worker(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
@@ -2617,10 +2761,6 @@ TEST_F(CertProvisioningWorkerDynamicTest, InformationalGetters) {
         GetNextInstruction(Eq(std::ref(provisioning_process)), /*callback=*/_),
         base::unexpected(BackendError(em::CertProvBackendError::CA_FAILURE)));
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kFailed))
-        .Times(1);
-
     worker.DoStep();
     FastForwardBy(base::Seconds(1));
 
@@ -2631,6 +2771,10 @@ TEST_F(CertProvisioningWorkerDynamicTest, InformationalGetters) {
               CertProvisioningWorkerState::kReadyForNextOperation);
     EXPECT_EQ(worker.GetCertProfile(), cert_profile);
     EXPECT_EQ(worker.GetPublicKey(), GetPublicKeyBin());
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kFailed);
   }
 }
 
@@ -2638,22 +2782,22 @@ TEST_F(CertProvisioningWorkerDynamicTest, CancelDeviceWorker) {
   base::HistogramTester histogram_tester;
 
   const CertScope kCertScope = CertScope::kDevice;
-  CertProfile cert_profile(kCertProfileId, kCertProfileName,
-                           kCertProfileVersion,
-                           /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
-                           ProtocolVersion::kDynamic);
+  const CertProfile cert_profile(
+      kCertProfileId, kCertProfileName, kCertProfileVersion,
+      /*is_va_enabled=*/true, kCertProfileRenewalPeriod,
+      ProtocolVersion::kDynamic);
+  const std::string process_id = GenerateCertProvisioningId();
   const CertProvisioningClient::ProvisioningProcess provisioning_process(
-      kCertScope, kCertProfileId, kCertProfileVersion, GetPublicKeyBin());
+      process_id, kCertScope, kCertProfileId, kCertProfileVersion,
+      GetPublicKeyBin());
 
   EXPECT_CALL(state_change_callback_observer_, StateChangeCallback)
       .Times(AtLeast(1));
   MockTpmChallengeKeySubtle* mock_tpm_challenge_key = PrepareTpmChallengeKey();
   auto worker = CertProvisioningWorkerFactory::Get()->Create(
-      kCertScope, GetProfile(), &testing_pref_service_, cert_profile,
-      &cert_provisioning_client_, MakeInvalidator(), GetStateChangeCallback(),
-      GetResultCallback());
-
-  EXPECT_CALL(callback_observer_, Callback).Times(0);
+      process_id, kCertScope, GetProfile(), &testing_pref_service_,
+      cert_profile, &cert_provisioning_client_, MakeInvalidator(),
+      GetStateChangeCallback(), GetResultCallback());
 
   PrefServiceObserver pref_observer(&testing_pref_service_,
                                     GetPrefNameForSerialization(kCertScope));
@@ -2684,6 +2828,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, CancelDeviceWorker) {
             "cert_scope": 1,
             "invalidation_topic": "",
             "key_location": 1,
+            "process_id": "%s",
             "attempted_va_challenge": false,
             "attempted_proof_of_possession": false,
             "proof_of_possession_signature": "",
@@ -2691,7 +2836,7 @@ TEST_F(CertProvisioningWorkerDynamicTest, CancelDeviceWorker) {
             "state": 1
           }
         })",
-        kPublicKeyBase64));
+        process_id.c_str(), kPublicKeyBase64));
     EXPECT_CALL(pref_observer, OnPrefValueUpdated(IsJson(pref_val))).Times(1);
 
     EXPECT_START_NO_OP(
@@ -2706,12 +2851,13 @@ TEST_F(CertProvisioningWorkerDynamicTest, CancelDeviceWorker) {
 
     worker->Stop(CertProvisioningWorkerState::kCanceled);
 
-    EXPECT_CALL(callback_observer_,
-                Callback(cert_profile, CertProvisioningWorkerState::kCanceled))
-        .Times(1);
     FastForwardBy(base::Seconds(1));
 
     VerifyDeleteKeyCalledOnce(kCertScope);
+
+    EXPECT_EQ(callback_observer_.Get<CertProfile>(), cert_profile);
+    EXPECT_EQ(callback_observer_.Get<CertProvisioningWorkerState>(),
+              CertProvisioningWorkerState::kCanceled);
   }
 
   histogram_tester.ExpectUniqueSample(

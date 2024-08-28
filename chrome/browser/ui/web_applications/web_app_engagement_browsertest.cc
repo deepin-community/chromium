@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/web_applications/web_app_metrics.h"
-
 #include <bitset>
 #include <vector>
 
@@ -22,7 +20,8 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
+#include "chrome/browser/ui/web_applications/web_app_metrics.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
@@ -59,6 +58,10 @@ enum HistogramIndex {
   kHistogramDefaultInstalled_InWindow,
   kHistogramUserInstalled_InTab,
   kHistogramUserInstalled_InWindow,
+  kHistogramUserInstalledDiy_InTab,
+  kHistogramUserInstalledDiy_InWindow,
+  kHistogramUserInstalledCrafted_InTab,
+  kHistogramUserInstalledCrafted_InWindow,
   kHistogramMoreThanThreeUserInstalledApps,
   kHistogramUpToThreeUserInstalledApps,
   kHistogramNoUserInstalledApps,
@@ -73,6 +76,10 @@ const char* kHistogramNames[] = {
     "WebApp.Engagement.DefaultInstalled.InWindow",
     "WebApp.Engagement.UserInstalled.InTab",
     "WebApp.Engagement.UserInstalled.InWindow",
+    "WebApp.Engagement.UserInstalled.Diy.InTab",
+    "WebApp.Engagement.UserInstalled.Diy.InWindow",
+    "WebApp.Engagement.UserInstalled.Crafted.InTab",
+    "WebApp.Engagement.UserInstalled.Crafted.InWindow",
     "WebApp.Engagement.MoreThanThreeUserInstalledApps",
     "WebApp.Engagement.UpToThreeUserInstalledApps",
     "WebApp.Engagement.NoUserInstalledApps"};
@@ -129,7 +136,7 @@ void ExpectLaunchCounts(const base::HistogramTester& tester,
 
 namespace web_app {
 
-class WebAppEngagementBrowserTest : public WebAppControllerBrowserTest {
+class WebAppEngagementBrowserTest : public WebAppBrowserTestBase {
  public:
   WebAppEngagementBrowserTest() = default;
   WebAppEngagementBrowserTest(const WebAppEngagementBrowserTest&) = delete;
@@ -199,8 +206,8 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppInWindow) {
 
   GURL example_url(
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
-  auto web_app_info = std::make_unique<WebAppInstallInfo>();
-  web_app_info->start_url = example_url;
+  auto web_app_info =
+      WebAppInstallInfo::CreateWithStartUrlForTesting(example_url);
   web_app_info->scope = example_url;
   web_app_info->user_display_mode = mojom::UserDisplayMode::kStandalone;
   webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
@@ -213,6 +220,41 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppInWindow) {
   Histograms histograms;
   histograms[kHistogramInWindow] = true;
   histograms[kHistogramUserInstalled_InWindow] = true;
+  histograms[kHistogramUserInstalledCrafted_InWindow] = true;
+  histograms[kHistogramUpToThreeUserInstalledApps] = true;
+
+  ExpectBucketCounts(tester, histograms,
+                     site_engagement::EngagementType::kWebappShortcutLaunch, 1);
+  ExpectBucketCounts(tester, histograms,
+                     site_engagement::EngagementType::kNavigation, 1);
+  ExpectTotalCounts(tester, ~histograms, 0);
+
+  TestEngagementEventsAfterLaunch(histograms, app_browser);
+  ExpectLaunchCounts(tester, /*windowLaunches=*/1, /*tabLaunches=*/0);
+}
+
+IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, DiyAppInWindow) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  base::HistogramTester tester;
+
+  GURL example_url(
+      embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
+  auto web_app_info =
+      WebAppInstallInfo::CreateWithStartUrlForTesting(example_url);
+  web_app_info->scope = example_url;
+  web_app_info->user_display_mode = mojom::UserDisplayMode::kStandalone;
+  web_app_info->is_diy_app = true;
+  webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
+
+  Browser* app_browser = LaunchWebAppBrowserAndWait(app_id);
+  NavigateViaLinkClickToURLAndWait(app_browser, example_url);
+
+  EXPECT_EQ(GetAppIdFromApplicationName(app_browser->app_name()), app_id);
+
+  Histograms histograms;
+  histograms[kHistogramInWindow] = true;
+  histograms[kHistogramUserInstalled_InWindow] = true;
+  histograms[kHistogramUserInstalledDiy_InWindow] = true;
   histograms[kHistogramUpToThreeUserInstalledApps] = true;
 
   ExpectBucketCounts(tester, histograms,
@@ -232,8 +274,8 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppInTab) {
   GURL example_url(
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
 
-  auto web_app_info = std::make_unique<WebAppInstallInfo>();
-  web_app_info->start_url = example_url;
+  auto web_app_info =
+      WebAppInstallInfo::CreateWithStartUrlForTesting(example_url);
   web_app_info->scope = example_url;
   web_app_info->user_display_mode = mojom::UserDisplayMode::kBrowser;
   webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
@@ -245,6 +287,43 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppInTab) {
   Histograms histograms;
   histograms[kHistogramInTab] = true;
   histograms[kHistogramUserInstalled_InTab] = true;
+  histograms[kHistogramUserInstalledCrafted_InTab] = true;
+  histograms[kHistogramUpToThreeUserInstalledApps] = true;
+
+  // Note: We explicitly do NOT expect engagement to be recorded in kNavigation.
+  // This is because the open-in-tab behavior only records the launch, and
+  // treats the navigation as a 'link' navigation, so it is not considered by
+  // the engagement service as a navigation. See the `IsEngagementNavigation`
+  // method.
+  ExpectBucketCounts(tester, histograms,
+                     site_engagement::EngagementType::kWebappShortcutLaunch, 1);
+  ExpectTotalCounts(tester, ~histograms, 0);
+  TestEngagementEventsAfterLaunch(histograms, browser);
+  ExpectLaunchCounts(tester, /*windowLaunches=*/0, /*tabLaunches=*/1);
+}
+
+IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, DiyAppInTab) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  base::HistogramTester tester;
+
+  GURL example_url(
+      embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
+
+  auto web_app_info =
+      WebAppInstallInfo::CreateWithStartUrlForTesting(example_url);
+  web_app_info->scope = example_url;
+  web_app_info->user_display_mode = mojom::UserDisplayMode::kBrowser;
+  web_app_info->is_diy_app = true;
+  webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
+
+  Browser* browser = LaunchBrowserForWebAppInTab(app_id);
+  EXPECT_FALSE(browser->app_controller());
+  NavigateViaLinkClickToURLAndWait(browser, example_url);
+
+  Histograms histograms;
+  histograms[kHistogramInTab] = true;
+  histograms[kHistogramUserInstalled_InTab] = true;
+  histograms[kHistogramUserInstalledDiy_InTab] = true;
   histograms[kHistogramUpToThreeUserInstalledApps] = true;
 
   // Note: We explicitly do NOT expect engagement to be recorded in kNavigation.
@@ -266,8 +345,8 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppWithoutScope) {
   GURL example_url(
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
 
-  auto web_app_info = std::make_unique<WebAppInstallInfo>();
-  web_app_info->start_url = example_url;
+  auto web_app_info =
+      WebAppInstallInfo::CreateWithStartUrlForTesting(example_url);
   // If app has no scope then UrlHandlers::GetUrlHandlers are empty. Therefore,
   // the app is counted as installed via the Create Shortcut button.
   web_app_info->scope = GURL();
@@ -283,6 +362,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppWithoutScope) {
   Histograms histograms;
   histograms[kHistogramInWindow] = true;
   histograms[kHistogramUserInstalled_InWindow] = true;
+  histograms[kHistogramUserInstalledCrafted_InWindow] = true;
   histograms[kHistogramUpToThreeUserInstalledApps] = true;
 
   ExpectBucketCounts(tester, histograms,
@@ -307,14 +387,14 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, TwoApps) {
 
   // Install two apps.
   {
-    auto web_app_info = std::make_unique<WebAppInstallInfo>();
-    web_app_info->start_url = example_url1;
+    auto web_app_info =
+        WebAppInstallInfo::CreateWithStartUrlForTesting(example_url1);
     web_app_info->scope = example_url1;
     app_id1 = InstallWebAppAndCountApps(std::move(web_app_info));
   }
   {
-    auto web_app_info = std::make_unique<WebAppInstallInfo>();
-    web_app_info->start_url = example_url2;
+    auto web_app_info =
+        WebAppInstallInfo::CreateWithStartUrlForTesting(example_url2);
     web_app_info->scope = example_url2;
     app_id2 = InstallWebAppAndCountApps(std::move(web_app_info));
   }
@@ -333,6 +413,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, TwoApps) {
   Histograms histograms;
   histograms[kHistogramInWindow] = true;
   histograms[kHistogramUserInstalled_InWindow] = true;
+  histograms[kHistogramUserInstalledCrafted_InWindow] = true;
   histograms[kHistogramUpToThreeUserInstalledApps] = true;
 
   ExpectBucketCounts(tester, histograms,
@@ -361,8 +442,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, ManyUserApps) {
   for (int i = 0; i < num_user_apps; ++i) {
     const GURL url = GetUrlForSuffix(base_url, i);
 
-    auto web_app_info = std::make_unique<WebAppInstallInfo>();
-    web_app_info->start_url = url;
+    auto web_app_info = WebAppInstallInfo::CreateWithStartUrlForTesting(url);
     web_app_info->scope = url;
     webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
     app_ids.push_back(app_id);
@@ -380,6 +460,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, ManyUserApps) {
   Histograms histograms;
   histograms[kHistogramInWindow] = true;
   histograms[kHistogramUserInstalled_InWindow] = true;
+  histograms[kHistogramUserInstalledCrafted_InWindow] = true;
   histograms[kHistogramMoreThanThreeUserInstalledApps] = true;
 
   ExpectBucketCounts(tester, histograms,
@@ -393,7 +474,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, ManyUserApps) {
                      /*tabLaunches=*/0);
 }
 
-// TODO(crbug.com/1401607): Flaky on Mac.
+// TODO(crbug.com/40884336): Flaky on Mac.
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_DefaultApp DISABLED_DefaultApp
 #else
@@ -440,8 +521,8 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, NavigateAwayFromAppTab) {
   const GURL outer_url =
       embedded_test_server()->GetURL("/banners/manifest_test_page.html");
 
-  auto web_app_info = std::make_unique<WebAppInstallInfo>();
-  web_app_info->start_url = start_url;
+  auto web_app_info =
+      WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
   web_app_info->scope = start_url;
   web_app_info->user_display_mode = mojom::UserDisplayMode::kBrowser;
   webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
@@ -454,6 +535,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, NavigateAwayFromAppTab) {
     Histograms histograms;
     histograms[kHistogramInTab] = true;
     histograms[kHistogramUserInstalled_InTab] = true;
+    histograms[kHistogramUserInstalledCrafted_InTab] = true;
     histograms[kHistogramUpToThreeUserInstalledApps] = true;
     TestEngagementEventsAfterLaunch(histograms, browser);
   }
@@ -541,7 +623,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, CommandLineWindowByUrl) {
   EXPECT_EQ(expected_tabs, app_browser->tab_strip_model()->count());
 }
 
-// TODO(crbug.com/1382269): Flaky on Mac.
+// TODO(crbug.com/40877225): Flaky on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_CommandLineWindowByAppId DISABLED_CommandLineWindowByAppId
 #else

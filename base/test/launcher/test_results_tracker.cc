@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/test/launcher/test_results_tracker.h"
 
 #include <stddef.h>
@@ -27,6 +32,7 @@
 #include "base/test/test_switches.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "third_party/icu/source/i18n/unicode/timezone.h"
 
 namespace base {
@@ -164,7 +170,7 @@ bool TestResultsTracker::Init(const CommandLine& command_line) {
 
   // Prevent initializing twice.
   if (out_) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return false;
   }
 
@@ -595,6 +601,7 @@ bool TestResultsTracker::SaveSummaryAsJSON(
     return false;
   }
 
+#if BUILDFLAG(IS_FUCHSIA)
   // File::Flush() will call fsync(). This is important on Fuchsia to ensure
   // that the file is written to the disk - the system running under qemu will
   // shutdown shortly after the test completes. On Fuchsia fsync() times out
@@ -613,6 +620,9 @@ bool TestResultsTracker::SaveSummaryAsJSON(
   }
 
   return false;
+#else
+  return true;
+#endif
 }
 
 TestResultsTracker::TestStatusMap

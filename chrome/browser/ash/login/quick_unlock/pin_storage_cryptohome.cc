@@ -20,7 +20,6 @@
 #include "chromeos/ash/components/cryptohome/auth_factor.h"
 #include "chromeos/ash/components/cryptohome/common_types.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
-#include "chromeos/ash/components/cryptohome/cryptohome_util.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/cryptohome/userdataauth_util.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
@@ -270,7 +269,8 @@ void PinStorageCryptohome::TryAuthenticate(
       << "Webauth dialog uses direct interaction with cryptohome";
 
   if (!user_context->GetAuthSessionId().empty()) {
-    NOTREACHED() << "TryAuthenticate called with existing auth session";
+    NOTREACHED_IN_MIGRATION()
+        << "TryAuthenticate called with existing auth session";
     user_context->ResetAuthSessionIds();
   }
 
@@ -302,7 +302,7 @@ void PinStorageCryptohome::OnAuthFactorsEdit(
     std::unique_ptr<UserContext> user_context,
     std::optional<AuthenticationError> error) {
   if (error.has_value()) {
-    LOG(ERROR) << "Failed to edit pin, code " << error->get_cryptohome_code();
+    LOG(ERROR) << "Failed to edit pin, code " << error->get_cryptohome_error();
     std::move(callback).Run(std::move(user_context), std::move(error));
     return;
   }

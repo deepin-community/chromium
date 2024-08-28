@@ -33,6 +33,7 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include <optional>
+
 #include "chromecast/common/media/cast_media_drm_bridge_client.h"
 #include "components/cdm/common/android_cdm_registration.h"
 #endif
@@ -50,7 +51,7 @@
 #if BUILDFLAG(BUNDLE_WIDEVINE_CDM) && BUILDFLAG(IS_LINUX)
 #include "base/no_destructor.h"
 #include "components/cdm/common/cdm_manifest.h"
-#include "media/cdm/cdm_capability.h"
+#include "media/base/cdm_capability.h"
 #include "third_party/widevine/cdm/widevine_cdm_common.h"  // nogncheck
 // component updated CDM on all desktop platforms and remove this.
 // This file is In SHARED_INTERMEDIATE_DIR.
@@ -79,7 +80,7 @@ std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
 // directory and create a CdmInfo. If that is successful, return the CdmInfo. If
 // not, return nullptr.
 // Copied from chrome_content_client.cc
-// TODO(crbug.com/1174571): move the functions to a common file.
+// TODO(crbug.com/40746872): move the functions to a common file.
 std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
     const base::FilePath& cdm_base_path) {
   // Library should be inside a platform specific directory.

@@ -8,6 +8,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/check_op.h"
 #include "base/command_line.h"
@@ -850,9 +851,9 @@ std::u16string GetStringFUTF16(int message_id,
                                const std::vector<std::u16string>& replacements,
                                std::vector<size_t>* offsets) {
   // TODO(tc): We could save a string copy if we got the raw string as
-  // a StringPiece and were able to call ReplaceStringPlaceholders with
-  // a StringPiece format string and std::u16string substitution strings.  In
-  // practice, the strings should be relatively short.
+  // a std::string_view and were able to call ReplaceStringPlaceholders with
+  // a std::string_view format string and std::u16string substitution strings.
+  // In practice, the strings should be relatively short.
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   const std::u16string& format_string = rb.GetLocalizedString(message_id);
   return FormatString(format_string, replacements, offsets);
@@ -1038,13 +1039,22 @@ void GetAcceptLanguages(std::vector<std::string>* locale_codes) {
   }
 }
 
-bool IsLanguageAccepted(const std::string& display_locale,
-                        const std::string& locale) {
-  if (std::binary_search(std::begin(kAcceptLanguageList),
-                         std::end(kAcceptLanguageList), locale)) {
-    return l10n_util::IsLocaleNameTranslated(locale.c_str(), display_locale);
-  }
-  return false;
+bool IsPossibleAcceptLanguage(std::string_view locale) {
+  return base::ranges::binary_search(kAcceptLanguageList, locale);
+}
+
+bool IsAcceptLanguageDisplayable(const std::string& display_locale,
+                                 const std::string& locale) {
+  return IsPossibleAcceptLanguage(locale) &&
+         l10n_util::IsLocaleNameTranslated(locale.c_str(), display_locale);
+}
+
+std::vector<std::string> KeepAcceptedLanguages(
+    base::span<const std::string> languages) {
+  std::vector<std::string> filtered_languages;
+  base::ranges::copy_if(languages, std::back_inserter(filtered_languages),
+                        IsPossibleAcceptLanguage);
+  return filtered_languages;
 }
 
 int GetLocalizedContentsWidthInPixels(int pixel_resource_id) {

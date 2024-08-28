@@ -91,8 +91,7 @@ void TestVDAVideoDecoder::Initialize(const VideoDecoderConfig& config,
 
   // Create decoder factory.
   std::unique_ptr<GpuVideoDecodeAcceleratorFactory> decoder_factory;
-  GpuVideoDecodeGLClient gl_client;
-  decoder_factory = GpuVideoDecodeAcceleratorFactory::Create(gl_client);
+  decoder_factory = GpuVideoDecodeAcceleratorFactory::Create();
 
   if (!decoder_factory) {
     ASSERT_TRUE(decoder_) << "Failed to create VideoDecodeAccelerator factory";
@@ -117,8 +116,9 @@ void TestVDAVideoDecoder::Initialize(const VideoDecoderConfig& config,
     DVLOGF(2) << "Use VdVideoDecodeAccelerator";
     vda_config.is_deferred_initialization_allowed = true;
     decoder_ = media::VdVideoDecodeAccelerator::Create(
-        base::BindRepeating(&media::VideoDecoderPipeline::Create), this,
-        vda_config, false, base::SequencedTaskRunner::GetCurrentDefault());
+        base::BindRepeating(
+            &media::VideoDecoderPipeline::CreateForVDAAdapterForARC),
+        this, vda_config, base::SequencedTaskRunner::GetCurrentDefault());
 #endif  // BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
   } else {
     DVLOGF(2) << "Use original VDA";
@@ -191,8 +191,7 @@ int TestVDAVideoDecoder::GetMaxDecodeRequests() const {
 void TestVDAVideoDecoder::ProvidePictureBuffers(
     uint32_t requested_num_of_buffers,
     VideoPixelFormat format,
-    const gfx::Size& dimensions,
-    uint32_t texture_target) {
+    const gfx::Size& dimensions) {
   NOTIMPLEMENTED() << "VDA must call ProvidePictureBuffersWithVisibleRect()";
 }
 
@@ -200,8 +199,7 @@ void TestVDAVideoDecoder::ProvidePictureBuffersWithVisibleRect(
     uint32_t requested_num_of_buffers,
     VideoPixelFormat format,
     const gfx::Size& dimensions,
-    const gfx::Rect& visible_rect,
-    uint32_t texture_target) {
+    const gfx::Rect& visible_rect) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(vda_wrapper_sequence_checker_);
   DVLOGF(4) << "Requested " << requested_num_of_buffers
             << " picture buffers with size " << dimensions.width() << "x"
@@ -242,7 +240,7 @@ void TestVDAVideoDecoder::ProvidePictureBuffersWithVisibleRect(
     handle = CreateGpuMemoryBufferHandle(video_frame.get());
     DCHECK(!handle.is_null());
 #else
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
 #endif  // BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
 
     ASSERT_TRUE(!handle.is_null()) << "Failed to create GPU memory handle";
@@ -279,23 +277,11 @@ void TestVDAVideoDecoder::PictureReady(const Picture& picture) {
   // Wrap the video frame in another frame that calls ReusePictureBufferTask()
   // upon destruction. When the renderer and video frame processors are done
   // using the video frame, the associated picture buffer will automatically be
-  // flagged for reuse. WrapVideoFrame() is not supported for texture-based
-  // video frames (see http://crbug/362521) so we work around this by creating a
-  // new video frame using the same mailbox.
+  // flagged for reuse.
   if (!picture.visible_rect().IsEmpty()) {
-    if (!video_frame->HasTextures()) {
-      wrapped_video_frame = VideoFrame::WrapVideoFrame(
-          video_frame, video_frame->format(), picture.visible_rect(),
-          picture.visible_rect().size());
-    } else {
-      gpu::MailboxHolder mailbox_holders[media::VideoFrame::kMaxPlanes];
-      mailbox_holders[0] = video_frame->mailbox_holder(0);
-      wrapped_video_frame = VideoFrame::WrapNativeTextures(
-          video_frame->format(), mailbox_holders,
-          VideoFrame::ReleaseMailboxCB(), video_frame->coded_size(),
-          picture.visible_rect(), picture.visible_rect().size(),
-          video_frame->timestamp());
-    }
+    wrapped_video_frame = VideoFrame::WrapVideoFrame(
+        video_frame, video_frame->format(), picture.visible_rect(),
+        picture.visible_rect().size());
   } else {
     // This occurs in bitstream buffer in webrtc scenario. WrapNativeTexture()
     // fails if visible_rect() is empty. Although the client of

@@ -18,12 +18,12 @@
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
-#include "chrome/browser/keyboard_accessory/android/manual_filling_utils.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_data.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
-#include "chrome/browser/password_manager/android/all_passwords_bottom_sheet_controller.h"
+#include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
+#include "chrome/browser/keyboard_accessory/android/manual_filling_utils.h"
 #include "chrome/browser/keyboard_accessory/android/password_accessory_controller.h"
+#include "chrome/browser/password_manager/android/all_passwords_bottom_sheet_controller.h"
 #include "chrome/browser/password_manager/android/password_generation_controller.h"
 #include "chrome/browser/password_manager/android/password_manager_launcher_android.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
@@ -38,7 +38,6 @@
 #include "components/autofill/core/common/password_generation_util.h"
 #include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
-#include "components/password_manager/content/browser/content_password_manager_driver_factory.h"
 #include "components/password_manager/core/browser/credential_cache.h"
 #include "components/password_manager/core/browser/origin_credential_store.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
@@ -110,11 +109,11 @@ std::u16string GetTitle(bool has_suggestions, const url::Origin& origin) {
 
 password_manager::PasswordManagerDriver* GetPasswordManagerDriver(
     content::WebContents* web_contents) {
-  password_manager::ContentPasswordManagerDriverFactory* factory =
-      password_manager::ContentPasswordManagerDriverFactory::FromWebContents(
-          web_contents);
-  content::RenderFrameHost* rfh = web_contents->GetFocusedFrame();
-  return factory && rfh ? factory->GetDriverForFrame(rfh) : nullptr;
+  if (content::RenderFrameHost* rfh = web_contents->GetFocusedFrame()) {
+    return password_manager::ContentPasswordManagerDriver::
+        GetForRenderFrameHost(rfh);
+  }
+  return nullptr;  // No driver without focused frame!
 }
 
 ShouldShowAction ShouldShowCredManReentryAction(
@@ -298,7 +297,8 @@ void PasswordAccessoryControllerImpl::OnPasskeySelected(
           driver_supplier_.Run((&GetWebContents()))) {
     if (password_manager::WebAuthnCredentialsDelegate* credentials_delegate =
             password_client_->GetWebAuthnCredentialsDelegateForDriver(driver)) {
-      credentials_delegate->SelectPasskey(base::Base64Encode(passkey_id));
+      credentials_delegate->SelectPasskey(base::Base64Encode(passkey_id),
+                                          base::DoNothing());
     }
   }
 }
@@ -397,8 +397,9 @@ void PasswordAccessoryControllerImpl::OnOptionSelected(
                 WebAuthnCredManDelegate::RequestPasswords(false));
             return;
           default:
-            NOTREACHED() << "WebAuthnCredManDelegate should not be used if "
-                            "CredManMode is kNotEnabled!";
+            NOTREACHED_IN_MIGRATION()
+                << "WebAuthnCredManDelegate should not be used if "
+                   "CredManMode is kNotEnabled!";
         }
       }
       return;
@@ -415,8 +416,8 @@ void PasswordAccessoryControllerImpl::OnOptionSelected(
       }
       return;
     default:
-      NOTREACHED() << "Unhandled selected action: "
-                   << static_cast<int>(selected_action);
+      NOTREACHED_IN_MIGRATION()
+          << "Unhandled selected action: " << static_cast<int>(selected_action);
   }
 }
 
@@ -427,8 +428,8 @@ void PasswordAccessoryControllerImpl::OnToggleChanged(
     ChangeCurrentOriginSavePasswordsStatus(enabled);
     return;
   }
-  NOTREACHED() << "Unhandled selected action: "
-               << static_cast<int>(toggled_action);
+  NOTREACHED_IN_MIGRATION()
+      << "Unhandled selected action: " << static_cast<int>(toggled_action);
 }
 
 void PasswordAccessoryControllerImpl::RefreshSuggestionsForField(
@@ -475,7 +476,7 @@ void PasswordAccessoryControllerImpl::RefreshSuggestionsForField(
     sheet_provides_value = true;
   }
 
-  DCHECK(source_observer_);
+  CHECK(source_observer_);
   // The all passwords sheet could cover this but if it's still loading, use
   // this data as the next closest proxy to minimize delayed updates UI.
   sheet_provides_value |=
@@ -563,8 +564,18 @@ void PasswordAccessoryControllerImpl::ChangeCurrentOriginSavePasswordsStatus(
   password_manager::PasswordFormDigest form_digest(
       password_manager::PasswordForm::Scheme::kHtml,
       password_manager::GetSignonRealm(origin_as_gurl), origin_as_gurl);
-  password_manager::PasswordStoreInterface* store =
-      password_client_->GetProfilePasswordStore();
+
+  password_manager::PasswordStoreInterface* store;
+  if (password_client_->GetPasswordFeatureManager()
+          ->IsOptedInForAccountStorage() &&
+      password_client_->GetPasswordFeatureManager()
+              ->GetDefaultPasswordStore() ==
+          password_manager::PasswordForm::Store::kAccountStore) {
+    store = password_client_->GetAccountPasswordStore();
+  } else {
+    store = password_client_->GetProfilePasswordStore();
+  }
+
   if (saving_enabled) {
     store->Unblocklist(form_digest);
   } else {
@@ -594,10 +605,6 @@ bool PasswordAccessoryControllerImpl::AppearsInSuggestions(
 
 bool PasswordAccessoryControllerImpl::ShouldShowRecoveryToggle(
     const url::Origin& origin) const {
-  if (!base::FeatureList::IsEnabled(
-          password_manager::features::kRecoverFromNeverSaveAndroid)) {
-    return false;
-  }
   return password_client_->IsSavingAndFillingEnabled(origin.GetURL());
 }
 
@@ -628,7 +635,7 @@ void PasswordAccessoryControllerImpl::ShowAllPasswords() {
 
   // AllPasswordsBottomSheetController assumes that the focused frame has a live
   // RenderFrame so that it can use the password manager driver.
-  // TODO(https://crbug.com/1286779): Investigate if focused frame really needs
+  // TODO(crbug.com/40815830): Investigate if focused frame really needs
   // to return RenderFrameHosts with non-live RenderFrames.
   if (!GetWebContents().GetFocusedFrame()->IsRenderFrameLive()) {
     return;
@@ -638,7 +645,8 @@ void PasswordAccessoryControllerImpl::ShowAllPasswords() {
   // |AllPasswordsSheetDismissed| we are sure that this controller is alive as
   // it owns |AllPasswordsBottomSheetController| from which the method is
   // called.
-  // TODO(crbug.com/1104132): Update the controller with the last focused field.
+  // TODO(crbug.com/40139552): Update the controller with the last focused
+  // field.
   all_passords_bottom_sheet_controller_ =
       std::make_unique<AllPasswordsBottomSheetController>(
           &GetWebContents(), password_client_->GetProfilePasswordStore(),
@@ -657,8 +665,7 @@ bool PasswordAccessoryControllerImpl::ShouldTriggerBiometricReauth(
     return false;
   }
 
-  return password_manager_util::CanUseBiometricAuth(authenticator_.get(),
-                                                    password_client_);
+  return password_client_->IsReauthBeforeFillingRequired(authenticator_.get());
 }
 
 void PasswordAccessoryControllerImpl::OnReauthCompleted(
@@ -675,8 +682,8 @@ void PasswordAccessoryControllerImpl::FillSelection(
     const AccessorySheetField& selection) {
   if (!AppearsInSuggestions(selection.display_text(), selection.is_obfuscated(),
                             GetFocusedFrameOrigin())) {
-    NOTREACHED() << "Tried to fill '" << selection.display_text() << "' into "
-                 << GetFocusedFrameOrigin();
+    NOTREACHED_IN_MIGRATION() << "Tried to fill '" << selection.display_text()
+                              << "' into " << GetFocusedFrameOrigin();
     return;  // Never fill across different origins!
   }
   password_manager::PasswordManagerDriver* driver =

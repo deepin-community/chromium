@@ -52,7 +52,7 @@ scoped_refptr<base::SingleThreadTaskRunner> GetTaskRunnerForAndroidMainThread(
       traits = {base::TaskPriority::USER_BLOCKING};
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return g_browser_task_executor->GetUIThreadTaskRunner(traits);
 }
@@ -76,7 +76,7 @@ BaseBrowserTaskExecutor::GetTaskRunner(BrowserThread::ID identifier,
     case BrowserThread::IO:
       return browser_io_thread_handle_->GetBrowserTaskRunner(queue_type);
     case BrowserThread::ID_COUNT:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return nullptr;
 }
@@ -243,7 +243,7 @@ void BrowserTaskExecutor::RunAllPendingTasksOnThreadForTesting(
       break;
     }
     case BrowserThread::ID_COUNT:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   run_loop.Run();
@@ -290,10 +290,10 @@ std::unique_ptr<BrowserProcessIOThread> BrowserTaskExecutor::CreateIOThread() {
   base::Thread::Options options;
   options.message_pump_type = base::MessagePumpType::IO;
   options.delegate = std::move(browser_io_thread_delegate);
-// TODO(1329208): Align Win ThreadType with other platforms. The platform
-// discrepancy stems from organic evolution of the thread priorities on each
-// platform and while it might make sense not to bump the priority of the IO
-// thread per Windows' priority boosts capabilities on MessagePumpForIO, this
+// TODO(crbug.com/40226692): Align Win ThreadType with other platforms. The
+// platform discrepancy stems from organic evolution of the thread priorities on
+// each platform and while it might make sense not to bump the priority of the
+// IO thread per Windows' priority boosts capabilities on MessagePumpForIO, this
 // should at least be aligned with what platform_thread_win.cc does for
 // ThreadType::kDisplayCritical (IO pumps in other processes) and it currently
 // does not.

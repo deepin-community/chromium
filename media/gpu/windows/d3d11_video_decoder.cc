@@ -4,7 +4,6 @@
 
 #include "media/gpu/windows/d3d11_video_decoder.h"
 
-#include <d3d11_4.h>
 #include <memory>
 #include <utility>
 
@@ -42,6 +41,7 @@
 #include "media/gpu/windows/d3d12_video_decoder_wrapper.h"
 #include "media/gpu/windows/supported_profile_helpers.h"
 #include "media/media_buildflags.h"
+#include "ui/gfx/color_space.h"
 #include "ui/gfx/hdr_metadata.h"
 #include "ui/gl/gl_angle_util_win.h"
 #include "ui/gl/gl_switches.h"
@@ -136,8 +136,7 @@ D3D11VideoDecoder::D3D11VideoDecoder(
       system_hdr_enabled_(system_hdr_enabled),
       use_shared_handle_(
           base::FeatureList::IsEnabled(kD3D12VideoDecoder) ||
-          base::FeatureList::IsEnabled(kD3D11VideoDecoderUseSharedHandle) ||
-          gpu_preferences.gr_context_type != gpu::GrContextType::kGL) {
+          base::FeatureList::IsEnabled(kD3D11VideoDecoderUseSharedHandle)) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(media_log_);
 }
@@ -208,7 +207,8 @@ bool D3D11VideoDecoder::ResetD3DVideoDecoder() {
                  config_.profile() == HEVCPROFILE_MAIN10 ||
                  (config_.color_space_info().GuessGfxColorSpace().IsHDR() &&
                   config_.codec() != VideoCodec::kH264 &&
-                  config_.profile() != HEVCPROFILE_MAIN)
+                  config_.profile() != HEVCPROFILE_MAIN &&
+                  config_.profile() != HEVCPROFILE_MAIN_STILL_PICTURE)
              ? 10
              : 8);
   }
@@ -271,18 +271,17 @@ D3D11VideoDecoder::CreateD3DVideoDecoderWrapper(
   std::unique_ptr<D3DVideoDecoderWrapper> video_decoder_wrapper;
   if (base::FeatureList::IsEnabled(kD3D12VideoDecoder)) {
     MEDIA_LOG(INFO, media_log_) << "D3D11VideoDecoder is using D3D12 backend";
-    Microsoft::WRL::ComPtr<IUnknown> d3d_device =
-        get_d3d_device_cb_.Run(D3DVersion::kD3D12);
+    ComUnknown d3d_device = get_d3d_device_cb_.Run(D3DVersion::kD3D12);
     if (!d3d_device) {
       NotifyError({D3D11StatusCode::kUnsupportedFeatureLevel,
                    "Cannot create D3D12Device"});
       return nullptr;
     }
 
-    Microsoft::WRL::ComPtr<ID3D12Device> device;
+    ComD3D12Device device;
     CHECK_EQ(d3d_device.As(&device), S_OK);
 
-    Microsoft::WRL::ComPtr<ID3D12VideoDevice> video_device;
+    ComD3D12VideoDevice video_device;
     HRESULT hr = device.As(&video_device);
     if (FAILED(hr)) {
       NotifyError({D3D11StatusCode::kFailedToGetVideoDevice,
@@ -382,8 +381,7 @@ void D3D11VideoDecoder::Initialize(const VideoDecoderConfig& config,
   // TODO(liberato): This isn't allowed off the main thread, since the callback
   // does who-knows-what.  Either we should be given the angle device, or we
   // should thread-hop to get it.
-  Microsoft::WRL::ComPtr<IUnknown> d3d_device =
-      get_d3d_device_cb_.Run(D3DVersion::kD3D11);
+  ComUnknown d3d_device = get_d3d_device_cb_.Run(D3DVersion::kD3D11);
   if (!d3d_device) {
     // This happens if, for example, if chrome is configured to use
     // D3D9 for ANGLE.
@@ -813,7 +811,8 @@ void D3D11VideoDecoder::CreatePictureBuffers() {
 
     base::OnceCallback<void(scoped_refptr<media::D3D11PictureBuffer>)>
         picture_buffer_gpu_resource_init_done_cb = base::DoNothing();
-    if (base::FeatureList::IsEnabled(kD3D11VideoDecoderUseSharedHandle)) {
+    if (base::FeatureList::IsEnabled(kD3D11VideoDecoderUseSharedHandle) ||
+        base::FeatureList::IsEnabled(kUseClientSharedImageForD3D11Video)) {
       // WebGPU requires interop on the picture buffer to achieve zero copy.
       // This requires a picture buffer to produce a shared image representation
       // during initialization. Add picture buffer in_client_use count to idle
@@ -891,7 +890,7 @@ bool D3D11VideoDecoder::OutputResult(const CodecPicture* picture,
   if (visible_rect.IsEmpty())
     visible_rect = config_.visible_rect();
 
-  // TODO(https://crbug.com/843150): Use aspect ratio from decoder (SPS) if
+  // TODO(crbug.com/41389060): Use aspect ratio from decoder (SPS) if
   // the config's aspect ratio isn't valid.
   gfx::Size natural_size = config_.aspect_ratio().GetNaturalSize(visible_rect);
 
@@ -903,19 +902,34 @@ bool D3D11VideoDecoder::OutputResult(const CodecPicture* picture,
     picture_color_space = config_.color_space_info().ToGfxColorSpace();
   }
 
-  MailboxHolderArray mailbox_holders;
+  media::ClientSharedImageOrMailboxHolder shared_image;
   gfx::ColorSpace output_color_space;
   D3D11Status result = picture_buffer->ProcessTexture(
-      picture_color_space, &mailbox_holders, &output_color_space);
+      picture_color_space, shared_image, &output_color_space);
   if (!result.is_ok()) {
     NotifyError(std::move(result).AddHere());
     return false;
   }
 
-  scoped_refptr<VideoFrame> frame = VideoFrame::WrapNativeTextures(
-      texture_selector_->PixelFormat(), mailbox_holders,
-      VideoFrame::ReleaseMailboxCB(), picture_buffer->size(), visible_rect,
-      natural_size, timestamp);
+  scoped_refptr<VideoFrame> frame;
+  if (absl::holds_alternative<scoped_refptr<gpu::ClientSharedImage>>(
+          shared_image)) {
+    scoped_refptr<gpu::ClientSharedImage> client_shared_image =
+        absl::get<scoped_refptr<gpu::ClientSharedImage>>(
+            std::move(shared_image));
+    frame = VideoFrame::WrapSharedImage(
+        texture_selector_->PixelFormat(), client_shared_image,
+        client_shared_image->creation_sync_token(), GL_TEXTURE_EXTERNAL_OES,
+        VideoFrame::ReleaseMailboxCB(), picture_buffer->size(), visible_rect,
+        natural_size, timestamp);
+  } else {
+    gpu::MailboxHolder mailbox_holders[VideoFrame::kMaxPlanes] = {
+        absl::get<gpu::MailboxHolder>(std::move(shared_image))};
+    frame = VideoFrame::WrapNativeTextures(
+        texture_selector_->PixelFormat(), mailbox_holders,
+        VideoFrame::ReleaseMailboxCB(), picture_buffer->size(), visible_rect,
+        natural_size, timestamp);
+  }
 
   if (!frame) {
     // This can happen if, somehow, we get an unsupported combination of
@@ -942,6 +956,16 @@ bool D3D11VideoDecoder::OutputResult(const CodecPicture* picture,
   // the finch flag is enabled.  We may not choose to set ALLOW_OVERLAY if the
   // flag is off, however.
   frame->metadata().allow_overlay = true;
+  // The swapchain presenter currently only supports NV12 and P010 overlay,
+  // with BGRA only as fallback when DWM continuously fails to overlay submitted
+  // video. As a result, we should not allow overlay for non-NV12/P010 formats
+  // which may cause chroma downsampling when blitting into the back buffer.
+  // See https://crbugs.com/331679628 for more details.
+  if (!config_.is_encrypted()) {
+    frame->metadata().allow_overlay =
+        texture_selector_->OutputDXGIFormat() == DXGI_FORMAT_P010 ||
+        texture_selector_->OutputDXGIFormat() == DXGI_FORMAT_NV12;
+  }
   frame->metadata().power_efficient = true;
 
   frame->set_color_space(output_color_space);
@@ -952,10 +976,8 @@ bool D3D11VideoDecoder::OutputResult(const CodecPicture* picture,
                                                     : config_.hdr_metadata());
   }
 
-  if (IsMultiPlaneFormatForHardwareVideoEnabled()) {
-    frame->set_shared_image_format_type(
-        SharedImageFormatType::kSharedImageFormat);
-  }
+  frame->set_shared_image_format_type(
+      SharedImageFormatType::kSharedImageFormat);
 
   frame->metadata().is_webgpu_compatible = use_shared_handle_;
 
@@ -1097,7 +1119,7 @@ D3D11VideoDecoder::GetSupportedVideoDecoderConfigs(
     if (!d3d_device) {
       return {};
     }
-    Microsoft::WRL::ComPtr<ID3D12Device> d3d12_device;
+    ComD3D12Device d3d12_device;
     CHECK_EQ(d3d_device.As(&d3d12_device), S_OK);
 
     supported_resolutions =

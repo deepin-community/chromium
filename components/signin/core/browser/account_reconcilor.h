@@ -21,6 +21,7 @@
 #include "components/content_settings/core/browser/content_settings_observer.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/signin/core/browser/account_reconcilor_delegate.h"
 #include "components/signin/core/browser/account_reconcilor_throttler.h"
 #include "components/signin/core/browser/signin_header_helper.h"
@@ -32,6 +33,8 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "components/account_manager_core/account_manager_facade.h"
 #endif
+
+class PrefRegistrySimple;
 
 namespace signin {
 class AccountReconcilorDelegate;
@@ -126,6 +129,8 @@ class AccountReconcilor
   AccountReconcilor& operator=(const AccountReconcilor&) = delete;
 
   ~AccountReconcilor() override;
+
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
   // Initializes the account reconcilor. Should be called once after
   // construction.
@@ -309,6 +314,10 @@ class AccountReconcilor
                            TableRowTestMultilogin);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorTest, ReconcileAfterShutdown);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorTest, UnlockAfterShutdown);
+#if BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS_LACROS)
+  FRIEND_TEST_ALL_PREFIXES(AccountReconcilorTest,
+                           OnAccountsInCookieUpdatedLogoutInProgress);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(IS_CHROMEOS_LACROS)
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorThrottlerTest, RefillOneRequest);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorThrottlerTest, RefillFiveRequests);
   FRIEND_TEST_ALL_PREFIXES(AccountReconcilorThrottlerTest,
@@ -402,11 +411,15 @@ class AccountReconcilor
       ContentSettingsTypeSet content_type_set) override;
 
   // Overridden from signin::IdentityManager::Observer.
+  void OnPrimaryAccountChanged(
+      const signin::PrimaryAccountChangeEvent& event_details) override;
   void OnEndBatchOfRefreshTokenStateChanges() override;
   void OnRefreshTokensLoaded() override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
-      const GoogleServiceAuthError& error) override;
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
   void OnAccountsInCookieUpdated(
       const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
       const GoogleServiceAuthError& error) override;
@@ -465,6 +478,10 @@ class AccountReconcilor
 
   // The SigninClient associated with this reconcilor.
   raw_ptr<SigninClient> client_;
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  PrefChangeRegistrar pref_observer_;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 #if BUILDFLAG(IS_CHROMEOS)
   // On Ash, this is a pointer to `AccountManagerFacadeImpl`.

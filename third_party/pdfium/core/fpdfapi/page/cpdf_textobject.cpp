@@ -10,9 +10,10 @@
 
 #include "core/fpdfapi/font/cpdf_cidfont.h"
 #include "core/fpdfapi/font/cpdf_font.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/span.h"
-#include "third_party/base/check.h"
+#include "core/fxcrt/span_util.h"
 
 #define ISLATINWORD(u) (u != 0x20 && u <= 0x28FF)
 
@@ -193,23 +194,23 @@ void CPDF_TextObject::SetTextMatrix(const CFX_Matrix& matrix) {
   CalcPositionDataInternal(GetFont());
 }
 
-void CPDF_TextObject::SetSegments(const ByteString* pStrs,
-                                  const std::vector<float>& kernings,
-                                  size_t nSegs) {
+void CPDF_TextObject::SetSegments(pdfium::span<const ByteString> strings,
+                                  pdfium::span<const float> kernings) {
+  size_t nSegs = strings.size();
   CHECK(nSegs);
   m_CharCodes.clear();
   m_CharPos.clear();
   RetainPtr<CPDF_Font> pFont = GetFont();
   size_t nChars = nSegs - 1;
-  for (size_t i = 0; i < nSegs; ++i)
-    nChars += pFont->CountChar(pStrs[i].AsStringView());
-
+  for (const auto& str : strings) {
+    nChars += pFont->CountChar(str.AsStringView());
+  }
   CHECK(nChars);
   m_CharCodes.resize(nChars);
   m_CharPos.resize(nChars - 1);
   size_t index = 0;
   for (size_t i = 0; i < nSegs; ++i) {
-    ByteStringView segment = pStrs[i].AsStringView();
+    ByteStringView segment = strings[i].AsStringView();
     size_t offset = 0;
     while (offset < segment.GetLength()) {
       DCHECK(index < m_CharCodes.size());
@@ -223,7 +224,7 @@ void CPDF_TextObject::SetSegments(const ByteString* pStrs,
 }
 
 void CPDF_TextObject::SetText(const ByteString& str) {
-  SetSegments(&str, std::vector<float>(), 1);
+  SetSegments(pdfium::span_from_ref(str), pdfium::span<float>());
   CalcPositionDataInternal(GetFont());
   SetDirty(true);
 }

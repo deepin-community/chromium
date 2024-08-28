@@ -65,7 +65,7 @@
         on-settings-boolean-control-change="onSpellCheckToggleChange_">
     </settings-toggle-button>
 <if expr="_google_chrome or not is_macosx">
-    <iron-collapse id="spellCheckCollapse"
+    <cr-collapse id="spellCheckCollapse"
         opened="[[prefs.browser.enable_spellchecking.value]]">
 <if expr="_google_chrome">
       <div class="cr-row continuation spell-check-radio-group">
@@ -117,7 +117,7 @@
                       item.downloadDictionaryFailureCount, 0)]]">
                 $i18n{retry}
               </cr-button>
-              <template is="dom-if" if="[[!item.isManaged]]">
+              <template is="dom-if" if="[[!item.isManaged]]" restamp>
                 <cr-toggle on-change="onSpellCheckLanguageChange_"
                     disabled="[[!item.language.supportsSpellcheck]]"
                     checked="[[item.spellCheckEnabled]]"
@@ -126,7 +126,7 @@
                         item.downloadDictionaryFailureCount, 0)]]">
                 </cr-toggle>
               </template>
-              <template is="dom-if" if="[[item.isManaged]]">
+              <template is="dom-if" if="[[item.isManaged]]" restamp>
                 <cr-policy-pref-indicator
                     pref="[[getIndicatorPrefForManagedSpellcheckLanguage_(
                         item.spellCheckEnabled)]]"
@@ -149,7 +149,7 @@
           role-description="$i18n{subpageArrowRoleDescription}">
       </cr-link-row>
 </if> <!-- not is_macosx -->
-    </iron-collapse>
+    </cr-collapse>
 </if> <!-- _google_chrome or not is_macosx -->
   </div>
 <if expr="not is_macosx">

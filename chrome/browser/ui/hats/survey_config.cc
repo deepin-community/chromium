@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "survey_config.h"
+
 #include <optional>
 
 #include "base/feature_list.h"
@@ -12,6 +13,7 @@
 #include "components/permissions/permission_hats_trigger_helper.h"
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/download/download_warning_desktop_hats_utils.h"
 #include "chrome/common/chrome_features.h"
 #include "components/password_manager/core/browser/features/password_features.h"  // nogncheck
 #include "components/performance_manager/public/features.h"         // nogncheck
@@ -26,8 +28,24 @@
 constexpr char kHatsSurveyTriggerAutofillAddress[] = "autofill-address";
 constexpr char kHatsSurveyTriggerAutofillAddressUserPerception[] =
     "autofill-address-users-perception";
+constexpr char kHatsSurveyTriggerAutofillCreditCardUserPerception[] =
+    "autofill-credit-card-users-perception";
+constexpr char kHatsSurveyTriggerAutofillPasswordUserPerception[] =
+    "autofill-password-users-perception";
 constexpr char kHatsSurveyTriggerAutofillCard[] = "autofill-card";
 constexpr char kHatsSurveyTriggerAutofillPassword[] = "autofill-password";
+constexpr char kHatsSurveyTriggerDownloadWarningBubbleBypass[] =
+    "download-warning-bubble-bypass";
+constexpr char kHatsSurveyTriggerDownloadWarningBubbleHeed[] =
+    "download-warning-bubble-heed";
+constexpr char kHatsSurveyTriggerDownloadWarningBubbleIgnore[] =
+    "download-warning-bubble-ignore";
+constexpr char kHatsSurveyTriggerDownloadWarningPageBypass[] =
+    "download-warning-page-bypass";
+constexpr char kHatsSurveyTriggerDownloadWarningPageHeed[] =
+    "download-warning-page-heed";
+constexpr char kHatsSurveyTriggerDownloadWarningPageIgnore[] =
+    "download-warning-page-ignore";
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 constexpr char kHatsSurveyTriggerGetMostChrome[] = "get-most-chrome";
 #endif
@@ -58,14 +76,6 @@ constexpr char kHatsSurveyTriggerSettingsSecurity[] = "settings-security";
 constexpr char kHatsSurveyTriggerExtensions[] = "extensions";
 constexpr char kHatsSurveyTriggerSuggestedPasswordsExperiment[] =
     "suggested-passwords-experiment";
-constexpr char kHatsSurveyTriggerTrackingProtectionControlImmediate[] =
-    "tracking-protection-control-immediate";
-constexpr char kHatsSurveyTriggerTrackingProtectionTreatmentImmediate[] =
-    "tracking-protection-treatment-immediate";
-constexpr char kHatsSurveyTriggerTrackingProtectionControlDelayed[] =
-    "tracking-protection-control-delayed";
-constexpr char kHatsSurveyTriggerTrackingProtectionTreatmentDelayed[] =
-    "tracking-protection-treatment-delayed";
 constexpr char kHatsSurveyTriggerTrustSafetyPrivacySandbox4ConsentAccept[] =
     "ts-ps4-consent-accept";
 constexpr char kHatsSurveyTriggerTrustSafetyPrivacySandbox4ConsentDecline[] =
@@ -92,6 +102,10 @@ constexpr char kHatsSurveyTriggerTrustSafetyV2PasswordProtectionUI[] =
     "ts-v2-password-protection-ui";
 constexpr char kHatsSurveyTriggerTrustSafetyV2SafetyCheck[] =
     "ts-v2-safety-check";
+constexpr char kHatsSurveyTriggerTrustSafetyV2SafetyHubNotification[] =
+    "ts-v2-safety-hub-notification";
+constexpr char kHatsSurveyTriggerTrustSafetyV2SafetyHubInteraction[] =
+    "ts-v2-safety-hub-interaction";
 constexpr char kHatsSurveyTriggerTrustSafetyV2TrustedSurface[] =
     "ts-v2-trusted-surface";
 constexpr char kHatsSurveyTriggerTrustSafetyV2PrivacyGuide[] =
@@ -109,6 +123,7 @@ constexpr char kHatsSurveyTriggerTrustSafetyV2SafeBrowsingInterstitial[] =
 constexpr char kHatsSurveyTriggerWallpaperSearch[] = "wallpaper-search";
 #else   // BUILDFLAG(IS_ANDROID)
 constexpr char kHatsSurveyTriggerAndroidStartupSurvey[] = "startup_survey";
+constexpr char kHatsSurveyTriggerQuickDelete[] = "quick_delete_survey";
 #endif  // #if !BUILDFLAG(IS_ANDROID)
 
 constexpr char kHatsSurveyTriggerTesting[] = "testing";
@@ -155,7 +170,9 @@ std::vector<hats::SurveyConfig> GetAllSurveyConfigs() {
           permissions::kPermissionsPromptSurveyReleaseChannelKey,
           permissions::kPermissionsPromptSurveyDisplayTimeKey,
           permissions::kPermissionPromptSurveyOneTimePromptsDecidedBucketKey,
-          permissions::kPermissionPromptSurveyUrlKey});
+          permissions::kPermissionPromptSurveyUrlKey,
+          permissions::kPermissionPromptSurveyPepcPromptPositionKey,
+          permissions::kPermissionPromptSurveyInitialPermissionStatusKey});
 
 #if !BUILDFLAG(IS_ANDROID)
   // Dev tools surveys.
@@ -238,43 +255,6 @@ std::vector<hats::SurveyConfig> GetAllSurveyConfigs() {
       &features::kHappinessTrackingSurveysForNtpPhotosOptOut,
       kHatsSurveyTriggerNtpPhotosModuleOptOut);
 
-  // Tracking Protection Sentiment Surveys
-  survey_configs.emplace_back(
-      &features::kTrackingProtectionSentimentSurvey,
-      kHatsSurveyTriggerTrackingProtectionControlImmediate,
-      features::kTrackingProtectionSentimentSurveyControlImmediateTriggerId
-          .Get(),
-      std::vector<std::string>{
-          "Onboarding Settings Clicked", "3P cookies blocked", "Is Mode B'",
-          "Topics enabled", "Fledge enabled", "Measurement enabled"},
-      std::vector<std::string>{"Seconds to acknowledge"});
-  survey_configs.emplace_back(
-      &features::kTrackingProtectionSentimentSurvey,
-      kHatsSurveyTriggerTrackingProtectionTreatmentImmediate,
-      features::kTrackingProtectionSentimentSurveyTreatmentImmediateTriggerId
-          .Get(),
-      std::vector<std::string>{
-          "Onboarding Settings Clicked", "3P cookies blocked", "Is Mode B'",
-          "Topics enabled", "Fledge enabled", "Measurement enabled"},
-      std::vector<std::string>{"Seconds to acknowledge"});
-  survey_configs.emplace_back(
-      &features::kTrackingProtectionSentimentSurvey,
-      kHatsSurveyTriggerTrackingProtectionControlDelayed,
-      features::kTrackingProtectionSentimentSurveyControlDelayedTriggerId.Get(),
-      std::vector<std::string>{
-          "Onboarding Settings Clicked", "3P cookies blocked", "Is Mode B'",
-          "Topics enabled", "Fledge enabled", "Measurement enabled"},
-      std::vector<std::string>{"Seconds to acknowledge"});
-  survey_configs.emplace_back(
-      &features::kTrackingProtectionSentimentSurvey,
-      kHatsSurveyTriggerTrackingProtectionTreatmentDelayed,
-      features::kTrackingProtectionSentimentSurveyTreatmentDelayedTriggerId
-          .Get(),
-      std::vector<std::string>{
-          "Onboarding Settings Clicked", "3P cookies blocked", "Is Mode B'",
-          "Topics enabled", "Fledge enabled", "Measurement enabled"},
-      std::vector<std::string>{"Seconds to acknowledge"});
-
   // Trust & Safety Sentiment surveys.
   survey_configs.emplace_back(
       &features::kTrustSafetySentimentSurvey,
@@ -351,6 +331,31 @@ std::vector<hats::SurveyConfig> GetAllSurveyConfigs() {
       &features::kTrustSafetySentimentSurveyV2,
       kHatsSurveyTriggerTrustSafetyV2SafetyCheck,
       features::kTrustSafetySentimentSurveyV2SafetyCheckTriggerId.Get());
+  std::vector<std::string> sh_psd_fields{
+      "User visited Safety Hub page",
+      "User clicked Safety Hub notification",
+      "User interacted with Safety Hub",
+      "Is notification module extensions",
+      "Is notification module notification permissions",
+      "Is notification module passwords",
+      "Is notification module revoked permissions",
+      "Is notification module safe browsing",
+      "Global state is safe",
+      "Global state is info",
+      "Global state is warning",
+      "Global state is weak"};
+  survey_configs.emplace_back(
+      &features::kTrustSafetySentimentSurveyV2,
+      kHatsSurveyTriggerTrustSafetyV2SafetyHubInteraction,
+      features::kTrustSafetySentimentSurveyV2SafetyHubInteractionTriggerId
+          .Get(),
+      sh_psd_fields);
+  survey_configs.emplace_back(
+      &features::kTrustSafetySentimentSurveyV2,
+      kHatsSurveyTriggerTrustSafetyV2SafetyHubNotification,
+      features::kTrustSafetySentimentSurveyV2SafetyHubNotificationTriggerId
+          .Get(),
+      sh_psd_fields);
   survey_configs.emplace_back(
       &features::kTrustSafetySentimentSurveyV2,
       kHatsSurveyTriggerTrustSafetyV2TrustedSurface,
@@ -419,6 +424,23 @@ std::vector<hats::SurveyConfig> GetAllSurveyConfigs() {
           "Total filled", "Total unfilled", "Total manually filled",
           "Total number of fields"});
 
+  survey_configs.emplace_back(
+      &::autofill::features::kAutofillCreditCardUserPerceptionSurvey,
+      kHatsSurveyTriggerAutofillCreditCardUserPerception, std::nullopt,
+      std::vector<std::string>{},
+      std::vector<std::string>{
+          "Accepted fields", "Corrected to same type",
+          "Corrected to a different type", "Corrected to an unknown type",
+          "Corrected to empty", "Manually filled to same type",
+          "Manually filled to a different type",
+          "Manually filled to an unknown type", "Total corrected",
+          "Total filled", "Total unfilled", "Total manually filled",
+          "Total number of fields"});
+  survey_configs.emplace_back(
+      &password_manager::features::kAutofillPasswordUserPerceptionSurvey,
+      kHatsSurveyTriggerAutofillPasswordUserPerception, std::nullopt,
+      std::vector<std::string>{},
+      std::vector<std::string>{"Filling assistance"});
   survey_configs.emplace_back(&features::kAutofillAddressSurvey,
                               kHatsSurveyTriggerAutofillAddress);
   survey_configs.emplace_back(&features::kAutofillCardSurvey,
@@ -434,7 +456,7 @@ std::vector<hats::SurveyConfig> GetAllSurveyConfigs() {
   // What's New survey.
   survey_configs.emplace_back(
       &features::kHappinessTrackingSurveysForDesktopWhatsNew,
-      kHatsSurveyTriggerWhatsNew);
+      kHatsSurveyTriggerWhatsNew, "SYLcvnoRH0ugnJ3q1cK0RAHYFycs");
 
   // Performance Controls surveys.
   survey_configs.emplace_back(
@@ -476,9 +498,64 @@ std::vector<hats::SurveyConfig> GetAllSurveyConfigs() {
           .Get(),
       std::vector<std::string>{"Suggested password accepted"});
 
+  // Desktop download warning surveys.
+  survey_configs.emplace_back(
+      &safe_browsing::kDownloadWarningSurvey,
+      kHatsSurveyTriggerDownloadWarningBubbleBypass,
+      /*presupplied_trigger_id=*/std::nullopt,
+      DownloadWarningHatsProductSpecificData::GetBitsDataFields(
+          DownloadWarningHatsType::kDownloadBubbleBypass),
+      DownloadWarningHatsProductSpecificData::GetStringDataFields(
+          DownloadWarningHatsType::kDownloadBubbleBypass));
+  survey_configs.emplace_back(
+      &safe_browsing::kDownloadWarningSurvey,
+      kHatsSurveyTriggerDownloadWarningBubbleHeed,
+      /*presupplied_trigger_id=*/std::nullopt,
+      DownloadWarningHatsProductSpecificData::GetBitsDataFields(
+          DownloadWarningHatsType::kDownloadBubbleHeed),
+      DownloadWarningHatsProductSpecificData::GetStringDataFields(
+          DownloadWarningHatsType::kDownloadBubbleHeed));
+  survey_configs.emplace_back(
+      &safe_browsing::kDownloadWarningSurvey,
+      kHatsSurveyTriggerDownloadWarningBubbleIgnore,
+      /*presupplied_trigger_id=*/std::nullopt,
+      DownloadWarningHatsProductSpecificData::GetBitsDataFields(
+          DownloadWarningHatsType::kDownloadBubbleIgnore),
+      DownloadWarningHatsProductSpecificData::GetStringDataFields(
+          DownloadWarningHatsType::kDownloadBubbleIgnore));
+  survey_configs.emplace_back(
+      &safe_browsing::kDownloadWarningSurvey,
+      kHatsSurveyTriggerDownloadWarningPageBypass,
+      /*presupplied_trigger_id=*/std::nullopt,
+      DownloadWarningHatsProductSpecificData::GetBitsDataFields(
+          DownloadWarningHatsType::kDownloadsPageBypass),
+      DownloadWarningHatsProductSpecificData::GetStringDataFields(
+          DownloadWarningHatsType::kDownloadsPageBypass));
+  survey_configs.emplace_back(
+      &safe_browsing::kDownloadWarningSurvey,
+      kHatsSurveyTriggerDownloadWarningPageHeed,
+      /*presupplied_trigger_id=*/std::nullopt,
+      DownloadWarningHatsProductSpecificData::GetBitsDataFields(
+          DownloadWarningHatsType::kDownloadsPageHeed),
+      DownloadWarningHatsProductSpecificData::GetStringDataFields(
+          DownloadWarningHatsType::kDownloadsPageHeed));
+  survey_configs.emplace_back(
+      &safe_browsing::kDownloadWarningSurvey,
+      kHatsSurveyTriggerDownloadWarningPageIgnore,
+      /*presupplied_trigger_id=*/std::nullopt,
+      DownloadWarningHatsProductSpecificData::GetBitsDataFields(
+          DownloadWarningHatsType::kDownloadsPageIgnore),
+      DownloadWarningHatsProductSpecificData::GetStringDataFields(
+          DownloadWarningHatsType::kDownloadsPageIgnore));
+
 #else
   survey_configs.emplace_back(&chrome::android::kChromeSurveyNextAndroid,
                               kHatsSurveyTriggerAndroidStartupSurvey);
+
+  survey_configs.emplace_back(
+      &chrome::android::kQuickDeleteAndroidSurvey,
+      kHatsSurveyTriggerQuickDelete,
+      chrome::android::kQuickDeleteAndroidSurveyTriggerId.Get());
 
 #endif  // #if !BUILDFLAG(IS_ANDROID)
 

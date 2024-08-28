@@ -52,7 +52,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/enterprise/data_controls/dlp_histogram_helper.h"
+#include "components/enterprise/data_controls/core/dlp_histogram_helper.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
 #include "storage/browser/file_system/file_system_url.h"
@@ -861,7 +861,7 @@ class IOTaskBrowserTest
       const bool expected_should_proceed,
       const std::vector<base::FilePath>& warning_files,
       Policy type = Policy::kDlp) {
-    bool is_move = (action == dlp::FileAction::kMove) ? true : false;
+    bool is_move = action == dlp::FileAction::kMove;
     auto warn_on_check =
         [=](std::optional<file_manager::io_task::IOTaskId> task_id,
             const std::vector<storage::FileSystemURL>& transferred_files,

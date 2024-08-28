@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/accessibility/platform/ax_platform_node_textrangeprovider_win.h"
 
 #include "base/command_line.h"
@@ -116,8 +121,7 @@ class AXPlatformNodeTextRangeProviderWinBrowserTest
       base::as_wcstr(&ui::AXPlatformNodeBase::kEmbeddedCharacter), 1};
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
-    cl->AppendSwitchASCII(switches::kForceDeviceScaleFactor, "1.0");
+    command_line->AppendSwitchASCII(switches::kForceDeviceScaleFactor, "1.0");
   }
 
   void SetUpOnMainThread() override {
@@ -1887,8 +1891,8 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
 
   std::vector<std::wstring> paragraphs = {
       L"start",
-      L"text with [:before] and [:after]content, then a",
-      L"bold element with a [block]before content then a italic",
+      L"text with [:before] and [:after]content, then a\n\xFFFC",
+      L"bold element with a [block]before content then a italic\n\xFFFC",
       L"element with a [block] after content",
       L"end",
   };
@@ -2249,7 +2253,7 @@ IN_PROC_BROWSER_TEST_F(
 
   std::vector<std::wstring> paragraphs = {
       L"start",
-      L"text with [:before] and [:after]content, then a",
+      L"text with [:before] and [:after]content, then a\n\xFFFC",
       L"bold element",
   };
 
@@ -2964,7 +2968,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
                           L"Before frame\nText in iframe\nAfter frame");
 }
 
-// TODO(https://crbug.com/1338169): This test is flaky.
+// TODO(crbug.com/40848898): This test is flaky.
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
                        DISABLED_OutOfProcessIFrameTraversal) {
   GURL main_url(embedded_test_server()->GetURL(
@@ -3579,7 +3583,7 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 // Flaky.
-// TODO(https://crbug.com/1132248): Re-enable.
+// TODO(crbug.com/40721846): Re-enable.
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
                        DISABLED_IframeSelect) {
   LoadInitialAccessibilityTreeFromHtmlFilePath(
@@ -3656,8 +3660,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
     ASSERT_NE(nullptr, text_range_provider.Get());
     EXPECT_UIA_TEXTRANGE_EQ(text_range_provider, L"Before frame");
 
-    AccessibilityNotificationWaiter waiter(web_contents, ui::kAXModeComplete,
-                                           ax::mojom::Event::kLayoutComplete);
+    AccessibilityNotificationWaiter waiter(web_contents);
 
     // Updating the style on that particular node is going to invalidate the
     // leaf text node and will replace it with a new one with the updated style.
@@ -3684,8 +3687,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
         /*expected_text*/ L"Before frame\nText ",
         /*expected_count*/ 1);
 
-    AccessibilityNotificationWaiter waiter(web_contents, ui::kAXModeComplete,
-                                           ax::mojom::Event::kLayoutComplete);
+    AccessibilityNotificationWaiter waiter(web_contents);
 
     // Updating the style on that particular node is going to invalidate the
     // leaf text node and will replace it with a new one with the updated style.
@@ -4031,8 +4033,9 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   EXPECT_UIA_DOUBLE_SAFEARRAY_EQ(rectangles.Get(), expected_values);
 }
 
+// TODO(crbug.com/340389557): This test is flaky.
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
-                       TextDeletedInTextFieldAdjustmentNeeded) {
+                       DISABLED_TextDeletedInTextFieldAdjustmentNeeded) {
   // This test, tests a scenario where an AT is used to make a deletion on some
   // text and then manually moves the caret around: On the input "hello world
   // red green<> blue" where the caret position is noted by <>:
@@ -4107,9 +4110,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   EXPECT_HRESULT_SUCCEEDED(deletion_text_range_provider->Select());
 
   // Now we delete "world".
-  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
-                                         ui::kAXModeComplete,
-                                         ax::mojom::Event::kLayoutComplete);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents());
   SimulateKeyPress(shell()->web_contents(), ui::DomKey::BACKSPACE,
                    ui::DomCode::BACKSPACE, ui::VKEY_BACK, false, false, false,
                    false);
@@ -4224,9 +4225,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   ASSERT_TRUE(sel_waiter.WaitForNotification());
 
   // Now we delete "hello".
-  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
-                                         ui::kAXModeComplete,
-                                         ax::mojom::Event::kLayoutComplete);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents());
   SimulateKeyPress(shell()->web_contents(), ui::DomKey::BACKSPACE,
                    ui::DomCode::BACKSPACE, ui::VKEY_BACK, /* control */ false,
                    /* shift */ false, /* alt */ false,

@@ -4,7 +4,13 @@
 
 #include "content/browser/web_package/signed_exchange_handler.h"
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -46,6 +52,7 @@
 #include "net/cookies/cookie_setting_override.h"
 #include "net/filter/source_stream.h"
 #include "net/ssl/ssl_info.h"
+#include "net/storage_access_api/status.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
@@ -140,14 +147,14 @@ std::string OCSPErrorToString(const bssl::OCSPVerifyResult& ocsp_result) {
 
   switch (ocsp_result.revocation_status) {
     case bssl::OCSPRevocationStatus::GOOD:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     case bssl::OCSPRevocationStatus::REVOKED:
       return "OCSP response indicates that the certificate is revoked.";
     case bssl::OCSPRevocationStatus::UNKNOWN:
       return "OCSP responder doesn't know about the certificate.";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return std::string();
 }
 
@@ -311,7 +318,7 @@ void SignedExchangeHandler::DidReadHeader(bool completed_syncly,
         result = ParseHeadersAndFetchCertificate();
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
     if (result != SignedExchangeLoadResult::kSuccess) {
       RunErrorCallback(result, net::ERR_INVALID_SIGNED_EXCHANGE);
@@ -404,8 +411,8 @@ SignedExchangeHandler::ParseHeadersAndFetchCertificate() {
 
   DCHECK(version_.has_value());
 
-  base::StringPiece data(header_buf_->data(), header_read_buf_->size());
-  base::StringPiece signature_header_field = data.substr(
+  std::string_view data(header_buf_->data(), header_read_buf_->size());
+  std::string_view signature_header_field = data.substr(
       0, prologue_fallback_url_and_after_.signature_header_field_length());
   base::span<const uint8_t> cbor_header =
       base::as_bytes(base::make_span(data.substr(
@@ -428,7 +435,7 @@ SignedExchangeHandler::ParseHeadersAndFetchCertificate() {
   }
 
   const GURL cert_url = envelope_->signature().cert_url;
-  // TODO(https://crbug.com/819467): When we will support ed25519Key, |cert_url|
+  // TODO(crbug.com/40565993): When we will support ed25519Key, |cert_url|
   // may be empty.
   DCHECK(cert_url.is_valid());
 
@@ -728,15 +735,17 @@ void SignedExchangeHandler::CheckAbsenceOfCookies(base::OnceClosure callback) {
   auto match_options = network::mojom::CookieManagerGetOptions::New();
   match_options->name = "";
   match_options->match_type = network::mojom::CookieMatchType::STARTS_WITH;
-  // We set `has_storage_access` to true below in order to use any Storage
-  // Access grant that exists, since a frame might go through this code path and
-  // then obtain storage access in order to access cookies. Using true instead
-  // of false here means we are being conservative, since this runs an error
-  // callback if any cookies were retrieved.
+  // We set `storage_access_api_status` to kAccessViaAPI below in order to use
+  // any Storage Access grant that exists, since a frame might go through this
+  // code path and then obtain storage access in order to access cookies. Using
+  // true instead of false here means we are being conservative, since this runs
+  // an error callback if any cookies were retrieved.
   cookie_manager_->GetAllForUrl(
       envelope_->request_url().url, isolation_info.site_for_cookies(),
-      *isolation_info.top_frame_origin(), /*has_storage_access=*/true,
-      std::move(match_options), /*is_ad_tagged=*/false,
+      *isolation_info.top_frame_origin(),
+      net::StorageAccessApiStatus::kAccessViaAPI, std::move(match_options),
+      /*is_ad_tagged=*/false,
+      /*force_disable_third_party_cookies=*/false,
       base::BindOnce(&SignedExchangeHandler::OnGetCookies,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -754,7 +763,7 @@ void SignedExchangeHandler::OnGetCookies(
 
 void SignedExchangeHandler::CreateResponse(
     network::mojom::URLResponseHeadPtr response_head) {
-  // TODO(https://crbug.com/803774): Resource timing for signed exchange
+  // TODO(crbug.com/40558902): Resource timing for signed exchange
   // loading is not speced yet. https://github.com/WICG/webpackage/issues/156
   response_head->load_timing.request_start_time = base::Time::Now();
   base::TimeTicks now(base::TimeTicks::Now());
@@ -806,7 +815,8 @@ SignedExchangeHandler::CreateResponseBodyStream() {
   }
 
   // For now, we allow only mi-sha256-03 content encoding.
-  // TODO(crbug.com/934629): Handle other content codings, such as gzip and br.
+  // TODO(crbug.com/41442806): Handle other content codings, such as gzip and
+  // br.
   auto content_encoding_iter = headers.find("content-encoding");
   if (content_encoding_iter == headers.end()) {
     signed_exchange_utils::ReportErrorAndTraceEvent(

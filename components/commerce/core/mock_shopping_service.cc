@@ -6,6 +6,9 @@
 
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
+#include "components/commerce/core/mock_cluster_manager.h"
+#include "components/commerce/core/product_specifications/mock_product_specifications_service.h"
+#include "components/sync/test/mock_model_type_change_processor.h"
 
 namespace commerce {
 
@@ -29,7 +32,16 @@ MockShoppingService::MockShoppingService()
                                 nullptr,
                                 nullptr,
                                 nullptr,
-                                nullptr) {}
+                                nullptr) {
+  product_specifications_service_ =
+      std::make_unique<testing::NiceMock<MockProductSpecificationsService>>();
+  ON_CALL(*this, GetProductSpecificationsService)
+      .WillByDefault(testing::Return(product_specifications_service_.get()));
+  cluster_manager_ = std::make_unique<testing::NiceMock<MockClusterManager>>(
+      product_specifications_service_.get());
+  ON_CALL(*this, GetClusterManager)
+      .WillByDefault(testing::Return(cluster_manager_.get()));
+}
 
 MockShoppingService::~MockShoppingService() = default;
 
@@ -58,6 +70,11 @@ void MockShoppingService::SetupPermissiveMock() {
   SetGetAllParcelStatusesCallbackValue(std::vector<ParcelTrackingStatus>());
 }
 
+void MockShoppingService::SetAccountChecker(AccountChecker* account_checker) {
+  ON_CALL(*this, GetAccountChecker)
+      .WillByDefault(testing::Return(account_checker));
+}
+
 void MockShoppingService::SetResponseForGetProductInfoForUrl(
     std::optional<commerce::ProductInfo> product_info) {
   ON_CALL(*this, GetProductInfoForUrl)
@@ -81,6 +98,12 @@ void MockShoppingService::SetResponseForGetPriceInsightsInfoForUrl(
                 FROM_HERE,
                 base::BindOnce(std::move(callback), url, price_insights_info));
           });
+}
+
+void MockShoppingService::SetResponseForGetUrlInfosForActiveWebWrappers(
+    std::vector<commerce::UrlInfo> url_infos) {
+  ON_CALL(*this, GetUrlInfosForActiveWebWrappers)
+      .WillByDefault(testing::Return(url_infos));
 }
 
 void MockShoppingService::SetResponsesForGetUpdatedProductInfoForBookmarks(
@@ -234,12 +257,6 @@ void MockShoppingService::SetResponseForGetDiscountInfoForUrls(
       });
 }
 
-void MockShoppingService::SetBookmarkModelUsedForSync(
-    bookmarks::BookmarkModel* bookmark_model) {
-  ON_CALL(*this, GetBookmarkModelUsedForSync)
-      .WillByDefault(testing::Return(bookmark_model));
-}
-
 void MockShoppingService::SetIsParcelTrackingEligible(bool is_eligible) {
   ON_CALL(*this, IsParcelTrackingEligible)
       .WillByDefault(testing::Return(is_eligible));
@@ -260,5 +277,19 @@ void MockShoppingService::SetGetAllParcelStatusesCallbackValue(
 
 void StopTrackingParcel(const std::string& tracking_id,
                         base::OnceCallback<void(bool)> callback) {}
+
+void MockShoppingService::SetResponseForGetProductSpecificationsForUrls(
+    ProductSpecifications specs) {
+  ON_CALL(*this, GetProductSpecificationsForUrls)
+      .WillByDefault(
+          [specs = std::move(specs)](const std::vector<GURL>& urls,
+                                     ProductSpecificationsCallback callback) {
+            std::vector<uint64_t> ids{0};
+            base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE, base::BindOnce(std::move(callback), std::move(ids),
+                                          std::optional<ProductSpecifications>(
+                                              std::move(specs))));
+          });
+}
 
 }  // namespace commerce

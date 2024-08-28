@@ -41,7 +41,9 @@
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_switches.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/os_crypt/sync/os_crypt_mocker.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
 #include "components/webdata/common/web_database.h"
 #include "sql/statement.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -80,13 +82,10 @@ class PaymentsAutofillTableTest : public testing::Test {
   time_t GetDateModified(std::string_view table_name,
                          std::string_view column,
                          absl::variant<std::string, int64_t> id) {
-    sql::Statement s(db_->GetSQLConnection()->GetUniqueStatement(
-        base::StrCat({"SELECT ", column, " FROM ", table_name, " WHERE ",
-                      absl::holds_alternative<std::string>(id)
-                          ? "guid"
-                          : "instrument_id",
-                      " = ?"})
-            .c_str()));
+    sql::Statement s(db_->GetSQLConnection()->GetUniqueStatement(base::StrCat(
+        {"SELECT ", column, " FROM ", table_name, " WHERE ",
+         absl::holds_alternative<std::string>(id) ? "guid" : "instrument_id",
+         " = ?"})));
     if (const std::string* guid = absl::get_if<std::string>(&id)) {
       s.BindString(0, *guid);
     } else {
@@ -107,7 +106,7 @@ TEST_F(PaymentsAutofillTableTest, Iban) {
   Iban iban;
   std::string guid = base::Uuid::GenerateRandomV4().AsLowercaseString();
   iban.set_identifier(Iban::Guid(guid));
-  iban.SetRawInfo(IBAN_VALUE, u"IE12 BOFI 9000 0112 3456 78");
+  iban.SetRawInfo(IBAN_VALUE, std::u16string(test::kIbanValue16));
   iban.set_nickname(u"My doctor's IBAN");
 
   EXPECT_TRUE(table_->AddLocalIban(iban));
@@ -184,6 +183,9 @@ TEST_F(PaymentsAutofillTableTest, MaskedServerIban) {
   std::vector<AutofillMetadata> outputs;
   ASSERT_TRUE(table_->GetServerIbansMetadata(outputs));
   ASSERT_FALSE(outputs.empty());
+  EXPECT_EQ(iban_0.use_date(), outputs[0].use_date);
+  EXPECT_EQ(iban_1.use_date(), outputs[1].use_date);
+  EXPECT_EQ(iban_2.use_date(), outputs[2].use_date);
 }
 
 // Test that masked IBANs can be added and loaded successfully without updating
@@ -322,29 +324,6 @@ TEST_F(PaymentsAutofillTableTest, AddCreditCardCvcWithFlagOff) {
   EXPECT_TRUE(table_->UpdateCreditCard(card));
   db_card = table_->GetCreditCard(card.guid());
   EXPECT_EQ(u"", db_card->cvc());
-}
-
-// Tests that verify ClearLocalPaymentMethodsData function working as expected.
-TEST_F(PaymentsAutofillTableTest, ClearLocalPaymentMethodsData) {
-  base::test::ScopedFeatureList features(
-      features::kAutofillEnableCvcStorageAndFilling);
-  CreditCard card = test::WithCvc(test::GetCreditCard());
-  EXPECT_TRUE(table_->AddCreditCard(card));
-  std::unique_ptr<CreditCard> db_card = table_->GetCreditCard(card.guid());
-  EXPECT_EQ(card.cvc(), db_card->cvc());
-  Iban iban = test::GetLocalIban();
-  EXPECT_TRUE(table_->AddLocalIban(iban));
-
-  // After calling ClearLocalPaymentMethodsData, the local_stored_cvc,
-  // credit_cards, and local_ibans tables should be empty.
-  table_->ClearLocalPaymentMethodsData();
-  EXPECT_FALSE(table_->GetCreditCard(card.guid()));
-  EXPECT_FALSE(table_->GetLocalIban(iban.guid()));
-  sql::Statement s(db_->GetSQLConnection()->GetUniqueStatement(
-      "SELECT guid FROM local_stored_cvc WHERE guid=?"));
-  s.BindString(0, card.guid());
-  ASSERT_TRUE(s.is_valid());
-  EXPECT_FALSE(s.Step());
 }
 
 // Tests that adding credit card with cvc, get credit card with cvc and update
@@ -567,23 +546,29 @@ TEST_F(PaymentsAutofillTableTest, ReconcileServerCvcs) {
   EXPECT_TRUE(table_->AddServerCvc(ServerCvc{3333, u"456", kArbitraryTime}));
   EXPECT_EQ(3U, table_->GetAllServerCvcs().size());
 
+  std::vector<std::unique_ptr<ServerCvc>> deleted_cvc_list =
+      table_->DeleteOrphanedServerCvcs();
+
   // After we reconcile server cvc, we should only see 2 cvcs in
   // server_stored_cvc table because obsolete cvc has been reconciled.
-  EXPECT_TRUE(table_->ReconcileServerCvcs());
+  // Additionally, `deleted_cvc_list` should contain the obsolete CVC..
   EXPECT_EQ(2U, table_->GetAllServerCvcs().size());
+  ASSERT_EQ(1uL, deleted_cvc_list.size());
+  EXPECT_EQ(3333, deleted_cvc_list[0]->instrument_id);
 }
 
-TEST_F(PaymentsAutofillTableTest, AddFullServerCreditCard) {
+TEST_F(PaymentsAutofillTableTest, AddServerCreditCardForTesting) {
   CreditCard credit_card;
-  credit_card.set_record_type(CreditCard::RecordType::kFullServerCard);
+  credit_card.set_record_type(CreditCard::RecordType::kMaskedServerCard);
   credit_card.set_server_id("server_id");
   credit_card.set_origin("https://www.example.com/");
   credit_card.SetRawInfo(CREDIT_CARD_NAME_FULL, u"Jack Torrance");
-  credit_card.SetRawInfo(CREDIT_CARD_NUMBER, u"1234567890123456");
+  credit_card.SetRawInfo(CREDIT_CARD_NUMBER, u"3456");
   credit_card.SetRawInfo(CREDIT_CARD_EXP_MONTH, u"04");
   credit_card.SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, u"2013");
+  credit_card.SetNetworkForMaskedCard(kVisaCard);
 
-  EXPECT_TRUE(table_->AddFullServerCreditCard(credit_card));
+  EXPECT_TRUE(table_->AddServerCreditCardForTesting(credit_card));
 
   std::vector<std::unique_ptr<CreditCard>> outputs;
   ASSERT_TRUE(table_->GetServerCreditCards(outputs));
@@ -876,94 +861,118 @@ TEST_F(PaymentsAutofillTableTest, RemoveOriginURLsModifiedBetween) {
 }
 
 TEST_F(PaymentsAutofillTableTest, SetGetServerCards) {
-  std::vector<CreditCard> inputs;
-  inputs.emplace_back(CreditCard::RecordType::kMaskedServerCard, "a123");
-  inputs[0].SetRawInfo(CREDIT_CARD_NAME_FULL, u"Paul F. Tompkins");
-  inputs[0].SetRawInfo(CREDIT_CARD_EXP_MONTH, u"1");
-  inputs[0].SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, u"2020");
-  inputs[0].SetRawInfo(CREDIT_CARD_NUMBER, u"4444");
-  inputs[0].SetNetworkForMaskedCard(kVisaCard);
-  inputs[0].set_card_issuer(CreditCard::Issuer::kExternalIssuer);
-  inputs[0].set_instrument_id(321);
-  inputs[0].set_virtual_card_enrollment_state(
-      CreditCard::VirtualCardEnrollmentState::kUnenrolled);
-  inputs[0].set_virtual_card_enrollment_type(
-      CreditCard::VirtualCardEnrollmentType::kIssuer);
-  inputs[0].set_product_description(u"Fake description");
-  inputs[0].set_cvc(u"000");
+  for (bool is_cvc_storage_flag_enabled : {true, false}) {
+    base::test::ScopedFeatureList features;
+    if (is_cvc_storage_flag_enabled) {
+      features.InitAndEnableFeature(
+          features::kAutofillEnableCvcStorageAndFilling);
+    } else {
+      features.InitAndDisableFeature(
+          features::kAutofillEnableCvcStorageAndFilling);
+    }
 
-  inputs.emplace_back(CreditCard::RecordType::kMaskedServerCard, "b456");
-  inputs[1].SetRawInfo(CREDIT_CARD_NAME_FULL, u"Rick Roman");
-  inputs[1].SetRawInfo(CREDIT_CARD_EXP_MONTH, u"12");
-  inputs[1].SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, u"1997");
-  inputs[1].SetRawInfo(CREDIT_CARD_NUMBER, u"1111");
-  inputs[1].SetNetworkForMaskedCard(kVisaCard);
-  std::u16string nickname = u"Grocery card";
-  inputs[1].SetNickname(nickname);
-  inputs[1].set_card_issuer(CreditCard::Issuer::kExternalIssuer);
-  inputs[1].set_issuer_id("amex");
-  inputs[1].set_instrument_id(123);
-  inputs[1].set_virtual_card_enrollment_state(
-      CreditCard::VirtualCardEnrollmentState::kEnrolled);
-  inputs[1].set_virtual_card_enrollment_type(
-      CreditCard::VirtualCardEnrollmentType::kNetwork);
-  inputs[1].set_card_art_url(GURL("https://www.example.com"));
-  inputs[1].set_product_terms_url(GURL("https://www.example_term.com"));
-  inputs[1].set_cvc(u"111");
+    std::vector<CreditCard> inputs;
+    inputs.emplace_back(CreditCard::RecordType::kMaskedServerCard, "a123");
+    inputs[0].SetRawInfo(CREDIT_CARD_NAME_FULL, u"Paul F. Tompkins");
+    inputs[0].SetRawInfo(CREDIT_CARD_EXP_MONTH, u"1");
+    inputs[0].SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, u"2020");
+    inputs[0].SetRawInfo(CREDIT_CARD_NUMBER, u"4444");
+    inputs[0].SetNetworkForMaskedCard(kVisaCard);
+    inputs[0].set_card_issuer(CreditCard::Issuer::kExternalIssuer);
+    inputs[0].set_instrument_id(321);
+    inputs[0].set_virtual_card_enrollment_state(
+        CreditCard::VirtualCardEnrollmentState::kUnenrolled);
+    inputs[0].set_virtual_card_enrollment_type(
+        CreditCard::VirtualCardEnrollmentType::kIssuer);
+    inputs[0].set_product_description(u"Fake description");
+    inputs[0].set_cvc(u"000");
 
-  test::SetServerCreditCards(table_.get(), inputs);
+    inputs.emplace_back(CreditCard::RecordType::kMaskedServerCard, "b456");
+    inputs[1].SetRawInfo(CREDIT_CARD_NAME_FULL, u"Rick Roman");
+    inputs[1].SetRawInfo(CREDIT_CARD_EXP_MONTH, u"12");
+    inputs[1].SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, u"1997");
+    inputs[1].SetRawInfo(CREDIT_CARD_NUMBER, u"1111");
+    inputs[1].SetNetworkForMaskedCard(kVisaCard);
+    std::u16string nickname = u"Grocery card";
+    inputs[1].SetNickname(nickname);
+    inputs[1].set_card_issuer(CreditCard::Issuer::kExternalIssuer);
+    inputs[1].set_issuer_id("amex");
+    inputs[1].set_instrument_id(123);
+    inputs[1].set_virtual_card_enrollment_state(
+        CreditCard::VirtualCardEnrollmentState::kEnrolled);
+    inputs[1].set_virtual_card_enrollment_type(
+        CreditCard::VirtualCardEnrollmentType::kNetwork);
+    inputs[1].set_card_art_url(GURL("https://www.example.com"));
+    inputs[1].set_product_terms_url(GURL("https://www.example_term.com"));
+    inputs[1].set_cvc(u"111");
 
-  std::vector<std::unique_ptr<CreditCard>> outputs;
-  ASSERT_TRUE(table_->GetServerCreditCards(outputs));
-  ASSERT_EQ(inputs.size(), outputs.size());
+    test::SetServerCreditCards(table_.get(), inputs);
 
-  // Ordering isn't guaranteed, so fix the ordering if it's backwards.
-  if (outputs[1]->server_id() == inputs[0].server_id())
-    std::swap(outputs[0], outputs[1]);
+    std::vector<std::unique_ptr<CreditCard>> outputs;
+    ASSERT_TRUE(table_->GetServerCreditCards(outputs));
+    ASSERT_EQ(inputs.size(), outputs.size());
 
-  // GUIDs for server cards are dynamically generated so will be different
-  // after reading from the DB. Check they're valid, but otherwise don't count
-  // them in the comparison.
-  inputs[0].set_guid(std::string());
-  inputs[1].set_guid(std::string());
-  outputs[0]->set_guid(std::string());
-  outputs[1]->set_guid(std::string());
+    // Ordering isn't guaranteed, so fix the ordering if it's backwards.
+    if (outputs[1]->server_id() == inputs[0].server_id()) {
+      std::swap(outputs[0], outputs[1]);
+    }
 
-  EXPECT_EQ(inputs[0], *outputs[0]);
-  EXPECT_EQ(inputs[1], *outputs[1]);
+    // GUIDs for server cards are dynamically generated so will be different
+    // after reading from the DB. Check they're valid, but otherwise don't count
+    // them in the comparison.
+    inputs[0].set_guid(std::string());
+    inputs[1].set_guid(std::string());
+    outputs[0]->set_guid(std::string());
+    outputs[1]->set_guid(std::string());
 
-  EXPECT_TRUE(outputs[0]->nickname().empty());
-  EXPECT_EQ(nickname, outputs[1]->nickname());
+    if (!is_cvc_storage_flag_enabled) {
+      // Verify that CVC values are not present on the output entries and then
+      // clear the same from the input entries to allow the comparison between
+      // input and output.
+      EXPECT_TRUE(outputs[0]->cvc().empty());
+      EXPECT_TRUE(outputs[1]->cvc().empty());
 
-  EXPECT_EQ(CreditCard::Issuer::kExternalIssuer, outputs[0]->card_issuer());
-  EXPECT_EQ(CreditCard::Issuer::kExternalIssuer, outputs[1]->card_issuer());
-  EXPECT_EQ("", outputs[0]->issuer_id());
-  EXPECT_EQ("amex", outputs[1]->issuer_id());
+      inputs[0].clear_cvc();
+      inputs[1].clear_cvc();
+    }
+    EXPECT_EQ(inputs[0], *outputs[0]);
+    EXPECT_EQ(inputs[1], *outputs[1]);
 
-  EXPECT_EQ(321, outputs[0]->instrument_id());
-  EXPECT_EQ(123, outputs[1]->instrument_id());
+    EXPECT_TRUE(outputs[0]->nickname().empty());
+    EXPECT_EQ(nickname, outputs[1]->nickname());
 
-  EXPECT_EQ(CreditCard::VirtualCardEnrollmentState::kUnenrolled,
-            outputs[0]->virtual_card_enrollment_state());
-  EXPECT_EQ(CreditCard::VirtualCardEnrollmentState::kEnrolled,
-            outputs[1]->virtual_card_enrollment_state());
+    EXPECT_EQ(CreditCard::Issuer::kExternalIssuer, outputs[0]->card_issuer());
+    EXPECT_EQ(CreditCard::Issuer::kExternalIssuer, outputs[1]->card_issuer());
+    EXPECT_EQ("", outputs[0]->issuer_id());
+    EXPECT_EQ("amex", outputs[1]->issuer_id());
 
-  EXPECT_EQ(CreditCard::VirtualCardEnrollmentType::kIssuer,
-            outputs[0]->virtual_card_enrollment_type());
-  EXPECT_EQ(CreditCard::VirtualCardEnrollmentType::kNetwork,
-            outputs[1]->virtual_card_enrollment_type());
+    EXPECT_EQ(321, outputs[0]->instrument_id());
+    EXPECT_EQ(123, outputs[1]->instrument_id());
 
-  EXPECT_EQ(GURL(), outputs[0]->card_art_url());
-  EXPECT_EQ(GURL("https://www.example.com"), outputs[1]->card_art_url());
+    EXPECT_EQ(CreditCard::VirtualCardEnrollmentState::kUnenrolled,
+              outputs[0]->virtual_card_enrollment_state());
+    EXPECT_EQ(CreditCard::VirtualCardEnrollmentState::kEnrolled,
+              outputs[1]->virtual_card_enrollment_state());
 
-  EXPECT_EQ(GURL(), outputs[0]->product_terms_url());
-  EXPECT_EQ(GURL("https://www.example_term.com"),
-            outputs[1]->product_terms_url());
+    EXPECT_EQ(CreditCard::VirtualCardEnrollmentType::kIssuer,
+              outputs[0]->virtual_card_enrollment_type());
+    EXPECT_EQ(CreditCard::VirtualCardEnrollmentType::kNetwork,
+              outputs[1]->virtual_card_enrollment_type());
 
-  EXPECT_EQ(u"Fake description", outputs[0]->product_description());
+    EXPECT_EQ(GURL(), outputs[0]->card_art_url());
+    EXPECT_EQ(GURL("https://www.example.com"), outputs[1]->card_art_url());
 
-  EXPECT_EQ(inputs[0].cvc(), outputs[0]->cvc());
-  EXPECT_EQ(inputs[1].cvc(), outputs[1]->cvc());
+    EXPECT_EQ(GURL(), outputs[0]->product_terms_url());
+    EXPECT_EQ(GURL("https://www.example_term.com"),
+              outputs[1]->product_terms_url());
+
+    EXPECT_EQ(u"Fake description", outputs[0]->product_description());
+
+    if (is_cvc_storage_flag_enabled) {
+      EXPECT_EQ(inputs[0].cvc(), outputs[0]->cvc());
+      EXPECT_EQ(inputs[1].cvc(), outputs[1]->cvc());
+    }
+  }
 }
 
 TEST_F(PaymentsAutofillTableTest, SetGetRemoveServerCardMetadata) {
@@ -1045,11 +1054,12 @@ TEST_F(PaymentsAutofillTableTest, AddUpdateServerCardMetadata) {
 
 TEST_F(PaymentsAutofillTableTest, UpdateServerCardMetadataDoesNotChangeData) {
   std::vector<CreditCard> inputs;
-  inputs.emplace_back(CreditCard::RecordType::kFullServerCard, "a123");
+  inputs.emplace_back(CreditCard::RecordType::kMaskedServerCard, "a123");
   inputs[0].SetRawInfo(CREDIT_CARD_NAME_FULL, u"Paul F. Tompkins");
   inputs[0].SetRawInfo(CREDIT_CARD_EXP_MONTH, u"1");
   inputs[0].SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, u"2020");
-  inputs[0].SetRawInfo(CREDIT_CARD_NUMBER, u"4111111111111111");
+  inputs[0].SetRawInfo(CREDIT_CARD_NUMBER, u"1111");
+  inputs[0].SetNetworkForMaskedCard(kVisaCard);
   test::SetServerCreditCards(table_.get(), inputs);
 
   std::vector<std::unique_ptr<CreditCard>> outputs;
@@ -1706,7 +1716,7 @@ TEST_F(PaymentsAutofillTableTest, GetAllCreditCardBenefits) {
 
   // Check all valid benefits are added to table and are searchable.
   std::vector<CreditCardBenefit> output_benefits;
-  EXPECT_TRUE(table_->GetAllCreditCardBenefits(&output_benefits));
+  EXPECT_TRUE(table_->GetAllCreditCardBenefits(output_benefits));
   EXPECT_EQ(input_benefits.size(), output_benefits.size());
   for (const auto& input_benefit : input_benefits) {
     // Find input benefits in outputs.
@@ -1722,15 +1732,14 @@ TEST_F(PaymentsAutofillTableTest, AddInactiveCreditCardBenefit) {
   std::vector<CreditCardBenefit> input_benefits;
   CreditCardMerchantBenefit inactive_benefit =
       test::GetActiveCreditCardMerchantBenefit();
-  test_api(inactive_benefit)
-      .SetStartTimeForTesting(AutofillClock::Now() + base::Days(1));
-  EXPECT_TRUE(inactive_benefit.IsValid());
+  test_api(inactive_benefit).SetStartTime(AutofillClock::Now() + base::Days(1));
+  EXPECT_TRUE(inactive_benefit.IsValidForWriteFromSync());
   input_benefits.push_back(std::move(inactive_benefit));
   EXPECT_TRUE(table_->SetCreditCardBenefits(input_benefits));
 
   // Check the inactive benefit is added to table and is searchable.
   std::vector<CreditCardBenefit> output_benefits;
-  EXPECT_TRUE(table_->GetAllCreditCardBenefits(&output_benefits));
+  EXPECT_TRUE(table_->GetAllCreditCardBenefits(output_benefits));
   ASSERT_EQ(1u, output_benefits.size());
   EXPECT_EQ(input_benefits[0], output_benefits[0]);
 }
@@ -1740,13 +1749,13 @@ TEST_F(PaymentsAutofillTableTest, AddInvalidCreditCardBenefit) {
   // valid benefit.
   CreditCardFlatRateBenefit valid_benefit =
       test::GetActiveCreditCardFlatRateBenefit();
-  ASSERT_TRUE(valid_benefit.IsValid());
+  ASSERT_TRUE(valid_benefit.IsValidForWriteFromSync());
   CreditCardCategoryBenefit invalid_benefit =
       test::GetActiveCreditCardCategoryBenefit();
   test_api(invalid_benefit)
-      .SetBenefitCategoryForTesting(
+      .SetBenefitCategory(
           CreditCardCategoryBenefit::BenefitCategory::kUnknownBenefitCategory);
-  ASSERT_FALSE(invalid_benefit.IsValid());
+  ASSERT_FALSE(invalid_benefit.IsValidForWriteFromSync());
 
   CreditCardBenefitBase::BenefitId valid_input_benefit_id =
       valid_benefit.benefit_id();
@@ -1757,7 +1766,7 @@ TEST_F(PaymentsAutofillTableTest, AddInvalidCreditCardBenefit) {
 
   // Check invalid benefit will not be added to the table.
   std::vector<CreditCardBenefit> output_benefits;
-  EXPECT_TRUE(table_->GetAllCreditCardBenefits(&output_benefits));
+  EXPECT_TRUE(table_->GetAllCreditCardBenefits(output_benefits));
   ASSERT_EQ(output_benefits.size(), 1u);
   EXPECT_EQ(valid_input_benefit_id, get_benefit_id(output_benefits[0]));
 }
@@ -1773,7 +1782,7 @@ TEST_F(PaymentsAutofillTableTest, ClearCreditCardBenefits) {
   std::vector<CreditCardBenefit> output_benefits;
 
   // Check benefits are added.
-  EXPECT_TRUE(table_->GetAllCreditCardBenefits(&output_benefits));
+  EXPECT_TRUE(table_->GetAllCreditCardBenefits(output_benefits));
   EXPECT_EQ(input_benefits.size(), output_benefits.size());
   sql::Statement count_statement(table_->GetDbForTesting()->GetUniqueStatement(
       "SELECT COUNT(benefit_id) from benefit_merchant_domains"));
@@ -1784,12 +1793,164 @@ TEST_F(PaymentsAutofillTableTest, ClearCreditCardBenefits) {
 
   // Check benefits and benefit merchant domains are removed.
   output_benefits.clear();
-  EXPECT_TRUE(table_->GetAllCreditCardBenefits(&output_benefits));
+  EXPECT_TRUE(table_->GetAllCreditCardBenefits(output_benefits));
   EXPECT_TRUE(output_benefits.empty());
 
   count_statement.Reset(/*clear_bound_vars=*/true);
   EXPECT_TRUE(count_statement.Step());
   EXPECT_EQ(0, count_statement.ColumnInt(0));
+}
+
+TEST_F(PaymentsAutofillTableTest, GetCreditCardBenefitsForInstrumentId) {
+  // Add benefits with different instrument ids to the table.
+  std::vector<CreditCardBenefit> input_benefits = {
+      test::GetActiveCreditCardFlatRateBenefit(),
+      test::GetActiveCreditCardCategoryBenefit(),
+      test::GetActiveCreditCardMerchantBenefit()};
+  EXPECT_TRUE(table_->SetCreditCardBenefits(input_benefits));
+
+  // Get the first benefit in the `input_benefits` from the table by instrument
+  // id.
+  std::vector<CreditCardBenefit> output_benefits;
+  EXPECT_TRUE(table_->GetCreditCardBenefitsForInstrumentId(
+      *absl::visit(
+          [](const auto& benefit) {
+            return benefit.linked_card_instrument_id();
+          },
+          input_benefits[0]),
+      output_benefits));
+  EXPECT_THAT(output_benefits, testing::ElementsAre(input_benefits[0]));
+}
+
+TEST_F(PaymentsAutofillTableTest,
+       PaymentInstrument_StoresPaymentInstrumentWithBankAccount) {
+  // Add a bank account payment instrument to the table.
+  sync_pb::PaymentInstrument payment_instrument =
+      test::CreatePaymentInstrumentWithBankAccount(1234);
+  std::vector<sync_pb::PaymentInstrument> payment_instruments{
+      payment_instrument};
+  table_->SetPaymentInstruments(payment_instruments);
+
+  // Retrieve the payment instruments.
+  std::vector<sync_pb::PaymentInstrument> payment_instruments_from_table;
+  table_->GetPaymentInstruments(payment_instruments_from_table);
+
+  // Check that the payment instruments are equal.
+  EXPECT_EQ(payment_instruments_from_table.size(), 1u);
+  EXPECT_EQ(payment_instrument.instrument_id(),
+            payment_instruments_from_table[0].instrument_id());
+  auto table_bank_account = payment_instruments_from_table[0].bank_account();
+  EXPECT_EQ(payment_instrument.bank_account().bank_name(),
+            table_bank_account.bank_name());
+  EXPECT_EQ(payment_instrument.bank_account().account_number_suffix(),
+            table_bank_account.account_number_suffix());
+  EXPECT_EQ(payment_instrument.bank_account().account_type(),
+            table_bank_account.account_type());
+}
+
+TEST_F(PaymentsAutofillTableTest,
+       PaymentInstrument_StoresPaymentInstrumentWithIban) {
+  // Add an IBAN payment instrument to the table.
+  sync_pb::PaymentInstrument payment_instrument =
+      test::CreatePaymentInstrumentWithIban(1234);
+  std::vector<sync_pb::PaymentInstrument> payment_instruments{
+      payment_instrument};
+  table_->SetPaymentInstruments(payment_instruments);
+
+  // Retrieve the payment instruments.
+  std::vector<sync_pb::PaymentInstrument> payment_instruments_from_table;
+  table_->GetPaymentInstruments(payment_instruments_from_table);
+
+  // Check that the payment instruments are equal.
+  EXPECT_EQ(payment_instruments_from_table.size(), 1u);
+  EXPECT_EQ(payment_instrument.instrument_id(),
+            payment_instruments_from_table[0].instrument_id());
+  auto table_iban = payment_instruments_from_table[0].iban();
+  EXPECT_EQ(payment_instrument.iban().instrument_id(),
+            table_iban.instrument_id());
+  EXPECT_EQ(payment_instrument.iban().prefix(), table_iban.prefix());
+  EXPECT_EQ(payment_instrument.iban().suffix(), table_iban.suffix());
+  EXPECT_EQ(payment_instrument.iban().length(), table_iban.length());
+  EXPECT_EQ(payment_instrument.iban().nickname(), table_iban.nickname());
+}
+
+TEST_F(PaymentsAutofillTableTest,
+       PaymentInstrument_StoresMultiplePaymentInstruments) {
+  // Add multiple payment instruments with details to the table.
+  sync_pb::PaymentInstrument bank_account_payment_instrument =
+      test::CreatePaymentInstrumentWithBankAccount(1234);
+  sync_pb::PaymentInstrument iban_payment_instrument =
+      test::CreatePaymentInstrumentWithIban(5678);
+  std::vector<sync_pb::PaymentInstrument> payment_instruments{
+      bank_account_payment_instrument, iban_payment_instrument};
+  table_->SetPaymentInstruments(payment_instruments);
+
+  // Retrieve the payment instruments.
+  std::vector<sync_pb::PaymentInstrument> payment_instruments_from_table;
+  table_->GetPaymentInstruments(payment_instruments_from_table);
+
+  // Check that both payment instruments exist in the table.
+  EXPECT_EQ(payment_instruments_from_table.size(), 2u);
+  EXPECT_TRUE(std::ranges::any_of(
+      payment_instruments_from_table,
+      [&bank_account_payment_instrument](sync_pb::PaymentInstrument& p) {
+        return p.instrument_id() ==
+               bank_account_payment_instrument.instrument_id();
+      }));
+  EXPECT_TRUE(std::ranges::any_of(
+      payment_instruments_from_table,
+      [&iban_payment_instrument](sync_pb::PaymentInstrument& p) {
+        return p.instrument_id() == iban_payment_instrument.instrument_id();
+      }));
+}
+
+TEST_F(PaymentsAutofillTableTest,
+       PaymentInstrument_DoesNotStorePaymentInstrumentWithoutDetails) {
+  // Add a payment instrument without details to the table.
+  sync_pb::PaymentInstrument payment_instrument;
+  payment_instrument.set_instrument_id(1234);
+  std::vector<sync_pb::PaymentInstrument> payment_instruments{
+      payment_instrument};
+  table_->SetPaymentInstruments(payment_instruments);
+
+  // Attempt to retrieve the payment instruments.
+  std::vector<sync_pb::PaymentInstrument> payment_instruments_from_table;
+  table_->GetPaymentInstruments(payment_instruments_from_table);
+
+  // Check that no payment instruments were retrieved.
+  EXPECT_TRUE(payment_instruments_from_table.empty());
+}
+
+TEST_F(PaymentsAutofillTableTest,
+       PaymentInstrument_SetPaymentInstrumentsOverwritesExistingValues) {
+  // Add the first payment instrument to the table.
+  sync_pb::PaymentInstrument payment_instrument_1 =
+      test::CreatePaymentInstrumentWithBankAccount(1234);
+  std::vector<sync_pb::PaymentInstrument> payment_instruments{
+      payment_instrument_1};
+  table_->SetPaymentInstruments(payment_instruments);
+  // Overwrite the existing payment instrument with a new instrument.
+  sync_pb::PaymentInstrument payment_instrument_2 =
+      test::CreatePaymentInstrumentWithBankAccount(5678);
+  payment_instruments[0] = payment_instrument_2;
+  table_->SetPaymentInstruments(payment_instruments);
+
+  // Retrieve the payment instruments.
+  std::vector<sync_pb::PaymentInstrument> payment_instruments_from_table;
+  table_->GetPaymentInstruments(payment_instruments_from_table);
+
+  // Check that the first payment instrument does not exist.
+  EXPECT_FALSE(std::ranges::any_of(
+      payment_instruments_from_table,
+      [&payment_instrument_1](sync_pb::PaymentInstrument& p) {
+        return p.instrument_id() == payment_instrument_1.instrument_id();
+      }));
+  // Check that the second payment instruments exists.
+  EXPECT_TRUE(std::ranges::any_of(
+      payment_instruments_from_table,
+      [&payment_instrument_2](sync_pb::PaymentInstrument& p) {
+        return p.instrument_id() == payment_instrument_2.instrument_id();
+      }));
 }
 
 }  // namespace

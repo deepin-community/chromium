@@ -11,10 +11,10 @@
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
 #include "third_party/blink/renderer/core/editing/text_affinity.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_request.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -92,6 +92,31 @@ TEST_F(HitTestingTest, OcclusionHitTest) {
   EXPECT_EQ(result.InnerNode(), occluder);
 }
 
+TEST_F(HitTestingTest, OcclusionHitTestSVGTextWithFilterCrash) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+    div {
+      width: 100px;
+      height: 100px;
+    }
+    text {
+      filter: blur(10px);
+    }
+    </style>
+
+    <div id="target"></div>
+    <svg overflow="visible" display="block">
+      <text id="occluder" y="40" font-size="50px">M</text>
+    </svg>
+  )HTML");
+
+  Element* target = GetElementById("target");
+  Element* occluder = GetElementById("occluder");
+  HitTestResult result = target->GetLayoutObject()->HitTestForOcclusion();
+  // The intersection will be flagged on the text node.
+  EXPECT_EQ(result.InnerNode(), occluder->firstChild());
+}
+
 TEST_F(HitTestingTest, HitTestWithCallback) {
   SetBodyInnerHTML(R"HTML(
     <style>
@@ -137,7 +162,7 @@ TEST_F(HitTestingTest, HitTestWithCallback) {
 
   // Ensure that occluders intersect with the target.
   const int div_height =
-      GetLayoutObjectByElementId("target")->StyleRef().UsedHeight().IntValue();
+      GetLayoutObjectByElementId("target")->StyleRef().Height().IntValue();
   occluder_1->SetInlineStyleProperty(CSSPropertyID::kMarginTop, "-10px");
   occluder_2->SetInlineStyleProperty(
       CSSPropertyID::kMarginTop,

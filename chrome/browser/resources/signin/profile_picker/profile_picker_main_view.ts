@@ -14,6 +14,7 @@ import './profile_picker_shared.css.js';
 import './strings.m.js';
 
 import {listenOnce} from '//resources/js/util.js';
+import {HelpBubbleMixin} from 'chrome://resources/cr_components/help_bubble/help_bubble_mixin.js';
 import type {CrCheckboxElement} from 'chrome://resources/cr_elements/cr_checkbox/cr_checkbox.js';
 import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
 import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
@@ -43,7 +44,7 @@ export interface ProfilePickerMainViewElement {
 }
 
 const ProfilePickerMainViewElementBase =
-    WebUiListenerMixin(NavigationMixin(PolymerElement));
+    HelpBubbleMixin(WebUiListenerMixin(NavigationMixin(PolymerElement)));
 
 export class ProfilePickerMainViewElement extends
     ProfilePickerMainViewElementBase implements DraggableTileListInterface {
@@ -114,7 +115,7 @@ export class ProfilePickerMainViewElement extends
   private dragDelegate_: DragDropReorderTileListDelegate|null = null;
   private dragDuration_: number = 300;
 
-  // TODO(crbug.com/1478217): Move the dialog into it's own element with the
+  // TODO(crbug.com/40280498): Move the dialog into it's own element with the
   // below members. This dialog state should be independent of the Profile
   // Picker itself.
   private forceSigninErrorDialogTitle_: string;
@@ -255,7 +256,7 @@ export class ProfilePickerMainViewElement extends
   private handleProfileRemoved_(profilePath: string) {
     for (let i = 0; i < this.profilesList_.length; i += 1) {
       if (this.profilesList_[i].profilePath === profilePath) {
-        // TODO(crbug.com/1063856): Add animation.
+        // TODO(crbug.com/40123459): Add animation.
         this.splice('profilesList_', i, 1);
         break;
       }

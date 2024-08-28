@@ -38,7 +38,6 @@ namespace ash {
 class ExistingUserController;
 class MojoSystemInfoDispatcher;
 class OobeUIDialogDelegate;
-class UserBoardViewMojo;
 class WizardController;
 
 // A LoginDisplayHost instance that sends requests to the views-based signin
@@ -76,7 +75,6 @@ class LoginDisplayHostMojo : public LoginDisplayHostCommon,
   content::WebContents* GetOobeWebContents() const override;
   WebUILoginView* GetWebUILoginView() const override;
   void OnFinalize() override;
-  void SetStatusAreaVisible(bool visible) override;
   void StartWizard(OobeScreenId first_screen) override;
   WizardController* GetWizardController() override;
   void OnStartUserAdding() override;
@@ -196,6 +194,12 @@ class LoginDisplayHostMojo : public LoginDisplayHostCommon,
 
   void OnDeviceSettingsChanged();
 
+  // Starts `AuthHub` in login mode.
+  void ScheduleStartAuthHubInLoginMode();
+  void StartAuthHubInLoginMode(bool is_cryptohome_available);
+
+  base::ObserverList<LoginDisplayHost::Observer> observers_;
+
   // State associated with a pending authentication attempt.
   struct AuthState {
     AuthState(AccountId account_id, base::OnceCallback<void(bool)> callback);
@@ -208,7 +212,6 @@ class LoginDisplayHostMojo : public LoginDisplayHostCommon,
   };
   std::unique_ptr<AuthState> pending_auth_state_;
 
-  std::unique_ptr<UserBoardViewMojo> user_board_view_mojo_;
   std::unique_ptr<UserSelectionScreen> user_selection_screen_;
 
   base::CallbackListSubscription allow_new_user_subscription_;
@@ -252,8 +255,6 @@ class LoginDisplayHostMojo : public LoginDisplayHostCommon,
 
   base::ScopedObservation<ui::UserActivityDetector, ui::UserActivityObserver>
       scoped_activity_observation_{this};
-
-  base::ObserverList<LoginDisplayHost::Observer> observers_;
 
   base::WeakPtrFactory<LoginDisplayHostMojo> weak_factory_{this};
 };

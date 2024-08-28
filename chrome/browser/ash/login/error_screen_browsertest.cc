@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/login/screens/error_screen.h"
+
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
-#include "chrome/browser/ash/login/app_mode/kiosk_launch_controller.h"
+#include "chrome/browser/ash/app_mode/kiosk_test_helper.h"
 #include "chrome/browser/ash/login/app_mode/test/kiosk_apps_mixin.h"
 #include "chrome/browser/ash/login/login_wizard.h"
-#include "chrome/browser/ash/login/screens/error_screen.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/login/test/dialog_window_waiter.h"
@@ -19,6 +20,7 @@
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
@@ -309,9 +311,6 @@ class KioskErrorScreenTest : public MixinBasedInProcessBrowserTest {
   void SetUpInProcessBrowserTestFixture() override {
     host_resolver()->AddRule("*", "127.0.0.1");
 
-    skip_splash_wait_override_ =
-        KioskLaunchController::SkipSplashScreenWaitForTesting();
-
     AddKioskAppToDevicePolicy();
 
     MixinBasedInProcessBrowserTest::SetUpInProcessBrowserTestFixture();
@@ -345,8 +344,7 @@ class KioskErrorScreenTest : public MixinBasedInProcessBrowserTest {
 
   void SetBlockAppLaunch(bool block) {
     if (block) {
-      block_app_launch_override_ =
-          KioskLaunchController::BlockAppLaunchForTesting();
+      block_app_launch_override_ = KioskTestHelper::BlockAppLaunch();
     } else {
       block_app_launch_override_.reset();
     }
@@ -368,8 +366,9 @@ class KioskErrorScreenTest : public MixinBasedInProcessBrowserTest {
 
   std::unique_ptr<NetworkStateTestHelper> network_helper_;
 
-  std::unique_ptr<base::AutoReset<bool>> skip_splash_wait_override_;
-  std::unique_ptr<base::AutoReset<bool>> block_app_launch_override_;
+  base::AutoReset<bool> skip_splash_wait_override_ =
+      KioskTestHelper::SkipSplashScreenWait();
+  std::optional<base::AutoReset<bool>> block_app_launch_override_;
 
   DeviceStateMixin device_state_{
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED};
@@ -383,7 +382,7 @@ class KioskErrorScreenTest : public MixinBasedInProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(KioskErrorScreenTest, OpenCertificateConfig) {
   KioskAppsMixin::WaitForAppsButton();
   EXPECT_TRUE(LoginScreenTestApi::IsAppsButtonShown());
-  ASSERT_TRUE(LoginScreenTestApi::LaunchApp(KioskAppsMixin::kKioskAppId));
+  ASSERT_TRUE(LoginScreenTestApi::LaunchApp(KioskAppsMixin::kTestChromeAppId));
 
   OobeScreenWaiter(ErrorScreenView::kScreenId).Wait();
   EXPECT_TRUE(LoginScreenTestApi::IsOobeDialogVisible());
@@ -410,7 +409,7 @@ IN_PROC_BROWSER_TEST_F(KioskErrorScreenTest,
                        NoBackButtonInNetworkConfigureScreenAfterTimeout) {
   KioskAppsMixin::WaitForAppsButton();
   EXPECT_TRUE(LoginScreenTestApi::IsAppsButtonShown());
-  ASSERT_TRUE(LoginScreenTestApi::LaunchApp(KioskAppsMixin::kKioskAppId));
+  ASSERT_TRUE(LoginScreenTestApi::LaunchApp(KioskAppsMixin::kTestChromeAppId));
   EXPECT_TRUE(LoginScreenTestApi::IsOobeDialogVisible());
   OobeScreenWaiter(ErrorScreenView::kScreenId).Wait();
   test::OobeJS().ExpectPathDisplayed(false, kNetworkBackButton);
@@ -431,7 +430,7 @@ IN_PROC_BROWSER_TEST_F(KioskErrorScreenTest,
   SetOnline(true);
   KioskAppsMixin::WaitForAppsButton();
   EXPECT_TRUE(LoginScreenTestApi::IsAppsButtonShown());
-  ASSERT_TRUE(LoginScreenTestApi::LaunchApp(KioskAppsMixin::kKioskAppId));
+  ASSERT_TRUE(LoginScreenTestApi::LaunchApp(KioskAppsMixin::kTestChromeAppId));
   SetBlockAppLaunch(true);
   OobeScreenWaiter(AppLaunchSplashScreenView::kScreenId).Wait();
 

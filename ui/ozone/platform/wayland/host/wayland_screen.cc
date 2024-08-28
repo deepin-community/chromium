@@ -68,7 +68,7 @@ display::Display::Rotation WaylandTransformToRotation(int32_t transform) {
       NOTIMPLEMENTED_LOG_ONCE();
       return display::Display::ROTATE_0;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return display::Display::ROTATE_0;
 }
 
@@ -95,10 +95,10 @@ WaylandScreen::WaylandScreen(WaylandConnection* connection)
     if (format == gfx::BufferFormat::RGBA_8888)
       image_format_alpha_ = gfx::BufferFormat::RGBA_8888;
 
-      // TODO(1128997): |image_format_no_alpha_| should use RGBX_8888 when it's
-      // available, but for some reason Chromium gets broken when it's used.
-      // Though,  we can import RGBX_8888 dma buffer to EGLImage successfully.
-      // Enable that back when the issue is resolved.
+      // TODO(crbug.com/40719968): |image_format_no_alpha_| should use RGBX_8888
+      // when it's available, but for some reason Chromium gets broken when it's
+      // used. Though,  we can import RGBX_8888 dma buffer to EGLImage
+      // successfully. Enable that back when the issue is resolved.
 #endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
 
     if (format == gfx::BufferFormat::RGBA_F16)
@@ -361,7 +361,7 @@ display::Display WaylandScreen::GetDisplayForAcceleratedWidget(
 
   if (display_id_map_.find(entered_output_id.value()) ==
       display_id_map_.end()) {
-    DUMP_WILL_BE_NOTREACHED_NORETURN();
+    DUMP_WILL_BE_NOTREACHED();
     return GetPrimaryDisplay();
   }
 
@@ -373,7 +373,7 @@ display::Display WaylandScreen::GetDisplayForAcceleratedWidget(
       return display;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return GetPrimaryDisplay();
 }
 
@@ -548,6 +548,14 @@ base::Value::List WaylandScreen::GetGpuExtraInfo(
                                  base::JoinString(protocols, " ")));
   StorePlatformNameIntoListOfValues(values, "wayland");
   return values;
+}
+
+std::optional<float> WaylandScreen::GetPreferredScaleFactorForAcceleratedWidget(
+    gfx::AcceleratedWidget widget) const {
+  if (auto* window = connection_->window_manager()->GetWindow(widget)) {
+    return window->GetPreferredScaleFactor();
+  }
+  return std::nullopt;
 }
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)

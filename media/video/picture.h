@@ -21,35 +21,13 @@
 
 namespace media {
 
-// A picture buffer that is composed of one or more GLES2 textures.
-// This is the media-namespace equivalent of PP_PictureBuffer_Dev.
+// A PictureBuffer carries metadata about a particular buffer tracked by the
+// client of a VideoDecodeAccelerator.
 class MEDIA_EXPORT PictureBuffer {
  public:
-  using TextureIds = std::vector<uint32_t>;
-  using TextureSizes = std::vector<gfx::Size>;
-
   PictureBuffer(int32_t id, const gfx::Size& size);
   PictureBuffer(int32_t id,
                 const gfx::Size& size,
-                const TextureIds& client_texture_ids);
-  PictureBuffer(int32_t id,
-                const gfx::Size& size,
-                const TextureIds& client_texture_ids,
-                const TextureIds& service_texture_ids,
-                uint32_t texture_target,
-                VideoPixelFormat pixel_format);
-  PictureBuffer(int32_t id,
-                const gfx::Size& size,
-                const TextureIds& client_texture_ids,
-                const std::vector<gpu::Mailbox>& texture_mailboxes,
-                uint32_t texture_target,
-                VideoPixelFormat pixel_format);
-  PictureBuffer(int32_t id,
-                const gfx::Size& size,
-                const TextureSizes& texture_sizes,
-                const TextureIds& client_texture_ids,
-                const TextureIds& service_texture_ids,
-                uint32_t texture_target,
                 VideoPixelFormat pixel_format);
   PictureBuffer(const PictureBuffer& other);
   ~PictureBuffer();
@@ -62,27 +40,10 @@ class MEDIA_EXPORT PictureBuffer {
 
   void set_size(const gfx::Size& size) { size_ = size; }
 
-  // The client texture ids, i.e., those returned by Chrome's GL service.
-  const TextureIds& client_texture_ids() const { return client_texture_ids_; }
-
-  // The service texture ids, i.e., the real platform ids corresponding to
-  // |client_texture_ids|.
-  const TextureIds& service_texture_ids() const { return service_texture_ids_; }
-
-  uint32_t texture_target() const { return texture_target_; }
-
   VideoPixelFormat pixel_format() const { return pixel_format_; }
-
-  gfx::Size texture_size(size_t plane) const;
-
  private:
   int32_t id_;
   gfx::Size size_;
-  TextureSizes texture_sizes_;
-  TextureIds client_texture_ids_;
-  TextureIds service_texture_ids_;
-  std::vector<gpu::Mailbox> texture_mailboxes_;
-  uint32_t texture_target_ = 0;
   VideoPixelFormat pixel_format_ = PIXEL_FORMAT_UNKNOWN;
 };
 
@@ -186,14 +147,6 @@ class MEDIA_EXPORT Picture {
 
   bool is_webgpu_compatible() { return is_webgpu_compatible_; }
 
-  SharedImageFormatType shared_image_format_type() const {
-    return shared_image_format_type_;
-  }
-
-  void set_shared_image_format_type(SharedImageFormatType type) {
-    shared_image_format_type_ = type;
-  }
-
  private:
   int32_t picture_buffer_id_;
   int32_t bitstream_buffer_id_;
@@ -206,8 +159,6 @@ class MEDIA_EXPORT Picture {
   bool texture_owner_;
   bool wants_promotion_hint_;
   bool is_webgpu_compatible_;
-  SharedImageFormatType shared_image_format_type_ =
-      SharedImageFormatType::kLegacy;
   std::array<scoped_refptr<ScopedSharedImage>, VideoFrame::kMaxPlanes>
       scoped_shared_images_;
 };

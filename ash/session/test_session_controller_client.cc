@@ -292,7 +292,7 @@ void TestSessionControllerClient::CycleActiveUser(
         return session && session->session_id == session_id;
       });
   if (it == sessions.end()) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 
@@ -302,8 +302,8 @@ void TestSessionControllerClient::CycleActiveUser(
 void TestSessionControllerClient::ShowMultiProfileLogin() {
   SetSessionState(session_manager::SessionState::LOGIN_SECONDARY);
 
-  views::Widget::InitParams params;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   params.bounds = gfx::Rect(0, 0, 400, 300);
   params.context = Shell::GetPrimaryRootWindow();
 
@@ -328,8 +328,9 @@ base::FilePath TestSessionControllerClient::GetProfilePath(
   return base::FilePath("/profile/path").Append(account_id.GetUserEmail());
 }
 
-bool TestSessionControllerClient::IsEnterpriseManaged() const {
-  return is_enterprise_managed_;
+std::tuple<bool, bool> TestSessionControllerClient::IsEligibleForSeaPen(
+    const AccountId& account_id) {
+  return is_eligible_for_background_replace_;
 }
 
 std::optional<int> TestSessionControllerClient::GetExistingUsersCount() const {

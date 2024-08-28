@@ -26,7 +26,6 @@
 #include "media/gpu/test/video_encoder/video_encoder_client.h"
 #include "media/gpu/test/video_encoder/video_encoder_test_environment.h"
 #include "media/gpu/test/video_frame_file_writer.h"
-#include "media/gpu/test/video_frame_helpers.h"
 #include "media/gpu/test/video_frame_validator.h"
 #include "media/gpu/test/video_test_environment.h"
 #include "media/gpu/test/video_test_helpers.h"

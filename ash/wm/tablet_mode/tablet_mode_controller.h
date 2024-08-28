@@ -28,6 +28,7 @@
 #include "ui/compositor/layer_observer.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/compositor/throughput_tracker.h"
+#include "ui/display/manager/display_manager_observer.h"
 #include "ui/display/screen.h"
 #include "ui/events/devices/input_device_event_observer.h"
 #include "ui/gfx/geometry/vector3d_f.h"
@@ -67,7 +68,7 @@ class ASH_EXPORT TabletModeController
       public chromeos::PowerManagerClient::Observer,
       public TabletMode,
       public ShellObserver,
-      public WindowTreeHostManager::Observer,
+      public display::DisplayManagerObserver,
       public SessionObserver,
       public ui::InputDeviceEventObserver,
       public ui::LayerAnimationObserver,
@@ -138,14 +139,14 @@ class ASH_EXPORT TabletModeController
   bool ForceUiTabletModeState(std::optional<bool> enabled) override;
   // Do NOT call this directly from unit tests. Instead, please use
   // ash::TabletModeControllerTestApi().{Enter/Leave}TabletMode().
-  // TODO(crbug.com/1502114): Move this to private.
+  // TODO(crbug.com/40942452): Move this to private.
   void SetEnabledForTest(bool enabled) override;
 
   // ShellObserver:
   void OnShellInitialized() override;
 
-  // WindowTreeHostManager::Observer:
-  void OnDisplayConfigurationChanged() override;
+  // display::DisplayManagerObserver:
+  void OnDidApplyDisplayChanges() override;
 
   // SessionObserver:
   void OnChromeTerminating() override;
@@ -185,8 +186,6 @@ class ASH_EXPORT TabletModeController
     ++tab_drag_in_splitview_count_;
   }
 
-  // TODO(hewer): Remove this when the cue is made into a class variable for
-  // the event handler.
   TabletModeWindowManager* tablet_mode_window_manager() {
     return tablet_mode_window_manager_.get();
   }
@@ -251,15 +250,6 @@ class ASH_EXPORT TabletModeController
   enum TabletModeIntervalType {
     TABLET_MODE_INTERVAL_INACTIVE,
     TABLET_MODE_INTERVAL_ACTIVE
-  };
-
-  // Tracks whether we are in the process of entering or exiting tablet mode.
-  // Used for logging histogram metrics.
-  enum class State {
-    kInClamshellMode,
-    kEnteringTabletMode,
-    kInTabletMode,
-    kExitingTabletMode,
   };
 
   // Turn the always tablet mode window manager on or off.

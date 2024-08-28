@@ -110,7 +110,8 @@ class DownloadItemView : public views::View,
 
  protected:
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& /*available_size*/) const override;
   void OnPaintBackground(gfx::Canvas* canvas) override;
   void OnPaint(gfx::Canvas* canvas) override;
   void OnThemeChanged() override;
@@ -263,15 +264,11 @@ class DownloadItemView : public views::View,
   raw_ptr<views::StyledLabel> warning_label_;
   raw_ptr<views::StyledLabel> deep_scanning_label_;
 
-  // These fields are not raw_ptr<> because they are assigned to |auto*| in
-  // ranged loop on an array initializer literal comprising of those pointers.
-  RAW_PTR_EXCLUSION views::MdTextButton* open_now_button_;
-  RAW_PTR_EXCLUSION views::MdTextButton* save_button_;
-  RAW_PTR_EXCLUSION views::MdTextButton* discard_button_;
-  RAW_PTR_EXCLUSION views::MdTextButton* scan_button_;
-  // This field is not a raw_ptr<> because of conflicting types in an
-  // initializer list.
-  RAW_PTR_EXCLUSION views::MdTextButton* review_button_;
+  raw_ptr<views::MdTextButton> open_now_button_;
+  raw_ptr<views::MdTextButton> save_button_;
+  raw_ptr<views::MdTextButton> discard_button_;
+  raw_ptr<views::MdTextButton> scan_button_;
+  raw_ptr<views::MdTextButton> review_button_;
   raw_ptr<views::ImageButton> dropdown_button_;
 
   // Whether the dropdown is currently pressed.

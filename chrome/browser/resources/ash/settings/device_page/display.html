@@ -1,5 +1,13 @@
 <style include="cr-shared-style settings-shared md-select iron-flex
   iron-flex-alignment">
+  #arrangement-section {
+    border-top: none;
+  }
+
+  #arrangement-section-main {
+    padding: 0 var(--cr-section-padding);
+  }
+
   .indented {
     align-self: stretch;
     margin-inline-start: var(--cr-section-indent-padding);
@@ -39,45 +47,57 @@
   }
 
   #mirrorDisplayToggleButton {
-    display: flex;
     align-self: stretch;
-    margin-bottom: 20px;
+    border-top: none;
+    display: flex;
   }
 
+  #brightnessSliderWrapper {
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+  }
 </style>
 
-<!-- Night Light Settings -->
-<template is="dom-if"
-    if="[[isRevampWayfindingEnabled_]]" restamp>
-  <settings-display-night-light prefs="{{prefs}}"
-    is-internal-display="[[selectedDisplay.isInternal]]">
-  </settings-display-night-light>
-  <div class="hr"></div>
-</template>
+<!-- Display Shiny Performance Mode Controller -->
+<div id="displayPerformanceModeSubsection" class="settings-box"
+    hidden="[[!isDisplayPerformanceSupported_]]">
+  <div id="displayPerformanceModeLabel"
+      class="start text-area" aria-hidden="true">
+      <!-- TODO(b/326270858): Translate the label -->
+      $i18n{displayShinyPerformanceLabel}
+  </div>
+  <cr-toggle id="displayPerformanceModeToggle"
+      aria-labelledby="displayPerformanceModeLabel"
+      on-change="toggleDisplayPerformanceEnabled_">
+  </cr-toggle>
+</div>
 
 <!-- Arrangement section -->
 <template is="dom-if"
     if="[[shouldShowArrangementSection(displays)]]" restamp>
-  <div class="settings-box first layout vertical self-stretch underbar"
-      id="arrangement-section">
-    <h2 class="layout self-start">
-      $i18n{displayArrangementTitle}
-    </h2>
-    <div class="secondary layout self-start"
-        hidden="[[isMirrored(displays)]]">
-      $i18n{displayArrangementText}
+  <div class="underbar" id="arrangement-section">
+    <div class="layout vertical self-stretch" id="arrangement-section-main">
+      <h2 class="layout self-start">
+        $i18n{displayArrangementTitle}
+      </h2>
+      <div class="secondary layout self-start"
+          hidden="[[isMirrored(displays)]]">
+        $i18n{displayArrangementText}
+      </div>
+      <display-layout id="displayLayout"
+          selected-display="[[selectedDisplay]]"
+          on-select-display="onSelectDisplay_"
+          deep-link-focus-id$="[[Setting.kDisplayArrangement]]">
+      </display-layout>
     </div>
-    <display-layout id="displayLayout"
-        selected-display="[[selectedDisplay]]"
-        on-select-display="onSelectDisplay_"
-        deep-link-focus-id$="[[Setting.kDisplayArrangement]]">
-    </display-layout>
 
     <template is="dom-if"
         if="[[showMirror(unifiedDesktopMode_, displays)]]" restamp>
       <!-- Mirror display toggle button -->
       <template is="dom-if" if="[[isRevampWayfindingEnabled_]]">
-        <div id="mirrorDisplayToggleButton" class="text-area">
+        <div id="mirrorDisplayToggleButton" class="settings-box"
+            on-click="onMirroredClick_" actionable-row>
           <div id="mirrorDisplayToggleLabel" class="start">
             [[getDisplayMirrorText_(displays)]]
           </div>
@@ -152,6 +172,44 @@
         <option value="0">$i18n{displayScreenPrimary}</option>
         <option value="1">$i18n{displayScreenExtended}</option>
       </select>
+    </div>
+  </template>
+
+  <!-- Display brightness controls -->
+  <template is="dom-if" restamp
+      if="[[showBrightnessControls_(selectedDisplay)]]">
+    <template is="dom-if" restamp
+        if="[[showAutoBrightnessToggle_(hasAmbientLightSensor_)]]">
+      <div class="settings-box indented" id="autoBrightnessToggleRow"
+          on-click="onAutoBrightnessToggleRowClicked_" actionable-row>
+        <div class="start settings-box-text">
+          <div id="autoBrightnessToggleLabel" class="start" aria-hidden="true">
+              $i18n{displayAutoBrightnessToggleLabel}
+          </div>
+          <div id="autoBrightnessToggleSubtitle" class="secondary"
+              aria-hidden="true">
+            $i18n{displayAutoBrightnessToggleSubtitle}
+          </div>
+        </div>
+        <cr-toggle id="autoBrightnessToggle"
+            checked="[[isAmbientLightSensorEnabled_]]"
+            on-change="onAutoBrightnessToggleChange_"
+            aria-labelledby="autoBrightnessToggleLabel">
+        </cr-toggle>
+      </div>
+    </template>
+    <div class="settings-box indented">
+      <div id="brightnessControlsTitle" class="start" aria-hidden="true">
+        $i18n{displayBrightnessLabel}
+      </div>
+      <div id="brightnessSliderWrapper">
+        <cr-slider id="brightnessSlider" min="[[brightnessSliderMin_]]"
+            max="[[brightnessSliderMax_]]" key-press-slider-increment="10"
+            value="[[currentInternalScreenBrightness_]]"
+            on-cr-slider-value-changed="onDisplayBrightnessSliderChanged_"
+            aria-labelledby="brightnessControlsTitle">
+        </cr-slider>
+      </div>
     </div>
   </template>
 
@@ -315,10 +373,7 @@
 </div>
 
 <!-- Night Light Settings -->
-<template is="dom-if"
-    if="[[!isRevampWayfindingEnabled_]]" restamp>
-  <div class="hr"></div>
-  <settings-display-night-light prefs="{{prefs}}"
+<div class="hr"></div>
+<settings-display-night-light prefs="{{prefs}}"
     is-internal-display="[[selectedDisplay.isInternal]]">
-  </settings-display-night-light>
-</template>
+</settings-display-night-light>

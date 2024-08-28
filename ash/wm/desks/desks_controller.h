@@ -45,7 +45,7 @@ namespace ash {
 // and providing an undo toast when done manually.
 // These values are logged to UMA. Entries should not be renumbered and
 // numeric values should never be reused. Please keep in sync with
-// DeskCloseType in src/tools/metrics/histograms/enums.xml.
+// `DeskCloseType` in src/tools/metrics/histograms/metadata/ash/enums.xml.
 enum class DeskCloseType {
   // Closes the target desk and moves its windows to another desk.
   kCombineDesks = 0,
@@ -136,7 +136,8 @@ class ASH_EXPORT DesksController : public chromeos::DesksHelper,
 
   const Desk* active_desk() const { return active_desk_; }
 
-  const base::flat_set<aura::Window*>& visible_on_all_desks_windows() const {
+  const base::flat_set<raw_ptr<aura::Window, CtnExperimental>>&
+  visible_on_all_desks_windows() const {
     return visible_on_all_desks_windows_;
   }
 
@@ -369,6 +370,9 @@ class ASH_EXPORT DesksController : public chromeos::DesksHelper,
   // `temporary_removed_desk_->is_toast_persistent()` is true.
   void MaybeDismissPersistentDeskRemovalToast();
 
+  // Requests focus on the undo desk toast's dismiss button.
+  bool RequestFocusOnUndoDeskRemovalToast();
+
   // Adds focus highlight to an active toast to undo desk removal if one is
   // active and the toast is not already highlighted. Otherwise, it removes the
   // highlight from an active toast and returns false.
@@ -415,12 +419,9 @@ class ASH_EXPORT DesksController : public chromeos::DesksHelper,
   void MaybeCommitPendingDeskRemoval(
       const std::string& toast_id = std::string());
 
-  // Returns true if the desk removal undo toast is shown.
-  bool IsUndoToastShown() const;
-
   // Returns true if there is an active toast for undoing desk removal and that
-  // toast's dismiss button is currently being highlighted.
-  bool IsUndoToastHighlighted() const;
+  // toast's dismiss button is currently being focused.
+  bool IsUndoToastFocused() const;
 
   // Tracks/untracks the z-order of `window` on all desks. Should only be called
   // when per-desk z-order is enabled.
@@ -534,7 +535,8 @@ class ASH_EXPORT DesksController : public chromeos::DesksHelper,
   // Stores visible on all desks windows, that is normal type windows with
   // normal z-ordering and are visible on all workspaces. Store here to prevent
   // repeatedly retrieving these windows on desk switches.
-  base::flat_set<aura::Window*> visible_on_all_desks_windows_;
+  base::flat_set<raw_ptr<aura::Window, CtnExperimental>>
+      visible_on_all_desks_windows_;
 
   // True when desks addition, removal, or activation change are in progress.
   // This can be checked when overview mode is active to avoid exiting overview

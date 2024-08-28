@@ -52,6 +52,10 @@
 #include "third_party/blink/renderer/core/timing/responsiveness_metrics.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
+namespace viz {
+struct FrameTimingDetails;
+}
+
 namespace blink {
 
 class AnimationFrameTimingInfo;
@@ -68,22 +72,28 @@ class CORE_EXPORT WindowPerformance final : public Performance,
     EventData(PerformanceEventTiming* event_timing,
               uint64_t presentation_index,
               base::TimeTicks event_timestamp,
+              base::TimeTicks processing_start,
+              base::TimeTicks processing_end,
               std::optional<int> key_code,
               std::optional<PointerId> pointer_id)
         : event_timing_(event_timing),
           presentation_index_(presentation_index),
           event_timestamp_(event_timestamp),
+          processing_start_(processing_start),
+          processing_end_(processing_end),
           key_code_(key_code),
           pointer_id_(pointer_id) {}
 
     static EventData* Create(PerformanceEventTiming* event_timing,
                              uint64_t presentation_index,
                              base::TimeTicks event_timestamp,
+                             base::TimeTicks processing_start,
+                             base::TimeTicks processing_end,
                              std::optional<int> key_code,
                              std::optional<PointerId> pointer_id) {
-      return MakeGarbageCollected<EventData>(event_timing, presentation_index,
-                                             event_timestamp, key_code,
-                                             pointer_id);
+      return MakeGarbageCollected<EventData>(
+          event_timing, presentation_index, event_timestamp, processing_start,
+          processing_end, key_code, pointer_id);
     }
     ~EventData() = default;
     void Trace(Visitor*) const;
@@ -92,6 +102,8 @@ class CORE_EXPORT WindowPerformance final : public Performance,
     }
     uint64_t GetPresentationIndex() const { return presentation_index_; }
     base::TimeTicks GetEventTimestamp() const { return event_timestamp_; }
+    base::TimeTicks GetProcessingStart() const { return processing_start_; }
+    base::TimeTicks GetProcessingEnd() const { return processing_end_; }
     std::optional<int> GetKeyCode() const { return key_code_; }
     std::optional<PointerId> GetPointerId() const { return pointer_id_; }
 
@@ -105,6 +117,10 @@ class CORE_EXPORT WindowPerformance final : public Performance,
     uint64_t presentation_index_;
     // The event creation timestamp.
     base::TimeTicks event_timestamp_;
+
+    base::TimeTicks processing_start_;
+
+    base::TimeTicks processing_end_;
     // Keycode for the event. If the event is not a keyboard event, the keycode
     // wouldn't be set.
     std::optional<int> key_code_;
@@ -141,6 +157,11 @@ class CORE_EXPORT WindowPerformance final : public Performance,
                            base::TimeTicks processing_start,
                            base::TimeTicks processing_end);
 
+  // Set commit finish time for all pending events that have finished processing
+  // and are watiting for presentation promise to resolve.
+  void SetCommitFinishTimeStampForPendingEvents(
+      base::TimeTicks commit_finish_time);
+
   void OnPaintFinished();
 
   void AddElementTiming(const AtomicString& name,
@@ -168,6 +189,8 @@ class CORE_EXPORT WindowPerformance final : public Performance,
 
   // PageVisibilityObserver
   void PageVisibilityChanged() override;
+  void PageVisibilityChangedWithTimestamp(
+      base::TimeTicks visibility_change_timestamp);
 
   void OnLargestContentfulPaintUpdated(
       base::TimeTicks start_time,
@@ -204,8 +227,13 @@ class CORE_EXPORT WindowPerformance final : public Performance,
 
   void BuildJSONValue(V8ObjectBuilder&) const override;
 
-  void OnPresentationPromiseResolved(uint64_t presentation_index,
-                                     base::TimeTicks presentation_timestamp);
+  void ReportAllPendingEventTimingsOnPageHidden();
+
+  void FlushEventTimingsOnPageHidden();
+
+  void OnPresentationPromiseResolved(
+      uint64_t presentation_index,
+      const viz::FrameTimingDetails& presentation_details);
   // Report buffered events with presentation time following their registered
   // order; stop as soon as seeing an event with pending presentation promise.
   void ReportEventTimings();
@@ -230,13 +258,14 @@ class CORE_EXPORT WindowPerformance final : public Performance,
 
   // Return a valid fallback time in event timing if there's one; otherwise
   // return nullopt.
-  absl::optional<base::TimeTicks> GetFallbackTime(
+  std::optional<base::TimeTicks> GetFallbackTime(
       PerformanceEventTiming* entry,
       base::TimeTicks event_timestamp,
+      base::TimeTicks processing_end,
       base::TimeTicks presentation_timestamp);
 
   // The last time the page visibility was changed.
-  base::TimeTicks last_visibility_change_timestamp_;
+  base::TimeTicks last_hidden_timestamp_;
 
   // A list of timestamps that javascript modal dialogs was showing. These are
   // timestamps right before start showing each dialog.

@@ -8,6 +8,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -15,7 +16,6 @@
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -136,7 +136,7 @@ std::vector<std::string> GetSortedThirdPartyIMEs(
   std::vector<std::string> ime_list;
   std::string preferred_languages =
       prefs->GetString(language::prefs::kPreferredLanguages);
-  std::vector<base::StringPiece> enabled_languages =
+  std::vector<std::string_view> enabled_languages =
       base::SplitStringPiece(preferred_languages, ",", base::TRIM_WHITESPACE,
                              base::SPLIT_WANT_NONEMPTY);
 
@@ -148,10 +148,10 @@ std::vector<std::string> GetSortedThirdPartyIMEs(
   ime_state->GetInputMethodExtensions(&descriptors);
 
   // Filter out the IMEs not in |third_party_ime_set|.
-      base::EraseIf(descriptors,
-          [&third_party_ime_set](const InputMethodDescriptor& descriptor) {
-            return !third_party_ime_set.contains(descriptor.id());
-          });
+  std::erase_if(descriptors, [&third_party_ime_set](
+                                 const InputMethodDescriptor& descriptor) {
+    return !third_party_ime_set.contains(descriptor.id());
+  });
 
   // A set of the elements of |ime_list|.
   std::set<std::string> ime_set;
@@ -499,7 +499,7 @@ LanguageSettingsPrivateMoveLanguageFunction::Run() {
 
     case language_settings_private::MoveType::kNone:
     case language_settings_private::MoveType::kMaxValue:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   // On Desktop we can only move languages by one position.
@@ -559,9 +559,9 @@ void LanguageSettingsPrivateGetSpellcheckWordsFunction::
 void LanguageSettingsPrivateGetSpellcheckWordsFunction::
     OnCustomDictionaryChanged(
         const SpellcheckCustomDictionary::Change& dictionary_change) {
-  NOTREACHED() << "SpellcheckCustomDictionary::Observer: "
-                  "OnCustomDictionaryChanged() called before "
-                  "OnCustomDictionaryLoaded()";
+  NOTREACHED_IN_MIGRATION() << "SpellcheckCustomDictionary::Observer: "
+                               "OnCustomDictionaryChanged() called before "
+                               "OnCustomDictionaryLoaded()";
 }
 
 base::Value::List

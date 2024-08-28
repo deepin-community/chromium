@@ -27,6 +27,24 @@ std::string ToUnderscoreId(const std::string& x) {
   return result;
 }
 
+// Return default value for each type. The default value is used to
+// avoid undefined behavior when struct is initialized on the stack.
+std::string GetTypeDefaultValue(const std::string& type) {
+  if (type == "uint64_t") {
+    return " = 0ull";
+  } else if (type == "int64_t") {
+    return " = 0ll";
+  } else if (type == "bool") {
+    return " = false";
+  } else if (type == "float") {
+    return " = 0.0f";
+  } else if (type.find("std::array") != std::string::npos) {
+    return "{}";
+  } else {
+    return "";
+  }
+}
+
 // Convert a CDDL identifier to camel case for use as a C typename.  E.g.
 // presentation-connection-message to PresentationConnectionMessage.
 std::string ToCamelCase(const std::string& x) {
@@ -95,7 +113,7 @@ bool WriteEnumEqualityOperatorSwitchCases(int fd,
                                           std::string parent_name) {
   for (const auto& x : parent.enum_type.members) {
     std::string enum_value = "k" + ToCamelCase(x.first);
-    dprintf(fd, "    case %s::%s: return parent == %s::%s;\n",
+    dprintf(fd, "    case %s::%s:\n      return parent == %s::%s;\n",
             child_name.c_str(), enum_value.c_str(), parent_name.c_str(),
             enum_value.c_str());
   }
@@ -115,27 +133,27 @@ bool WriteEnumEqualityOperator(int fd,
   std::string parent_name = ToCamelCase(parent.name);
 
   // Define type == parentType.
-  dprintf(fd, "inline bool operator==(const %s& child, const %s& parent) {\n",
+  dprintf(fd, "\ninline bool operator==(const %s& child, const %s& parent) {\n",
           name.c_str(), parent_name.c_str());
   dprintf(fd, "  switch (child) {\n");
   if (!WriteEnumEqualityOperatorSwitchCases(fd, parent, name, parent_name)) {
     return false;
   }
-  dprintf(fd, "    default: return false;\n");
+  dprintf(fd, "    default:\n      return false;\n");
   dprintf(fd, "  }\n}\n");
 
   // Define parentType == type.
-  dprintf(fd, "inline bool operator==(const %s& parent, const %s& child) {\n",
+  dprintf(fd, "\ninline bool operator==(const %s& parent, const %s& child) {\n",
           parent_name.c_str(), name.c_str());
   dprintf(fd, "  return child == parent;\n}\n");
 
   // Define type != parentType.
-  dprintf(fd, "inline bool operator!=(const %s& child, const %s& parent) {\n",
+  dprintf(fd, "\ninline bool operator!=(const %s& child, const %s& parent) {\n",
           name.c_str(), parent_name.c_str());
   dprintf(fd, "  return !(child == parent);\n}\n");
 
   // Define parentType != type.
-  dprintf(fd, "inline bool operator!=(const %s& parent, const %s& child) {\n",
+  dprintf(fd, "\ninline bool operator!=(const %s& parent, const %s& child) {\n",
           parent_name.c_str(), name.c_str());
   dprintf(fd, "  return !(parent == child);\n}\n");
 
@@ -147,8 +165,8 @@ bool WriteEnumStreamOperatorSwitchCases(int fd,
                                         std::string name) {
   for (const auto& x : type.enum_type.members) {
     std::string enum_value = "k" + ToCamelCase(x.first);
-    dprintf(fd, "    case %s::%s: os << \"%s\"; break;\n", name.c_str(),
-            enum_value.c_str(), enum_value.c_str());
+    dprintf(fd, "    case %s::%s:\n      os << \"%s\";\n      break;\n",
+            name.c_str(), enum_value.c_str(), enum_value.c_str());
   }
 
   return absl::c_all_of(
@@ -168,9 +186,10 @@ bool WriteEnumOperators(int fd, const CppType& type) {
   if (!WriteEnumStreamOperatorSwitchCases(fd, type, name)) {
     return false;
   }
-  dprintf(fd,
-          "    default: os << \"Unknown Value: \" << static_cast<int>(val);"
-          "\n      break;\n    }\n  return os;\n}\n");
+  dprintf(
+      fd,
+      "    default:\n      os << \"Unknown Value: \" << static_cast<int>(val);"
+      "\n      break;\n  }\n  return os;\n}\n");
 
   // Write equality operators.
   return absl::c_all_of(type.enum_type.sub_members,
@@ -285,7 +304,7 @@ bool WriteStructMembers(
       } break;
       case CppType::Which::kOptional: {
         // TODO(btolsch): Make this optional<T> when one lands.
-        dprintf(fd, "  bool has_%s;\n", ToUnderscoreId(x.name).c_str());
+        dprintf(fd, "  bool has_%s = false;\n", ToUnderscoreId(x.name).c_str());
         type_string = CppTypeToString(*x.type->optional_type);
       } break;
       case CppType::Which::kDiscriminatedUnion: {
@@ -325,7 +344,7 @@ bool WriteStructMembers(
           }
         }
         dprintf(fd, "    kUninitialized,\n");
-        dprintf(fd, "  } which;\n");
+        dprintf(fd, "  } which;\n\n");
         dprintf(fd, "  union {\n");
         for (auto* union_member : x.type->discriminated_union.members) {
           switch (union_member->which) {
@@ -363,8 +382,9 @@ bool WriteStructMembers(
     }
     if (type_string.empty())
       return false;
-    dprintf(fd, "  %s %s;\n", type_string.c_str(),
-            ToUnderscoreId(x.name).c_str());
+    dprintf(fd, "  %s %s%s;\n", type_string.c_str(),
+            ToUnderscoreId(x.name).c_str(),
+            GetTypeDefaultValue(type_string).c_str());
   }
   return true;
 }
@@ -387,7 +407,7 @@ bool WriteTypeDefinition(int fd, const CppType& type) {
     case CppType::Which::kEnum: {
       dprintf(fd, "\nenum class %s : uint64_t {\n", name.c_str());
       WriteEnumMembers(fd, type);
-      dprintf(fd, "};\n");
+      dprintf(fd, "};\n\n");
       if (!WriteEnumOperators(fd, type))
         return false;
     } break;
@@ -494,9 +514,9 @@ bool WriteTypeDefinitions(int fd, CppSymbolTable* table) {
   }
 
   dprintf(fd, "\nenum class Type : uint64_t {\n");
-  dprintf(fd, "    kUnknown = 0ull,\n");
+  dprintf(fd, "  kUnknown = 0ull,\n");
   for (CppType* type : table->TypesWithId()) {
-    dprintf(fd, "    k%s = %" PRIu64 "ull,\n", ToCamelCase(type->name).c_str(),
+    dprintf(fd, "  k%s = %" PRIu64 "ull,\n", ToCamelCase(type->name).c_str(),
             type->type_key.value());
   }
   dprintf(fd, "};\n");
@@ -817,7 +837,7 @@ bool WriteMapEncoder(int fd,
                      const std::string& nested_type_scope,
                      int encoder_depth) {
   std::string name_id = ToUnderscoreId(name);
-  dprintf(fd, "  CborEncoder encoder%d;\n", encoder_depth);
+  dprintf(fd, "  {\n  CborEncoder encoder%d;\n", encoder_depth);
   MemberCountResult member_counts = CountMemberTypes(fd, name_id, members);
   if (member_counts.num_optional == 0) {
     dprintf(fd,
@@ -873,7 +893,7 @@ bool WriteMapEncoder(int fd,
 
   dprintf(fd,
           "  CBOR_RETURN_ON_ERROR(cbor_encoder_close_container(&encoder%d, "
-          "&encoder%d));\n",
+          "&encoder%d));\n  }\n",
           encoder_depth - 1, encoder_depth);
   return true;
 }
@@ -890,7 +910,7 @@ bool WriteArrayEncoder(int fd,
                        const std::string& nested_type_scope,
                        int encoder_depth) {
   std::string name_id = ToUnderscoreId(name);
-  dprintf(fd, "  CborEncoder encoder%d;\n", encoder_depth);
+  dprintf(fd, "  {\n  CborEncoder encoder%d;\n", encoder_depth);
   MemberCountResult member_counts = CountMemberTypes(fd, name_id, members);
   if (member_counts.num_optional == 0) {
     dprintf(fd,
@@ -932,7 +952,7 @@ bool WriteArrayEncoder(int fd,
 
   dprintf(fd,
           "  CBOR_RETURN_ON_ERROR(cbor_encoder_close_container(&encoder%d, "
-          "&encoder%d));\n",
+          "&encoder%d));\n  }\n",
           encoder_depth - 1, encoder_depth);
   return true;
 }
@@ -1255,7 +1275,7 @@ bool WriteDecoder(int fd,
           "  CBOR_RETURN_ON_ERROR(cbor_value_enter_container(&it%d, &it%d));\n",
           decoder_depth, decoder_depth + 1);
       std::string loop_variable = "x" + std::to_string(decoder_depth + 1);
-      dprintf(fd, " for (auto& %s : %s) {\n", loop_variable.c_str(),
+      dprintf(fd, "  for (auto& %s : %s) {\n", loop_variable.c_str(),
               name.c_str());
       if (!WriteDecoder(fd, loop_variable, *cpp_type.vector_type.element_type,
                         decoder_depth + 1, temporary_count)) {
@@ -1414,6 +1434,7 @@ bool WriteMapDecoder(int fd,
           decoder_depth - 1);
   dprintf(fd, "    return -1;\n");
   dprintf(fd, "  }\n");
+  dprintf(fd, "  {\n");
   dprintf(fd, "  CborValue it%d;\n", decoder_depth);
   dprintf(fd, "  size_t it%d_length = 0;\n", decoder_depth);
   dprintf(fd,
@@ -1486,6 +1507,7 @@ bool WriteMapDecoder(int fd,
   dprintf(fd,
           "  CBOR_RETURN_ON_ERROR(cbor_value_leave_container(&it%d, &it%d));\n",
           decoder_depth - 1, decoder_depth);
+  dprintf(fd, "  }\n");
   return true;
 }
 
@@ -1504,6 +1526,7 @@ bool WriteArrayDecoder(int fd,
           decoder_depth - 1);
   dprintf(fd, "    return -1;\n");
   dprintf(fd, "  }\n");
+  dprintf(fd, "  {\n");
   dprintf(fd, "  CborValue it%d;\n", decoder_depth);
   dprintf(fd, "  size_t it%d_length = 0;\n", decoder_depth);
   dprintf(fd,
@@ -1559,6 +1582,7 @@ bool WriteArrayDecoder(int fd,
   dprintf(fd,
           "  CBOR_RETURN_ON_ERROR(cbor_value_leave_container(&it%d, &it%d));\n",
           decoder_depth - 1, decoder_depth);
+  dprintf(fd, "  }\n");
   return true;
 }
 
@@ -1721,9 +1745,9 @@ namespace {
 #define CBOR_RETURN_WHAT_ON_ERROR(stmt, what)                           \
   {                                                                     \
     CborError error = stmt;                                             \
-    OSP_DCHECK_NE(error, CborErrorTooFewItems);                         \
-    OSP_DCHECK_NE(error, CborErrorTooManyItems);                        \
-    OSP_DCHECK_NE(error, CborErrorDataTooLarge);                        \
+    OSP_CHECK_NE(error, CborErrorTooFewItems);                         \
+    OSP_CHECK_NE(error, CborErrorTooManyItems);                        \
+    OSP_CHECK_NE(error, CborErrorDataTooLarge);                        \
     if (error != CborNoError && error != CborErrorOutOfMemory)          \
       return what;                                                      \
   }

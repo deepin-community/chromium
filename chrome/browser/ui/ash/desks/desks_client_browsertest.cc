@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/ash/desks/desks_client.h"
+
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -10,7 +12,6 @@
 #include <string_view>
 #include <vector>
 
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/desk_template.h"
@@ -22,10 +23,16 @@
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/style/pill_button.h"
+#include "ash/test/ash_test_util.h"
 #include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "ash/wm/desks/desk.h"
+#include "ash/wm/desks/desk_action_button.h"
+#include "ash/wm/desks/desk_action_context_menu.h"
+#include "ash/wm/desks/desk_action_view.h"
 #include "ash/wm/desks/desks_controller.h"
+#include "ash/wm/desks/desks_test_api.h"
 #include "ash/wm/desks/desks_test_util.h"
+#include "ash/wm/desks/overview_desk_bar_view.h"
 #include "ash/wm/desks/templates/admin_template_launch_tracker.h"
 #include "ash/wm/desks/templates/saved_desk_controller.h"
 #include "ash/wm/desks/templates/saved_desk_metrics_util.h"
@@ -38,14 +45,18 @@
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/overview/overview_test_util.h"
 #include "ash/wm/overview/overview_utils.h"
+#include "ash/wm/snap_group/snap_group_controller.h"
+#include "ash/wm/splitview/split_view_constants.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/containers/contains.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_base.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/spin_wait.h"
 #include "base/uuid.h"
@@ -58,6 +69,8 @@
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/ash/app_restore/app_restore_arc_test_helper.h"
 #include "chrome/browser/ash/app_restore/app_restore_test_util.h"
+#include "chrome/browser/ash/crosapi/browser_manager.h"
+#include "chrome/browser/ash/crosapi/browser_util.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/ui/user_adding_screen.h"
@@ -71,7 +84,6 @@
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/desks/chrome_desks_util.h"
-#include "chrome/browser/ui/ash/desks/desks_client.h"
 #include "chrome/browser/ui/ash/desks/desks_templates_app_launch_handler.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
@@ -83,11 +95,13 @@
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/test/base/chromeos/ash_browser_test_starter.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "chromeos/ui/base/window_state_type.h"
+#include "chromeos/ui/frame/caption_buttons/snap_controller.h"
 #include "chromeos/ui/frame/multitask_menu/multitask_menu_nudge_controller.h"
 #include "components/account_id/account_id.h"
 #include "components/app_constants/constants.h"
@@ -118,10 +132,12 @@
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/range/range.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/menu/menu_item_view.h"
 #include "url/gurl.h"
 
 using ::testing::_;
 using ::testing::ElementsAre;
+using ::testing::FloatNear;
 using ::testing::Optional;
 
 namespace {
@@ -323,29 +339,88 @@ webapps::AppId CreateOsUrlHandlerSystemWebApp(Profile* profile,
   return CreateSystemWebApp(profile, std::move(params));
 }
 
-void ClickButton(const views::Button* button) {
-  DCHECK(button);
-  DCHECK(button->GetVisible());
+void SendKey(ui::KeyboardCode key_code) {
+  ui::test::EventGenerator generator(ash::Shell::GetPrimaryRootWindow());
+  ash::SendKey(key_code, &generator);
+}
+
+// TODO(sammiequon): Use ash::test::ClickOnView().
+void ClickView(const views::View* view) {
+  DCHECK(view);
+  DCHECK(view->GetVisible());
   aura::Window* root_window =
-      button->GetWidget()->GetNativeWindow()->GetRootWindow();
+      view->GetWidget()->GetNativeWindow()->GetRootWindow();
   ui::test::EventGenerator event_generator(root_window);
-  event_generator.MoveMouseToInHost(button->GetBoundsInScreen().CenterPoint());
+  event_generator.MoveMouseToInHost(view->GetBoundsInScreen().CenterPoint());
   event_generator.ClickLeftButton();
 }
 
+// TODO(hewer): Combine with `SelectSaveDeskAsTemplateButton` in
+// `full_restore_app_launch_handler_browsertest.cc`.
 // If `wait_for_ui` is true, wait for the callback from the model to update the
 // UI.
 void ClickSaveDeskAsTemplateButton(bool wait_for_ui) {
-  const views::Button* save_desk_as_template_button =
-      ash::GetSaveDeskAsTemplateButton();
-  DCHECK(save_desk_as_template_button);
-  ClickButton(save_desk_as_template_button);
+  // TODO(http://b/350771229): Remove `if` when Forest is enabled.
+  if (ash::features::IsForestFeatureEnabled()) {
+    // Tests in this suite only have a single desk, so the bar view should be in
+    // zero state when overview is started.
+    aura::Window* root_window = ash::Shell::GetPrimaryRootWindow();
+    auto* bar_view = ash::OverviewController::Get()
+                         ->overview_session()
+                         ->GetGridWithRootWindow(root_window)
+                         ->desks_bar_view();
+    ASSERT_TRUE(bar_view);
+    ASSERT_TRUE(bar_view->IsZeroState());
+
+    // Click the default desk button so it will expand to a `DeskMiniView`.
+    auto* default_button = bar_view->default_desk_button();
+    ASSERT_TRUE(default_button);
+    ClickView(default_button);
+
+    // Wait for the desk bar to finish animating to the expanded state.
+    ash::DesksTestApi::WaitForDeskBarUiUpdate(bar_view);
+
+    // Clicking the default desk button selects the desk's name field. We can
+    // press enter or escape or click to select out of it.
+    SendKey(ui::VKEY_RETURN);
+
+    ASSERT_FALSE(bar_view->IsZeroState());
+    ASSERT_EQ(bar_view->mini_views().size(), 1u);
+    ash::DeskMiniView* mini_view = bar_view->mini_views()[0];
+    ASSERT_TRUE(mini_view);
+
+    // Use the desk action view to get the context menu button.
+    ASSERT_TRUE(mini_view->desk_action_view());
+    ash::DeskActionButton* menu_button =
+        mini_view->desk_action_view()->context_menu_button();
+    ASSERT_TRUE(menu_button);
+    ASSERT_TRUE(menu_button->GetVisible());
+
+    // Click the button to open the context menu.
+    ClickView(menu_button);
+    ash::DeskActionContextMenu* menu = mini_view->context_menu();
+    ASSERT_TRUE(menu);
+
+    // Get the menu option to save the desk as a template and click it.
+    views::MenuItemView* menu_item =
+        ash::DesksTestApi::GetDeskActionContextMenuItem(
+            menu, ash::DeskActionContextMenu::CommandId::kSaveAsTemplate);
+    ASSERT_TRUE(menu_item);
+    ClickView(menu_item);
+  } else {
+    const views::Button* save_desk_as_template_button =
+        ash::GetSaveDeskAsTemplateButton();
+    DCHECK(save_desk_as_template_button);
+    ClickView(save_desk_as_template_button);
+  }
+
   if (wait_for_ui) {
     ash::WaitForSavedDeskUI();
   }
+
   // Clicking the save template button selects the newly created template's name
   // field. We can press enter or escape or click to select out of it.
-  ash::SendKey(ui::VKEY_RETURN);
+  SendKey(ui::VKEY_RETURN);
 }
 
 void ClickSaveDeskAsTemplateButton() {
@@ -356,19 +431,19 @@ void ClickSaveDeskForLaterButton() {
   const views::Button* save_desk_for_later_button =
       ash::GetSaveDeskForLaterButton();
   DCHECK(save_desk_for_later_button);
-  ClickButton(save_desk_for_later_button);
+  ClickView(save_desk_for_later_button);
 }
 
 void ClickLibraryButton() {
   const views::Button* zero_state_templates_button = ash::GetLibraryButton();
   ASSERT_TRUE(zero_state_templates_button);
-  ClickButton(zero_state_templates_button);
+  ClickView(zero_state_templates_button);
 }
 
 void ClickFirstTemplateItem() {
   const views::Button* template_item = ash::GetSavedDeskItemButton(/*index=*/0);
   DCHECK(template_item);
-  ClickButton(template_item);
+  ClickView(template_item);
 }
 
 const std::vector<raw_ptr<const ash::DeskTemplate, VectorExperimental>>
@@ -515,8 +590,7 @@ class DesksClientTest : public extensions::PlatformAppBrowserTest {
     std::vector<base::test::FeatureRef> enabled_features = {
         ash::features::kDesksTemplates};
     std::vector<base::test::FeatureRef> disabled_features = {
-        ash::features::kDeskTemplateSync,
-        ash::features::kFasterSplitScreenSetup};
+        ash::features::kDeskTemplateSync};
     scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
 
     // Suppress the multitask menu nudge as we'll be checking the stacking order
@@ -582,8 +656,8 @@ class DesksClientTest : public extensions::PlatformAppBrowserTest {
   }
 
   Browser* InstallAndLaunchPWA(const GURL& start_url, bool launch_in_browser) {
-    auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-    web_app_info->start_url = start_url;
+    auto web_app_info =
+        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
     web_app_info->scope = start_url.GetWithoutFilename();
     if (!launch_in_browser) {
       web_app_info->user_display_mode =
@@ -856,7 +930,7 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchMultipleDeskTemplates) {
   auto* desks_controller = ash::DesksController::Get();
   ASSERT_EQ(0, desks_controller->GetActiveDeskIndex());
 
-  // TODO(crbug.com/1273532): Note that `SetTemplate` allows setting an empty
+  // TODO(crbug.com/40206393): Note that `SetTemplate` allows setting an empty
   // desk template which shouldn't be possible in a real workflow. Make sure a
   // non empty desks are launched when this test is updated to use the real
   // workflow.
@@ -907,7 +981,6 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateWithSystemApp) {
 
   aura::Window* settings_window = FindBrowserWindow(kSettingsWindowId);
   ASSERT_TRUE(settings_window);
-  const std::u16string settings_title = settings_window->GetTitle();
 
   std::unique_ptr<ash::DeskTemplate> desk_template =
       CaptureActiveDeskAndSaveTemplate(ash::DeskTemplateType::kTemplate);
@@ -916,7 +989,6 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateWithSystemApp) {
       views::Widget::GetWidgetForNativeWindow(settings_window);
   settings_widget->CloseNow();
   ASSERT_FALSE(FindBrowserWindow(kSettingsWindowId));
-  settings_window = nullptr;
 
   auto* desks_controller = ash::DesksController::Get();
   ASSERT_EQ(0, desks_controller->GetActiveDeskIndex());
@@ -927,21 +999,17 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateWithSystemApp) {
   browsers_added.Wait();
 
   // Verify that the settings window has been launched on the new desk (desk B).
-  // TODO(sammiequon): Right now the app just launches, so verify the title
-  // matches. We should verify the restore id and use
-  // `FindBrowserWindow(kSettingsWindowId)` once things are wired up properly.
   EXPECT_EQ(1, desks_controller->GetActiveDeskIndex());
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    aura::Window* window = browser->window()->GetNativeWindow();
-    if (window->GetTitle() == settings_title) {
-      settings_window = window;
-      break;
-    }
-  }
-  ASSERT_TRUE(settings_window);
-  EXPECT_EQ(ash::Shell::GetContainer(settings_window->GetRootWindow(),
+  auto it =
+      base::ranges::find_if(*BrowserList::GetInstance(), [](Browser* browser) {
+        return ash::IsBrowserForSystemWebApp(browser,
+                                             ash::SystemWebAppType::SETTINGS);
+      });
+  ASSERT_NE(it, BrowserList::GetInstance()->end());
+  aura::Window* new_settings_window = (*it)->window()->GetNativeWindow();
+  EXPECT_EQ(ash::Shell::GetContainer(new_settings_window->GetRootWindow(),
                                      ash::kShellWindowId_DeskContainerB),
-            settings_window->parent());
+            new_settings_window->parent());
 }
 
 // Tests that launching a template that contains a system web app will move the
@@ -1532,12 +1600,17 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, SystemUIBasic) {
 
   // Note that this button needs at least one window to show up. Browser tests
   // have an existing browser window, so no new window needs to be created.
-  const views::Button* save_desk_as_template_button =
-      ash::GetSaveDeskAsTemplateButton();
-  ASSERT_TRUE(save_desk_as_template_button);
-  ClickButton(save_desk_as_template_button);
+  // TODO(http://b/350771229): Remove `if` when Forest is enabled.
+  if (ash::features::IsForestFeatureEnabled()) {
+    ClickSaveDeskAsTemplateButton();
+  } else {
+    const views::Button* save_desk_as_template_button =
+        ash::GetSaveDeskAsTemplateButton();
+    ASSERT_TRUE(save_desk_as_template_button);
+    ClickView(save_desk_as_template_button);
 
-  ash::WaitForSavedDeskUI();
+    ash::WaitForSavedDeskUI();
+  }
 
   EXPECT_EQ(1u, desk_model->GetEntryCount());
 
@@ -1776,7 +1849,7 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, SystemUICaptureIncognitoBrowserTest) {
   // MaterialNext uses PillButton instead of dialog buttons.
   if (std::string_view(dialog_accept_button->GetClassName()) ==
       std::string_view(ash::PillButton::kViewClassName)) {
-    ClickButton(dialog_accept_button);
+    ClickView(dialog_accept_button);
   } else {
     // Use a key press to accept the dialog instead of a click as
     // dialog buttons think a click generated by the event generator is an
@@ -1944,8 +2017,8 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, SystemUILaunchTemplateWithSWAExisting) {
   app_windows.erase(
       base::ranges::remove_if(app_windows,
                               [](aura::Window* w) {
-                                return w->GetProperty(aura::client::kAppType) ==
-                                       static_cast<int>(ash::AppType::NON_APP);
+                                return w->GetProperty(chromeos::kAppTypeKey) ==
+                                       chromeos::AppType::NON_APP;
                               }),
       app_windows.end());
   ASSERT_THAT(app_windows,
@@ -2379,7 +2452,7 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest,
 
   const views::Button* delete_button =
       ash::GetSavedDeskItemDeleteButton(/*index=*/0);
-  ClickButton(delete_button);
+  ClickView(delete_button);
 
   // Confirm deleting a template. Use a key press to accept the dialog instead
   // of a click as dialog buttons think a click generated by the event generator
@@ -2617,7 +2690,7 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest, LaunchTemplateAndCleanUpDesk) {
 // and then save the desk, that the desk is closed. Regression test for
 // https://crbug.com/1329350.
 IN_PROC_BROWSER_TEST_F(DesksClientTest,
-                       // TODO(crbug.com/1369348): Re-enable this test
+                       // TODO(crbug.com/40240645): Re-enable this test
                        DISABLED_SystemUIReEnterLibraryAndSaveDesk) {
   // Create a template that has a window because the "Save desk for later"
   // button is not enabled on empty desks.
@@ -2650,7 +2723,7 @@ IN_PROC_BROWSER_TEST_F(DesksClientTest,
   // Wait for the bounds to finish animating.
   ash::ShellTestApi().WaitForWindowFinishAnimating(
       save_desk_button->GetWidget()->GetNativeWindow());
-  ClickButton(save_desk_button);
+  ClickView(save_desk_button);
   ash::WaitForSavedDeskUI();
 
   // Wait for the browser to close.
@@ -3272,6 +3345,14 @@ using SaveAndRecallBrowserTest = DesksClientTest;
 
 IN_PROC_BROWSER_TEST_F(SaveAndRecallBrowserTest,
                        SystemUIBlockingDialogAccepted) {
+  // TODO(http://b/350771229): This test tests clicking the "Save desk for
+  // later" button that will not be shown if the Forest feature is enabled. This
+  // test will be fixed before the button change is no longer hidden behind
+  // Forest.
+  if (ash::features::IsForestFeatureEnabled()) {
+    GTEST_SKIP() << "Skipping test body for Forest Feature.";
+  }
+
   SetupBrowserToConfirmClose(browser());
 
   // We'll now save the desk as Save & Recall. After saving desks, this
@@ -3286,7 +3367,7 @@ IN_PROC_BROWSER_TEST_F(SaveAndRecallBrowserTest,
 
   // Send a key to OK the close dialog.
   BrowsersRemovedObserver browsers_removed(/*browser_removes_expected=*/1);
-  ash::SendKey(ui::VKEY_RETURN);
+  SendKey(ui::VKEY_RETURN);
   browsers_removed.Wait();
 
   EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
@@ -3304,6 +3385,14 @@ IN_PROC_BROWSER_TEST_F(SaveAndRecallBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(SaveAndRecallBrowserTest,
                        SystemUIBlockingDialogRejected) {
+  // TODO(http://b/350771229): This test tests clicking the "Save desk for
+  // later" button that will not be shown if the Forest feature is enabled. This
+  // test will be fixed before the button change is no longer hidden behind
+  // Forest.
+  if (ash::features::IsForestFeatureEnabled()) {
+    GTEST_SKIP() << "Skipping test body for Forest Feature.";
+  }
+
   SetupBrowserToConfirmClose(browser());
 
   ash::ToggleOverview();
@@ -3315,7 +3404,7 @@ IN_PROC_BROWSER_TEST_F(SaveAndRecallBrowserTest,
   EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
 
   // Send escape to cancel the dialog (keep the browser running).
-  ash::SendKey(ui::VKEY_ESCAPE);
+  SendKey(ui::VKEY_ESCAPE);
   content::RunAllTasksUntilIdle();
 
   ash::SavedDeskPresenterTestApi::FireWindowWatcherTimer();
@@ -3325,7 +3414,82 @@ IN_PROC_BROWSER_TEST_F(SaveAndRecallBrowserTest,
   // We should be in overview mode.
   ASSERT_TRUE(ash::Shell::Get()->overview_controller()->overview_session());
 }
-// TODO(crbug.com/1333965): Add some tests to launch LaCros browser.
+// TODO(crbug.com/40228006): Add some tests to launch LaCros browser.
+
+class SnapGroupDesksClientTest : public DesksClientTest {
+ public:
+  SnapGroupDesksClientTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{ash::features::kSnapGroup},
+        /*disabled_features=*/{});
+  }
+  SnapGroupDesksClientTest(const SnapGroupDesksClientTest&) = delete;
+  SnapGroupDesksClientTest& operator=(const SnapGroupDesksClientTest&) = delete;
+  ~SnapGroupDesksClientTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(SnapGroupDesksClientTest, DesksTemplates) {
+  // Create 1 other window to create a snap group.
+  Browser* browser2 = CreateBrowser({GURL(kExampleUrl2)});
+  aura::Window* w1 = browser()->window()->GetNativeWindow();
+  aura::Window* w2 = browser2->window()->GetNativeWindow();
+
+  auto* snap_group_controller = ash::SnapGroupController::Get();
+  ASSERT_TRUE(snap_group_controller);
+  const ash::WindowSnapWMEvent snap_primary(
+      ash::WM_EVENT_SNAP_PRIMARY, chromeos::kTwoThirdSnapRatio,
+      ash::WindowSnapActionSource::kDragWindowToEdgeToSnap);
+  auto* window_state1 = ash::WindowState::Get(w1);
+  window_state1->OnWMEvent(&snap_primary);
+  const ash::WindowSnapWMEvent snap_secondary(
+      ash::WM_EVENT_SNAP_SECONDARY, chromeos::kOneThirdSnapRatio,
+      ash::WindowSnapActionSource::kDragWindowToEdgeToSnap);
+  auto* window_state2 = ash::WindowState::Get(w2);
+  window_state2->OnWMEvent(&snap_secondary);
+  EXPECT_TRUE(snap_group_controller->AreWindowsInSnapGroup(w1, w2));
+  const gfx::Rect w1_bounds_before_restore = w1->GetBoundsInScreen();
+  const gfx::Rect w2_bounds_before_restore = w2->GetBoundsInScreen();
+  const float snap_ratio1 = window_state1->snap_ratio().value();
+  const float snap_ratio2 = window_state2->snap_ratio().value();
+  ASSERT_EQ(2u, BrowserList::GetInstance()->size());
+
+  // Open overview and save the desk as a template.
+  ash::ToggleOverview();
+  ash::WaitForOverviewEnterAnimation();
+
+  ClickSaveDeskAsTemplateButton();
+
+  // Launch the template.
+  ClickFirstTemplateItem();
+  content::RunAllTasksUntilIdle();
+
+  ash::ToggleOverview();
+  ash::WaitForOverviewExitAnimation();
+
+  BrowserList* browser_list = BrowserList::GetInstance();
+  ASSERT_EQ(4u, browser_list->size());
+  aura::Window* new_w1 = browser_list->get(3)->window()->GetNativeWindow();
+  aura::Window* new_w2 = browser_list->get(2)->window()->GetNativeWindow();
+
+  // The new windows will preserve the snap ratio but not added to a snap
+  // group so no divider will be shown.
+  // TODO(b/335294166): Implement SnapGroups for desks templates.
+  EXPECT_FALSE(snap_group_controller->GetSnapGroupForGivenWindow(new_w1));
+  EXPECT_FALSE(snap_group_controller->GetSnapGroupForGivenWindow(new_w2));
+  EXPECT_THAT(ash::WindowState::Get(new_w1)->snap_ratio(),
+              Optional(FloatNear(snap_ratio1, /*max_abs_error=*/0.01)));
+  EXPECT_TRUE(new_w1->GetBoundsInScreen().ApproximatelyEqual(
+      w1_bounds_before_restore,
+      /*tolerance=*/ash::kSplitviewDividerShortSideLength));
+  EXPECT_THAT(ash::WindowState::Get(new_w2)->snap_ratio(),
+              Optional(FloatNear(snap_ratio2, /*max_abs_error=*/0.01)));
+  EXPECT_TRUE(new_w2->GetBoundsInScreen().ApproximatelyEqual(
+      w2_bounds_before_restore,
+      /*tolerance=*/ash::kSplitviewDividerShortSideLength));
+}
 
 class DesksTemplatesClientArcTest : public InProcessBrowserTest {
  public:

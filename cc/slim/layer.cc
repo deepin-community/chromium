@@ -7,10 +7,11 @@
 #include <algorithm>
 #include <atomic>
 #include <utility>
+#include <vector>
 
 #include "base/atomic_sequence_num.h"
 #include "base/check.h"
-#include "base/containers/cxx20_erase_vector.h"
+#include "base/not_fatal_until.h"
 #include "base/ranges/algorithm.h"
 #include "cc/paint/filter_operation.h"
 #include "cc/slim/layer_tree.h"
@@ -38,6 +39,31 @@ cc::FilterOperations ToCcFilters(std::vector<cc::slim::Filter> filters) {
     }
   }
   return cc_filters;
+}
+
+bool DescendantLayerHasOffsetTag(const Layer* layer) {
+  for (auto& child : layer->children()) {
+    if (child->offset_tag() || DescendantLayerHasOffsetTag(child.get())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Verifies that there are no overlapping `OffsetTag`s in the layer tree for all
+// descendants and ancestors of `layer`. This only validates the part of the
+// layer tree that contains `layer`.
+bool VerifyOffsetTagTree(const Layer* layer) {
+  bool subtree_has_offset_tag = DescendantLayerHasOffsetTag(layer);
+  for (const Layer* target = layer; target; target = target->parent()) {
+    if (target->offset_tag() && subtree_has_offset_tag) {
+      // The offset tag from this layer applies to the subtree so if this
+      // happens there are overlapping tags.
+      return false;
+    }
+    subtree_has_offset_tag = subtree_has_offset_tag || layer->offset_tag();
+  }
+  return true;
 }
 
 }  // namespace
@@ -103,7 +129,7 @@ void Layer::ReplaceChild(Layer* old_child, scoped_refptr<Layer> new_child) {
 
   auto it = base::ranges::find_if(
       children_, [&](auto& ptr) { return ptr.get() == old_child; });
-  DCHECK(it != children_.end());
+  CHECK(it != children_.end(), base::NotFatalUntil::M130);
   old_child->SetParentSlim(nullptr);
   old_child->SetLayerTree(nullptr);
 
@@ -126,7 +152,7 @@ void Layer::RemoveFromParentSlim() {
   }
 
   SetLayerTree(nullptr);
-  base::EraseIf(parent_->children_,
+  std::erase_if(parent_->children_,
                 [&](auto& ptr) { return ptr.get() == this; });
   parent_->NotifyPropertyChanged();
   SetParentSlim(nullptr);
@@ -166,6 +192,7 @@ void Layer::SetParentSlim(Layer* parent) {
   if (parent_) {
     parent_->ChangeDrawableDescendantsBySlim(drawing_layers_in_subtree);
   }
+  DCHECK(VerifyOffsetTagTree(this));
 }
 
 void Layer::ChangeDrawableDescendantsBySlim(int num) {
@@ -250,6 +277,15 @@ void Layer::SetOpacity(float opacity) {
   NotifySubtreeChanged();
 }
 
+void Layer::SetOffsetTag(const viz::OffsetTag& offset_tag) {
+  if (offset_tag_ == offset_tag) {
+    return;
+  }
+  offset_tag_ = offset_tag;
+  DCHECK(VerifyOffsetTagTree(this));
+  NotifySubtreeChanged();
+}
+
 int Layer::NumDescendantsThatDrawContent() const {
   return num_descendants_that_draw_content_;
 }
@@ -326,7 +362,7 @@ gfx::Transform Layer::ComputeTransformToParent() const {
 }
 
 std::optional<gfx::Transform> Layer::ComputeTransformFromParent() const {
-  // TODO(crbug.com/1408128): Consider caching this result since GetInverse
+  // TODO(crbug.com/40888305): Consider caching this result since GetInverse
   // may be expensive.
   gfx::Transform inverse_transform;
   if (!transform_.GetInverse(&inverse_transform)) {
@@ -395,6 +431,7 @@ viz::SharedQuadState* Layer::CreateAndAppendSharedQuadState(
                      /*sorting_context=*/0,
                      /*layer_id=*/0u, /*fast_rounded_corner=*/false);
   quad_state->is_fast_rounded_corner = true;
+  quad_state->offset_tag = data.offset_tag;
   return quad_state;
 }
 

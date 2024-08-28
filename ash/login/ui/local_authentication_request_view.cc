@@ -35,6 +35,7 @@
 #include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/highlight_border.h"
@@ -238,7 +239,7 @@ LocalAuthenticationRequestView::LocalAuthenticationRequestView(
                                      kCrossSizeDp));
   close_button_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
   close_button_->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
-  close_button_->SetAccessibleName(l10n_util::GetStringUTF16(
+  close_button_->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
       IDS_ASH_LOGIN_LOCAL_AUTHENTICATION_CLOSE_DIALOG_BUTTON));
   close_button_->SetFocusBehavior(FocusBehavior::ALWAYS);
   close_button_view->AddChildView(close_button_.get());
@@ -298,7 +299,6 @@ LocalAuthenticationRequestView::LocalAuthenticationRequestView(
   login_password_view_->SetPaintToLayer();
   login_password_view_->layer()->SetFillsBoundsOpaquely(false);
   login_password_view_->SetDisplayPasswordButtonVisible(true);
-  login_password_view_->SetEnabledOnEmptyPassword(false);
   login_password_view_->SetFocusEnabledForTextfield(true);
 
   login_password_view_->SetPlaceholderText(
@@ -349,7 +349,8 @@ void LocalAuthenticationRequestView::UpdateState(
   description_label_->SetEnabledColorId(color_id);
 }
 
-gfx::Size LocalAuthenticationRequestView::CalculatePreferredSize() const {
+gfx::Size LocalAuthenticationRequestView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return GetLocalAuthenticationRequestViewSize();
 }
 
@@ -372,7 +373,7 @@ void LocalAuthenticationRequestView::OnClose() {
 }
 
 void LocalAuthenticationRequestView::UpdatePreferredSize() {
-  SetPreferredSize(CalculatePreferredSize());
+  SetPreferredSize(CalculatePreferredSize({}));
   if (GetWidget()) {
     GetWidget()->CenterWindow(GetPreferredSize());
   }
@@ -411,7 +412,7 @@ void LocalAuthenticationRequestView::OnAuthComplete(
   if (authentication_error.has_value()) {
     LOG(ERROR) << "An error happened during the attempt to validate "
                   "the password: "
-               << authentication_error.value().get_cryptohome_code();
+               << authentication_error.value().get_cryptohome_error();
     user_context_ = std::move(user_context);
     UpdateState(
         LocalAuthenticationRequestViewState::kError, default_title_,

@@ -30,6 +30,8 @@
 
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 
+#include <string_view>
+
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -65,8 +67,9 @@ class FakeDecodedResource final : public Resource {
                       const ResourceLoaderOptions& options)
       : Resource(request, ResourceType::kMock, options) {}
 
-  void AppendData(const char* data, size_t len) override {
-    Resource::AppendData(data, len);
+  void AppendData(
+      absl::variant<SegmentedBuffer, base::span<const char>> data) override {
+    Resource::AppendData(std::move(data));
     SetDecodedSize(this->size());
   }
 
@@ -212,14 +215,14 @@ static void TestResourcePruningLater(ResourceFetcher* fetcher,
   MemoryCache::Get()->Remove(dummy_resource);
   EXPECT_EQ(0u, MemoryCache::Get()->size());
 
-  const char kData[6] = "abcde";
+  std::string_view kData = "abcde";
   FetchParameters params1 = FetchParameters::CreateForTest(
       ResourceRequest("data:image/jpeg,resource1"));
   Resource* resource1 = FakeDecodedResource::Fetch(params1, fetcher, nullptr);
   MemoryCache::Get()->Remove(resource1);
   if (!identifier1.empty())
     resource1->SetCacheIdentifier(identifier1);
-  resource1->AppendData(kData, 3u);
+  resource1->AppendData(kData.substr(0u, 3u));
   resource1->FinishForTest();
   FetchParameters params2 = FetchParameters::CreateForTest(
       ResourceRequest("data:image/jpeg,resource2"));
@@ -229,7 +232,7 @@ static void TestResourcePruningLater(ResourceFetcher* fetcher,
   MemoryCache::Get()->Remove(resource2);
   if (!identifier2.empty())
     resource2->SetCacheIdentifier(identifier2);
-  resource2->AppendData(kData, 4u);
+  resource2->AppendData(kData.substr(0u, 4u));
   resource2->FinishForTest();
 
   platform->test_task_runner()->PostTask(
@@ -268,7 +271,7 @@ static void TestClientRemoval(ResourceFetcher* fetcher,
                               const String& identifier1,
                               const String& identifier2) {
   MemoryCache::Get()->SetCapacity(0);
-  const char kData[6] = "abcde";
+  const std::string_view kData = "abcde";
   Persistent<MockResourceClient> client1 =
       MakeGarbageCollected<MockResourceClient>();
   Persistent<MockResourceClient> client2 =
@@ -279,8 +282,8 @@ static void TestClientRemoval(ResourceFetcher* fetcher,
   FetchParameters params2 =
       FetchParameters::CreateForTest(ResourceRequest("data:image/jpeg,bar"));
   Resource* resource2 = FakeDecodedResource::Fetch(params2, fetcher, client2);
-  resource1->AppendData(kData, 4u);
-  resource2->AppendData(kData, 4u);
+  resource1->AppendData(kData.substr(0u, 4u));
+  resource2->AppendData(kData.substr(0u, 4u));
 
   MemoryCache::Get()->SetCapacity(0);
   // Remove and re-Add the resources, with proper cache identifiers.
@@ -382,11 +385,11 @@ TEST_F(MemoryCacheTest, ResourceMapIsolation) {
   EXPECT_TRUE(MemoryCache::Get()->Contains(resource2));
 
   const KURL url = KURL("http://test/resource");
-  EXPECT_EQ(resource1, MemoryCache::Get()->ResourceForURL(url));
+  EXPECT_EQ(resource1, MemoryCache::Get()->ResourceForURLForTesting(url));
   EXPECT_EQ(resource1, MemoryCache::Get()->ResourceForURL(
                            url, MemoryCache::Get()->DefaultCacheIdentifier()));
   EXPECT_EQ(resource2, MemoryCache::Get()->ResourceForURL(url, "foo"));
-  EXPECT_EQ(nullptr, MemoryCache::Get()->ResourceForURL(NullURL()));
+  EXPECT_EQ(nullptr, MemoryCache::Get()->ResourceForURLForTesting(NullURL()));
 
   auto* resource3 = MakeGarbageCollected<FakeResource>("http://test/resource",
                                                        ResourceType::kRaw);
@@ -412,10 +415,10 @@ TEST_F(MemoryCacheTest, FragmentIdentifier) {
   MemoryCache::Get()->Add(resource);
   EXPECT_TRUE(MemoryCache::Get()->Contains(resource));
 
-  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURL(url1));
+  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(url1));
 
   const KURL url2 = MemoryCache::RemoveFragmentIdentifierIfNeeded(url1);
-  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURL(url2));
+  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(url2));
 }
 
 TEST_F(MemoryCacheTest, RemoveURLFromCache) {

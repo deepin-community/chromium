@@ -37,6 +37,9 @@ class CC_EXPORT PrioritizedTile {
   const PaintWorkletRecordMap& GetPaintWorkletRecords() const {
     return source_tiling_->GetPaintWorkletRecords();
   }
+  ScrollOffsetMap GetRasterInducingScrollOffsets() const {
+    return source_tiling_->GetRasterInducingScrollOffsets();
+  }
   const TilePriority& priority() const { return priority_; }
   bool is_occluded() const { return is_occluded_; }
   bool is_process_for_images_only() const {
@@ -54,7 +57,7 @@ class CC_EXPORT PrioritizedTile {
   // RAW_PTR_EXCLUSION: Renderer performance: visible in sampling profiler
   // stacks.
   //
-  // TODO(crbug.com/1489080): These members were marked `DanglingUntriaged`
+  // TODO(crbug.com/40283905): These members were marked `DanglingUntriaged`
   // before being unrewritten.
   RAW_PTR_EXCLUSION Tile* tile_ = nullptr;
   RAW_PTR_EXCLUSION const PictureLayerTiling* source_tiling_ = nullptr;

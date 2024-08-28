@@ -12,7 +12,6 @@
 #include "base/unguessable_token.h"
 #include "chrome/browser/web_applications/web_app_install_manager.h"
 #include "chrome/browser/web_applications/web_app_install_manager_observer.h"
-#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -36,6 +35,14 @@ class WebAppTabHelper : public content::WebContentsUserData<WebAppTabHelper>,
   // Retrieves the WebAppTabHelper's app ID off |web_contents|, returns nullptr
   // if there is no tab helper or app ID.
   static const webapps::AppId* GetAppId(content::WebContents* web_contents);
+
+#if BUILDFLAG(IS_MAC)
+  // Like the above method, but also checks if notification attribution should
+  // apply to the app in the web contents. This checks the base::Feature as well
+  // as makes sure the app is installed.
+  static std::optional<webapps::AppId> GetAppIdForNotificationAttribution(
+      content::WebContents* web_contents);
+#endif
 
   explicit WebAppTabHelper(content::WebContents* web_contents);
   WebAppTabHelper(const WebAppTabHelper&) = delete;

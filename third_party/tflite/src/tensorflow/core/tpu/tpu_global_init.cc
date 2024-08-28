@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/base/attributes.h"
 #include "absl/base/const_init.h"
 #include "absl/base/thread_annotations.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -72,7 +73,7 @@ Status CreateDeviceMgr(Env* env, std::unique_ptr<DeviceMgr>* device_mgr) {
   TF_RETURN_IF_ERROR(
       device_factory->CreateDevices(session_options, kTaskSpec, &devices));
   *device_mgr = std::make_unique<DynamicDeviceMgr>(std::move(devices));
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 void DeviceSetFromDeviceMgr(const DeviceMgr& device_mgr,
@@ -119,7 +120,7 @@ Status ConstructDistributedInitializationGraph(absl::string_view job_name,
   TF_RETURN_IF_ERROR(
       ConvertGraphDefToGraph({}, graph->ToGraphDefDebug(), graph_to_run));
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 Status InitializeFromSession(absl::string_view session_target,
@@ -137,7 +138,7 @@ Status InitializeFromSession(absl::string_view session_target,
   TF_RETURN_IF_ERROR(
       sess->Run({}, {"InitializeTPUSystemGlobally:0"}, {}, outputs));
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -151,7 +152,7 @@ Status InitializeTPUSystemGlobally(absl::string_view job_name,
   absl::MutexLock lock(&global_init_tpu_mutex);
   if (global_tpu_topology != nullptr) {
     *tpu_topology = *global_tpu_topology;
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   std::unique_ptr<Graph> graph_to_run(new Graph(OpRegistry::Global()));
@@ -198,7 +199,7 @@ Status InitializeTPUSystemGlobally(absl::string_view job_name,
   }
 
   *tpu_topology = *global_tpu_topology;
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // NOTE: Session would have been the obvious first choice to run the graph

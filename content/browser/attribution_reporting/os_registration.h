@@ -15,6 +15,7 @@
 #include "url/origin.h"
 
 namespace attribution_reporting {
+enum class Registrar;
 struct OsRegistrationItem;
 }  // namespace attribution_reporting
 
@@ -28,12 +29,14 @@ struct CONTENT_EXPORT OsRegistration {
   std::optional<AttributionInputEvent> input_event;
   bool is_within_fenced_frame;
   GlobalRenderFrameHostId render_frame_id;
+  attribution_reporting::Registrar registrar;
 
   OsRegistration(std::vector<attribution_reporting::OsRegistrationItem>,
                  url::Origin top_level_origin,
                  std::optional<AttributionInputEvent> input_event,
                  bool is_within_fenced_frame,
-                 GlobalRenderFrameHostId render_frame_id);
+                 GlobalRenderFrameHostId render_frame_id,
+                 attribution_reporting::Registrar);
 
   ~OsRegistration();
 

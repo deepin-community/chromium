@@ -6,11 +6,11 @@
 #define REMOTING_PROTOCOL_WEBRTC_TRANSPORT_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
 
-#include <optional>
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -167,6 +167,7 @@ class WebrtcTransport : public Transport,
   void OnRemoteDescriptionSet(bool send_answer,
                               bool success,
                               const std::string& error);
+  void OnCloseAfterDisconnectTimeout();
 
   // PeerConnection event handlers, called by PeerConnectionWrapper.
   void OnSignalingChange(
@@ -246,6 +247,9 @@ class WebrtcTransport : public Transport,
 
   std::unique_ptr<jingle_xmpp::XmlElement> pending_transport_info_message_;
   base::OneShotTimer transport_info_timer_;
+  // Timer that closes the transport after the ICE connection has become
+  // disconnected for the specified timeout.
+  base::OneShotTimer close_after_disconnect_timer_;
 
   std::vector<std::unique_ptr<webrtc::IceCandidateInterface>>
       pending_incoming_candidates_;

@@ -21,6 +21,18 @@ enum class DeviceType {
   kMouse = 3,
 };
 
+enum class MetadataTier {
+  kNoMetadata = 0,
+  kClassificationOnly = 1,
+  kHasButtonConfig = 2,
+  kMaxValue = kHasButtonConfig,
+};
+
+enum class DeviceImageDestination {
+  kNotification = 0,
+  kSettings = 1,
+};
+
 struct ASH_EXPORT MouseMetadata {
   mojom::CustomizationRestriction customization_restriction;
   mojom::MouseButtonConfig mouse_button_config;

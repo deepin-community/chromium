@@ -5,12 +5,9 @@
 #ifndef SQL_SANDBOXED_VFS_H_
 #define SQL_SANDBOXED_VFS_H_
 
-#include <stdint.h>
-
 #include <memory>
 #include <optional>
 
-#include <optional>
 #include "base/component_export.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"

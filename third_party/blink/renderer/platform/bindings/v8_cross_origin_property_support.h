@@ -7,6 +7,7 @@
 
 #include "base/containers/span.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "v8/include/v8.h"
 
 // This file provides utilities to support implementation of cross origin
@@ -23,8 +24,8 @@ struct CrossOriginAttributeTableEntry final {
   const char* name;
   v8::FunctionCallback get_callback;
   v8::FunctionCallback set_callback;
-  v8::GenericNamedPropertyGetterCallback get_value;
-  v8::GenericNamedPropertySetterCallback set_value;
+  v8::NamedPropertyGetterCallback get_value;
+  v8::NamedPropertySetterCallback set_value;
 };
 
 struct CrossOriginOperationTableEntry final {
@@ -35,12 +36,14 @@ struct CrossOriginOperationTableEntry final {
 
 PLATFORM_EXPORT v8::MaybeLocal<v8::Function> GetCrossOriginFunction(
     v8::Isolate* isolate,
+    const StringView& func_name,
     v8::FunctionCallback callback,
     int func_length,
     const WrapperTypeInfo* wrapper_type_info);
 
-PLATFORM_EXPORT v8::MaybeLocal<v8::Value> GetCrossOriginFunctionOrUndefined(
+PLATFORM_EXPORT v8::MaybeLocal<v8::Value> GetCrossOriginGetterSetter(
     v8::Isolate* isolate,
+    const StringView& func_name,
     v8::FunctionCallback callback,
     int func_length,
     const WrapperTypeInfo* wrapper_type_info);

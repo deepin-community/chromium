@@ -114,7 +114,8 @@ void RequestSender::SendInternal() {
   }
   network_fetcher_->PostRequest(
       url, request_body_, kContentType, request_extra_headers_,
-      base::BindOnce(&RequestSender::OnResponseStarted, base::Unretained(this)),
+      base::BindRepeating(&RequestSender::OnResponseStarted,
+                          base::Unretained(this)),
       base::DoNothing(),
       base::BindOnce(&RequestSender::OnNetworkFetcherComplete,
                      base::Unretained(this), url));
@@ -191,7 +192,7 @@ void RequestSender::OnNetworkFetcherComplete(
   }
 
   int retry_after_sec = -1;
-  if (original_url.SchemeIsCryptographic() && error > 0) {
+  if (original_url.SchemeIsCryptographic() && error >= 0) {
     retry_after_sec = base::saturated_cast<int>(xheader_retry_after_sec);
   }
 

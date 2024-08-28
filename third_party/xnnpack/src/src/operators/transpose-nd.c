@@ -4,19 +4,24 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
-#include <math.h>
-#include <stdbool.h>
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include <xnnpack.h>
-#include <xnnpack/allocator.h>
-#include <xnnpack/config.h>
-#include <xnnpack/log.h>
-#include <xnnpack/math.h>
-#include <xnnpack/normalization.h>
-#include <xnnpack/operator.h>
+#include "xnnpack.h"
+#include "xnnpack/allocator.h"
+#include "xnnpack/common.h"
+#include "xnnpack/compute.h"
+#include "xnnpack/config-types.h"
+#include "xnnpack/config.h"
+#include "xnnpack/log.h"
+#include "xnnpack/microkernel-type.h"
+#include "xnnpack/normalization.h"
+#include "xnnpack/operator-type.h"
+#include "xnnpack/operator.h"
+#include "xnnpack/params.h"
+#include "pthreadpool.h"
 
 /// Reorder the data in array using the indices in loop_order.
 ///
@@ -59,7 +64,11 @@ static enum xnn_status create_transpose_nd(
   }
 
   const struct xnn_transpose_config* transpose_config = xnn_init_transpose_config();
-  assert(transpose_config != NULL);
+  if (!transpose_config) {
+    xnn_log_error(
+      "failed to create transpose config: unsupported hardware configuration");
+    return xnn_status_unsupported_hardware;
+  }
 
   status = xnn_status_out_of_memory;
   transpose_op = xnn_allocate_zero_simd_memory(sizeof(struct xnn_operator));
@@ -167,8 +176,8 @@ static enum xnn_status reshape_transpose_nd(
     for (size_t j = i + 1; j < num_dims; ++j) {
       if (perm[i] == perm[j]) {
         xnn_log_error(
-            "failed to create %s operator with duplicate entries in perm",
-            xnn_operator_type_to_string(transpose_op->type));
+            "failed to create %s operator with duplicate entries in perm %zu %zu",
+            xnn_operator_type_to_string(transpose_op->type), perm[i], perm[j]);
         goto error;
       }
     }
@@ -568,7 +577,9 @@ enum xnn_status run_transpose_nd(
   memset(&transpose_op, 0, sizeof(transpose_op));
 
   const struct xnn_transpose_config* transpose_config = xnn_init_transpose_config();
-  assert(transpose_config != NULL);
+  if (!transpose_config) {
+    return xnn_status_unsupported_hardware;
+  }
 
   init_transpose_nd(flags, transpose_config, operator_type, &transpose_op);
 
@@ -690,7 +701,11 @@ enum xnn_status create_depth_to_space_nchw2nhwc(
   }
 
   const struct xnn_transpose_config* transpose_config = xnn_init_transpose_config();
-  assert(transpose_config != NULL);
+  if (!transpose_config) {
+    xnn_log_error(
+      "failed to create transpose config: unsupported hardware configuration");
+    return xnn_status_unsupported_hardware;
+  }
 
   depth_to_space_op->block_size = block_size;
 
@@ -932,7 +947,11 @@ static enum xnn_status create_depth_to_space_nhwc(
   }
 
   const struct xnn_transpose_config* transpose_config = xnn_init_transpose_config();
-  assert(transpose_config != NULL);
+  if (!transpose_config) {
+    xnn_log_error(
+      "failed to create transpose config: unsupported hardware configuration");
+    return xnn_status_unsupported_hardware;
+  }
 
   depth_to_space_op->block_size = block_size;
   depth_to_space_op->type = operator_type;
@@ -1209,7 +1228,11 @@ static enum xnn_status create_space_to_depth_nhwc(
   }
 
   const struct xnn_transpose_config* transpose_config = xnn_init_transpose_config();
-  assert(transpose_config != NULL);
+  if (!transpose_config) {
+    xnn_log_error(
+      "failed to create transpose config: unsupported hardware configuration");
+    return xnn_status_unsupported_hardware;
+  }
 
   space_to_depth_op->block_size = block_size;
 

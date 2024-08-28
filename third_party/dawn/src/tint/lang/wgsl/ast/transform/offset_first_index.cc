@@ -83,7 +83,7 @@ Transform::ApplyResult OffsetFirstIndex::Apply(const Program& src,
         if (auto* var = node->As<Variable>()) {
             for (auto* attr : var->attributes) {
                 if (auto* builtin_attr = attr->As<BuiltinAttribute>()) {
-                    core::BuiltinValue builtin = src.Sem().Get(builtin_attr)->Value();
+                    core::BuiltinValue builtin = builtin_attr->builtin;
                     if (builtin == core::BuiltinValue::kVertexIndex && cfg &&
                         cfg->first_vertex_offset.has_value()) {
                         auto* sem_var = src.Sem().Get(var);
@@ -100,7 +100,7 @@ Transform::ApplyResult OffsetFirstIndex::Apply(const Program& src,
         if (auto* member = node->As<StructMember>()) {
             for (auto* attr : member->attributes) {
                 if (auto* builtin_attr = attr->As<BuiltinAttribute>()) {
-                    core::BuiltinValue builtin = src.Sem().Get(builtin_attr)->Value();
+                    core::BuiltinValue builtin = builtin_attr->builtin;
                     if (builtin == core::BuiltinValue::kVertexIndex && cfg &&
                         cfg->first_vertex_offset.has_value()) {
                         auto* sem_mem = src.Sem().Get(member);
@@ -155,6 +155,8 @@ Transform::ApplyResult OffsetFirstIndex::Apply(const Program& src,
     ctx.Clone();
     return resolver::Resolve(b);
 }
+
+OffsetFirstIndex::Config::Config() = default;
 
 OffsetFirstIndex::Config::Config(std::optional<int32_t> first_vertex_off,
                                  std::optional<int32_t> first_instance_off)

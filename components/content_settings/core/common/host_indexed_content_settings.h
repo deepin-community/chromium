@@ -7,12 +7,16 @@
 
 #include <iterator>
 #include <optional>
-#include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_rules.h"
 #include "url/gurl.h"
+
+namespace base {
+class Clock;
+}
 
 namespace content_settings {
 
@@ -33,9 +37,11 @@ class HostIndexedContentSettings {
 
   HostIndexedContentSettings();
 
+  explicit HostIndexedContentSettings(base::Clock* clock);
+
   // Creates an index with additional metadata about the content settings
   // provider that the settings came from.
-  explicit HostIndexedContentSettings(std::string source, bool off_the_record);
+  HostIndexedContentSettings(ProviderType source, bool off_the_record);
 
   HostIndexedContentSettings(const HostIndexedContentSettings& other) = delete;
   HostIndexedContentSettings& operator=(const HostIndexedContentSettings&) =
@@ -71,7 +77,7 @@ class HostIndexedContentSettings {
     }
 
     friend bool operator!=(const Iterator& a, const Iterator& b) {
-      return a.current_iterator_ != b.current_iterator_;
+      return !(a == b);
     }
 
    private:
@@ -97,11 +103,11 @@ class HostIndexedContentSettings {
   Iterator begin() const;
   Iterator end() const;
 
-  // Returns the number of entries in this index.
   size_t size() const;
+  bool empty() const;
 
   // Returns the source of the entries within this index.
-  const std::optional<std::string>& source() const { return source_; }
+  const ProviderType& source() const { return source_; }
   // Returns whether the index contains off the record entries.
   const std::optional<bool>& off_the_record() const { return off_the_record_; }
 
@@ -127,20 +133,17 @@ class HostIndexedContentSettings {
   // Clears the object information.
   void Clear();
 
+  void SetClockForTesting(base::Clock* clock);
+
  private:
   HostToContentSettings primary_host_indexed_;
   HostToContentSettings secondary_host_indexed_;
   Rules wildcard_settings_;
-  std::optional<std::string> source_;
+  ProviderType source_ = ProviderType::kNone;
   std::optional<bool> off_the_record_;
+  raw_ptr<base::Clock> clock_;
   mutable int iterating_ = 0;
 };
-
-// Finds the first (in precedence order) content setting in `settings`.
-const ContentSettingPatternSource* FindContentSetting(
-    const GURL& primary_url,
-    const GURL& secondary_url,
-    std::reference_wrapper<const ContentSettingsForOneType> settings);
 
 }  // namespace content_settings
 

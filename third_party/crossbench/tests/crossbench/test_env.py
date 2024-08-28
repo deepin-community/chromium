@@ -11,7 +11,6 @@ import hjson
 from crossbench.env import (HostEnvironment, HostEnvironmentConfig,
                             ValidationError, ValidationMode)
 from tests import test_helper
-
 from tests.crossbench.mock_helper import CrossbenchFakeFsTestCase
 
 
@@ -74,7 +73,7 @@ class HostEnvironmentConfigTestCase(unittest.TestCase):
 
   def test_parse_example_config_file(self):
     example_config_file = pathlib.Path(
-        __file__).parent.parent / "config" / "env.config.example.hjson"
+        __file__).parent.parent / "config/doc/env.config.hjson"
     if not example_config_file.exists():
       raise unittest.SkipTest(f"Test file {example_config_file} does not exist")
     with example_config_file.open(encoding="utf-8") as f:
@@ -210,7 +209,7 @@ class HostEnvironmentTestCase(CrossbenchFakeFsTestCase):
         self.mock_runner,
         HostEnvironmentConfig(browser_is_headless=HostEnvironmentConfig.IGNORE),
         ValidationMode.THROW)
-    mock_browser = mock.Mock()
+    mock_browser = mock.Mock(platform=self.mock_platform)
     self.mock_runner.browsers = [mock_browser]
 
     mock_browser.viewport.is_headless = False
@@ -223,7 +222,7 @@ class HostEnvironmentTestCase(CrossbenchFakeFsTestCase):
     env = HostEnvironment(self.mock_runner,
                           HostEnvironmentConfig(browser_is_headless=True),
                           ValidationMode.THROW)
-    mock_browser = mock.Mock()
+    mock_browser = mock.Mock(platform=self.mock_platform)
     self.mock_runner.browsers = [mock_browser]
 
     self.mock_platform.has_display = True
@@ -247,7 +246,7 @@ class HostEnvironmentTestCase(CrossbenchFakeFsTestCase):
     env = HostEnvironment(self.mock_runner,
                           HostEnvironmentConfig(browser_is_headless=False),
                           ValidationMode.THROW)
-    mock_browser = mock.Mock()
+    mock_browser = mock.Mock(platform=self.mock_platform)
     self.mock_runner.browsers = [mock_browser]
 
     self.mock_platform.has_display = True
@@ -324,6 +323,19 @@ class HostEnvironmentTestCase(CrossbenchFakeFsTestCase):
       env.check_installed(["custom_binary_a", "custom_binary_b"])
     self.assertIn("custom_binary_a", str(cm.exception))
     self.assertNotIn("custom_binary_b", str(cm.exception))
+
+
+class ValidationModeTestCase(unittest.TestCase):
+
+  def test_construct(self):
+    self.assertIs(ValidationMode("throw"), ValidationMode.THROW)
+    self.assertIs(ValidationMode("THROW"), ValidationMode.THROW)
+    self.assertIs(ValidationMode("prompt"), ValidationMode.PROMPT)
+    self.assertIs(ValidationMode("PROMPT"), ValidationMode.PROMPT)
+    self.assertIs(ValidationMode("warn"), ValidationMode.WARN)
+    self.assertIs(ValidationMode("WARN"), ValidationMode.WARN)
+    self.assertIs(ValidationMode("skip"), ValidationMode.SKIP)
+    self.assertIs(ValidationMode("SKIP"), ValidationMode.SKIP)
 
 
 if __name__ == "__main__":

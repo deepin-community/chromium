@@ -15,10 +15,10 @@
 #include "core/fpdfapi/page/cpdf_pageobject.h"
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_document.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/stl_util.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 bool GraphicsData::operator<(const GraphicsData& other) const {
   if (!FXSYS_SafeEQ(fillAlpha, other.fillAlpha))
@@ -69,9 +69,7 @@ void CPDF_PageObjectHolder::ContinueParse(PauseIndicatorIface* pPause) {
 
   m_ParseState = ParseState::kParsed;
   m_pDocument->IncrementParsedPageCount();
-  if (m_pParser->GetCurStates()) {
-    m_LastCTM = m_pParser->GetCurStates()->current_transformation_matrix();
-  }
+  m_AllCTMs = m_pParser->TakeAllCTMs();
 
   m_pParser.reset();
 }
@@ -114,6 +112,36 @@ void CPDF_PageObjectHolder::FontsMapInsert(const FontData& fd,
   m_FontsMap[fd] = str;
 }
 
+CFX_Matrix CPDF_PageObjectHolder::GetCTMAtBeginningOfStream(int32_t stream) {
+  CHECK(stream >= 0 || stream == CPDF_PageObject::kNoContentStream);
+
+  if (stream == 0 || m_AllCTMs.empty()) {
+    return CFX_Matrix();
+  }
+
+  if (stream == CPDF_PageObject::kNoContentStream) {
+    return m_AllCTMs.rbegin()->second;
+  }
+
+  // For all other cases, CTM at beginning of `stream` is the same value as CTM
+  // at the end of the previous stream.
+  return GetCTMAtEndOfStream(stream - 1);
+}
+
+CFX_Matrix CPDF_PageObjectHolder::GetCTMAtEndOfStream(int32_t stream) {
+  // This code should never need to calculate the CTM for the end of
+  // `CPDF_PageObject::kNoContentStream`, which uses a negative sentinel value.
+  // All other streams have a non-negative index.
+  CHECK_GE(stream, 0);
+
+  if (m_AllCTMs.empty()) {
+    return CFX_Matrix();
+  }
+
+  const auto it = m_AllCTMs.lower_bound(stream);
+  return it != m_AllCTMs.end() ? it->second : m_AllCTMs.rbegin()->second;
+}
+
 void CPDF_PageObjectHolder::LoadTransparencyInfo() {
   RetainPtr<const CPDF_Dictionary> pGroup = m_pDict->GetDictFor("Group");
   if (!pGroup)
@@ -137,6 +165,7 @@ CPDF_PageObject* CPDF_PageObjectHolder::GetPageObjectByIndex(
 
 void CPDF_PageObjectHolder::AppendPageObject(
     std::unique_ptr<CPDF_PageObject> pPageObj) {
+  CHECK(pPageObj);
   m_PageObjectList.push_back(std::move(pPageObj));
 }
 

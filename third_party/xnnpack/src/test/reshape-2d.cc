@@ -3,11 +3,6 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
-#include <xnnpack.h>
-#include <xnnpack/node-type.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/subgraph.h>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -17,8 +12,12 @@
 #include <random>
 #include <vector>
 
-#include "subgraph-unary-tester.h"
 #include <gtest/gtest.h>
+#include "xnnpack.h"
+#include "xnnpack/node-type.h"
+#include "xnnpack/operator.h"
+#include "xnnpack/subgraph.h"
+#include "subgraph-unary-tester.h"
 
 using Reshape2dTestInt8 = UnaryTest<int8_t>;
 using Reshape2dTestUint8 = UnaryTest<uint8_t>;
@@ -156,7 +155,7 @@ TEST_F(Reshape2dTestInt8, matches_operator_api) {
 
   std::vector<size_t> output_dims(2, 1);
   if (!dims.empty()) {
-    for (int k = 0; k < dims.size() - 1; ++k) {
+    for (size_t k = 0; k < dims.size() - 1; ++k) {
       output_dims[0] *= dims[k];
     }
     output_dims.back() = dims.back();

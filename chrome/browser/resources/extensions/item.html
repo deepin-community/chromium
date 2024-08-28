@@ -156,7 +156,7 @@
     width: 16px;
   }
 
-  paper-tooltip {
+  cr-tooltip {
     --paper-tooltip-min-width: 0;
   }
 
@@ -204,10 +204,10 @@
          be contained inside of a position:relative parent element. -->
     <template is="dom-if"
         if="[[computeSourceIndicatorIcon_(data.*)]]">
-      <paper-tooltip id="source-indicator-text" for="source-indicator"
+      <cr-tooltip id="source-indicator-text" for="source-indicator"
           position="top" fit-to-visible-bounds aria-hidden="true">
         [[computeSourceIndicatorText_(data.*)]]
-      </paper-tooltip>
+      </cr-tooltip>
     </template>
     <div id="content">
       <!--Note: We wrap inspect-views in a div so that the outer div
@@ -226,7 +226,7 @@
         [[data.description]]
       </div>
       <template is="dom-if"
-          if="[[hasSevereWarnings_(data.disableReasons.*, data.*)]]">
+          if="[[showSevereWarnings(data.disableReasons.*, data.*)]]">
         <div id="warnings">
           <iron-icon class="message-icon" icon="cr:error"></iron-icon>
           <span id="runtime-warnings" aria-describedby="a11yAssociation"
@@ -251,6 +251,16 @@
             -->[[data.blacklistText]]<!-- so we can use :empty in css.
          --></span>
         </div>
+      </template>
+      <template is="dom-if"
+          if="[[showMv2DeprecationWarning_(data.disableReasons.*, data.*)]]">
+          <div id="warnings">
+            <iron-icon class="message-icon" icon="cr:error"></iron-icon>
+            <span id="mv2-deprecation-warning"
+                aria-describedby="a11yAssociation">
+              $i18n{mv2DeprecationUnsupportedExtensionOffText}
+            </span>
+          </div>
       </template>
       <template is="dom-if"
           if="[[showAllowlistWarning_(data.disableReasons.*, data.*)]]">
@@ -316,8 +326,9 @@
     </div>
     <template is="dom-if" if="[[!computeDevReloadButtonHidden_(data.*)]]">
       <cr-icon-button id="dev-reload-button" class="icon-refresh no-overlap"
-          aria-label="$i18n{itemReload}" aria-describedby="a11yAssociation"
-          on-click="onReloadClick_"></cr-icon-button>
+          title="$i18n{itemReload}" aria-label="$i18n{itemReload}"
+          aria-describedby="a11yAssociation" on-click="onReloadClick_">
+      </cr-icon-button>
     </template>
     <template is="dom-if"
         if="[[showRepairButton_(data.disableReasons.corruptInstall)]]">
@@ -338,10 +349,10 @@
         icon-class="cr20:kite"
         icon-aria-label="$i18n{parentDisabledPermissions}">
     </cr-tooltip-icon>
-    <paper-tooltip id="enable-toggle-tooltip" for="enableToggle" position="left"
+    <cr-tooltip id="enable-toggle-tooltip" for="enableToggle" position="left"
         aria-hidden="true" animation-delay="0" fit-to-visible-bounds>
       [[getEnableToggleTooltipText_(data.*)]]
-    </paper-tooltip>
+    </cr-tooltip>
     <cr-toggle id="enableToggle"
         aria-label$="[[getEnableToggleAriaLabel_(data.*)]]"
         aria-describedby="a11yAssociation enable-toggle-tooltip"

@@ -148,6 +148,9 @@ class PLATFORM_EXPORT Font {
   // coordinates using (<text run x position>, <baseline position>) as the
   // origin.
   float Width(const TextRun&, gfx::RectF* glyph_bounds = nullptr) const;
+  // Works in the same way as Font::Width, but splits the text run into logical
+  // runs to compute their width and bounds using the correct text direction.
+  float BidiWidth(const TextRun&, gfx::RectF* glyph_bounds = nullptr) const;
 
   int OffsetForPosition(const TextRun&,
                         float position,
@@ -158,11 +161,6 @@ class PLATFORM_EXPORT Font {
                                   float height,
                                   int from = 0,
                                   int to = -1) const;
-
-  // Returns a vector of same size as TextRun.length() with advances measured
-  // in pixels from the left bounding box of the full TextRun to the left bound
-  // of the glyph rendered by each character. Values should always be positive.
-  Vector<double> IndividualCharacterAdvances(const TextRun&) const;
 
   // Metrics that we query the FontFallbackList for.
   float SpaceWidth() const {

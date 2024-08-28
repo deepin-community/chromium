@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/login/quick_unlock/fingerprint_storage.h"
+
 #include <memory>
 #include <optional>
 
@@ -182,7 +183,7 @@ void FingerprintStorage::OnAuthScanDone(
                                     msg->get_fingerprint_error());
       return;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void FingerprintStorage::OnSessionFailed() {}

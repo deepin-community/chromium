@@ -8,18 +8,20 @@
 
 #include <math.h>
 
+#include <array>
 #include <iterator>
 #include <memory>
 #include <utility>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
+#include "core/fxcrt/stl_util.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/dib/cfx_imagestretcher.h"
 #include "core/fxge/dib/fx_dib.h"
-#include "third_party/base/check.h"
-#include "third_party/base/compiler_specific.h"
-#include "third_party/base/notreached.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 namespace {
 
@@ -34,15 +36,17 @@ uint8_t BilinearInterpolate(const uint8_t* buf,
   int i_resx = 255 - data.res_x;
   int col_bpp_l = data.src_col_l * bpp;
   int col_bpp_r = data.src_col_r * bpp;
-  const uint8_t* buf_u = buf + data.row_offset_l + c_offset;
-  const uint8_t* buf_d = buf + data.row_offset_r + c_offset;
-  const uint8_t* src_pos0 = buf_u + col_bpp_l;
-  const uint8_t* src_pos1 = buf_u + col_bpp_r;
-  const uint8_t* src_pos2 = buf_d + col_bpp_l;
-  const uint8_t* src_pos3 = buf_d + col_bpp_r;
-  uint8_t r_pos_0 = (*src_pos0 * i_resx + *src_pos1 * data.res_x) >> 8;
-  uint8_t r_pos_1 = (*src_pos2 * i_resx + *src_pos3 * data.res_x) >> 8;
-  return (r_pos_0 * (255 - data.res_y) + r_pos_1 * data.res_y) >> 8;
+  UNSAFE_TODO({
+    const uint8_t* buf_u = buf + data.row_offset_l + c_offset;
+    const uint8_t* buf_d = buf + data.row_offset_r + c_offset;
+    const uint8_t* src_pos0 = buf_u + col_bpp_l;
+    const uint8_t* src_pos1 = buf_u + col_bpp_r;
+    const uint8_t* src_pos2 = buf_d + col_bpp_l;
+    const uint8_t* src_pos3 = buf_d + col_bpp_r;
+    uint8_t r_pos_0 = (*src_pos0 * i_resx + *src_pos1 * data.res_x) >> 8;
+    uint8_t r_pos_1 = (*src_pos2 * i_resx + *src_pos3 * data.res_x) >> 8;
+    return (r_pos_0 * (255 - data.res_y) + r_pos_1 * data.res_y) >> 8;
+  });
 }
 
 class CFX_BilinearMatrix {
@@ -57,8 +61,8 @@ class CFX_BilinearMatrix {
 
   void Transform(int x, int y, int* x1, int* y1, int* res_x, int* res_y) const {
     CFX_PointF val = TransformInternal(CFX_PointF(x, y));
-    *x1 = pdfium::base::saturated_cast<int>(val.x / kBase);
-    *y1 = pdfium::base::saturated_cast<int>(val.y / kBase);
+    *x1 = pdfium::saturated_cast<int>(val.x / kBase);
+    *y1 = pdfium::saturated_cast<int>(val.y / kBase);
     *res_x = static_cast<int>(val.x) % kBase;
     *res_y = static_cast<int>(val.y) % kBase;
     if (*res_x < 0 && *res_x > -kBase)
@@ -123,7 +127,7 @@ void DoBilinearLoop(const CFX_ImageTransformer::CalcData& calc_data,
         d.row_offset_r = d.src_row_r * calc_data.pitch;
         func(d, dest);
       }
-      dest += increment;
+      UNSAFE_TODO(dest += increment);
     }
   }
 }
@@ -277,16 +281,14 @@ void CFX_ImageTransformer::CalcAlpha(const CalcData& calc_data) {
 }
 
 void CFX_ImageTransformer::CalcMono(const CalcData& calc_data) {
-  uint32_t argb[256];
+  std::array<uint32_t, 256> argb;
   if (m_Storer.GetBitmap()->HasPalette()) {
     pdfium::span<const uint32_t> palette =
         m_Storer.GetBitmap()->GetPaletteSpan();
-    for (size_t i = 0; i < std::size(argb); i++)
-      argb[i] = palette[i];
+    fxcrt::Copy(palette.first(argb.size()), argb);
   } else {
-    for (size_t i = 0; i < std::size(argb); i++) {
-      uint32_t v = static_cast<uint32_t>(i);
-      argb[i] = ArgbEncode(0xff, v, v, v);
+    for (uint32_t i = 0; i < argb.size(); ++i) {
+      argb[i] = ArgbEncode(0xff, i, i, i);
     }
   }
   int destBpp = calc_data.bitmap->GetBPP() / 8;

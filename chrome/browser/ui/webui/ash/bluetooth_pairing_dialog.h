@@ -7,14 +7,15 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
 #include "chrome/browser/ui/webui/ash/system_web_dialog_delegate.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chromeos/ash/services/bluetooth_config/public/mojom/cros_bluetooth_config.mojom-forward.h"
 #include "content/public/browser/webui_config.h"
 #include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/web_dialogs/web_dialog_ui.h"
 #include "ui/webui/resources/cr_components/color_change_listener/color_change_listener.mojom.h"
 
@@ -26,6 +27,8 @@ namespace ash {
 
 class BluetoothPairingDialog : public SystemWebDialogDelegate {
  public:
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kBluetoothPairingDialogElementId);
+
   BluetoothPairingDialog(const BluetoothPairingDialog&) = delete;
   BluetoothPairingDialog& operator=(const BluetoothPairingDialog&) = delete;
 
@@ -36,17 +39,17 @@ class BluetoothPairingDialog : public SystemWebDialogDelegate {
   // manages its own lifetime, for more information see
   // chrome/browser/ui/webui/ash/system_web_dialog_delegate.h.
   static SystemWebDialogDelegate* ShowDialog(
-      std::optional<base::StringPiece> device_address = std::nullopt);
+      std::optional<std::string_view> device_address = std::nullopt);
 
   ~BluetoothPairingDialog() override;
 
  protected:
   BluetoothPairingDialog(
       const std::string& dialog_id,
-      std::optional<base::StringPiece> canonical_device_address);
+      std::optional<std::string_view> canonical_device_address);
 
  private:
-  // SystemWebDialogDelegate
+  // SystemWebDialogDelegate:
   std::string Id() override;
   void AdjustWidgetInitParams(views::Widget::InitParams* params) override;
 

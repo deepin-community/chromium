@@ -63,7 +63,10 @@ base::Value::Dict FrameNodeImplDescriber::DescribeFrameNodeData(
   // Document specific properties. These are emitted in a nested dictionary, as
   // a frame node can be reused for different documents.
   base::Value::Dict doc;
-  doc.Set("url", impl->document_.url.value().possibly_invalid_spec());
+  doc.Set("url", impl->document_.url.possibly_invalid_spec());
+  doc.Set("origin", impl->document_.origin.has_value()
+                        ? impl->document_.origin->GetDebugString()
+                        : "undefined");
   doc.Set("has_nonempty_beforeunload",
           impl->document_.has_nonempty_beforeunload);
   doc.Set("network_almost_idle", impl->document_.network_almost_idle.value());
@@ -75,7 +78,7 @@ base::Value::Dict FrameNodeImplDescriber::DescribeFrameNodeData(
   ret.Set("render_frame_id", impl->render_frame_id_);
   ret.Set("frame_token", impl->frame_token_.value().ToString());
   ret.Set("browsing_instance_id", impl->browsing_instance_id_.value());
-  ret.Set("site_instance_id", impl->site_instance_id_.value());
+  ret.Set("site_instance_group_id", impl->site_instance_group_id_.value());
   ret.Set("lifecycle_state", MojoEnumToString(impl->lifecycle_state_.value()));
   ret.Set("is_ad_frame", impl->is_ad_frame_.value());
   ret.Set("is_holding_weblock", impl->is_holding_weblock_.value());

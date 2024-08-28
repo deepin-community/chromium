@@ -24,6 +24,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout.LayoutParams;
 import android.widget.TextView;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.Nullable;
 
 import org.chromium.base.ApiCompatibilityUtils;
@@ -32,9 +33,8 @@ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgePadAdjuster;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeSupplier;
 import org.chromium.chrome.ui.messages.R;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
-import org.chromium.components.browser_ui.widget.InsetObserver;
 import org.chromium.components.browser_ui.widget.text.TemplatePreservingTextView;
-import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.InsetObserver;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.interpolators.Interpolators;
 
@@ -61,6 +61,7 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
     protected ViewGroup mParent;
     protected Snackbar mSnackbar;
     private View mRootContentView;
+    private @ColorInt int mBackgroundColor;
 
     // Variables used to adjust view position and size when visible frame is changed.
     private Rect mCurrentVisibleRect = new Rect();
@@ -99,8 +100,9 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
             OnClickListener listener,
             Snackbar snackbar,
             ViewGroup parentView,
-            @Nullable WindowAndroid windowAndroid) {
-        this(activity, listener, snackbar, parentView, windowAndroid, null);
+            @Nullable WindowAndroid windowAndroid,
+            boolean isTablet) {
+        this(activity, listener, snackbar, parentView, windowAndroid, null, isTablet);
     }
 
     /**
@@ -122,8 +124,9 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
             Snackbar snackbar,
             ViewGroup parentView,
             @Nullable WindowAndroid windowAndroid,
-            @Nullable EdgeToEdgeSupplier edgeToEdgeSupplier) {
-        mIsTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(activity);
+            @Nullable EdgeToEdgeSupplier edgeToEdgeSupplier,
+            boolean isTablet) {
+        mIsTablet = isTablet;
         mOriginalParent = parentView;
         mWindowAndroid = windowAndroid;
 
@@ -143,7 +146,7 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
         mEdgeToEdgeSupplier = edgeToEdgeSupplier;
         mEdgeToEdgePadAdjuster =
                 edgeToEdgeSupplier != null
-                        ? EdgeToEdgeControllerFactory.createForView(mSnackbarView)
+                        ? EdgeToEdgeControllerFactory.createForView(mSnackbarView, true)
                         : null;
 
         updateInternal(snackbar, false);
@@ -304,10 +307,10 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
     }
 
     // TODO(fgorski): Start using color ID, to remove the view from arguments.
-    private static int getBackgroundColor(View view, Snackbar snackbar) {
+    private static int calculateBackgroundColor(View view, Snackbar snackbar) {
         // Themes are used first.
         if (snackbar.getTheme() == Snackbar.Theme.GOOGLE) {
-            // TODO(crbug.com/1260203): Revisit once we know whether to make this dynamic.
+            // TODO(crbug.com/40798080): Revisit once we know whether to make this dynamic.
             return view.getContext().getColor(R.color.default_control_color_active_baseline);
         }
 
@@ -317,6 +320,10 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
         }
 
         return SemanticColorUtils.getSnackbarBackgroundColor(view.getContext());
+    }
+
+    public @ColorInt int getBackgroundColor() {
+        return mBackgroundColor;
     }
 
     private static int getTextAppearance(Snackbar snackbar) {
@@ -352,15 +359,15 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
         ApiCompatibilityUtils.setTextAppearance(
                 mActionButtonView, getButtonTextAppearance(snackbar));
 
-        int backgroundColor = getBackgroundColor(mContainerView, snackbar);
+        mBackgroundColor = calculateBackgroundColor(mContainerView, snackbar);
         if (mIsTablet) {
             // On tablet, snackbars have rounded corners.
             mSnackbarView.setBackgroundResource(R.drawable.snackbar_background_tablet);
             GradientDrawable backgroundDrawable =
                     (GradientDrawable) mSnackbarView.getBackground().mutate();
-            backgroundDrawable.setColor(backgroundColor);
+            backgroundDrawable.setColor(mBackgroundColor);
         } else {
-            mSnackbarView.setBackgroundColor(backgroundColor);
+            mSnackbarView.setBackgroundColor(mBackgroundColor);
         }
 
         if (snackbar.getActionText() != null) {

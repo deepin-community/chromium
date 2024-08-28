@@ -5,8 +5,8 @@
 #include "third_party/blink/renderer/modules/wake_lock/wake_lock_manager.h"
 
 #include "base/check_op.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/wake_lock/wake_lock.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -23,7 +23,8 @@ WakeLockManager::WakeLockManager(ExecutionContext* execution_context,
   DCHECK_NE(execution_context, nullptr);
 }
 
-void WakeLockManager::AcquireWakeLock(ScriptPromiseResolver* resolver) {
+void WakeLockManager::AcquireWakeLock(
+    ScriptPromiseResolver<WakeLockSentinel>* resolver) {
   // https://w3c.github.io/screen-wake-lock/#the-request-method
   if (!wake_lock_.is_bound()) {
     // 8.3.2. If document.[[ActiveLocks]]["screen"] is empty, then invoke the

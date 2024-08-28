@@ -18,6 +18,11 @@
 
 namespace feed {
 
+namespace switches {
+// Specifies whether RssLinkReader is enabled.
+const char kEnableRssLinkReader[] = "enable-rss-link-reader";
+}  // namespace switches
+
 // InterestFeedV2 takes precedence over InterestFeedContentSuggestions.
 // InterestFeedV2 is cached in ChromeCachedFlags. If the default value here is
 // changed, please update the cached one's default value in CachedFeatureFlags.
@@ -39,7 +44,6 @@ BASE_FEATURE(kInterestFeedNoticeCardAutoDismiss,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
-BASE_FEATURE(kWebFeed, "WebFeed", base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kDiscoFeedEndpoint,
              "DiscoFeedEndpoint",
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -49,9 +53,6 @@ BASE_FEATURE(kXsurfaceMetricsReporting,
 BASE_FEATURE(kFeedLoadingPlaceholder,
              "FeedLoadingPlaceholder",
              base::FEATURE_DISABLED_BY_DEFAULT);
-const base::FeatureParam<bool>
-    kEnableFeedLoadingPlaceholderAnimationOnInstantStart{
-        &kFeedLoadingPlaceholder, "enable_animation_on_instant_start", false};
 BASE_FEATURE(kFeedImageMemoryCacheSizePercentage,
              "FeedImageMemoryCacheSizePercentage",
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -67,8 +68,6 @@ BASE_FEATURE(kFeedBottomSyncStringRemoval,
 #endif
 BASE_FEATURE(kFeedStamp, "FeedStamp", base::FEATURE_DISABLED_BY_DEFAULT);
 
-const char kDefaultReferrerUrl[] = "https://www.google.com/";
-
 BASE_FEATURE(kWebFeedAwareness,
              "WebFeedAwareness",
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -79,31 +78,15 @@ BASE_FEATURE(kWebFeedOnboarding,
 
 BASE_FEATURE(kWebFeedSort, "WebFeedSort", base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kEnableOpenInNewTabFromStartSurfaceFeed,
-             "EnableOpenInNewTabFromStartSurfaceFeed",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kWebUiFeed, "FeedWebUi", base::FEATURE_DISABLED_BY_DEFAULT);
-const base::FeatureParam<std::string> kWebUiFeedUrl{
-    &kWebUiFeed, "feedurl", "https://www.google.com/feed-api/following"};
-const base::FeatureParam<bool> kWebUiDisableContentSecurityPolicy{
-    &kWebUiFeed, "disableCsp", false};
-
-std::string GetFeedReferrerUrl() {
-  return kDefaultReferrerUrl;
-}
-
 bool IsCormorantEnabledForLocale(std::string country) {
-  const std::vector<std::string> launched_countries = {"AU", "CA", "GB",
-                                                       "NZ", "US", "ZA"};
-  return base::Contains(launched_countries, country);
+  return IsWebFeedEnabledForLocale(country);
 }
 
 BASE_FEATURE(kPersonalizeFeedUnsignedUsers,
              "PersonalizeFeedUnsignedUsers",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// TODO(crbug.com/1205923): Remove this helper, directly use kSignin instead.
+// TODO(crbug.com/40764861): Remove this helper, directly use kSignin instead.
 signin::ConsentLevel GetConsentLevelNeededForPersonalizedFeed() {
   return signin::ConsentLevel::kSignin;
 }
@@ -124,10 +107,6 @@ BASE_FEATURE(kFeedNoViewCache,
              "FeedNoViewCache",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kFeedExperimentIDTagging,
-             "FeedExperimentIDTagging",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kFeedShowSignInCommand,
              "FeedShowSignInCommand",
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -138,10 +117,6 @@ BASE_FEATURE(kFeedPerformanceStudy,
 
 BASE_FEATURE(kSyntheticCapabilities,
              "FeedSyntheticCapabilities",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kFeedUserInteractionReliabilityReport,
-             "FeedUserInteractionReliabilityReport",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kFeedSignedOutViewDemotion,
@@ -156,12 +131,23 @@ BASE_FEATURE(kFeedFollowUiUpdate,
              "FeedFollowUiUpdate",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kFeedSportsCard,
-             "FeedSportsCard",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 BASE_FEATURE(kRefreshFeedOnRestart,
              "RefreshFeedOnRestart",
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kFeedContainment,
+             "FeedContainment",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kWebFeedKillSwitch,
+             "WebFeedKillSwitch",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsWebFeedEnabledForLocale(const std::string& country) {
+  const std::vector<std::string> launched_countries = {"AU", "CA", "GB",
+                                                       "NZ", "US", "ZA"};
+  return base::Contains(launched_countries, country) &&
+         !base::FeatureList::IsEnabled(kWebFeedKillSwitch);
+}
 
 }  // namespace feed

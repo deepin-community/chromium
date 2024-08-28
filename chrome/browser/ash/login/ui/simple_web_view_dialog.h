@@ -56,14 +56,20 @@ class SimpleWebViewDialog : public views::View,
   SimpleWebViewDialog& operator=(const SimpleWebViewDialog&) = delete;
   ~SimpleWebViewDialog() override;
 
-  // Starts loading.
-  void StartLoad(const GURL& gurl);
+  // Starts loading of the given url with HTTPS upgrades disabled so that
+  // captive portals that allow HTTPS traffic before login can properly
+  // display the login URL over HTTPS. HTTPS Upgrades will remain enabled for
+  // subsequent navigations in this webview.
+  void StartLoad(const GURL& url);
 
   // Inits view. Should be attached to a Widget before call.
   void Init();
 
   // Implements content::PageNavigator:
-  content::WebContents* OpenURL(const content::OpenURLParams& params) override;
+  content::WebContents* OpenURL(
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
 
   // Implements content::WebContentsDelegate:
   void NavigationStateChanged(content::WebContents* source,

@@ -13,7 +13,6 @@
 #include "base/time/time.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "third_party/skia/include/core/SkPath.h"
-#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
@@ -25,6 +24,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
@@ -96,7 +96,7 @@ class FadeImageView : public views::ImageView,
   void OnImplicitAnimationsCompleted() override {
     switch (animation_state_) {
       case FadeAnimationState::kNoFadeAnimation:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return;
       case FadeAnimationState::kFadeOut:
         CHECK_EQ(layer()->opacity(), 0.0f);
@@ -167,11 +167,8 @@ class ClipboardHistoryBitmapItemView::BitmapContentsView
       : container_(container) {
     views::Builder<views::View>(this)
         .SetLayoutManager(std::make_unique<views::FillLayout>())
-        .AddChild(
-            views::Builder<views::ImageView>(BuildImageView())
-                .CopyAddressTo(&image_view_)
-                .SetPreferredSize(gfx::Size(
-                    INT_MAX, ClipboardHistoryViews::kImageViewPreferredHeight)))
+        .AddChild(views::Builder<views::ImageView>(BuildImageView())
+                      .CopyAddressTo(&image_view_))
         .BuildChildren();
 
     if (chromeos::features::IsClipboardHistoryRefreshEnabled()) {
@@ -223,7 +220,7 @@ class ClipboardHistoryBitmapItemView::BitmapContentsView
     const auto horizontal_offset = SkPoint::Make(radius, 0.f);
     const auto vertical_offset = SkPoint::Make(0.f, radius);
 
-    return SkPathBuilder()
+    return SkPath()
         // Start just before the curve of the top-left corner.
         .moveTo(radius, 0.f)
         // Draw the top-left rounded corner.
@@ -244,8 +241,11 @@ class ClipboardHistoryBitmapItemView::BitmapContentsView
         .rCubicTo(0.f, -3.3f, -2.f, -10.f, -10.f, -10.f)
         // Draw a horizontal line back to the starting point.
         .lineTo(radius, 0.f)
-        .close()
-        .detach();
+        .close();
+  }
+
+  int GetHeightForWidth(int width) const override {
+    return ClipboardHistoryViews::kImageViewPreferredHeight;
   }
 
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
@@ -300,7 +300,7 @@ class ClipboardHistoryBitmapItemView::BitmapContentsView
         break;
       }
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
 
@@ -327,17 +327,18 @@ ClipboardHistoryBitmapItemView::ClipboardHistoryBitmapItemView(
     views::MenuItemView* container)
     : ClipboardHistoryItemView(item_id, clipboard_history, container),
       data_format_(GetClipboardHistoryItem()->main_format()) {
+  SetID(clipboard_history_util::kBitmapItemView);
   switch (data_format_) {
     case ui::ClipboardInternalFormat::kHtml:
-      SetAccessibleName(
+      GetViewAccessibility().SetName(
           l10n_util::GetStringUTF16(IDS_CLIPBOARD_HISTORY_MENU_HTML_IMAGE));
       break;
     case ui::ClipboardInternalFormat::kPng:
-      SetAccessibleName(
+      GetViewAccessibility().SetName(
           l10n_util::GetStringUTF16(IDS_CLIPBOARD_HISTORY_MENU_PNG_IMAGE));
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 

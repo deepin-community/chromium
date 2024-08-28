@@ -38,6 +38,14 @@ TestPasskeyModel::GetModelTypeControllerDelegate() {
   return nullptr;
 }
 
+bool TestPasskeyModel::IsReady() const {
+  return true;
+}
+
+bool TestPasskeyModel::IsEmpty() const {
+  return credentials_.empty();
+}
+
 base::flat_set<std::string> TestPasskeyModel::GetAllSyncIds() const {
   base::flat_set<std::string> ids;
   for (const auto& credential : credentials_) {
@@ -119,7 +127,8 @@ std::string TestPasskeyModel::AddNewPasskeyForTesting(
   return credentials_.back().credential_id();
 }
 
-bool TestPasskeyModel::DeletePasskey(const std::string& credential_id) {
+bool TestPasskeyModel::DeletePasskey(const std::string& credential_id,
+                                     const base::Location& location) {
   // Don't implement the shadow chain deletion logic. Instead, remove the
   // credential with the matching id.
   const auto credential_it =
@@ -133,6 +142,10 @@ bool TestPasskeyModel::DeletePasskey(const std::string& credential_id) {
   credentials_.erase(credential_it);
   NotifyPasskeysChanged({std::move(change)});
   return true;
+}
+
+void TestPasskeyModel::DeleteAllPasskeys() {
+  credentials_.clear();
 }
 
 bool TestPasskeyModel::UpdatePasskey(const std::string& credential_id,

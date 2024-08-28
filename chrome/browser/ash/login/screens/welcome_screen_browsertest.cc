@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/login/screens/welcome_screen.h"
+
 #include <memory>
 
 #include "ash/constants/ash_features.h"
@@ -24,7 +26,6 @@
 #include "chrome/browser/ash/accessibility/speech_monitor.h"
 #include "chrome/browser/ash/login/login_wizard.h"
 #include "chrome/browser/ash/login/screens/chromevox_hint/chromevox_hint_detector.h"
-#include "chrome/browser/ash/login/screens/welcome_screen.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_exit_waiter.h"
@@ -33,7 +34,6 @@
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
 #include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
 #include "chrome/browser/ui/webui/ash/login/enable_debugging_screen_handler.h"
@@ -43,6 +43,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/interactive_test_utils.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #include "chromeos/constants/chromeos_features.h"
@@ -86,8 +87,10 @@ const test::UIPath kChromeVoxHintDialog = {"connect", "welcomeScreen",
                                            "chromeVoxHint"};
 const test::UIPath kChromeVoxHintDialogCloseButton = {
     "connect", "welcomeScreen", "dismissChromeVoxButton"};
-const test::UIPath kChromeVoxHintDialogContent = {"connect", "welcomeScreen",
-                                                  "chromeVoxHintContent"};
+const test::UIPath kChromeVoxHintDialogContentClamshell = {
+    "connect", "welcomeScreen", "chromeVoxHintContentClamshell"};
+const test::UIPath kChromeVoxHintDialogContentTablet = {
+    "connect", "welcomeScreen", "chromeVoxHintContentTablet"};
 const test::UIPath kChromeVoxHintDialogTitle = {"connect", "welcomeScreen",
                                                 "chromeVoxHintTitle"};
 const test::UIPath kDismissChromeVoxButton = {"connect", "welcomeScreen",
@@ -814,11 +817,9 @@ class WelcomeScreenChromeVoxHintTest : public WelcomeScreenBrowserTest {
 
   bool IdleDetectionActivatedForTesting() {
     AssertChromeVoxHintDetector();
-    return welcome_screen()
-                   ->GetChromeVoxHintDetectorForTesting()
-                   ->idle_detector_
-               ? true
-               : false;
+    return !!welcome_screen()
+                 ->GetChromeVoxHintDetectorForTesting()
+                 ->idle_detector_;
   }
 
   bool IdleDetectionCancelledForTesting() {
@@ -1136,7 +1137,8 @@ IN_PROC_BROWSER_TEST_F(WelcomeScreenInternationalChromeVoxHintTest,
   WaitForSpokenSuccessMetric();
 }
 
-IN_PROC_BROWSER_TEST_F(WelcomeScreenChromeVoxHintTest, DialogStructure) {
+IN_PROC_BROWSER_TEST_F(WelcomeScreenChromeVoxHintTest,
+                       DialogStructureClamshell) {
   test::WaitForWelcomeScreen();
   TtsExtensionEngine::GetInstance()->DisableBuiltInTTSEngineForTesting();
   test::ExecuteOobeJS(kSetAvailableVoices);
@@ -1146,13 +1148,35 @@ IN_PROC_BROWSER_TEST_F(WelcomeScreenChromeVoxHintTest, DialogStructure) {
   test::OobeJS().ExpectAttributeEQ("textContent", kChromeVoxHintDialogTitle,
                                    std::string("Turn on screen reader"));
   test::OobeJS().ExpectAttributeEQ(
-      "textContent", kChromeVoxHintDialogContent,
+      "textContent", kChromeVoxHintDialogContentClamshell,
       std::string(kChromeVoxHintLaptopSpokenStringImproved));
+  // Tablet content should not be displayed.
+  test::OobeJS().ExpectPathDisplayed(false, kChromeVoxHintDialogContentTablet);
   test::OobeJS().ExpectAttributeEQ(
       "labelForAria_", kChromeVoxHintDialogCloseButton, std::string("Close"));
 }
 
-IN_PROC_BROWSER_TEST_F(WelcomeScreenChromeVoxHintTest, LaptopAnnouncement) {
+IN_PROC_BROWSER_TEST_F(WelcomeScreenChromeVoxHintTest, DialogStructureTablet) {
+  test::WaitForWelcomeScreen();
+  TtsExtensionEngine::GetInstance()->DisableBuiltInTTSEngineForTesting();
+  test::ExecuteOobeJS(kSetAvailableVoices);
+  ShellTestApi().SetTabletModeEnabledForTest(true);
+  test::OobeJS().ExpectAttributeEQ("open", kChromeVoxHintDialog, false);
+  GiveChromeVoxHintForTesting();
+  WaitForChromeVoxHintDialogToOpen();
+  test::OobeJS().ExpectAttributeEQ("textContent", kChromeVoxHintDialogTitle,
+                                   std::string("Turn on screen reader"));
+  test::OobeJS().ExpectAttributeEQ(
+      "textContent", kChromeVoxHintDialogContentTablet,
+      std::string(kChromeVoxHintTabletSpokenStringImproved));
+  // Clamshell content should not be displayed.
+  test::OobeJS().ExpectPathDisplayed(false,
+                                     kChromeVoxHintDialogContentClamshell);
+  test::OobeJS().ExpectAttributeEQ(
+      "labelForAria_", kChromeVoxHintDialogCloseButton, std::string("Close"));
+}
+
+IN_PROC_BROWSER_TEST_F(WelcomeScreenChromeVoxHintTest, ClamshellAnnouncement) {
   test::WaitForWelcomeScreen();
   TtsExtensionEngine::GetInstance()->DisableBuiltInTTSEngineForTesting();
   test::ExecuteOobeJS(kSetAvailableVoices);

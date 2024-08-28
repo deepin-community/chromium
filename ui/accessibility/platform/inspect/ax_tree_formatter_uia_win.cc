@@ -8,7 +8,6 @@
 #include <oleacc.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <uiautomation.h>
 #include <wrl/client.h>
 
 #include <iostream>
@@ -19,7 +18,6 @@
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -33,6 +31,8 @@
 #include "ui/accessibility/platform/inspect/ax_inspect_utils_win.h"
 #include "ui/accessibility/platform/uia_registrar_win.h"
 #include "ui/gfx/win/hwnd_util.h"
+
+#include <uiautomation.h>
 
 namespace {
 
@@ -1283,7 +1283,7 @@ void AXTreeFormatterUia::ProcessValueForOutput(const std::string& name,
       break;
     }
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }

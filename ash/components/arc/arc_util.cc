@@ -11,7 +11,6 @@
 #include "ash/components/arc/arc_features.h"
 #include "ash/components/arc/arc_prefs.h"
 #include "ash/components/arc/session/arc_vm_data_migration_status.h"
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/system/time/calendar_utils.h"
 #include "ash/system/time/date_helper.h"
@@ -31,6 +30,7 @@
 #include "chromeos/version/version_loader.h"
 #include "components/exo/shell_surface_util.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/user_manager/user_manager.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
@@ -218,18 +218,6 @@ bool IsArcVmDevConfIgnored() {
       ash::switches::kIgnoreArcVmDevConf);
 }
 
-// TODO(b/315507371): Remove after deprecated switches are not in use
-bool IsUreadaheadDisabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ash::switches::kArcDisableUreadahead);
-}
-
-// TODO(b/315507371): Remove after deprecated switches are not in use
-bool IsHostUreadaheadGeneration() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      ash::switches::kArcHostUreadaheadGeneration);
-}
-
 bool IsArcUseDevCaches() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       ash::switches::kArcUseDevCaches);
@@ -278,36 +266,9 @@ bool ShouldShowOptInForTesting() {
       ash::switches::kArcForceShowOptInUi);
 }
 
-bool IsArcKioskAvailable() {
-  const auto* command_line = base::CommandLine::ForCurrentProcess();
-
-  if (command_line->HasSwitch(ash::switches::kArcAvailability)) {
-    std::string value =
-        command_line->GetSwitchValueASCII(ash::switches::kArcAvailability);
-    if (value == kAvailabilityInstalled) {
-      return true;
-    }
-    return IsArcAvailable();
-  }
-
-  // TODO(hidehiko): Remove this when session_manager supports the new flag.
-  if (command_line->HasSwitch(ash::switches::kArcAvailable)) {
-    return true;
-  }
-
-  // If not special kiosk device case, use general ARC check.
-  return IsArcAvailable();
-}
-
-bool IsArcKioskMode() {
-  return user_manager::UserManager::IsInitialized() &&
-         user_manager::UserManager::Get()->IsLoggedInAsArcKioskApp();
-}
-
 bool IsRobotOrOfflineDemoAccountMode() {
   return user_manager::UserManager::IsInitialized() &&
-         (user_manager::UserManager::Get()->IsLoggedInAsArcKioskApp() ||
-          user_manager::UserManager::Get()->IsLoggedInAsManagedGuestSession());
+         user_manager::UserManager::Get()->IsLoggedInAsManagedGuestSession();
 }
 
 bool IsArcAllowedForUser(const user_manager::User* user) {
@@ -318,17 +279,14 @@ bool IsArcAllowedForUser(const user_manager::User* user) {
 
   // ARC is only supported for the following cases:
   // - Users have Gaia accounts;
-  // - Active directory users;
-  // - ARC kiosk session;
   // - Public Session users;
-  //   kUserTypeArcKioskApp check is compatible with IsArcKioskMode()
-  //   above because ARC kiosk user is always the primary/active user of a
-  //   user session. The same for kPublicAccount.
-  if (!user->HasGaiaAccount() && !user->IsActiveDirectoryUser() &&
-      user->GetType() != user_manager::UserType::kArcKioskApp &&
+  //   kPublicAccount check is compatible with IsRobotOrOfflineDemoAccountMode()
+  //   above because public account user is always the primary/active user of a
+  //   user session.
+  if (!user->HasGaiaAccount() &&
       user->GetType() != user_manager::UserType::kPublicAccount) {
-    VLOG(1) << "Users without GAIA or AD accounts, or not ARC kiosk apps are "
-               "not supported in ARC.";
+    VLOG(1) << "Only users with GAIA account or managed guest session users "
+               "are supported in ARC.";
     return false;
   }
 
@@ -506,7 +464,7 @@ void ConfigureUpstartJobs(std::deque<JobDesc> jobs,
                                          std::move(wrapped_callback));
       break;
     case UpstartOperation::JOB_STOP_AND_START:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }
@@ -562,6 +520,12 @@ bool ShouldUseArcKeyMint() {
          (!base::CommandLine::ForCurrentProcess()->HasSwitch(
               ash::switches::kArcBlockKeyMint) ||
           base::FeatureList::IsEnabled(kSwitchToKeyMintOnTOverride));
+}
+
+bool ShouldUseArcAttestation() {
+  // Attesation depends on keymint.
+  return ShouldUseArcKeyMint() &&
+         base::FeatureList::IsEnabled(kEnableArcAttestation);
 }
 
 int GetDaysUntilArcVmDataMigrationDeadline(PrefService* prefs) {
@@ -687,6 +651,63 @@ void EnsureStaleArcVmAndArcVmUpstartJobsStopped(
   ConfigureUpstartJobs(std::move(jobs),
                        base::BindOnce(&OnStaleArcVmUpstartJobsStopped,
                                       user_id_hash, std::move(callback)));
+}
+
+bool ShouldAlwaysMountAndroidVolumesInFilesForTesting() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      ash::switches::kArcForceMountAndroidVolumesInFiles);
+}
+
+bool ShouldDeferArcActivationUntilUserSessionStartUpTaskCompletion(
+    const PrefService* prefs) {
+  if (!base::FeatureList::IsEnabled(
+          kDeferArcActivationUntilUserSessionStartUpTaskCompletion)) {
+    return false;
+  }
+
+  const int max_window_size = kDeferArcActivationHistoryWindow.Get();
+  const int threshold = kDeferArcActivationHistoryThreshold.Get();
+  if (max_window_size < 0 || threshold < 0) {
+    LOG(ERROR) << "Unexpected negative value(s): " << max_window_size << ", "
+               << threshold;
+    return false;
+  }
+
+  // Look at recent (at most) `histogram_window` sessions, and if ARC is
+  // activated during user session start up tasks more than or equals to
+  // `history_threshold` times, we'll immediately activate ARC.
+  // I.e., if ARC is activated during user session start up tasks less than
+  // `history_threshold` times, we'll defer the ARC activation until
+  // the user session start up task completion.
+  const auto& history =
+      prefs->GetList(prefs::kArcFirstActivationDuringUserSessionStartUpHistory);
+  const size_t window_size = std::min<size_t>(history.size(), max_window_size);
+  base::span<const base::Value> history_window(history.end() - window_size,
+                                               history.end());
+  return base::ranges::count(history_window, base::Value(true)) < threshold;
+}
+
+void RecordFirstActivationDuringUserSessionStartUp(PrefService* prefs,
+                                                   bool value) {
+  if (!base::FeatureList::IsEnabled(
+          kDeferArcActivationUntilUserSessionStartUpTaskCompletion)) {
+    return;
+  }
+
+  const int window_size = kDeferArcActivationHistoryWindow.Get();
+  if (window_size < 0) {
+    LOG(ERROR) << "Unexpected negative window_size: " << window_size;
+    return;
+  }
+
+  ScopedListPrefUpdate update(
+      prefs, prefs::kArcFirstActivationDuringUserSessionStartUpHistory);
+  auto& history = update.Get();
+  // Limit the size up to the history_window.
+  history.Append(value);
+  if (history.size() >= static_cast<size_t>(window_size)) {
+    history.erase(history.begin(), history.end() - window_size);
+  }
 }
 
 }  // namespace arc

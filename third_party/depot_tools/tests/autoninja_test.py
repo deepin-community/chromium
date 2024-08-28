@@ -73,48 +73,21 @@ class AutoninjaTest(trial_dir.TestCase):
         self.assertEqual(args[args.index('-C') + 1], out_dir)
         self.assertIn('base', args)
 
-    def test_autoninja_goma(self):
-        """
-        Test that when specifying use_goma=true, autoninja verifies that Goma
-        is running and then delegates to ninja.
-        """
-        goma_dir = os.path.join(self.root_dir, 'goma_dir')
-        with mock.patch('subprocess.call', return_value=0), \
-             mock.patch('ninja.main', return_value=0) as ninja_main, \
-             mock.patch.dict(os.environ, {"GOMA_DIR": goma_dir}):
-            out_dir = os.path.join('out', 'dir')
-            write(os.path.join(out_dir, 'args.gn'), 'use_goma=true')
-            write(
-                os.path.join(
-                    'goma_dir', 'gomacc.exe'
-                    if sys.platform.startswith('win') else 'gomacc'), 'content')
-            autoninja.main(['autoninja.py', '-C', out_dir])
-            ninja_main.assert_called_once()
-            args = ninja_main.call_args.args[0]
-        self.assertIn('-C', args)
-        self.assertEqual(args[args.index('-C') + 1], out_dir)
-        # Check that autoninja correctly calculated the number of jobs to use
-        # as required for remote execution, instead of using the value for
-        # local execution.
-        self.assertIn('-j', args)
-        parallel_j = int(args[args.index('-j') + 1])
-        self.assertGreater(parallel_j, multiprocessing.cpu_count() * 2)
-
     def test_autoninja_reclient(self):
         """
         Test that when specifying use_remoteexec=true, autoninja delegates to
-        ninja_reclient.
+        reclient_helper.
         """
-        with mock.patch('ninja_reclient.main',
-                        return_value=0) as ninja_reclient_main:
+        with mock.patch('reclient_helper.run_ninja',
+                        return_value=0) as run_ninja:
             out_dir = os.path.join('out', 'dir')
             write(os.path.join(out_dir, 'args.gn'), 'use_remoteexec=true')
             write(os.path.join('buildtools', 'reclient_cfgs', 'reproxy.cfg'),
                   'RBE_v=2')
             write(os.path.join('buildtools', 'reclient', 'version.txt'), '0.0')
             autoninja.main(['autoninja.py', '-C', out_dir])
-            ninja_reclient_main.assert_called_once()
-            args = ninja_reclient_main.call_args.args[0]
+            run_ninja.assert_called_once()
+            args = run_ninja.call_args.args[0]
         self.assertIn('-C', args)
         self.assertEqual(args[args.index('-C') + 1], out_dir)
         # Check that autoninja correctly calculated the number of jobs to use
@@ -140,34 +113,54 @@ class AutoninjaTest(trial_dir.TestCase):
     def test_autoninja_siso_reclient(self):
         """
         Test that when specifying use_siso=true and use_remoteexec=true,
-        autoninja delegates to autosiso.
+        autoninja starts reproxy using reclient_helper and calls 'siso ninja'.
         """
-        with mock.patch('autosiso.main', return_value=0) as autosiso_main:
-            out_dir = os.path.join('out', 'dir')
-            write(os.path.join(out_dir, 'args.gn'),
-                  'use_siso=true\nuse_remoteexec=true')
-            write(os.path.join('buildtools', 'reclient_cfgs', 'reproxy.cfg'),
-                  'RBE_v=2')
-            write(os.path.join('buildtools', 'reclient', 'version.txt'), '0.0')
-            autoninja.main(['autoninja.py', '-C', out_dir])
-            autosiso_main.assert_called_once()
-            args = autosiso_main.call_args.args[0]
-        self.assertIn('-C', args)
-        self.assertEqual(args[args.index('-C') + 1], out_dir)
+        reclient_helper_calls = []
+
+        @contextlib.contextmanager
+        def reclient_helper_mock(argv, tool, _should_collect_logs):
+            reclient_helper_calls.append([argv, tool])
+            yield 0
+
+        with mock.patch('reclient_helper.build_context', reclient_helper_mock):
+            with mock.patch('siso.main', return_value=0) as siso_main:
+                out_dir = os.path.join('out', 'dir')
+                write(os.path.join(out_dir, 'args.gn'),
+                      'use_siso=true\nuse_remoteexec=true')
+                write(
+                    os.path.join('buildtools', 'reclient_cfgs', 'reproxy.cfg'),
+                    'RBE_v=2')
+                write(os.path.join('buildtools', 'reclient', 'version.txt'),
+                      '0.0')
+                autoninja.main(['autoninja.py', '-C', out_dir])
+                siso_main.assert_called_once_with([
+                    'siso', 'ninja', '-project=', '-reapi_instance=', '-C',
+                    out_dir
+                ])
+        self.assertEqual(len(reclient_helper_calls), 1)
+        self.assertEqual(
+            reclient_helper_calls[0][0],
+            ['siso', 'ninja', '-project=', '-reapi_instance=', '-C', out_dir])
+        self.assertEqual(reclient_helper_calls[0][1], 'autosiso')
 
     @parameterized.expand([
-        ("non corp machine", False, None, None, False),
-        ("non corp adc account", True, "foo@chromium.org", None, True),
-        ("corp adc account", True, "foo@google.com", None, False),
-        ("non corp gcloud auth account", True, None, "foo@chromium.org", True),
-        ("corp gcloud auth account", True, None, "foo@google.com", False),
+        ("non corp machine", False, None, None, None, False),
+        ("non corp adc account", True, "foo@chromium.org", None, None, True),
+        ("corp adc account", True, "foo@google.com", None, None, False),
+        ("non corp gcloud auth account", True, None, "foo@chromium.org", None,
+         True),
+        ("corp gcloud auth account", True, None, "foo@google.com", None, False),
+        ("non corp luci auth account", True, None, None, "foo@chromium.org",
+         True),
+        ("corp luci auth account", True, None, None, "foo@google.com", False),
     ])
     def test_is_corp_machine_using_external_account(self, _, is_corp,
                                                     adc_account,
                                                     gcloud_auth_account,
+                                                    luci_auth_account,
                                                     expected):
         for shelve_file in glob.glob(
-                os.path.join(autoninja.SCRIPT_DIR, ".autoninja*")):
+                os.path.join(autoninja._SCRIPT_DIR, ".autoninja*")):
             # Clear cache.
             os.remove(shelve_file)
 
@@ -176,29 +169,14 @@ class AutoninjaTest(trial_dir.TestCase):
                             'autoninja._adc_account',
                             return_value=adc_account), mock.patch(
                                 'autoninja._gcloud_auth_account',
-                                return_value=gcloud_auth_account):
+                                return_value=gcloud_auth_account), mock.patch(
+                                    'autoninja._luci_auth_account',
+                                    return_value=luci_auth_account):
             self.assertEqual(
                 bool(
                     # pylint: disable=line-too-long
                     autoninja._is_google_corp_machine_using_external_account()),
                 expected)
-
-    def test_gn_lines(self):
-        out_dir = os.path.join('out', 'dir')
-        # Make sure nested import directives work. This is based on the
-        # reclient test.
-        write(os.path.join(out_dir, 'args.gn'), 'import("//out/common.gni")')
-        write(os.path.join('out', 'common.gni'), 'import("common_2.gni")')
-        write(os.path.join('out', 'common_2.gni'), 'use_remoteexec=true')
-
-        lines = list(
-            autoninja._gn_lines(out_dir, os.path.join(out_dir, 'args.gn')))
-
-        # The test will only pass if both imports work and
-        # 'use_remoteexec=true' is seen.
-        self.assertListEqual(lines, [
-            'use_remoteexec=true',
-        ])
 
     @mock.patch('sys.platform', 'win32')
     def test_print_cmd_windows(self):

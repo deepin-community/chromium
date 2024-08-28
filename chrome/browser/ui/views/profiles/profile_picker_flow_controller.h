@@ -50,10 +50,17 @@ class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
 
   base::FilePath GetSwitchProfilePathOrEmpty() const;
 
+  // Switch to the flow that is shown when the user decides to create a profile
+  // without signing in.
+  void SwitchToSignedOutPostIdentityFlow(
+      Profile* profile,
+      PostHostClearedCallback post_host_cleared_callback,
+      StepSwitchFinishedCallback step_switch_finished_callback);
+
  protected:
   // ProfileManagementFlowControllerImpl
-  base::queue<ProfileManagementFlowController::Step> RegisterPostIdentitySteps()
-      override;
+  base::queue<ProfileManagementFlowController::Step> RegisterPostIdentitySteps(
+      PostHostClearedCallback post_host_cleared_callback) override;
 
  private:
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
@@ -75,13 +82,6 @@ class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
       const CoreAccountInfo& account_info,
       std::unique_ptr<content::WebContents> contents) override;
 
-  // When `is_continue_callback` is true, the flow should finishing up
-  // immediately so that `post_host_cleared_callback` can be executed, without
-  // showing other steps.
-  void HandleIdentityStepsCompleted(
-      PostHostClearedCallback post_host_cleared_callback,
-      bool is_continue_callback);
-
   const ProfilePicker::EntryPoint entry_point_;
 
   // Color provided when a profile creation is initiated, that may be used to
@@ -91,7 +91,7 @@ class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
   // color choice that the user would be able to override.
   std::optional<SkColor> suggested_profile_color_;
 
-  // TODO(crbug.com/1359352): To be refactored out.
+  // TODO(crbug.com/40237338): To be refactored out.
   // This is used for `ProfilePicker::GetSwitchProfilePath()`. The information
   // should ideally be provided to the handler of the profile switch page once
   // its controller is created instead of relying on static calls.
@@ -99,7 +99,6 @@ class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
       weak_signed_in_flow_controller_;
 
   base::WeakPtr<Profile> created_profile_;
-  PostHostClearedCallback post_host_cleared_callback_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_FLOW_CONTROLLER_H_

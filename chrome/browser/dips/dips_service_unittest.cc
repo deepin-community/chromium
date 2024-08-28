@@ -4,17 +4,19 @@
 
 #include "chrome/browser/dips/dips_service.h"
 
+#include <optional>
+
 #include "base/files/file_util.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/strings/string_piece.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_file_util.h"
 #include "base/time/default_clock.h"
+#include "base/types/pass_key.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -30,17 +32,28 @@
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/site_engagement/content/site_engagement_service.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_browsing_data_remover_delegate.h"
+#include "net/base/schemeful_site.h"
+#include "net/cookies/cookie_partition_key.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "url/gurl.h"
 
+using testing::AllOf;
+using testing::ElementsAre;
+using testing::IsEmpty;
+using testing::Pair;
+
 class DIPSServiceTest : public testing::Test {
+ protected:
+  base::PassKey<DIPSServiceTest> PassKey() { return {}; }
+
  private:
   content::BrowserTaskEnvironment task_environment_;
 };
@@ -57,6 +70,18 @@ TEST_F(DIPSServiceTest, DontCreateServiceIfFeatureDisabled) {
 
   TestingProfile profile;
   EXPECT_EQ(DIPSService::Get(&profile), nullptr);
+}
+
+TEST_F(DIPSServiceTest, NoPrepopulation) {
+  const GURL url("http://example.com/");
+  TestingProfile profile;
+  site_engagement::SiteEngagementService::Get(&profile)->AddPointsForTesting(
+      url, 42);
+
+  auto* dips_service = DIPSService::Get(&profile);
+  // There was engagement on example.com, but database prepopulation was
+  // disabled, so there should NOT be a DIPS DB record for it:
+  ASSERT_FALSE(GetDIPSState(dips_service, url).has_value());
 }
 
 // Verifies that if database persistence is disabled via Finch, then when the
@@ -252,16 +277,16 @@ class DIPSServiceStateRemovalTest : public testing::Test {
                                       ContentSettingsType::COOKIES,
                                       ContentSetting::CONTENT_SETTING_ALLOW);
 
-    EXPECT_EQ(
-        CONTENT_SETTING_BLOCK,
-        GetCookieSettings()->GetCookieSetting(
-            first_party_url.value_or(GURL()), third_party_url.value_or(GURL()),
-            net::CookieSettingOverrides(), nullptr));
-    EXPECT_EQ(
-        CONTENT_SETTING_ALLOW,
-        GetCookieSettings()->GetCookieSetting(
-            third_party_url.value_or(GURL()), first_party_url.value_or(GURL()),
-            net::CookieSettingOverrides(), nullptr));
+    EXPECT_EQ(CONTENT_SETTING_BLOCK,
+              GetCookieSettings()->GetCookieSetting(
+                  first_party_url.value_or(GURL()), net::SiteForCookies(),
+                  third_party_url.value_or(GURL()),
+                  net::CookieSettingOverrides(), nullptr));
+    EXPECT_EQ(CONTENT_SETTING_ALLOW,
+              GetCookieSettings()->GetCookieSetting(
+                  third_party_url.value_or(GURL()), net::SiteForCookies(),
+                  first_party_url.value_or(GURL()),
+                  net::CookieSettingOverrides(), nullptr));
   }
 
  private:
@@ -281,14 +306,13 @@ TEST_F(DIPSServiceStateRemovalTest,
 
   std::vector<DIPSRedirectInfoPtr> complete_redirects;
   complete_redirects.push_back(std::make_unique<DIPSRedirectInfo>(
-      /*url=*/GURL("http://b.test/"),
+      /*url=*/MakeUrlAndId("http://b.test/"),
       /*redirect_type=*/DIPSRedirectType::kServer,
       /*access_type=*/SiteDataAccessType::kNone,
-      /*source_id=*/ukm::SourceId(),
       /*time=*/Now()));
   auto complete_chain = std::make_unique<DIPSRedirectChainInfo>(
-      /*initial_url=*/GURL("http://a.test/"),
-      /*final_url=*/GURL("http://c.test/"),
+      /*initial_url=*/MakeUrlAndId("http://a.test/"),
+      /*final_url=*/MakeUrlAndId("http://c.test/"),
       /*length=*/1, /*is_partial_chain=*/false);
 
   GetService()->HandleRedirectChain(
@@ -307,14 +331,13 @@ TEST_F(DIPSServiceStateRemovalTest,
 
   std::vector<DIPSRedirectInfoPtr> partial_redirects;
   partial_redirects.push_back(std::make_unique<DIPSRedirectInfo>(
-      /*url=*/GURL("http://b.test/"),
+      /*url=*/MakeUrlAndId("http://b.test/"),
       /*redirect_type=*/DIPSRedirectType::kServer,
       /*access_type=*/SiteDataAccessType::kNone,
-      /*source_id=*/ukm::SourceId(),
       /*time=*/Now()));
   auto partial_chain = std::make_unique<DIPSRedirectChainInfo>(
-      /*initial_url=*/GURL("http://a.test/"),
-      /*final_url=*/GURL("http://c.test/"),
+      /*initial_url=*/MakeUrlAndId("http://a.test/"),
+      /*final_url=*/MakeUrlAndId("http://c.test/"),
       /*length=*/1, /*is_partial_chain=*/true);
 
   GetService()->HandleRedirectChain(
@@ -355,13 +378,23 @@ TEST_F(DIPSServiceStateRemovalTest, BrowsingDataDeletion_Enabled) {
   auto filter_builder = content::BrowsingDataFilterBuilder::Create(
       content::BrowsingDataFilterBuilder::Mode::kDelete);
   filter_builder->AddRegisterableDomain(GetSiteForDIPS(url));
+  filter_builder->SetCookiePartitionKeyCollection(
+      net::CookiePartitionKeyCollection());
   delegate_.ExpectCall(
       base::Time::Min(), base::Time::Max(),
-      chrome_browsing_data_remover::FILTERABLE_DATA_TYPES |
+      (chrome_browsing_data_remover::FILTERABLE_DATA_TYPES &
+       ~content::BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX) |
           content::BrowsingDataRemover::DATA_TYPE_AVOID_CLOSING_CONNECTIONS,
       content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
           content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB,
       filter_builder.get());
+  // We don't test the filter builder for partitioned cookies here because it's
+  // messy. The browser tests ensure that it behaves as expected.
+  delegate_.ExpectCallDontCareAboutFilterBuilder(
+      base::Time::Min(), base::Time::Max(),
+      content::BrowsingDataRemover::DATA_TYPE_COOKIES,
+      content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
+          content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB);
 
   // Time-travel to after the grace period has ended for the bounce.
   AdvanceTimeTo(bounce + grace_period + tiny_delta);
@@ -751,13 +784,23 @@ TEST_F(DIPSServiceStateRemovalTest, ImmediateEnforcement) {
   auto filter_builder = content::BrowsingDataFilterBuilder::Create(
       content::BrowsingDataFilterBuilder::Mode::kDelete);
   filter_builder->AddRegisterableDomain(GetSiteForDIPS(url));
+  filter_builder->SetCookiePartitionKeyCollection(
+      net::CookiePartitionKeyCollection());
   delegate_.ExpectCall(
       base::Time::Min(), base::Time::Max(),
-      chrome_browsing_data_remover::FILTERABLE_DATA_TYPES |
+      (chrome_browsing_data_remover::FILTERABLE_DATA_TYPES &
+       ~content::BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX) |
           content::BrowsingDataRemover::DATA_TYPE_AVOID_CLOSING_CONNECTIONS,
       content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
           content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB,
       filter_builder.get());
+  // We don't test the filter builder for partitioned cookies here because it's
+  // messy. The browser tests ensure that it behaves as expected.
+  delegate_.ExpectCallDontCareAboutFilterBuilder(
+      base::Time::Min(), base::Time::Max(),
+      content::BrowsingDataRemover::DATA_TYPE_COOKIES,
+      content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB |
+          content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB);
 
   // Perform immediate enforcement of deletion, without regard for grace period
   // and verify `url` is returned the `DeletedSitesCallback`.
@@ -967,4 +1010,195 @@ TEST_F(DIPSServiceHistogramTest, Deletion_Enforced) {
   histograms().ExpectUniqueSample(kUmaHistogramDeletionPrefix + kBlock3PC,
                                   DIPSDeletionAction::kEnforced, 1);
   EXPECT_TRUE(GetDIPSState(GetService(), url).has_value());
+}
+
+MATCHER_P(HasSourceId, id, "") {
+  *result_listener << "where the source id is " << arg.source_id;
+  return arg.source_id == id;
+}
+
+MATCHER_P(HasMetrics, matcher, "") {
+  return ExplainMatchResult(matcher, arg.metrics, result_listener);
+}
+
+using DIPSServiceUkmTest = DIPSServiceTest;
+
+TEST_F(DIPSServiceUkmTest, BothChainBeginAndChainEnd) {
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  TestingProfile profile;
+  DIPSService* service = DIPSService::Get(&profile);
+
+  UrlAndSourceId initial_url = MakeUrlAndId("http://a.test/");
+  UrlAndSourceId redirect_url1 = MakeUrlAndId("http://b.test/");
+  UrlAndSourceId redirect_url2 = MakeUrlAndId("http://c.test/first");
+  UrlAndSourceId final_url = MakeUrlAndId("http://c.test/second");
+
+  RedirectChainObserver observer(service, final_url.url);
+  std::vector<DIPSRedirectInfoPtr> redirects;
+  redirects.push_back(std::make_unique<DIPSRedirectInfo>(
+      redirect_url1,
+      /*redirect_type=*/DIPSRedirectType::kServer,
+      /*access_type=*/SiteDataAccessType::kNone,
+      /*time=*/base::Time::Now()));
+  redirects.push_back(std::make_unique<DIPSRedirectInfo>(
+      redirect_url2,
+      /*redirect_type=*/DIPSRedirectType::kServer,
+      /*access_type=*/SiteDataAccessType::kNone,
+      /*time=*/base::Time::Now()));
+  DIPSRedirectChainInfoPtr chain = std::make_unique<DIPSRedirectChainInfo>(
+      initial_url, final_url,
+      /*length=*/2, /*is_partial_chain=*/false);
+  const int32_t chain_id = chain->chain_id;
+  service->HandleRedirectChain(std::move(redirects), std::move(chain),
+                               base::DoNothing());
+  observer.Wait();
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainBegin",
+                                      {"ChainId", "InitialAndFinalSitesSame"}),
+              ElementsAre(AllOf(HasSourceId(initial_url.source_id),
+                                HasMetrics(ElementsAre(
+                                    Pair("ChainId", chain_id),
+                                    Pair("InitialAndFinalSitesSame", 0))))));
+
+  EXPECT_THAT(
+      ukm_recorder.GetEntries("DIPS.Redirect",
+                              {"ChainId", "InitialAndFinalSitesSame"}),
+      ElementsAre(
+          AllOf(HasSourceId(redirect_url1.source_id),
+                HasMetrics(ElementsAre(Pair("ChainId", chain_id),
+                                       Pair("InitialAndFinalSitesSame", 0)))),
+          AllOf(HasSourceId(redirect_url2.source_id),
+                HasMetrics(ElementsAre(Pair("ChainId", chain_id),
+                                       Pair("InitialAndFinalSitesSame", 0))))));
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainEnd",
+                                      {"ChainId", "InitialAndFinalSitesSame"}),
+              ElementsAre(AllOf(HasSourceId(final_url.source_id),
+                                HasMetrics(ElementsAre(
+                                    Pair("ChainId", chain_id),
+                                    Pair("InitialAndFinalSitesSame", 0))))));
+}
+
+TEST_F(DIPSServiceUkmTest, InitialAndFinalSitesSame_True) {
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  TestingProfile profile;
+  DIPSService* service = DIPSService::Get(&profile);
+
+  UrlAndSourceId initial_url = MakeUrlAndId("http://a.test/");
+  UrlAndSourceId redirect_url = MakeUrlAndId("http://b.test/");
+  UrlAndSourceId final_url = MakeUrlAndId("http://a.test/different-path");
+
+  RedirectChainObserver observer(service, final_url.url);
+  std::vector<DIPSRedirectInfoPtr> redirects;
+  redirects.push_back(std::make_unique<DIPSRedirectInfo>(
+      redirect_url,
+      /*redirect_type=*/DIPSRedirectType::kServer,
+      /*access_type=*/SiteDataAccessType::kNone,
+      /*time=*/base::Time::Now()));
+  DIPSRedirectChainInfoPtr chain = std::make_unique<DIPSRedirectChainInfo>(
+      initial_url, final_url,
+      /*length=*/1, /*is_partial_chain=*/false);
+  service->HandleRedirectChain(std::move(redirects), std::move(chain),
+                               base::DoNothing());
+  observer.Wait();
+
+  EXPECT_THAT(
+      ukm_recorder.GetEntries("DIPS.ChainBegin", {"InitialAndFinalSitesSame"}),
+      ElementsAre(
+          AllOf(HasSourceId(initial_url.source_id),
+                HasMetrics(ElementsAre(Pair("InitialAndFinalSitesSame", 1))))));
+
+  EXPECT_THAT(
+      ukm_recorder.GetEntries("DIPS.Redirect", {"InitialAndFinalSitesSame"}),
+      ElementsAre(
+          AllOf(HasSourceId(redirect_url.source_id),
+                HasMetrics(ElementsAre(Pair("InitialAndFinalSitesSame", 1))))));
+
+  EXPECT_THAT(
+      ukm_recorder.GetEntries("DIPS.ChainEnd", {"InitialAndFinalSitesSame"}),
+      ElementsAre(
+          AllOf(HasSourceId(final_url.source_id),
+                HasMetrics(ElementsAre(Pair("InitialAndFinalSitesSame", 1))))));
+}
+
+TEST_F(DIPSServiceUkmTest, DontReportEmptyChainsAtAll) {
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  TestingProfile profile;
+  DIPSService* service = DIPSService::Get(&profile);
+
+  UrlAndSourceId initial_url = MakeUrlAndId("http://a.test/");
+  UrlAndSourceId final_url = MakeUrlAndId("http://b.test/");
+
+  RedirectChainObserver observer(service, final_url.url);
+  DIPSRedirectChainInfoPtr chain = std::make_unique<DIPSRedirectChainInfo>(
+      initial_url, final_url,
+      /*length=*/0, /*is_partial_chain=*/false);
+  service->HandleRedirectChain({}, std::move(chain), base::DoNothing());
+  observer.Wait();
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainBegin", {}), IsEmpty());
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.Redirect", {}), IsEmpty());
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainEnd", {}), IsEmpty());
+}
+
+TEST_F(DIPSServiceUkmTest, DontReportChainBeginIfInvalidSourceId) {
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  TestingProfile profile;
+  DIPSService* service = DIPSService::Get(&profile);
+
+  UrlAndSourceId redirect_url = MakeUrlAndId("http://b.test/");
+  UrlAndSourceId final_url = MakeUrlAndId("http://c.test/");
+
+  RedirectChainObserver observer(service, final_url.url);
+  std::vector<DIPSRedirectInfoPtr> redirects;
+  redirects.push_back(std::make_unique<DIPSRedirectInfo>(
+      redirect_url,
+      /*redirect_type=*/DIPSRedirectType::kServer,
+      /*access_type=*/SiteDataAccessType::kNone,
+      /*time=*/base::Time::Now()));
+  DIPSRedirectChainInfoPtr chain = std::make_unique<DIPSRedirectChainInfo>(
+      UrlAndSourceId(), final_url,
+      /*length=*/1, /*is_partial_chain=*/false);
+  service->HandleRedirectChain(std::move(redirects), std::move(chain),
+                               base::DoNothing());
+  observer.Wait();
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainBegin", {}), IsEmpty());
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.Redirect", {}),
+              ElementsAre(AllOf(HasSourceId(redirect_url.source_id))));
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainEnd", {}),
+              ElementsAre(AllOf(HasSourceId(final_url.source_id))));
+}
+
+TEST_F(DIPSServiceUkmTest, DontReportChainEndIfInvalidSourceId) {
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  TestingProfile profile;
+  DIPSService* service = DIPSService::Get(&profile);
+
+  UrlAndSourceId initial_url = MakeUrlAndId("http://a.test/");
+  UrlAndSourceId redirect_url = MakeUrlAndId("http://b.test/");
+
+  RedirectChainObserver observer(service, GURL());
+  std::vector<DIPSRedirectInfoPtr> redirects;
+  redirects.push_back(std::make_unique<DIPSRedirectInfo>(
+      redirect_url,
+      /*redirect_type=*/DIPSRedirectType::kServer,
+      /*access_type=*/SiteDataAccessType::kNone,
+      /*time=*/base::Time::Now()));
+  DIPSRedirectChainInfoPtr chain = std::make_unique<DIPSRedirectChainInfo>(
+      initial_url, UrlAndSourceId(),
+      /*length=*/1, /*is_partial_chain=*/false);
+  service->HandleRedirectChain(std::move(redirects), std::move(chain),
+                               base::DoNothing());
+  observer.Wait();
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainBegin", {}),
+              ElementsAre(AllOf(HasSourceId(initial_url.source_id))));
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.Redirect", {}),
+              ElementsAre(AllOf(HasSourceId(redirect_url.source_id))));
+
+  EXPECT_THAT(ukm_recorder.GetEntries("DIPS.ChainEnd", {}), IsEmpty());
 }

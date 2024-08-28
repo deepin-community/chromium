@@ -7,18 +7,16 @@
 //   Specification: src/enums/node-type.yaml
 //   Generator: tools/generate-enum.py
 
-
 #include <assert.h>
 #include <stdint.h>
 
-#include <xnnpack/node-type.h>
-
+#include "xnnpack/node-type.h"
 
 #if XNN_LOG_LEVEL > 0
-static const uint16_t offset[57] = {
-  0, 8, 12, 17, 35, 54, 71, 93, 101, 107, 120, 133, 146, 159, 167, 182, 187, 204, 222, 247, 254, 258, 270, 282, 294,
-  300, 316, 339, 365, 391, 413, 435, 445, 456, 471, 480, 489, 499, 506, 512, 523, 528, 557, 565, 573, 591, 598, 610,
-  629, 649, 661, 676, 702, 715, 732, 741, 746
+static const uint16_t offset[62] = {
+  0, 8, 12, 17, 35, 54, 71, 93, 101, 107, 120, 133, 146, 159, 167, 182, 187, 197, 214, 232, 257, 264, 268, 272, 284,
+  296, 308, 314, 330, 353, 358, 384, 410, 432, 454, 464, 468, 479, 494, 503, 512, 522, 529, 535, 558, 569, 574, 603,
+  611, 619, 637, 644, 656, 675, 695, 707, 722, 748, 761, 778, 787, 792
 };
 
 static const char data[] =
@@ -38,22 +36,26 @@ static const char data[] =
   "Convert\0"
   "Convolution 2D\0"
   "Copy\0"
+  "Copy Sign\0"
   "Deconvolution 2D\0"
   "Depth To Space 2D\0"
   "Depthwise Convolution 2D\0"
   "Divide\0"
   "ELU\0"
+  "Exp\0"
   "Even Split2\0"
   "Even Split3\0"
   "Even Split4\0"
   "Floor\0"
   "Fully Connected\0"
   "Fully Connected Sparse\0"
+  "GELU\0"
   "Global Average Pooling 1D\0"
   "Global Average Pooling 2D\0"
   "Global Sum Pooling 1D\0"
   "Global Sum Pooling 2D\0"
   "HardSwish\0"
+  "Log\0"
   "Leaky ReLU\0"
   "Max Pooling 2D\0"
   "Maximum2\0"
@@ -61,6 +63,7 @@ static const char data[] =
   "Multiply2\0"
   "Negate\0"
   "PReLU\0"
+  "Reciprocal Square Root\0"
   "Reshape 2D\0"
   "RoPE\0"
   "Scaled Dot Product Attention\0"

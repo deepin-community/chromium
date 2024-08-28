@@ -21,6 +21,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/status/status.h"
 #include "absl/strings/match.h"
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
 
@@ -49,6 +50,7 @@ enum class GpuApi {
 
 enum class AdrenoGpu {
   // Adreno 7xx series
+  kAdreno750,
   kAdreno740,
   kAdreno730,
   // Adreno 6xx series
@@ -172,6 +174,7 @@ enum class AppleGpu {
   kA14,
   kA15,
   kA16,
+  kA17Pro,
   kM1,
   kM1Pro,
   kM1Max,
@@ -180,15 +183,39 @@ enum class AppleGpu {
 };
 
 struct AppleInfo {
+  // https://developer.apple.com/documentation/metal/mtlgpufamily
+  enum class Family {
+    kApple9 = 9,
+    kApple8 = 8,
+    kApple7 = 7,
+    kApple6 = 6,
+    kApple5 = 5,
+    kApple4 = 4,
+    kApple3 = 3,
+    kApple2 = 2,
+    kApple1 = 1,
+  };
   AppleInfo() = default;
   explicit AppleInfo(const std::string& gpu_description);
   AppleGpu gpu_type;
+  Family gpu_family;
 
-  bool IsA7GenerationGpu() const;
-  bool IsA8GenerationGpu() const;
+  bool IsFamilyApple1() const;
+  bool IsFamilyApple2() const;
+  bool IsFamilyApple3() const;
+  bool IsFamilyApple4() const;
+  bool IsFamilyApple5() const;
+  bool IsFamilyApple6() const;
+  bool IsFamilyApple7() const;
+  bool IsFamilyApple8() const;
+  bool IsFamilyApple9() const;
+
+  bool IsFamilyOrLower(Family family) const;
+
   bool IsLocalMemoryPreferredOverGlobal() const;
 
   bool IsBionic() const;
+  bool IsM1Series() const;
 
   bool IsSIMDMatMulSupported() const;
   // Often, fp32 alu performance is 1/2 of fp16 alu performance
@@ -206,6 +233,7 @@ struct AppleInfo {
   void SetComputeUnits(int compute_units_count);
 
  private:
+  Family GetGpuFamily() const;
   int compute_units = -1;
 };
 
@@ -497,6 +525,7 @@ struct GpuInfo {
   // returns true if device have fixed wave size equal to 32
   bool IsWaveSizeEqualTo32() const;
   bool SupportsSubGroupWithSize(int sub_group_size) const;
+  absl::Status GetMinSubGroupSize(int& min_sub_group_size) const;
 
   bool SupportsFloatImage2D(DataType data_type, int channels) const;
   bool SupportsExtension(const std::string& extension) const;

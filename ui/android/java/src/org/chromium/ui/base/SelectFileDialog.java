@@ -833,7 +833,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
         return photoFile;
     }
 
-    // TODO(crbug.com/1512123): Merge the Chrome and WebView implementations
+    // TODO(crbug.com/41484704): Merge the Chrome and WebView implementations
     // of isPathUnderAppDir into one.
     private static boolean isPathUnderAppDir(String path, Context context) {
         File file = new File(path);
@@ -1685,8 +1685,5 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
                 String[] displayNameArray);
 
         void onFileNotSelected(long nativeSelectFileDialogImpl, SelectFileDialog caller);
-
-        void onContactsSelected(
-                long nativeSelectFileDialogImpl, SelectFileDialog caller, String contacts);
     }
 }

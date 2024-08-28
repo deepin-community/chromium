@@ -5,8 +5,6 @@
 #ifndef CONTENT_BROWSER_WORKER_HOST_DEDICATED_WORKER_HOST_FACTORY_IMPL_H_
 #define CONTENT_BROWSER_WORKER_HOST_DEDICATED_WORKER_HOST_FACTORY_IMPL_H_
 
-#include <optional>
-
 #include "content/browser/network/cross_origin_embedder_policy_reporter.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/dedicated_worker_creator.h"
@@ -14,6 +12,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/isolation_info.h"
+#include "net/storage_access_api/status.h"
 #include "services/network/public/mojom/client_security_state.mojom-forward.h"
 #include "services/network/public/mojom/cross_origin_embedder_policy.mojom-forward.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -71,7 +70,7 @@ class CONTENT_EXPORT DedicatedWorkerHostFactoryImpl
       mojo::PendingRemote<blink::mojom::BlobURLToken> blob_url_token,
       mojo::PendingRemote<blink::mojom::DedicatedWorkerHostFactoryClient>
           client,
-      bool has_storage_access) override;
+      net::StorageAccessApiStatus storage_access_api_status) override;
 
  private:
   // The ID of the RenderProcessHost where the worker will live.

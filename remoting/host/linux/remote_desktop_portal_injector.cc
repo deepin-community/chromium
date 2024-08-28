@@ -17,7 +17,7 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "remoting/base/logging.h"
-#include "third_party/libei/include/libei.h"
+#include "third_party/libei/cipd/include/libei.h"
 #include "third_party/webrtc/modules/portal/portal_request_response.h"
 #include "third_party/webrtc/modules/portal/scoped_glib.h"
 #include "third_party/webrtc/modules/portal/xdg_desktop_portal_utils.h"
@@ -27,7 +27,7 @@ namespace remoting::xdg_portal {
 using webrtc::Scoped;
 
 namespace {
-// TODO(crbug/1291247): See if these can be pulled from a common place.
+// TODO(crbug.com/40212673): See if these can be pulled from a common place.
 constexpr int BUTTON_LEFT_KEYCODE = 272;
 constexpr int BUTTON_RIGHT_KEYCODE = 273;
 constexpr int BUTTON_MIDDLE_KEYCODE = 274;
@@ -52,7 +52,7 @@ int EvdevCodeToMouseButton(int code) {
     case BUTTON_FORWARD_KEYCODE:
       return BTN_FORWARD;
     default:
-      NOTREACHED() << "Undefined code: " << code;
+      NOTREACHED_IN_MIGRATION() << "Undefined code: " << code;
       return BTN_UNKNOWN;
   }
 }

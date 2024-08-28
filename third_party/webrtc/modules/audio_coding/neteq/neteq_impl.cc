@@ -151,8 +151,6 @@ NetEqImpl::NetEqImpl(const NetEq::Config& config,
       accelerate_factory_(std::move(deps.accelerate_factory)),
       preemptive_expand_factory_(std::move(deps.preemptive_expand_factory)),
       stats_(std::move(deps.stats)),
-      enable_fec_delay_adaptation_(
-          !field_trial::IsDisabled("WebRTC-Audio-NetEqFecDelayAdaptation")),
       controller_(std::move(deps.neteq_controller)),
       last_mode_(Mode::kNormal),
       decoded_buffer_length_(kMaxFrameSize),
@@ -195,11 +193,12 @@ NetEqImpl::NetEqImpl(const NetEq::Config& config,
 NetEqImpl::~NetEqImpl() = default;
 
 int NetEqImpl::InsertPacket(const RTPHeader& rtp_header,
-                            rtc::ArrayView<const uint8_t> payload) {
+                            rtc::ArrayView<const uint8_t> payload,
+                            Timestamp receive_time) {
   rtc::MsanCheckInitialized(payload);
   TRACE_EVENT0("webrtc", "NetEqImpl::InsertPacket");
   MutexLock lock(&mutex_);
-  if (InsertPacketInternal(rtp_header, payload) != 0) {
+  if (InsertPacketInternal(rtp_header, payload, receive_time) != 0) {
     return kFail;
   }
   return kOK;
@@ -220,13 +219,15 @@ int NetEqImpl::GetAudio(AudioFrame* audio_frame,
                         absl::optional<Operation> action_override) {
   TRACE_EVENT0("webrtc", "NetEqImpl::GetAudio");
   MutexLock lock(&mutex_);
-  if (GetAudioInternal(audio_frame, muted, action_override) != 0) {
+  if (GetAudioInternal(audio_frame, action_override) != 0) {
     return kFail;
   }
   RTC_DCHECK_EQ(
       audio_frame->sample_rate_hz_,
       rtc::dchecked_cast<int>(audio_frame->samples_per_channel_ * 100));
-  RTC_DCHECK_EQ(*muted, audio_frame->muted());
+  if (muted != nullptr) {
+    *muted = audio_frame->muted();
+  }
   audio_frame->speech_type_ = ToSpeechType(LastOutputType());
   last_output_sample_rate_hz_ = audio_frame->sample_rate_hz_;
   RTC_DCHECK(last_output_sample_rate_hz_ == 8000 ||
@@ -464,13 +465,12 @@ NetEq::Operation NetEqImpl::last_operation_for_test() const {
 // Methods below this line are private.
 
 int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
-                                    rtc::ArrayView<const uint8_t> payload) {
+                                    rtc::ArrayView<const uint8_t> payload,
+                                    Timestamp receive_time) {
   if (payload.empty()) {
     RTC_LOG_F(LS_ERROR) << "payload is empty";
     return kInvalidPointer;
   }
-
-  Timestamp receive_time = clock_->CurrentTime();
   stats_->ReceivedPacket();
 
   PacketList packet_list;
@@ -502,7 +502,6 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
   // Store these for later use, since the first packet may very well disappear
   // before we need these values.
   uint32_t main_timestamp = packet_list.front().timestamp;
-  uint8_t main_payload_type = packet_list.front().payload_type;
   uint16_t main_sequence_number = packet_list.front().sequence_number;
 
   // Reinitialize NetEq if it's needed (changed SSRC or first call).
@@ -555,7 +554,6 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
   if (decoder_database_->IsRed(rtp_header.payloadType)) {
     timestamp_scaler_->ToInternal(&packet_list);
     main_timestamp = packet_list.front().timestamp;
-    main_payload_type = packet_list.front().payload_type;
     main_sequence_number = packet_list.front().sequence_number;
   }
 
@@ -664,14 +662,13 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
       // An error occurred.
       return kOtherError;
     }
-    if (enable_fec_delay_adaptation_) {
-      info.buffer_flush = buffer_flush_occured;
-      const bool should_update_stats = !new_codec_ && !buffer_flush_occured;
-      auto relative_delay =
-          controller_->PacketArrived(fs_hz_, should_update_stats, info);
-      if (relative_delay) {
-        stats_->RelativePacketArrivalDelay(relative_delay.value());
-      }
+
+    info.buffer_flush = buffer_flush_occured;
+    const bool should_update_stats = !new_codec_ && !buffer_flush_occured;
+    auto relative_delay =
+        controller_->PacketArrived(fs_hz_, should_update_stats, info);
+    if (relative_delay) {
+      stats_->RelativePacketArrivalDelay(relative_delay.value());
     }
   }
 
@@ -723,27 +720,6 @@ int NetEqImpl::InsertPacketInternal(const RTPHeader& rtp_header,
     }
   }
 
-  if (!enable_fec_delay_adaptation_) {
-    const DecoderDatabase::DecoderInfo* dec_info =
-        decoder_database_->GetDecoderInfo(main_payload_type);
-    RTC_DCHECK(dec_info);  // Already checked that the payload type is known.
-
-    NetEqController::PacketArrivedInfo info;
-    info.is_cng_or_dtmf = dec_info->IsComfortNoise() || dec_info->IsDtmf();
-    info.packet_length_samples =
-        number_of_primary_packets * decoder_frame_length_;
-    info.main_timestamp = main_timestamp;
-    info.main_sequence_number = main_sequence_number;
-    info.is_dtx = is_dtx;
-    info.buffer_flush = buffer_flush_occured;
-
-    const bool should_update_stats = !new_codec_;
-    auto relative_delay =
-        controller_->PacketArrived(fs_hz_, should_update_stats, info);
-    if (relative_delay) {
-      stats_->RelativePacketArrivalDelay(relative_delay.value());
-    }
-  }
   return 0;
 }
 
@@ -773,13 +749,11 @@ bool NetEqImpl::MaybeChangePayloadType(uint8_t payload_type) {
 }
 
 int NetEqImpl::GetAudioInternal(AudioFrame* audio_frame,
-                                bool* muted,
                                 absl::optional<Operation> action_override) {
   PacketList packet_list;
   DtmfEvent dtmf_event;
   Operation operation;
   bool play_dtmf;
-  *muted = false;
   last_decoded_packet_infos_.clear();
   tick_timer_->Increment();
   stats_->IncreaseCounter(output_size_samples_, fs_hz_);
@@ -812,7 +786,6 @@ int NetEqImpl::GetAudioInternal(AudioFrame* audio_frame,
     audio_frame->num_channels_ = sync_buffer_->Channels();
     stats_->ExpandedNoiseSamples(output_size_samples_, false);
     controller_->NotifyMutedState();
-    *muted = true;
     return 0;
   }
   int return_value = GetDecision(&operation, &packet_list, &dtmf_event,
@@ -2003,9 +1976,17 @@ int NetEqImpl::ExtractPackets(size_t required_samples,
     extracted_samples = packet->timestamp - first_timestamp + packet_duration;
 
     RTC_DCHECK(controller_);
-    stats_->JitterBufferDelay(packet_duration, waiting_time_ms,
-                              controller_->TargetLevelMs(),
-                              controller_->UnlimitedTargetLevelMs());
+    TimeDelta processing_time = TimeDelta::Zero();
+
+    if (packet->packet_info.has_value() &&
+        !packet->packet_info->receive_time().IsMinusInfinity()) {
+      processing_time =
+          clock_->CurrentTime() - packet->packet_info->receive_time();
+    }
+
+    stats_->JitterBufferDelay(
+        packet_duration, waiting_time_ms, controller_->TargetLevelMs(),
+        controller_->UnlimitedTargetLevelMs(), processing_time.us());
 
     // Check what packet is available next.
     next_packet = packet_buffer_->PeekNextPacket();

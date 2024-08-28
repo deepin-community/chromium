@@ -92,6 +92,13 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
     // TODO(fangzhoug): Some Chrome OS boards still use the legacy video
     // decoder. Remove this once ChromeOSVideoDecoder is on everywhere.
     bool allow_sync_and_real_buffer_page_flip_testing = false;
+
+    // TODO(b/331237773): Unfortunately, the kHandleOverlaysSwapFailure feature
+    // cannot be checked by the overlay manager in ozone/drm directly as it
+    // creates a circular dependency that gn complains about. That's why this
+    // control bool is here. Remove this once kHandleOverlaysSwapFailure is
+    // removed and DrmOverlayManager is always handling swap failures.
+    bool handle_overlays_swap_failure = false;
   };
 
   // Struct used to indicate platform properties.
@@ -143,6 +150,10 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
     // Indicates that the platform allows client applications to manipulate
     // global screen coordinates. Wayland, for example, disallow it by design.
     bool supports_global_screen_coordinates = true;
+
+    // Whether the platform supports system/shell integrated color picker
+    // dialog. An example is XDG Desktop Portal provided PickColor dialog.
+    bool supports_color_picker_dialog = true;
   };
 
   // Groups platform properties that can only be known at run time.
@@ -199,14 +210,21 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
 
     // Wayland only: determines whether clip rects can be delegated via the
     // wayland protocol when some quads are out of window.
-    // TODO(crbug.com/1470024): The flag is currently disabled by default since
+    // TODO(crbug.com/40277728): The flag is currently disabled by default since
     // there is a bug. Set this flag to enabled in GPU process when the
     // remaining issues are resolved.
     bool supports_out_of_window_clip_rect = false;
 
-    // Whether wayland server has the fix that applies transformations in the
-    // correct order.
+    // Wayland only: whether wayland server has the fix that applies
+    // transformations in the correct order.
     bool has_transformation_fix = false;
+
+    // Wayland only: whether bubble widgets can use platform objects.
+    bool supports_subwindows_as_accelerated_widgets = false;
+
+    // Indicates whether the platform supports system-controlled per-window
+    // scaling.
+    bool supports_per_window_scaling = false;
   };
 
   // Corresponds to chrome_browser_main_extra_parts.h.
@@ -304,7 +322,7 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
                                              gfx::BufferUsage usage) const;
 
   // Whether the platform supports compositing windows with transparency.
-  virtual bool IsWindowCompositingSupported() const;
+  virtual bool IsWindowCompositingSupported() const = 0;
 
   // Returns whether a custom frame should be used for windows.
   // The default behaviour is returning what is suggested by the

@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/webui/ash/bluetooth_pairing_dialog.h"
 
 #include <memory>
+#include <string_view>
 
 #include "ash/public/cpp/bluetooth_config_service.h"
 #include "ash/webui/common/trusted_types_util.h"
@@ -20,7 +21,7 @@
 #include "chrome/grit/bluetooth_pairing_dialog_resources.h"
 #include "chrome/grit/bluetooth_pairing_dialog_resources_map.h"
 #include "chrome/grit/generated_resources.h"
-#include "chromeos/constants/chromeos_features.h"
+#include "chromeos/ash/components/network/network_event_log.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_ui.h"
@@ -56,7 +57,8 @@ void AddBluetoothStrings(content::WebUIDataSource* html_source) {
 
 // static
 SystemWebDialogDelegate* BluetoothPairingDialog::ShowDialog(
-    std::optional<base::StringPiece> device_address) {
+    std::optional<std::string_view> device_address) {
+  NET_LOG(EVENT) << "Attempting to display bluetooth pairing dialog";
   std::string dialog_id = chrome::kChromeUIBluetoothPairingURL;
   std::optional<std::string> canonical_device_address;
 
@@ -76,6 +78,7 @@ SystemWebDialogDelegate* BluetoothPairingDialog::ShowDialog(
       SystemWebDialogDelegate::FindInstance(dialog_id);
 
   if (existing_dialog) {
+    LOG(ERROR) << "Refocusing on the existing dialog";
     existing_dialog->Focus();
     return existing_dialog;
   }
@@ -90,7 +93,7 @@ SystemWebDialogDelegate* BluetoothPairingDialog::ShowDialog(
 
 BluetoothPairingDialog::BluetoothPairingDialog(
     const std::string& dialog_id,
-    std::optional<base::StringPiece> canonical_device_address)
+    std::optional<std::string_view> canonical_device_address)
     : SystemWebDialogDelegate(GURL(chrome::kChromeUIBluetoothPairingURL),
                               /*title=*/std::u16string()),
       dialog_id_(dialog_id) {
@@ -108,6 +111,8 @@ BluetoothPairingDialog::BluetoothPairingDialog(
   std::optional<std::string> args = base::WriteJson(device_data);
   CHECK(args.has_value());
   set_dialog_args(*args);
+
+  set_web_view_element_id(kBluetoothPairingDialogElementId);
 }
 
 BluetoothPairingDialog::~BluetoothPairingDialog() = default;
@@ -123,6 +128,9 @@ void BluetoothPairingDialog::AdjustWidgetInitParams(
   params->shadow_elevation = wm::kShadowElevationActiveWindow;
 }
 
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BluetoothPairingDialog,
+                                      kBluetoothPairingDialogElementId);
+
 // BluetoothPairingUI
 
 BluetoothPairingDialogUI::BluetoothPairingDialogUI(content::WebUI* web_ui)
@@ -132,7 +140,6 @@ BluetoothPairingDialogUI::BluetoothPairingDialogUI(content::WebUI* web_ui)
 
   AddBluetoothStrings(source);
   source->AddLocalizedString("title", IDS_BLUETOOTH_PAIRING_PAIR_NEW_DEVICES);
-  source->AddBoolean("isJellyEnabled", ::chromeos::features::IsJellyEnabled());
 
   webui::SetupWebUIDataSource(
       source,

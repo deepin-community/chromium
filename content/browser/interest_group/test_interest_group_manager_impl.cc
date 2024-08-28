@@ -88,6 +88,26 @@ void TestInterestGroupManagerImpl::EnqueueReports(
   }
 }
 
+void TestInterestGroupManagerImpl::EnqueueRealTimeReports(
+    std::map<url::Origin, RealTimeReportingContributions> contributions,
+    AdAuctionPageDataCallback ad_auction_page_data_callback,
+    int frame_tree_node_id,
+    const url::Origin& frame_origin,
+    const network::mojom::ClientSecurityState& client_security_state,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+  EXPECT_EQ(expected_frame_origin_, frame_origin);
+  EXPECT_EQ(*expected_client_security_state_, client_security_state);
+  EXPECT_EQ(expected_url_loader_factory_.get(), url_loader_factory.get());
+  if (use_real_enqueue_reports_) {
+    InterestGroupManagerImpl::EnqueueRealTimeReports(
+        std::move(contributions), std::move(ad_auction_page_data_callback),
+        frame_tree_node_id, frame_origin, client_security_state,
+        url_loader_factory);
+  } else {
+    real_time_contributions_ = std::move(contributions);
+  }
+}
+
 void TestInterestGroupManagerImpl::OnInterestGroupAccessed(
     base::optional_ref<const std::string> devtools_auction_id,
     base::Time access_time,
@@ -156,6 +176,12 @@ std::vector<GURL> TestInterestGroupManagerImpl::TakeReportUrlsOfType(
     ++it;
   }
   return out;
+}
+
+std::map<url::Origin,
+         TestInterestGroupManagerImpl::RealTimeReportingContributions>
+TestInterestGroupManagerImpl::TakeRealTimeContributions() {
+  return std::move(real_time_contributions_);
 }
 
 std::vector<blink::InterestGroupKey>

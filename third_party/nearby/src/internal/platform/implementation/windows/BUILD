@@ -53,6 +53,7 @@ cc_library(
         "//base",
         "//base:stringprintf",
         "//internal/base:bluetooth_address",
+        "//internal/base:files",
         "//internal/platform:base",
         "//internal/platform:types",
         "//internal/platform:uuid",
@@ -112,12 +113,14 @@ cc_library(
     copts = ["-DNO_INTEL_PIE"],
     visibility = ["//visibility:private"],
     deps = [
+        "//connections/implementation/flags:connections_flags",
+        "//internal/flags:nearby_flags",
         "//internal/platform:base",
         "//internal/platform:comm",
         "//internal/platform:types",
         "//internal/platform:uuid",
+        "//internal/platform/implementation:account_manager",
         "//internal/platform/implementation:comm",
-        "//internal/platform/implementation:types",
         "//internal/platform/implementation/windows/generated:types",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -213,7 +216,9 @@ cc_library(
         ":comm",
         ":crypto",  # build_cleaner: keep
         ":types",
+        "//connections/implementation/flags:connections_flags",
         "//internal/account",
+        "//internal/base:files",
         "//internal/flags:nearby_flags",
         "//internal/platform:base",
         "//internal/platform:cancellation_flag",
@@ -254,9 +259,7 @@ cc_library(
         "test_data.h",
         "test_utils.h",
     ],
-    visibility = [
-        "//visibility:private",  # Only private by automation, not intent. Owner may accept CLs adding visibility. See go/scheuklappen#explicit-private.
-    ],
+    visibility = ["//visibility:private"],
     deps = [
         "//internal/platform:base",
         "@nlohmann_json//:json",

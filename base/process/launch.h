@@ -10,6 +10,7 @@
 #include <stddef.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,7 +21,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
-#include "base/strings/string_piece.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/blink_buildflags.h"
 #include "build/build_config.h"
@@ -34,6 +34,10 @@
 
 #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
 #include "base/posix/file_descriptor_shuffle.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/binder.h"
 #endif
 
 namespace base {
@@ -111,7 +115,7 @@ struct BASE_EXPORT LaunchOptions {
   // for a good overview of Windows handle inheritance.
   //
   // Implementation note: it might be nice to implement in terms of
-  // absl::optional<>, but then the natural default state (vector not present)
+  // std::optional<>, but then the natural default state (vector not present)
   // would be "all inheritable handles" while we want "no inheritance."
   enum class Inherit {
     // Only those handles in |handles_to_inherit| vector are inherited. If the
@@ -188,6 +192,13 @@ struct BASE_EXPORT LaunchOptions {
   // propagate FDs into the child process.
   FileHandleMappingVector fds_to_remap;
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_ANDROID)
+  // Set of strong IBinder references to be passed to the child process. These
+  // make their way to ChildProcessServiceDelegate.onConnectionSetup (Java)
+  // within the new child process.
+  std::vector<android::BinderRef> binders;
+#endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
   // Set/unset environment variables. These are applied on top of the parent

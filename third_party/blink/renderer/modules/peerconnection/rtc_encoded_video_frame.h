@@ -9,12 +9,12 @@
 
 #include <memory>
 
+#include "base/types/expected.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace webrtc {
@@ -26,6 +26,7 @@ namespace blink {
 class DOMArrayBuffer;
 class RTCEncodedVideoFrameDelegate;
 class RTCEncodedVideoFrameMetadata;
+class RTCEncodedVideoFrameOptions;
 
 MODULES_EXPORT BASE_DECLARE_FEATURE(
     kAllowRTCEncodedVideoFrameSetMetadataAllFields);
@@ -34,6 +35,12 @@ class MODULES_EXPORT RTCEncodedVideoFrame final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  static RTCEncodedVideoFrame* Create(RTCEncodedVideoFrame* original_frame,
+                                      ExceptionState& exception_state);
+  static RTCEncodedVideoFrame* Create(
+      RTCEncodedVideoFrame* original_frame,
+      const RTCEncodedVideoFrameOptions* options_dict,
+      ExceptionState& exception_state);
   explicit RTCEncodedVideoFrame(
       std::unique_ptr<webrtc::TransformableVideoFrameInterface> webrtc_frame);
   explicit RTCEncodedVideoFrame(
@@ -43,9 +50,10 @@ class MODULES_EXPORT RTCEncodedVideoFrame final : public ScriptWrappable {
   String type() const;
   // Returns the RTP Packet Timestamp for this frame.
   uint32_t timestamp() const;
-  void setTimestamp(uint32_t timestamp, ExceptionState& exception_state);
   DOMArrayBuffer* data() const;
   RTCEncodedVideoFrameMetadata* getMetadata() const;
+  base::expected<void, String> SetMetadata(
+      const RTCEncodedVideoFrameMetadata* metadata);
   void setMetadata(RTCEncodedVideoFrameMetadata* metadata,
                    ExceptionState& exception_state);
   void setData(DOMArrayBuffer*);

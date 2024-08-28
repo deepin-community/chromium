@@ -9,7 +9,9 @@
 
 #include "base/component_export.h"
 #include "base/containers/unique_ptr_adapters.h"
+#include "base/memory/raw_ptr.h"
 #include "base/types/expected.h"
+#include "base/uuid.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/on_device_model/public/cpp/on_device_model.h"
@@ -29,15 +31,20 @@ class COMPONENT_EXPORT(ON_DEVICE_MODEL) OnDeviceModelService
   // These are defined separately in pre_sandbox_init.cc for explicit security
   // review coverage.
   [[nodiscard]] static bool PreSandboxInit();
+
+  // Must be called in the service's process after the run loop finished.
+  [[nodiscard]] static bool Shutdown();
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   static void AddSandboxLinuxOptions(
       sandbox::policy::SandboxLinux::Options& options);
 #endif
 
-  static mojom::PerformanceClass GetEstimatedPerformanceClass();
-
   explicit OnDeviceModelService(
       mojo::PendingReceiver<mojom::OnDeviceModelService> receiver);
+  OnDeviceModelService(
+      mojo::PendingReceiver<mojom::OnDeviceModelService> receiver,
+      const OnDeviceModelShim* impl);
   ~OnDeviceModelService() override;
 
   OnDeviceModelService(const OnDeviceModelService&) = delete;
@@ -53,12 +60,10 @@ class COMPONENT_EXPORT(ON_DEVICE_MODEL) OnDeviceModelService
   size_t NumModelsForTesting() const { return models_.size(); }
 
  private:
-  static base::expected<std::unique_ptr<OnDeviceModel>, mojom::LoadModelResult>
-  CreateModel(mojom::LoadModelParamsPtr params);
-
-  void DeleteModel(mojom::OnDeviceModel* model);
+  void DeleteModel(base::WeakPtr<mojom::OnDeviceModel> model);
 
   mojo::Receiver<mojom::OnDeviceModelService> receiver_;
+  raw_ptr<const OnDeviceModelShim> impl_;
   std::set<std::unique_ptr<mojom::OnDeviceModel>, base::UniquePtrComparator>
       models_;
 };

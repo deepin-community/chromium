@@ -12,51 +12,19 @@
 
 namespace autofill::autofill_metrics {
 
-// Helper struct to count the `FieldFillingStatus` for a form group like
-// addresses and credit cards.
-struct FormGroupFillingStats {
-  // Please have a look at AutofillMetrics::FieldFillingStatus for the meaning
-  // of the different fields.
-  size_t num_accepted = 0;
-  size_t num_corrected_to_same_type = 0;
-  size_t num_corrected_to_different_type = 0;
-  size_t num_corrected_to_unknown_type = 0;
-  size_t num_corrected_to_empty = 0;
-  size_t num_manually_filled_to_same_type = 0;
-  size_t num_manually_filled_to_differt_type = 0;
-  size_t num_manually_filled_to_unknown_type = 0;
-  size_t num_left_empty = 0;
+namespace internal {
 
-  size_t TotalCorrected() const {
-    return num_corrected_to_same_type + num_corrected_to_different_type +
-           num_corrected_to_unknown_type + num_corrected_to_empty;
-  }
+// Returns `true` if `form` has at least one email field and otherwise nothing
+// but unknown, password or additional email fields.
+bool IsEmailOnlyForm(const FormStructure& form);
 
-  size_t TotalManuallyFilled() const {
-    return num_manually_filled_to_differt_type +
-           num_manually_filled_to_unknown_type +
-           num_manually_filled_to_same_type;
-  }
+// Returns `true` if `form` has at least 3 distinct field types of
+// `FieldTypeGroup::kAddress` that are not country, and those field types are
+// not equal to `kFieldTypesOfATypicalStoreLocatorForm`. Returns `false`
+// otherwise.
+bool IsPostalAddressForm(const FormStructure& form);
 
-  size_t TotalUnfilled() const {
-    return TotalManuallyFilled() + num_left_empty;
-  }
-
-  size_t TotalFilled() const { return num_accepted + TotalCorrected(); }
-
-  size_t Total() const { return TotalFilled() + TotalUnfilled(); }
-
-  void AddFieldFillingStatus(AutofillMetrics::FieldFillingStatus status);
-};
-
-// Returns the filling status of `field`.
-AutofillMetrics::FieldFillingStatus GetFieldFillingStatus(
-    const AutofillField& field);
-
-// Merge `first` into `second` by summing each attribute from
-// `FormGroupFillingStats`.
-void MergeFormGroupFillingStats(const FormGroupFillingStats& first,
-                                FormGroupFillingStats& second);
+}  // namespace internal
 
 // kAccount profiles are synced from an external source and have potentially
 // originated from outside of Autofill. In order to determine the added value
@@ -95,13 +63,28 @@ enum class SettingsVisibleFieldTypeForMetrics {
   kDependentLocality = 9,
   // kHonorificPrefix = 10,  // Deprecated in M123.
   kCompany = 11,
-  kMaxValue = kCompany
+  kAdminLevel2 = 12,
+  kMaxValue = kAdminLevel2
 };
 
 // Converts a server field type that can be edited in the settings to an enum
 // used for metrics.
 SettingsVisibleFieldTypeForMetrics ConvertSettingsVisibleFieldTypeForMetrics(
     FieldType field_type);
+
+// Returns the set of all fillable form types for `form.`
+DenseSet<FormTypeNameForLogging> GetFormTypesForLogging(
+    const FormStructure& form);
+
+// Returns GetFormTypesForLogging() where entries need to correspond to
+// `FormType::kAddressForm`.
+DenseSet<FormTypeNameForLogging> GetAddressFormTypesForLogging(
+    const FormStructure& form);
+
+// Returns GetFormTypesForLogging() where entries need to correspond to
+// `FormType::kCreditCardForm` or `FormType::kStandaloneCvcForm`.
+DenseSet<FormTypeNameForLogging> GetCreditCardFormTypesForLogging(
+    const FormStructure& form);
 
 }  // namespace autofill::autofill_metrics
 

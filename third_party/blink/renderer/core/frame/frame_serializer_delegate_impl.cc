@@ -30,8 +30,6 @@
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
-#include "third_party/blink/renderer/platform/geometry/layout_point.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mhtml/mhtml_parser.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -280,7 +278,7 @@ void FrameSerializerDelegateImpl::GetCustomAttributesForImageElement(
 std::pair<ShadowRoot*, HTMLTemplateElement*>
 FrameSerializerDelegateImpl::GetShadowTree(const Element& element) const {
   ShadowRoot* shadow_root = element.GetShadowRoot();
-  if (!shadow_root || shadow_root->GetType() == ShadowRootType::kUserAgent) {
+  if (!shadow_root || shadow_root->GetMode() == ShadowRootMode::kUserAgent) {
     return std::pair<ShadowRoot*, HTMLTemplateElement*>();
   }
 
@@ -290,7 +288,7 @@ FrameSerializerDelegateImpl::GetShadowTree(const Element& element) const {
       MakeGarbageCollected<HTMLTemplateElement>(element.GetDocument());
   template_element->setAttribute(
       QualifiedName(AtomicString(kShadowModeAttributeName)),
-      AtomicString(shadow_root->GetType() == ShadowRootType::kOpen ? "open"
+      AtomicString(shadow_root->GetMode() == ShadowRootMode::kOpen ? "open"
                                                                    : "closed"));
   if (shadow_root->delegatesFocus()) {
     template_element->setAttribute(

@@ -4,18 +4,6 @@
 
 package org.chromium.chrome.browser.magic_stack;
 
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_CONFIGURATION_TURN_OFF_MODULE;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_CONFIGURATION_TURN_ON_MODULE;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_FIRST_MODULE_SHOWN_DURATION_MS;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MAGIC_STACK_MODULE_BUILD;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MAGIC_STACK_MODULE_CLICK;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MODULE_FETCH_DATA_DURATION_MS;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MODULE_FETCH_DATA_FAILED_DURATION_MS;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MODULE_FETCH_DATA_TIMEOUT_DURATION_MS;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MODULE_FETCH_DATA_TIMEOUT_TYPE;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MODULE_PROFILE_READY_DELAY_MS;
-import static org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils.HISTOGRAM_MODULE_SEGMENTATION_FETCH_RANKING_DURATION_MS;
-
 import androidx.test.filters.SmallTest;
 
 import org.junit.Test;
@@ -25,7 +13,7 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
-import org.chromium.chrome.browser.util.BrowserUiUtils.HostSurface;
+import org.chromium.chrome.browser.util.BrowserUiUtils.ModuleTypeOnStartAndNtp;
 
 /** Unit tests for {@link HomeModulesMetricsUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -34,205 +22,203 @@ public class HomeModulesMetricsUtilsUnitTest {
     @Test
     @SmallTest
     public void testRecordModuleShown() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
-        String histogramName =
-                "MagicStack.Clank.StartSurface"
-                        + HomeModulesMetricsUtils.HISTOGRAM_MAGIC_STACK_MODULE_IMPRESSION;
+        int modulePosition = 2;
+        String histogramName = "MagicStack.Clank.NewTabPage.Module.TopImpressionV2";
+        String histogramNameWithPosition =
+                "MagicStack.Clank.NewTabPage.Regular.Module.SingleTab.Impression";
+        String histogramNameStartupWithPosition =
+                "MagicStack.Clank.NewTabPage.Startup.Module.SingleTab.Impression";
 
-        var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, moduleType);
-        HomeModulesMetricsUtils.recordModuleShown(hostSurface, moduleType);
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecords(histogramName, moduleType)
+                        .expectIntRecord(histogramNameWithPosition, modulePosition)
+                        .build();
+        HomeModulesMetricsUtils.recordModuleShown(
+                moduleType, modulePosition, /* isShownAtStartup= */ false);
+        histogramWatcher.assertExpected();
+
+        histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecords(histogramName, moduleType)
+                        .expectIntRecord(histogramNameStartupWithPosition, modulePosition)
+                        .build();
+        HomeModulesMetricsUtils.recordModuleShown(
+                moduleType, modulePosition, /* isShownAtStartup= */ true);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordContextMenuShown() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
-        String histogramName =
-                "MagicStack.Clank.StartSurface"
-                        + HomeModulesMetricsUtils.HISTOGRAM_CONTEXT_MENU_SHOWN;
+        String histogramName = "MagicStack.Clank.NewTabPage.ContextMenu.ShownV2";
 
         var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, moduleType);
-        HomeModulesMetricsUtils.recordContextMenuShown(hostSurface, moduleType);
+        HomeModulesMetricsUtils.recordContextMenuShown(moduleType);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordContextMenuRemoveModule() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
-        String histogramName =
-                "MagicStack.Clank.StartSurface"
-                        + HomeModulesMetricsUtils.HISTOGRAM_CONTEXT_MENU_REMOVE_MODULE;
+        String histogramName = "MagicStack.Clank.NewTabPage.ContextMenu.RemoveModuleV2";
 
         var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, moduleType);
-        HomeModulesMetricsUtils.recordContextMenuRemoveModule(hostSurface, moduleType);
+        HomeModulesMetricsUtils.recordContextMenuRemoveModule(moduleType);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordContextMenuCustomizeSettings() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
-        String histogramName =
-                "MagicStack.Clank.StartSurface"
-                        + HomeModulesMetricsUtils.HISTOGRAM_CONTEXT_MENU_OPEN_CUSTOMIZE_SETTINGS;
+        String histogramName = "MagicStack.Clank.NewTabPage.ContextMenu.OpenCustomizeSettings";
 
         var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, moduleType);
-        HomeModulesMetricsUtils.recordContextMenuCustomizeSettings(hostSurface, moduleType);
+        HomeModulesMetricsUtils.recordContextMenuCustomizeSettings(moduleType);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordFetchDataDuration() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
         int duration = 100;
 
-        StringBuilder builder = new StringBuilder();
-        builder.append("MagicStack.Clank.StartSurface");
-        builder.append(HISTOGRAM_MODULE_FETCH_DATA_DURATION_MS);
-        builder.append(HomeModulesMetricsUtils.getModuleName(moduleType));
-        String histogramName = builder.toString();
+        String histogramName = "MagicStack.Clank.NewTabPage.Module.FetchDataDurationMs.SingleTab";
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder().expectIntRecord(histogramName, duration).build();
-        HomeModulesMetricsUtils.recordFetchDataDuration(hostSurface, moduleType, duration);
+        HomeModulesMetricsUtils.recordFetchDataDuration(moduleType, duration);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordFetchDataTimeoutDuration() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
         int duration = 100;
 
-        StringBuilder builder = new StringBuilder();
-        builder.append("MagicStack.Clank.StartSurface");
-        builder.append(HISTOGRAM_MODULE_FETCH_DATA_TIMEOUT_DURATION_MS);
-        builder.append(HomeModulesMetricsUtils.getModuleName(moduleType));
-        String histogramName = builder.toString();
+        String histogramName =
+                "MagicStack.Clank.NewTabPage.Module.FetchDataTimeoutDurationMs.SingleTab";
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder().expectIntRecord(histogramName, duration).build();
-        HomeModulesMetricsUtils.recordFetchDataTimeOutDuration(hostSurface, moduleType, duration);
+        HomeModulesMetricsUtils.recordFetchDataTimeOutDuration(moduleType, duration);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordFetchDataTimeoutType() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
-        String histogramName =
-                "MagicStack.Clank.StartSurface" + HISTOGRAM_MODULE_FETCH_DATA_TIMEOUT_TYPE;
+        String histogramName = "MagicStack.Clank.NewTabPage.Module.FetchDataTimeoutTypeV2";
 
         var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, moduleType);
-        HomeModulesMetricsUtils.recordFetchDataTimeOutType(hostSurface, moduleType);
+        HomeModulesMetricsUtils.recordFetchDataTimeOutType(moduleType);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordFetchDataFailedDuration() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
         int duration = 100;
 
-        StringBuilder builder = new StringBuilder();
-        builder.append("MagicStack.Clank.StartSurface");
-        builder.append(HISTOGRAM_MODULE_FETCH_DATA_FAILED_DURATION_MS);
-        builder.append(HomeModulesMetricsUtils.getModuleName(moduleType));
-        String histogramName = builder.toString();
+        String histogramName =
+                "MagicStack.Clank.NewTabPage.Module.FetchDataFailedDurationMs.SingleTab";
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder().expectIntRecord(histogramName, duration).build();
-        HomeModulesMetricsUtils.recordFetchDataFailedDuration(hostSurface, moduleType, duration);
+        HomeModulesMetricsUtils.recordFetchDataFailedDuration(moduleType, duration);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordFirstModuleShowDuration() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         int duration = 100;
-        String histogramName =
-                "MagicStack.Clank.StartSurface" + HISTOGRAM_FIRST_MODULE_SHOWN_DURATION_MS;
+        String histogramName = "MagicStack.Clank.NewTabPage.Module.FirstModuleShownDurationMs";
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder().expectIntRecord(histogramName, duration).build();
-        HomeModulesMetricsUtils.recordFirstModuleShownDuration(hostSurface, duration);
+        HomeModulesMetricsUtils.recordFirstModuleShownDuration(duration);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordProfileReadyDelay() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         int duration = 100;
-        String histogramName =
-                "MagicStack.Clank.StartSurface" + HISTOGRAM_MODULE_PROFILE_READY_DELAY_MS;
+        String histogramName = "MagicStack.Clank.NewTabPage.Module.ProfileReadyDelayMs";
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder().expectIntRecord(histogramName, duration).build();
-        HomeModulesMetricsUtils.recordProfileReadyDelay(hostSurface, duration);
+        HomeModulesMetricsUtils.recordProfileReadyDelay(duration);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordSegmentationFetchRankingDuration() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         int duration = 100;
         String histogramName =
-                "MagicStack.Clank.StartSurface"
-                        + HISTOGRAM_MODULE_SEGMENTATION_FETCH_RANKING_DURATION_MS;
+                "MagicStack.Clank.NewTabPage.Segmentation.FetchRankingResultsDurationMs";
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder().expectIntRecord(histogramName, duration).build();
-        HomeModulesMetricsUtils.recordSegmentationFetchRankingDuration(hostSurface, duration);
+        HomeModulesMetricsUtils.recordSegmentationFetchRankingDuration(duration);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
-    public void testRecordModuleClickedPosition() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
+    public void testRecordModuleClicked() {
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
-        int modulePosition = 0;
+        int modulePosition = 2;
 
-        StringBuilder builder = new StringBuilder();
-        builder.append("MagicStack.Clank.StartSurface");
-        builder.append(HISTOGRAM_MAGIC_STACK_MODULE_CLICK);
-        builder.append(HomeModulesMetricsUtils.getModuleName(moduleType));
-        builder.append(".");
-        builder.append(modulePosition);
-        String histogramName = builder.toString();
+        String histogramName = "MagicStack.Clank.NewTabPage.Module.Click";
+        String histogramNameHomeSurface = "NewTabPage.Module.Click";
+        String histogramNameWithPosition =
+                "MagicStack.Clank.NewTabPage.Regular.Module.SingleTab.Click";
+        String histogramNameStartupWithPosition =
+                "MagicStack.Clank.NewTabPage.Startup.Module.SingleTab.Click";
 
-        var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, 1);
-        HomeModulesMetricsUtils.recordModuleClickedPosition(
-                hostSurface, moduleType, modulePosition);
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(histogramName, moduleType)
+                        .expectIntRecord(
+                                histogramNameHomeSurface, ModuleTypeOnStartAndNtp.MAGIC_STACK)
+                        .expectIntRecords(histogramNameWithPosition, modulePosition)
+                        .build();
+        HomeModulesMetricsUtils.recordModuleClicked(
+                moduleType, modulePosition, /* isShownAtStartup= */ false);
+        histogramWatcher.assertExpected();
+
+        histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(histogramName, moduleType)
+                        .expectIntRecord(
+                                histogramNameHomeSurface, ModuleTypeOnStartAndNtp.MAGIC_STACK)
+                        .expectIntRecords(histogramNameStartupWithPosition, modulePosition)
+                        .build();
+        HomeModulesMetricsUtils.recordModuleClicked(
+                moduleType, modulePosition, /* isShownAtStartup= */ true);
         histogramWatcher.assertExpected();
     }
 
     @Test
     @SmallTest
     public void testRecordHomeModulesScrollState() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         boolean isScrollable = true;
         boolean isScrolled = true;
-        String histogramName =
-                "MagicStack.Clank.StartSurface"
-                        + HomeModulesMetricsUtils.HISTOGRAM_MAGIC_STACK_SCROLLABLE_SCROLLED;
+        String histogramName = "MagicStack.Clank.NewTabPage.Scrollable.Scrolled";
 
         var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, 1);
-        HomeModulesMetricsUtils.recordHomeModulesScrollState(hostSurface, isScrollable, isScrolled);
+        HomeModulesMetricsUtils.recordHomeModulesScrollState(isScrollable, isScrolled);
         histogramWatcher.assertExpected();
     }
 
@@ -241,14 +227,14 @@ public class HomeModulesMetricsUtilsUnitTest {
     public void testRecordModuleToggledInConfiguration() {
         @ModuleType int moduleType = ModuleType.PRICE_CHANGE;
         boolean isEnabled = true;
-        String histogramName = "MagicStack.Clank." + HISTOGRAM_CONFIGURATION_TURN_ON_MODULE;
+        String histogramName = "MagicStack.Clank.Settings.TurnOnModule";
 
         var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, moduleType);
         HomeModulesMetricsUtils.recordModuleToggledInConfiguration(moduleType, isEnabled);
         histogramWatcher.assertExpected();
 
         isEnabled = false;
-        histogramName = "MagicStack.Clank." + HISTOGRAM_CONFIGURATION_TURN_OFF_MODULE;
+        histogramName = "MagicStack.Clank.Settings.TurnOffModule";
 
         histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, moduleType);
         HomeModulesMetricsUtils.recordModuleToggledInConfiguration(moduleType, isEnabled);
@@ -258,20 +244,22 @@ public class HomeModulesMetricsUtilsUnitTest {
     @Test
     @SmallTest
     public void testRecordModuleBuiltPosition() {
-        @HostSurface int hostSurface = HostSurface.START_SURFACE;
         @ModuleType int moduleType = ModuleType.SINGLE_TAB;
-        int modulePosition = 0;
+        int modulePosition = 2;
 
-        StringBuilder builder = new StringBuilder();
-        builder.append("MagicStack.Clank.StartSurface");
-        builder.append(HISTOGRAM_MAGIC_STACK_MODULE_BUILD);
-        builder.append(HomeModulesMetricsUtils.getModuleName(moduleType));
-        builder.append(".");
-        builder.append(modulePosition);
-        String histogramName = builder.toString();
+        String histogramName = "MagicStack.Clank.NewTabPage.Regular.Module.SingleTab.Build";
+        String histogramNameStartup = "MagicStack.Clank.NewTabPage.Startup.Module.SingleTab.Build";
 
-        var histogramWatcher = HistogramWatcher.newSingleRecordWatcher(histogramName, 1);
-        HomeModulesMetricsUtils.recordModuleBuiltPosition(hostSurface, moduleType, modulePosition);
+        var histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(histogramName, modulePosition);
+        HomeModulesMetricsUtils.recordModuleBuiltPosition(
+                moduleType, modulePosition, /* isShownAtStartup= */ false);
+        histogramWatcher.assertExpected();
+
+        histogramWatcher =
+                HistogramWatcher.newSingleRecordWatcher(histogramNameStartup, modulePosition);
+        HomeModulesMetricsUtils.recordModuleBuiltPosition(
+                moduleType, modulePosition, /* isShownAtStartup= */ true);
         histogramWatcher.assertExpected();
     }
 }

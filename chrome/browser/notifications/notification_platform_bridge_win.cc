@@ -5,6 +5,7 @@
 #include "chrome/browser/notifications/notification_platform_bridge_win.h"
 
 #include <objbase.h>
+
 #include <wrl/event.h>
 
 #include <map>
@@ -110,8 +111,9 @@ void ForwardNotificationOperationOnUiThread(
     const std::optional<std::u16string>& reply,
     const std::optional<bool>& by_user) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!g_browser_process)
+  if (!g_browser_process || g_browser_process->IsShuttingDown()) {
     return;
+  }
 
   // Profile ID can be empty for system notifications, which are not bound to a
   // profile, but system notifications are transient and thus not handled by

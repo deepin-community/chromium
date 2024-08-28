@@ -131,7 +131,7 @@ TEST_P(InlineCursorTest, BidiLevelInlineBoxLTR) {
       "abc<b id=def>def</b><bdo dir=rtl><b id=ghi>GHI</b></bdo>jkl</div>");
   Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
   EXPECT_THAT(list,
-              ElementsAre("#linebox", "abc:0", "#def:0", "#ghi:1", "jkl:0"));
+              ElementsAre("#linebox", "abc:0", "#def:0", "#ghi:3", "jkl:0"));
 }
 
 TEST_P(InlineCursorTest, BidiLevelInlineBoxRTL) {
@@ -141,7 +141,7 @@ TEST_P(InlineCursorTest, BidiLevelInlineBoxRTL) {
       "abc<b id=def>def</b><bdo dir=rtl><b id=ghi>GHI</b></bdo>jkl</div>");
   Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
   EXPECT_THAT(list,
-              ElementsAre("#linebox", "#ghi:3", "jkl:2", "#def:1", "abc:2"));
+              ElementsAre("#linebox", "abc:2", "#def:2", "#ghi:3", "jkl:2"));
 }
 
 TEST_P(InlineCursorTest, BidiLevelSimpleLTR) {
@@ -150,8 +150,8 @@ TEST_P(InlineCursorTest, BidiLevelSimpleLTR) {
       "<bdo dir=rtl>GHI<bdo dir=ltr>abc</bdo>DEF</bdo><br>"
       "123, jkl <bdo dir=rtl>MNO</bdo></div>");
   Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
-  EXPECT_THAT(list, ElementsAre("#linebox", "DEF:1", "abc:2", "GHI:1", ":0",
-                                "#linebox", "123, jkl:0", "MNO:1"));
+  EXPECT_THAT(list, ElementsAre("#linebox", "DEF:3", "abc:6", "GHI:3", ":0",
+                                "#linebox", "123, jkl:0", "MNO:3"));
 }
 
 TEST_P(InlineCursorTest, BidiLevelSimpleRTL) {
@@ -161,7 +161,7 @@ TEST_P(InlineCursorTest, BidiLevelSimpleRTL) {
       "123, jkl <bdo dir=rtl>MNO</bdo></div>");
   Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
   EXPECT_THAT(
-      list, ElementsAre("#linebox", ":0", "DEF:3", "abc:4", "GHI:3", "#linebox",
+      list, ElementsAre("#linebox", ":0", "DEF:3", "abc:6", "GHI:3", "#linebox",
                         "MNO:3", ":1", "jkl:2", ",:1", "123:2"));
 }
 
@@ -420,6 +420,49 @@ TEST_P(InlineCursorTest, FirstLastLogicalLeafInTextAsDeepDescendants) {
   EXPECT_EQ("last", ToDebugString(last_logical_leaf));
 }
 
+TEST_P(InlineCursorTest, MoveToEndOfLineWithNoCharsLtr) {
+  SetBodyContent(
+      "<textarea rows=\"3\" cols=\"50\">foo&#10;&#10;bar</textarea>");
+  const auto& textarea =
+      ToTextControl(*GetDocument().QuerySelector(AtomicString("textarea")));
+  const LayoutObject* textarea_layout =
+      textarea.InnerEditorElement()->GetLayoutObject();
+  const LayoutBlockFlow& block_flow = *To<LayoutBlockFlow>(textarea_layout);
+
+  InlineCursor move_to_end_of_line(block_flow);
+  // Preparing the InlineCursor to start from beginning
+  // of second line(Empty Line).
+  move_to_end_of_line.MoveToNextLine();
+  InlineCursor next_line = move_to_end_of_line.CursorForDescendants();
+  // Verify if it has been successfully placed at the correct position.
+  EXPECT_EQ(4u, next_line.Current().TextStartOffset());
+  const PositionWithAffinity end_position =
+      move_to_end_of_line.PositionForEndOfLine();
+  EXPECT_EQ(4, end_position.GetPosition().OffsetInContainerNode());
+}
+
+TEST_P(InlineCursorTest, MoveToEndOfLineWithNoCharsRtl) {
+  SetBodyContent(
+      "<textarea rows=\"3\" cols=\"50\" "
+      "dir=\"rtl\">foo&#10;&#10;bar</textarea>");
+  const auto& textarea =
+      ToTextControl(*GetDocument().QuerySelector(AtomicString("textarea")));
+  const LayoutObject* textarea_layout =
+      textarea.InnerEditorElement()->GetLayoutObject();
+  const LayoutBlockFlow& block_flow = *To<LayoutBlockFlow>(textarea_layout);
+
+  InlineCursor move_to_end_of_line(block_flow);
+  // Preparing the InlineCursor to start from beginning
+  // of second line(Empty Line).
+  move_to_end_of_line.MoveToNextLine();
+  InlineCursor next_line = move_to_end_of_line.CursorForDescendants();
+  // Verify if it has been successfully placed at the correct position.
+  EXPECT_EQ(4u, next_line.Current().TextStartOffset());
+  const PositionWithAffinity end_position =
+      move_to_end_of_line.PositionForEndOfLine();
+  EXPECT_EQ(4, end_position.GetPosition().OffsetInContainerNode());
+}
+
 TEST_P(InlineCursorTest, FirstLastLogicalLeafWithInlineBlock) {
   InsertStyleElement("b { display: inline-block; }");
   InlineCursor cursor = SetupCursor(
@@ -457,9 +500,9 @@ TEST_P(InlineCursorTest, FirstNonPseudoLeafWithBlockImage) {
   InlineCursor cursor = SetupCursor("<p id=root><b><img id=target></b></p>");
 
   // Note: The first child of block-in-inline can be |LayoutImage|.
-  // LayoutNGBlockFlow P id="root"
+  // LayoutBlockFlow P id="root"
   //   +--LayoutInline SPAN
-  //   |  +--LayoutNGBlockFlow (anonymous)  # block-in-inline
+  //   |  +--LayoutBlockFlow (anonymous)  # block-in-inline
   //   |  |  +--LayoutImage IMG id="target" # first child of block-in-inline
   //   +--LayoutText #text ""
   const auto& target =

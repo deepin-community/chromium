@@ -29,9 +29,10 @@ import {IronSelectorElement} from 'chrome://resources/polymer/v3_0/iron-selector
 import {DomRepeat, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {assertExists, castExists} from '../assert_extras.js';
-import {isRevampWayfindingEnabled} from '../common/load_time_booleans.js';
+import {androidAppsVisible, isInputDeviceSettingsSplitEnabled, isRevampWayfindingEnabled} from '../common/load_time_booleans.js';
 import {RouteObserverMixin, RouteObserverMixinInterface} from '../common/route_observer_mixin.js';
 import {Constructor} from '../common/types.js';
+import {DevicePageBrowserProxy, DevicePageBrowserProxyImpl} from '../device_page/device_page_browser_proxy.js';
 import {FakeInputDeviceSettingsProvider} from '../device_page/fake_input_device_settings_provider.js';
 import {getInputDeviceSettingsProvider} from '../device_page/input_device_mojo_interface_provider.js';
 import {InputDeviceSettingsProviderInterface, Keyboard, Mouse, PointingStick, Touchpad} from '../device_page/input_device_settings_types.js';
@@ -214,7 +215,7 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
         type: String,
         value: '',
         computed: 'computeDeviceMenuItemDescription_(hasKeyboard_,' +
-            'hasMouse_, hasPointingStick_, hasTouchpad_, hasHapticTouchpad_)',
+            'hasMouse_, hasPointingStick_, hasTouchpad_)',
       },
 
       multideviceMenuItemDescription_: {
@@ -226,6 +227,11 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
         type: String,
         value: '',
       },
+
+      isRtl_: {
+        type: Boolean,
+        value: false,
+      },
     };
   }
 
@@ -235,6 +241,7 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
   private basicMenuItems_: MenuItemData[];
   private advancedMenuItems_: MenuItemData[];
   private isRevampWayfindingEnabled_: boolean;
+  private isRtl_: boolean;
   private selectedItemPath_: string;
   private aboutMenuItemPath_: string;
 
@@ -252,6 +259,9 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
   private hasMouse_: boolean|undefined;
   private hasPointingStick_: boolean|undefined;
   private hasTouchpad_: boolean|undefined;
+  private isInputDeviceSettingsSplitEnabled_: boolean =
+      isInputDeviceSettingsSplitEnabled();
+  private devicePageBrowserProxy_: DevicePageBrowserProxy;
   private inputDeviceSettingsProvider_: InputDeviceSettingsProviderInterface;
   private keyboardSettingsObserverReceiver_: KeyboardSettingsObserverReceiver|
       undefined;
@@ -274,7 +284,11 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
   constructor() {
     super();
 
-    this.inputDeviceSettingsProvider_ = getInputDeviceSettingsProvider();
+    if (this.isInputDeviceSettingsSplitEnabled_) {
+      this.inputDeviceSettingsProvider_ = getInputDeviceSettingsProvider();
+    } else {
+      this.devicePageBrowserProxy_ = DevicePageBrowserProxyImpl.getInstance();
+    }
     this.multideviceBrowserProxy_ = MultiDeviceBrowserProxyImpl.getInstance();
   }
 
@@ -282,20 +296,36 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
     super.connectedCallback();
 
     if (this.isRevampWayfindingEnabled_) {
-      // Accounts menu item.
-      this.updateAccountsMenuItemDescription_();
-      this.addWebUiListener(
-          'accounts-changed',
-          this.updateAccountsMenuItemDescription_.bind(this));
+      // Accounts menu item is not available in guest mode.
+      if (this.pageAvailability[Section.kPeople]) {
+        this.updateAccountsMenuItemDescription_();
+        this.addWebUiListener(
+            'accounts-changed',
+            this.updateAccountsMenuItemDescription_.bind(this));
+      }
 
       // Bluetooth menu item.
       this.observeBluetoothProperties_();
 
       // Device menu item.
-      this.observeKeyboardSettings_();
-      this.observeMouseSettings_();
-      this.observePointingStickSettings_();
-      this.observeTouchpadSettings_();
+      if (this.isInputDeviceSettingsSplitEnabled_) {
+        this.observeKeyboardSettings_();
+        this.observeMouseSettings_();
+        this.observePointingStickSettings_();
+        this.observeTouchpadSettings_();
+      } else {
+        // Before input device settings split, keyboard was always assumed to
+        // exist.
+        this.hasKeyboard_ = true;
+        this.addWebUiListener(
+            'has-mouse-changed', this.set.bind(this, 'hasMouse_'));
+        this.addWebUiListener(
+            'has-pointing-stick-changed',
+            this.set.bind(this, 'hasPointingStick_'));
+        this.addWebUiListener(
+            'has-touchpad-changed', this.set.bind(this, 'hasTouchpad_'));
+        this.devicePageBrowserProxy_.initializePointers();
+      }
 
       // Internet menu item.
       this.networkConfig_ =
@@ -304,11 +334,18 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
         this.updateInternetMenuItemDescription_();
       });
 
-      // Multidevice menu item.
-      this.addWebUiListener(
-          'settings.updateMultidevicePageContentData',
-          this.updateMultideviceMenuItemDescription_.bind(this));
+      // Multidevice menu item is not available in guest mode.
+      if (this.pageAvailability[Section.kMultiDevice]) {
+        this.addWebUiListener(
+            'settings.updateMultidevicePageContentData',
+            this.updateMultideviceMenuItemDescription_.bind(this));
+
+        this.multideviceBrowserProxy_.getPageContentData().then(
+            this.updateMultideviceMenuItemDescription_.bind(this));
+      }
     }
+
+    this.isRtl_ = window.getComputedStyle(this).direction === 'rtl';
   }
 
   override disconnectedCallback(): void {
@@ -329,11 +366,6 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
     // Force render menu items so the matching item can be selected when the
     // page initially loads.
     this.$.topMenuRepeat.render();
-
-    if (this.isRevampWayfindingEnabled_) {
-      this.multideviceBrowserProxy_.getPageContentData().then(
-          this.updateMultideviceMenuItemDescription_.bind(this));
-    }
   }
 
   override currentRouteChanged(newRoute: Route): void {
@@ -349,17 +381,21 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
   }
 
   /**
-   * Set the selected menu item based on a menu item's route matching or
-   * containing the given |route|.
+   * The selected menu item should be the menu item whose path matches the path
+   * of the section ancestor route for the given `route`. For example, the
+   * BLUETOOTH_DEVICES_SUBPAGE route's section ancestor is the BLUETOOTH route,
+   * whose path matches the bluetooth menu item path.
    */
   private setSelectedItemPathForRoute_(route: Route): void {
-    const menuItems =
-        this.shadowRoot!.querySelectorAll('os-settings-menu-item');
-    for (const menuItem of menuItems) {
-      const matchingRoute = Router.getInstance().getRouteForPath(menuItem.path);
-      if (matchingRoute?.contains(route)) {
-        this.setSelectedItemPath_(menuItem.path);
-        return;
+    const sectionAncestorRoute = route.getSectionAncestor();
+    if (sectionAncestorRoute) {
+      const menuItems =
+          this.shadowRoot!.querySelectorAll('os-settings-menu-item');
+      for (const menuItem of menuItems) {
+        if (sectionAncestorRoute.path === menuItem.path) {
+          this.setSelectedItemPath_(menuItem.path);
+          return;
+        }
       }
     }
 
@@ -431,7 +467,9 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
           path: `/${routesMojom.APPS_SECTION_PATH}`,
           icon: 'os-settings:apps',
           label: this.i18n('appsPageTitle'),
-          sublabel: this.i18n('appsMenuItemDescription'),
+          sublabel: androidAppsVisible() ?
+              this.i18n('appsMenuItemDescription') :
+              this.i18n('appsmenuItemDescriptionArcUnavailable'),
         },
         {
           section: Section.kAccessibility,
@@ -620,8 +658,12 @@ export class OsSettingsMenuElement extends OsSettingsMenuElementBase {
     return bool.toString();
   }
 
-  private getMenuItemTooltipPosition_(): 'right'|'bottom' {
-    return this.isDrawerMenu ? 'bottom' : 'right';
+  private getMenuItemTooltipPosition_(): 'right'|'left'|'bottom' {
+    if (this.isDrawerMenu) {
+      return 'bottom';
+    }
+
+    return this.isRtl_ ? 'left' : 'right';
   }
 
   /**

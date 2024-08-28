@@ -43,7 +43,6 @@
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_plugin.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_regexp.h"
 #include "third_party/blink/renderer/core/annotation/annotation_agent_container_impl.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
@@ -76,9 +75,12 @@
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
+#include "third_party/blink/renderer/core/html/html_embed_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_element_base.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/core/html/html_object_element.h"
 #include "third_party/blink/renderer/core/html/html_plugin_element.h"
+#include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/input/context_menu_allowed_scope.h"
@@ -90,6 +92,7 @@
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/platform/bindings/script_regexp.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
 
 namespace blink {
@@ -118,12 +121,15 @@ void SetPasswordManagerData(Element* element, ContextMenuData& data) {
     const AtomicString& id = input->GetIdAttribute();
     const AtomicString& name = input->GetNameAttribute();
 
-    // TODO(crbug.com/1504626): This should be generic V8PerIsolateData.
-    DEFINE_STATIC_LOCAL(Persistent<ScriptRegexp>, passwordRegexp,
-                        (MakeGarbageCollected<ScriptRegexp>(
-                            element->GetDocument().GetAgent().isolate(),
-                            kPasswordRe, kTextCaseUnicodeInsensitive)));
+    auto* isolate = element->GetDocument().GetAgent().isolate();
+    auto* per_isolate_data = V8PerIsolateData::From(isolate);
+    if (!per_isolate_data->GetPasswordRegexp()) {
+      per_isolate_data->SetPasswordRegexp(MakeGarbageCollected<ScriptRegexp>(
+          element->GetDocument().GetAgent().isolate(), kPasswordRe,
+          kTextCaseUnicodeInsensitive));
+    }
 
+    auto* password_regexp = per_isolate_data->GetPasswordRegexp();
     data.is_password_type_by_heuristics =
         (data.form_control_type == mojom::blink::FormControlType::kInputText ||
          data.form_control_type == mojom::blink::FormControlType::kInputEmail ||
@@ -131,8 +137,8 @@ void SetPasswordManagerData(Element* element, ContextMenuData& data) {
              mojom::blink::FormControlType::kInputSearch ||
          data.form_control_type == mojom::blink::FormControlType::kInputUrl ||
          data.form_control_type == mojom::blink::FormControlType::kTextArea) &&
-        (passwordRegexp->Match(id.GetString()) >= 0 ||
-         passwordRegexp->Match(name.GetString()) >= 0 ||
+        (password_regexp->Match(id.GetString()) >= 0 ||
+         password_regexp->Match(name.GetString()) >= 0 ||
          input->HasBeenPasswordField());
   }
 }
@@ -688,16 +694,12 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
             .Utf8();
     WebRange range =
         selected_frame->GetInputMethodController().GetSelectionOffsets();
-    data.selection_start_offset = range.StartOffset();
-    // TODO(crbug.com/850954): Remove redundant log after we identified the
-    // issue.
-    CHECK_GE(data.selection_start_offset, 0)
-        << "Log issue against https://crbug.com/850954\n"
-        << "data.selection_start_offset: " << data.selection_start_offset
-        << "\nrange: [" << range.StartOffset() << ", " << range.EndOffset()
-        << "]\nVisibleSelection: "
-        << selected_frame->Selection()
-               .ComputeVisibleSelectionInDOMTreeDeprecated();
+    // TODO(crbug.com/40093243): `range.StartOffset()` shouldn't be negative but
+    // it happens. crbug.com/40093243#comment28 suggested not to show context
+    // menu. For now, prefer showing it at wrong place/data than not showing.
+    if (range.StartOffset() >= 0) {
+      data.selection_start_offset = range.StartOffset();
+    }
     if (!result.IsContentEditable()) {
       TextFragmentHandler::OpenedContextMenuOverSelection(selected_frame);
       AnnotationAgentContainerImpl* annotation_container =
@@ -817,9 +819,7 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
             attribution_src_loader->CanRegister(result.AbsoluteLinkURL(),
                                                 /*element=*/anchor,
                                                 /*request_id=*/std::nullopt)) {
-          data.impression = blink::Impression{
-              .runtime_features = attribution_src_loader->GetRuntimeFeatures(),
-          };
+          data.impression = blink::Impression();
         }
       }
     }

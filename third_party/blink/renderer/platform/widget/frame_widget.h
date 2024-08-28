@@ -8,6 +8,8 @@
 #include <optional>
 
 #include "base/time/time.h"
+#include "base/types/optional_ref.h"
+#include "cc/input/browser_controls_offset_tags_info.h"
 #include "mojo/public/mojom/base/text_direction.mojom-blink.h"
 #include "services/viz/public/mojom/compositing/frame_sink_id.mojom-blink.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
@@ -41,6 +43,10 @@ struct ScreenInfos;
 namespace ui {
 class Cursor;
 }  // namespace ui
+
+namespace viz {
+struct FrameTimingDetails;
+}  // namespace viz
 
 namespace blink {
 
@@ -83,7 +89,8 @@ class PLATFORM_EXPORT FrameWidget {
   // passed to the callback is the presentation timestamp; otherwise, it would
   // be timestamp of when the failure is detected.
   virtual void NotifyPresentationTimeInBlink(
-      base::OnceCallback<void(base::TimeTicks)> presentation_callback) = 0;
+      base::OnceCallback<void(const viz::FrameTimingDetails&)>
+          presentation_callback) = 0;
 
   // Enable or disable BeginMainFrameNotExpected signals from the compositor,
   // which are consumed by the blink scheduler.
@@ -99,9 +106,12 @@ class PLATFORM_EXPORT FrameWidget {
   virtual const cc::LayerTreeSettings* GetLayerTreeSettings() = 0;
 
   // Sets the state of the browser controls. (Used for URL bar animations.)
-  virtual void UpdateBrowserControlsState(cc::BrowserControlsState constraints,
-                                          cc::BrowserControlsState current,
-                                          bool animate) = 0;
+  virtual void UpdateBrowserControlsState(
+      cc::BrowserControlsState constraints,
+      cc::BrowserControlsState current,
+      bool animate,
+      base::optional_ref<const cc::BrowserControlsOffsetTagsInfo>
+          offset_tags_info) = 0;
 
   // Set or get what event handlers exist in the document contained in the
   // WebWidget in order to inform the compositor thread if it is able to handle
@@ -122,8 +132,8 @@ class PLATFORM_EXPORT FrameWidget {
   // Returns the CanResize value of the widget.
   virtual bool Resizable() const = 0;
 
-  // Returns the window segments for the widget.
-  virtual const WebVector<gfx::Rect>& WindowSegments() const = 0;
+  // Returns the viewport segments for the widget.
+  virtual const WebVector<gfx::Rect>& ViewportSegments() const = 0;
 
   // Sets the ink metadata on the layer tree host
   virtual void SetDelegatedInkMetadata(
@@ -157,6 +167,9 @@ class PLATFORM_EXPORT FrameWidget {
 
   // Return the visible line bounds in screen coordinates.
   virtual Vector<gfx::Rect>& GetVisibleLineBoundsOnScreen() = 0;
+
+  // Called to send new cursor anchor info data to the browser.
+  virtual void UpdateCursorAnchorInfo() = 0;
 
   // Update the current visible line bounds for the focused element.
   virtual void UpdateLineBounds() = 0;

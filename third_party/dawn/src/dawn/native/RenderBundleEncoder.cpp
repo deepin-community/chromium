@@ -29,7 +29,6 @@
 
 #include <utility>
 
-#include "dawn/common/StackContainer.h"
 #include "dawn/native/CommandValidation.h"
 #include "dawn/native/Commands.h"
 #include "dawn/native/Device.h"
@@ -81,7 +80,7 @@ MaybeError ValidateRenderBundleEncoderDescriptor(DeviceBase* device,
         if (format != wgpu::TextureFormat::Undefined) {
             DAWN_TRY_CONTEXT(ValidateColorAttachmentFormat(device, format),
                              "validating colorFormats[%u]", i);
-            colorAttachmentFormats->push_back(&device->GetValidInternalFormat(format));
+            colorAttachmentFormats.push_back(&device->GetValidInternalFormat(format));
             allColorFormatsUndefined = false;
         }
     }
@@ -118,7 +117,13 @@ RenderBundleEncoder::RenderBundleEncoder(DeviceBase* device, ErrorTag errorTag, 
     : RenderEncoderBase(device, &mBundleEncodingContext, errorTag, label),
       mBundleEncodingContext(device, this) {}
 
+RenderBundleEncoder::~RenderBundleEncoder() {
+    mEncodingContext = nullptr;
+}
+
 void RenderBundleEncoder::DestroyImpl() {
+    mIndirectDrawMetadata.ClearIndexedIndirectBufferValidationInfo();
+    mCommandBufferState.End();
     RenderEncoderBase::DestroyImpl();
     mBundleEncodingContext.Destroy();
 }
@@ -157,6 +162,8 @@ RenderBundleBase* RenderBundleEncoder::APIFinish(const RenderBundleDescriptor* d
 
 ResultOrError<Ref<RenderBundleBase>> RenderBundleEncoder::FinishImpl(
     const RenderBundleDescriptor* descriptor) {
+    mCommandBufferState.End();
+
     // Even if mBundleEncodingContext.Finish() validation fails, calling it will mutate the
     // internal state of the encoding context. Subsequent calls to encode commands will generate
     // errors.

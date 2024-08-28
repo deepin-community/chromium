@@ -18,10 +18,13 @@ limitations under the License.
 
 #include <memory>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/gpu/gpu_fused_mha_runner.h"
-#include "xla/service/gpu/thunk.h"
+#include "xla/service/gpu/runtime/thunk.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla_data.pb.h"
 
@@ -43,11 +46,27 @@ class FusedMHAThunk : public Thunk {
                 BufferAllocation::Slice scratch_slice,
                 BufferAllocation::Slice mask_slice, /* may be null */
                 BufferAllocation::Slice bias_slice /* may be null */,
-                BufferAllocation::Slice activation_slice /* may be null */);
+                BufferAllocation::Slice activation_slice /* may be null */,
+                BufferAllocation::Slice seqlen_q_slice /* may be null */,
+                BufferAllocation::Slice seqlen_k_slice /* may be null */);
 
   FusedMHAThunk(const FusedMHAThunk&) = delete;
   FusedMHAThunk& operator=(const FusedMHAThunk&) = delete;
 
+  BufferAllocation::Slice lhs_bmm1_buffer() const { return lhs_bmm1_buffer_; }
+  BufferAllocation::Slice rhs_bmm1_buffer() const { return rhs_bmm1_buffer_; }
+  BufferAllocation::Slice rhs_bmm2_buffer() const { return rhs_bmm2_buffer_; }
+  BufferAllocation::Slice output_buffer() const { return output_buffer_; }
+  BufferAllocation::Slice scratch_buffer() const { return scratch_buffer_; }
+  BufferAllocation::Slice bias_buffer() const { return bias_buffer_; }
+  BufferAllocation::Slice activation_buffer() const {
+    return activation_buffer_;
+  }
+  BufferAllocation::Slice seqlen_q_buffer() const { return seqlen_q_buffer_; }
+  BufferAllocation::Slice seqlen_k_buffer() const { return seqlen_k_buffer_; }
+
+  GpufMHAConfig config() const { return config_; }
+  absl::Status Initialize(const InitializeParams& params) override;
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
  private:
@@ -56,9 +75,10 @@ class FusedMHAThunk : public Thunk {
   BufferAllocation::Slice rhs_bmm2_buffer_;
   BufferAllocation::Slice output_buffer_;
   BufferAllocation::Slice scratch_buffer_;
-  BufferAllocation::Slice mask_buffer_;
   BufferAllocation::Slice bias_buffer_;
   BufferAllocation::Slice activation_buffer_;
+  BufferAllocation::Slice seqlen_q_buffer_;
+  BufferAllocation::Slice seqlen_k_buffer_;
 
   FusedMultiHeadedAttentionRunner& GetOrCreateRunner(
       const stream_executor::Stream* stream);
@@ -85,16 +105,51 @@ class FusedMHABackwardThunk : public Thunk {
                         BufferAllocation::Slice d_bmm1_rhs_slice,
                         BufferAllocation::Slice d_bmm2_rhs_slice,
                         BufferAllocation::Slice d_s_slice,
-                        BufferAllocation::Slice softmax_sum_slice,
-                        BufferAllocation::Slice d_Q_accum_slice,
                         BufferAllocation::Slice mask_slice,
                         BufferAllocation::Slice d_bias_slice,
                         BufferAllocation::Slice fwd_output_slice,
-                        BufferAllocation::Slice bias_slice);
+                        BufferAllocation::Slice bias_slice,
+                        BufferAllocation::Slice seqlen_q_slice,
+                        BufferAllocation::Slice seqlen_k_slice);
 
   FusedMHABackwardThunk(const FusedMHABackwardThunk&) = delete;
   FusedMHABackwardThunk& operator=(const FusedMHABackwardThunk&) = delete;
 
+  BufferAllocation::Slice bmm1_grad_gemm1_rhs_buffer() const {
+    return bmm1_grad_gemm1_rhs_buffer_;
+  }
+  BufferAllocation::Slice bmm1_grad_gemm2_rhs_buffer() const {
+    return bmm1_grad_gemm2_rhs_buffer_;
+  }
+  BufferAllocation::Slice bmm2_grad_gemm1_lhs_buffer() const {
+    return bmm2_grad_gemm1_lhs_buffer_;
+  }
+  BufferAllocation::Slice bmm2_grad_gemm2_rhs_buffer() const {
+    return bmm2_grad_gemm2_rhs_buffer_;
+  }
+  BufferAllocation::Slice d_output_buffer() const { return d_output_buffer_; }
+  BufferAllocation::Slice scratch_buffer() const { return scratch_buffer_; }
+  BufferAllocation::Slice d_bmm1_lhs_buffer() const {
+    return d_bmm1_lhs_buffer_;
+  }
+  BufferAllocation::Slice d_bmm1_rhs_buffer() const {
+    return d_bmm1_rhs_buffer_;
+  }
+  BufferAllocation::Slice d_bmm2_rhs_buffer() const {
+    return d_bmm2_rhs_buffer_;
+  }
+  BufferAllocation::Slice d_s_buffer() const { return d_s_buffer_; }
+  BufferAllocation::Slice d_bias_buffer() const { return d_bias_buffer_; }
+  BufferAllocation::Slice fwd_output_buffer() const {
+    return fwd_output_buffer_;
+  }
+  BufferAllocation::Slice bias_buffer() const { return bias_buffer_; }
+  BufferAllocation::Slice seqlen_q_buffer() const { return seqlen_q_buffer_; }
+  BufferAllocation::Slice seqlen_k_buffer() const { return seqlen_k_buffer_; }
+
+  GpufMHABackwardConfig config() const { return config_; }
+
+  absl::Status Initialize(const InitializeParams& params) override;
   absl::Status ExecuteOnStream(const ExecuteParams& params) override;
 
  private:
@@ -108,12 +163,11 @@ class FusedMHABackwardThunk : public Thunk {
   BufferAllocation::Slice d_bmm1_rhs_buffer_;
   BufferAllocation::Slice d_bmm2_rhs_buffer_;
   BufferAllocation::Slice d_s_buffer_;
-  BufferAllocation::Slice softmax_sum_buffer_;
-  BufferAllocation::Slice d_Q_accum_buffer_;
-  BufferAllocation::Slice mask_buffer_;
   BufferAllocation::Slice d_bias_buffer_;
   BufferAllocation::Slice fwd_output_buffer_;
   BufferAllocation::Slice bias_buffer_;
+  BufferAllocation::Slice seqlen_q_buffer_;
+  BufferAllocation::Slice seqlen_k_buffer_;
 
   FusedMultiHeadedAttentionBackwardRunner& GetOrCreateRunner(
       const stream_executor::Stream* stream);

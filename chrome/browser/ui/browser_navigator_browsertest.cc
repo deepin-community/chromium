@@ -24,7 +24,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
-#include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
+#include "chrome/browser/ui/page_info/chrome_page_info_delegate.h"
 #include "chrome/browser/ui/search/ntp_test_utils.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
@@ -626,13 +626,14 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, Disposition_NewPopupTrusted) {
 
 #if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
 // This test verifies that navigating with WindowOpenDisposition = NEW_POPUP
-// and is_captive_portal_popup = true results in a new WebContents where
-// is_captive_portal_window() is true.
+// and NavigateParams::CaptivePortalWindowType::kPopup results in a new
+// WebContents where is_captive_portal_window() is true.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
                        Disposition_NewPopupCaptivePortal) {
   NavigateParams params(MakeNavigateParams());
   params.disposition = WindowOpenDisposition::NEW_POPUP;
-  params.is_captive_portal_popup = true;
+  params.captive_portal_window_type =
+      captive_portal::CaptivePortalWindowType::kPopup;
   params.window_features.bounds = gfx::Rect(0, 0, 200, 200);
   // Wait for new popup to to load and gain focus.
   ui_test_utils::NavigateToURL(&params);
@@ -813,7 +814,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, SwitchToTabCorrectWindow) {
                            false));
 }
 
-// TODO(crbug/1272155): Reactivate the test.
+// TODO(crbug.com/40806044): Reactivate the test.
 #if !BUILDFLAG(IS_CHROMEOS_LACROS)
 // This test verifies that "switch to tab" prefers the latest used browser,
 // if multiple exist.
@@ -1432,7 +1433,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-// TODO(1024166): Timing out on linux-chromeos-dbg.
+// TODO(crbug.com/40107334): Timing out on linux-chromeos-dbg.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #define MAYBE_NavigateFromBlankToOptionsInSameTab \
   DISABLED_NavigateFromBlankToOptionsInSameTab
@@ -1457,7 +1458,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-// TODO(1024166): Timing out on linux-chromeos-dbg.
+// TODO(crbug.com/40107334): Timing out on linux-chromeos-dbg.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #define MAYBE_NavigateFromNTPToOptionsInSameTab \
   DISABLED_NavigateFromNTPToOptionsInSameTab
@@ -1531,8 +1532,8 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-// TODO(crbug.com/1171245): This is disabled for Mac OS due to flakiness.
-// TODO(1024166): Timing out on linux-chromeos-dbg.
+// TODO(crbug.com/40166082): This is disabled for Mac OS due to flakiness.
+// TODO(crbug.com/40107334): Timing out on linux-chromeos-dbg.
 #if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_MAC)
 #define MAYBE_NavigateFromNTPToOptionsPageInSameTab \
   DISABLED_NavigateFromNTPToOptionsPageInSameTab
@@ -1568,32 +1569,44 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-// TODO(crbug.com/1504185): Enable this test on Ash prior to the full
-// feature launch of File System Access Persistent Permissions.
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
-                       NavigateFromPageInfoToSiteSettingsFileSystemInNewTab) {
-  // Initial navigation.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GetGoogleURL()));
+                       NavigateFromPageInfoToSiteSettingsInNewTab) {
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-
-  // Simulate navigation event to the file system site settings subpage for the
-  // given URL.
-  ChromePageInfoUiDelegate delegate(web_contents,
-                                    web_contents->GetVisibleURL());
-  delegate.OpenSiteSettingsFileSystem();
-
-  content::WebContents* updated_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  content::LoadStopObserver observer(updated_web_contents);
+  ChromePageInfoDelegate delegate(web_contents);
+  delegate.ShowSiteSettings(web_contents->GetVisibleURL());
+  content::LoadStopObserver observer(
+      browser()->tab_strip_model()->GetActiveWebContents());
   observer.Wait();
 
-  // The file system site settings page opens in a new tab.
+  // Site settings opens in a new tab.
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
-  EXPECT_EQ(
-      chrome::GetSettingsUrl(chrome::kFileSystemSubpage),
-      browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+  EXPECT_EQ(chrome::GetSettingsUrl(chrome::kContentSettingsSubPage),
+            browser()
+                ->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetLastCommittedURL());
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+                       NavigateFromPageInfoToSiteSettingsFileSystemInNewTab) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ChromePageInfoDelegate delegate(web_contents);
+  delegate.OpenContentSettingsExceptions(
+      ContentSettingsType::FILE_SYSTEM_WRITE_GUARD);
+  content::LoadStopObserver observer(
+      browser()->tab_strip_model()->GetActiveWebContents());
+  observer.Wait();
+
+  // File system site settings opens in a new tab.
+  EXPECT_EQ(2, browser()->tab_strip_model()->count());
+  EXPECT_EQ(chrome::GetSettingsUrl(chrome::kFileSystemSettingsSubpage),
+            browser()
+                ->tab_strip_model()
+                ->GetActiveWebContents()
+                ->GetLastCommittedURL());
 }
 #endif
 
@@ -1644,7 +1657,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
             browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
-// TODO(1024166): Timing out on linux-chromeos-dbg.
+// TODO(crbug.com/40107334): Timing out on linux-chromeos-dbg.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #define MAYBE_CloseSingletonTab DISABLED_CloseSingletonTab
 #else
@@ -1886,7 +1899,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest, MainFrameNavigationUIData) {
   }
 }
 
-// TODO(crbug/1272155): Reactivate the test.
+// TODO(crbug.com/40806044): Reactivate the test.
 #if !BUILDFLAG(IS_CHROMEOS_LACROS)
 // Test that subframe navigations generate a NavigationUIData with no
 // disposition.
@@ -1927,8 +1940,6 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
                        Disposition_PictureInPicture_Open) {
   // Create the params for the PiP request.
   auto pip_options = blink::mojom::PictureInPictureWindowOptions::New();
-  pip_options->initial_aspect_ratio = 0.5;
-  pip_options->lock_aspect_ratio = true;
 
   // The WebContents holds the parameters from the PiP request.
   WebContents::CreateParams web_contents_params(browser()->profile());
@@ -1953,22 +1964,21 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   // Should not re-use the browser.
   EXPECT_NE(browser(), params.browser);
   EXPECT_TRUE(params.browser->is_type_picture_in_picture());
+  EXPECT_EQ(params.browser->app_name(), std::string());
 
   // The window should have respected the initial aspect ratio.
   const gfx::Rect override_bounds = params.browser->override_bounds();
   const double aspect_ratio = static_cast<double>(override_bounds.width()) /
                               static_cast<double>(override_bounds.height());
-  EXPECT_DOUBLE_EQ(0.5, aspect_ratio);
+  EXPECT_DOUBLE_EQ(1.0, aspect_ratio);
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
                        Disposition_PictureInPicture_OpenWithWidthAndHeight) {
-  // Give both an aspect ratio and a width/height that don't match. The
-  // width/height should take precedence.
+  // Set width/height with equivalent aspect ratio of 1.0.
   auto pip_options = blink::mojom::PictureInPictureWindowOptions::New();
   pip_options->width = 500;
   pip_options->height = 500;
-  pip_options->initial_aspect_ratio = 0.5;
   WebContents::CreateParams web_contents_params(browser()->profile());
   web_contents_params.picture_in_picture_options = *pip_options;
 
@@ -1987,8 +1997,6 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   params.contents_to_insert = WebContents::Create(web_contents_params);
   Navigate(&params);
 
-  // The window should use the width and height and ignore the aspect ratio.
-  //
   // The bounds may have small adjustments for window decorations, since the
   // requested size is the inner size.  We can't get the inner size easily here,
   // so just verify that the aspect ratio is closer to 1.0 than 0.5.
@@ -2046,6 +2054,36 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
   EXPECT_TRUE(tab->GetLastCommittedURL().IsAboutBlank());
   params.source_contents = tab;
   EXPECT_EQ(nullptr, Navigate(&params));
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTest,
+                       Disposition_PictureInPicture_OpenFromWebApp) {
+  // Create the params for the PiP request that looks like it's from an app.
+  auto pip_options = blink::mojom::PictureInPictureWindowOptions::New();
+
+  // The WebContents holds the parameters from the PiP request.
+  WebContents::CreateParams web_contents_params(browser()->profile());
+  web_contents_params.picture_in_picture_options = *pip_options;
+
+  // Opening a picture in picture window should create a new browser.
+  NavigateParams params = MakeNavigateParams(browser());
+  params.disposition = WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
+  params.app_id = "extensionappid";
+
+  // Navigate to https:// page
+  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
+  ASSERT_TRUE(https_server.Start());
+  WebContents* tab = browser()->tab_strip_model()->GetActiveWebContents();
+  const GURL url = https_server.GetURL("/simple.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  params.source_contents = tab;
+  params.contents_to_insert = WebContents::Create(web_contents_params);
+  Navigate(&params);
+
+  // Should be PiP, with an app name.
+  EXPECT_TRUE(params.browser->is_type_picture_in_picture());
+  EXPECT_NE(params.browser->app_name(), std::string());
 }
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)

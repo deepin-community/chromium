@@ -110,8 +110,6 @@ NearbyShareDialogUI::NearbyShareDialogUI(content::WebUI* web_ui)
       "isOnePageOnboardingEnabled",
       base::FeatureList::IsEnabled(features::kNearbySharingOnePageOnboarding));
   RegisterNearbySharedStrings(html_source);
-  html_source->AddBoolean("isJellyEnabled",
-                          chromeos::features::IsJellyEnabled());
   html_source->UseStringsJs();
 
   // Register callback to handle "cancel-button-event" from nearby_*.html files.
@@ -129,10 +127,6 @@ NearbyShareDialogUI::NearbyShareDialogUI(content::WebUI* web_ui)
 
   const GURL& url = web_ui->GetWebContents()->GetVisibleURL();
   SetAttachmentFromQueryParameter(url);
-
-  html_source->AddBoolean(
-      "isSelfShareEnabled",
-      base::FeatureList::IsEnabled(features::kNearbySharingSelfShare));
 }
 
 NearbyShareDialogUI::~NearbyShareDialogUI() = default;
@@ -180,7 +174,7 @@ void NearbyShareDialogUI::BindInterface(
 
 bool NearbyShareDialogUI::HandleKeyboardEvent(
     content::WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   if (!web_view_) {
     return false;
   }

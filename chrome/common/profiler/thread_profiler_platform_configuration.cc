@@ -74,16 +74,9 @@ DefaultPlatformConfiguration::GetEnableRates(
 
   if (*release_channel == version_info::Channel::BETA) {
     // TODO(crbug.com/1497983): Ramp up enable rate on Non-Android platforms.
-    return RelativePopulations{100, 0, 0};
+    return RelativePopulations{85, 0, 15};
   }
-#if BUILDFLAG(IS_ANDROID)
-  // This is temporary, in order to run the Java Name Hashing field trial.
-  //
-  // TODO(crbug.com/1475718): Remove this once the field trial is done.
-  return RelativePopulations{0, 1, 99};
-#else
-  return RelativePopulations{0, 80, 20};
-#endif  // BUILDFLAG(IS_ANDROID)
+  return RelativePopulations{0, 70, 30};
 }
 
 double DefaultPlatformConfiguration::GetChildProcessPerExecutionEnableFraction(
@@ -145,11 +138,10 @@ bool DefaultPlatformConfiguration::IsSupportedForChannel(
          *release_channel == version_info::Channel::BETA;
 }
 
-#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
-// The configuration to use for the Android platform. Applies to ARM32 which is
-// the only Android architecture currently supported by StackSamplingProfiler.
-// Defined in terms of DefaultPlatformConfiguration where Android does not
-// differ from the default case.
+#if BUILDFLAG(IS_ANDROID)
+// The configuration to use for the Android platform. Defined in terms of
+// DefaultPlatformConfiguration where Android does not differ from the default
+// case.
 class AndroidPlatformConfiguration : public DefaultPlatformConfiguration {
  public:
   explicit AndroidPlatformConfiguration(
@@ -187,7 +179,7 @@ AndroidPlatformConfiguration::AndroidPlatformConfiguration(
                 for (int i = 0;
                      i <= static_cast<int>(
                               metrics::CallStackProfileParams::Thread::kMax);
-                     ++i) {
+                     i++) {
                   threads.push_back(
                       static_cast<metrics::CallStackProfileParams::Thread>(i));
                 }
@@ -215,22 +207,14 @@ AndroidPlatformConfiguration::GetEnableRates(
         *release_channel == version_info::Channel::BETA);
 
   if (*release_channel == version_info::Channel::BETA) {
-    // For 85% of population always disable profiling.
-    // For 15% of population
-    // - 1/3 within the subgroup, i.e. 5% of total population, enable profiling.
-    // - 1/3 within the subgroup, enable profiling with Java name hashing.
-    // - 1/3 within the subgroup, disable profiling.
-    // This results a total of 10% enable rate.
-    return RelativePopulations{85, 0, 15};
+    // TODO(crbug.com/40191622): Enable for 100% of the population.
+    return RelativePopulations{25, 0, 75};
   }
-  // For 1% of population always enable profiling.
-  // For 99% of population
-  // - 1/3 within the subgroup, i.e. 33% of total population, enable profiling.
-  // - 1/3 within the subgroup, enable profiling with Java name hashing.
+  // For 100% of population
+  // - 1/3 within the subgroup, i.e. 50% of total population, enable profiling.
+  // - 1/3 within the subgroup, i.e. 50% of total population, enable profiling
+  //   with thread pool unwinding.
   // - 1/3 within the subgroup, disable profiling.
-  // This results a total of 67% enable rate.
-  //
-  // TODO(crbug.com/1475718): Remove this once the field trial is done.
   return RelativePopulations{0, 1, 99};
 }
 
@@ -269,7 +253,7 @@ AndroidPlatformConfiguration::ChooseEnabledProcess() const {
     }
     cumulative_weight += process_enable_weight.weight;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return std::nullopt;
 }
 
@@ -277,13 +261,21 @@ bool AndroidPlatformConfiguration::IsEnabledForThread(
     metrics::CallStackProfileParams::Process process,
     metrics::CallStackProfileParams::Thread thread,
     std::optional<version_info::Channel> release_channel) const {
+#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
+  // For now, we only enable SSM in the Browser process and Main thread on
+  // Android 64, since Libunwindstack doesn't support JavaScript.
+  if (!(process == metrics::CallStackProfileParams::Process::kBrowser &&
+        thread == metrics::CallStackProfileParams::Thread::kMain)) {
+    return false;
+  }
+#endif
   if (!release_channel.has_value() || browser_test_mode_enabled()) {
     return true;
   }
 
   switch (*release_channel) {
-    // TODO(crbug.com/1497983): Adjust thread-level enable rate for beta channel
-    // based on the data volume after launch. Temporarily use the same
+    // TODO(crbug.com/40287243): Adjust thread-level enable rate for beta
+    // channel based on the data volume after launch. Temporarily use the same
     // thread-level enable rate as dev channel.
     case version_info::Channel::BETA:
     case version_info::Channel::DEV: {
@@ -298,7 +290,7 @@ bool AndroidPlatformConfiguration::IsEnabledForThread(
   }
 }
 
-#endif  // BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace
 
@@ -307,7 +299,7 @@ std::unique_ptr<ThreadProfilerPlatformConfiguration>
 ThreadProfilerPlatformConfiguration::Create(
     bool browser_test_mode_enabled,
     base::RepeatingCallback<bool(double)> is_enabled_on_dev_callback) {
-#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
+#if BUILDFLAG(IS_ANDROID)
   return std::make_unique<AndroidPlatformConfiguration>(
       browser_test_mode_enabled, is_enabled_on_dev_callback);
 #else
@@ -318,16 +310,8 @@ ThreadProfilerPlatformConfiguration::Create(
 
 bool ThreadProfilerPlatformConfiguration::IsSupported(
     std::optional<version_info::Channel> release_channel) const {
-// `ThreadProfiler` is currently not supported on ARM64, even if
-// `base::StackSamplingProfiler` may support it.
-//
-// TODO(crbug.com/1392158): Remove this conditional.
-#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
-  return false;
-#else
   return base::StackSamplingProfiler::IsSupportedForCurrentPlatform() &&
          IsSupportedForChannel(release_channel);
-#endif
 }
 
 // static

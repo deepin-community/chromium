@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/trace_event/trace_logging_minimal_win.h"
 
 #include <evntrace.h>
@@ -40,7 +45,7 @@ uint16_t TlmProvider::AppendNameToMetadata(
     return static_cast<uint16_t>(-1);
   }
 
-  memcpy(metadata + index, name.begin(), cch);
+  memcpy(metadata + index, name.data(), cch);
   metadata[index + cch] = 0;
   index += static_cast<uint16_t>(cch) + 1;
   return index;
@@ -232,7 +237,7 @@ bool TlmProvider::KeywordEnabled(uint64_t keyword) const noexcept {
 }
 
 TlmInt64Field::TlmInt64Field(const char* name, const int64_t value) noexcept
-    : TlmFieldBase(name), value_(value) {
+    : TlmFieldWithConstants(name), value_(value) {
   DCHECK_NE(Name(), nullptr);
 }
 int64_t TlmInt64Field::Value() const noexcept {
@@ -244,7 +249,7 @@ void TlmInt64Field::FillEventDescriptor(
 }
 
 TlmUInt64Field::TlmUInt64Field(const char* name, const uint64_t value) noexcept
-    : TlmFieldBase(name), value_(value) {
+    : TlmFieldWithConstants(name), value_(value) {
   DCHECK_NE(Name(), nullptr);
 }
 uint64_t TlmUInt64Field::Value() const noexcept {
@@ -257,7 +262,7 @@ void TlmUInt64Field::FillEventDescriptor(
 
 TlmMbcsStringField::TlmMbcsStringField(const char* name,
                                        const char* value) noexcept
-    : TlmFieldBase(name), value_(value) {
+    : TlmFieldWithConstants(name), value_(value) {
   DCHECK_NE(Name(), nullptr);
   DCHECK_NE(value_, nullptr);
 }
@@ -274,7 +279,7 @@ void TlmMbcsStringField::FillEventDescriptor(
 
 TlmUtf8StringField::TlmUtf8StringField(const char* name,
                                        const char* value) noexcept
-    : TlmFieldBase(name), value_(value) {
+    : TlmFieldWithConstants(name), value_(value) {
   DCHECK_NE(Name(), nullptr);
   DCHECK_NE(value_, nullptr);
 }
@@ -288,3 +293,11 @@ void TlmUtf8StringField::FillEventDescriptor(
   EventDataDescCreate(&descriptors[0], value_,
                       base::checked_cast<ULONG>(strlen(value_) + 1));
 }
+
+TlmFieldBase::TlmFieldBase(const char* name) noexcept : name_(name) {}
+TlmFieldBase::TlmFieldBase(std::string_view name) noexcept : name_(name) {}
+
+TlmFieldBase::~TlmFieldBase() = default;
+
+TlmFieldBase::TlmFieldBase(TlmFieldBase&&) noexcept = default;
+TlmFieldBase& TlmFieldBase::operator=(TlmFieldBase&&) noexcept = default;

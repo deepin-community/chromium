@@ -14,6 +14,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/arc/arc_util.h"
+#include "chrome/browser/ash/child_accounts/on_device_controls/app_controls_service_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_pref_names.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
@@ -23,6 +24,7 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/system_preferences/startup_section.h"
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/browser/ui/webui/webui_util.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/os_settings_resources.h"
@@ -42,6 +44,7 @@ using ::chromeos::settings::mojom::kAppDetailsSubpagePath;
 using ::chromeos::settings::mojom::kAppManagementSubpagePath;
 using ::chromeos::settings::mojom::kAppNotificationsManagerSubpagePath;
 using ::chromeos::settings::mojom::kAppNotificationsSubpagePath;
+using ::chromeos::settings::mojom::kAppParentalControlsSubpagePath;
 using ::chromeos::settings::mojom::kAppsSectionPath;
 using ::chromeos::settings::mojom::kArcVmUsbPreferencesSubpagePath;
 using ::chromeos::settings::mojom::kGooglePlayStoreSubpagePath;
@@ -218,6 +221,22 @@ const std::vector<SearchConcept>& GetManageIsolatedWebAppsSearchConcepts() {
   return *tags;
 }
 
+const std::vector<SearchConcept>& GetParentalControlsSearchConcepts() {
+  // Redirect search queries to the parental controls row in the Apps section
+  // because the app parental controls page should only be accessed after the
+  // user has entered their PIN, which is triggered from the settings row.
+  static const base::NoDestructor<std::vector<SearchConcept>> tags(
+      {{IDS_OS_SETTINGS_TAG_APPS_PARENTAL_CONTROLS,
+        mojom::kAppsSectionPath,
+        mojom::SearchResultIcon::kAppsParentalControls,
+        mojom::SearchResultDefaultRank::kMedium,
+        mojom::SearchResultType::kSetting,
+        {.setting = mojom::Setting::kAppParentalControls},
+        {IDS_OS_SETTINGS_TAG_APPS_PARENTAL_CONTROLS_ALT1,
+         SearchConcept::kAltTagEnd}}});
+  return *tags;
+}
+
 const std::vector<SearchConcept>& GetTurnOnIsolatedWebAppsSearchConcepts() {
   static const base::NoDestructor<std::vector<SearchConcept>> tags(
       {{IDS_OS_SETTINGS_TAG_TURN_ON_ISOLATED_WEB_APPS,
@@ -304,8 +323,6 @@ void AddAppManagementStrings(content::WebUIDataSource* html_source) {
       {"appManagementIntentSettingsTitle",
        IDS_APP_MANAGEMENT_INTENT_SETTINGS_TITLE},
       {"appManagementIntentSharingOpenAppLabel",
-       IDS_APP_MANAGEMENT_INTENT_SHARING_APP_OPEN},
-      {"appManagementIntentSharingOpenAppLabel",
        kIsRevampEnabled ? IDS_OS_SETTINGS_REVAMP_OPEN_IN_APP_TITLE
                         : IDS_APP_MANAGEMENT_INTENT_SHARING_APP_OPEN},
       {"appManagementIntentSharingOpenBrowserLabel",
@@ -391,6 +408,14 @@ void AddGuestOsStrings(content::WebUIDataSource* html_source) {
        IDS_SETTINGS_GUEST_OS_SHARED_USB_DEVICES_ADD_TITLE},
       {"guestOsSharedUsbDevicesNoneAttached",
        IDS_SETTINGS_GUEST_OS_SHARED_USB_DEVICES_NONE_ATTACHED},
+      {"guestOsSharedUsbDevicesNotificationDialogTitleEnable",
+       IDS_SETTINGS_GUEST_OS_SHARED_USB_DEVICES_NOTIFICATION_DIALOG_TITLE_ENABLE},
+      {"guestOsSharedUsbDevicesNotificationDialogTitleDisable",
+       IDS_SETTINGS_GUEST_OS_SHARED_USB_DEVICES_NOTIFICATION_DIALOG_TITLE_DISABLE},
+      {"guestOsSharedUsbDevicesNotificationDialogAccept",
+       IDS_SETTINGS_GUEST_OS_SHARED_USB_DEVICES_NOTIFICATION_DIALOG_ACCEPT},
+      {"guestOsSharedUsbDevicesNotificationsLabel",
+       IDS_SETTINGS_GUEST_OS_SHARED_USB_DEVICES_NOTIFICATION_LABEL},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 }
@@ -403,6 +428,58 @@ void AddBorealisStrings(content::WebUIDataSource* html_source) {
        IDS_SETTINGS_APPS_BOREALIS_APP_PERMISSION_TEXT},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
+}
+
+void AddAppParentalControlsStrings(content::WebUIDataSource* html_source) {
+  static constexpr webui::LocalizedString kLocalizedStrings[] = {
+      {"appParentalControlsAccessDialogTitle",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_ACCESS_DIALOG_TITLE},
+      {"appParentalControlsBlockedAppsCountText",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_BLOCKED_APPS_COUNT_TEXT},
+      {"appParentalControlsChoosePinSubtitle",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_CHOOSE_PIN_SUBTITLE},
+      {"appParentalControlsChoosePinTitle",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_CHOOSE_PIN_TITLE},
+      {"appParentalControlsConfirmPinTitle",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_CONFIRM_PIN_TITLE},
+      {"appParentalControlsForgotPinLinkName",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_FORGOT_PIN_LINK_NAME},
+      {"appParentalControlsHeaderText",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_APPS_TITLE_TEXT},
+      {"appParentalControlsNoAppsText",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_NO_APPS_FOUND_TEXT},
+      {"appParentalControlsPinIncorrectErrorText",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_PIN_INCORRECT_ERROR_TEXT},
+      {"appParentalControlsPinMismatchErrorText",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_PIN_MISMATCH_ERROR_TEXT},
+      {"appParentalControlsSearchPrompt",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_SEARCH_PROMPT},
+      {"appParentalControlsTitle", IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_LABEL},
+      {"appParentalControlsPinWrongLengthErrorText",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_PIN_WRONG_LENGTH_ERROR_TEXT},
+      {"appParentalControlsPinNumericErrorText",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_PIN_NUMERIC_ERROR_TEXT},
+      {"appParentalControlsTitle", IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_LABEL},
+      {"appParentalControlsSetUpButton",
+       IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_SET_UP_BUTTON},
+      {"appParentalControlsTitle", IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_LABEL},
+  };
+
+  html_source->AddLocalizedStrings(kLocalizedStrings);
+
+  html_source->AddString("appParentalControlsLearnMoreUrl",
+                         chrome::kAppParentalControlsLearnMoreUrl);
+
+  html_source->AddString(
+      "appParentalControlsSubtitle",
+      l10n_util::GetStringFUTF16(IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_SUBLABEL,
+                                 ui::GetChromeOSDeviceName(),
+                                 chrome::kAppParentalControlsLearnMoreUrl));
+  html_source->AddString(
+      "appParentalControlsSubtitleDescription",
+      l10n_util::GetStringFUTF16(
+          IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_SUBLABEL_DESCRIPTION,
+          ui::GetChromeOSDeviceName()));
 }
 
 bool ShowPluginVm(const Profile* profile, const PrefService& pref_service) {
@@ -426,7 +503,8 @@ AppsSection::AppsSection(Profile* profile,
               : std::nullopt),
       pref_service_(pref_service),
       arc_app_list_prefs_(arc_app_list_prefs),
-      app_service_proxy_(app_service_proxy) {
+      app_service_proxy_(app_service_proxy),
+      is_arc_allowed_(arc::IsArcAllowedForProfile(profile)) {
   if (!ash::features::IsOsSettingsRevampWayfindingEnabled()) {
     CHECK(startup_subsection_);
   }
@@ -441,7 +519,7 @@ AppsSection::AppsSection(Profile* profile,
     OnQuietModeChanged(MessageCenterAsh::Get()->IsQuietMode());
   }
 
-  if (arc::IsArcAllowedForProfile(profile)) {
+  if (is_arc_allowed_) {
     pref_change_registrar_.Init(pref_service_);
     pref_change_registrar_.Add(
         arc::prefs::kArcEnabled,
@@ -455,9 +533,14 @@ AppsSection::AppsSection(Profile* profile,
     UpdateAndroidSearchTags();
   }
 
-  if (content::IsolatedWebAppsPolicy::AreIsolatedWebAppsEnabled(profile)) {
+  if (web_app::IsIwaUnmanagedInstallEnabled(profile)) {
     updater.AddSearchTags(GetManageIsolatedWebAppsSearchConcepts());
     updater.AddSearchTags(GetTurnOnIsolatedWebAppsSearchConcepts());
+  }
+
+  if (on_device_controls::AppControlsServiceFactory::
+          IsOnDeviceAppControlsAvailable(profile)) {
+    updater.AddSearchTags(GetParentalControlsSearchConcepts());
   }
 }
 
@@ -483,6 +566,8 @@ void AppsSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
   webui::LocalizedString kLocalizedStrings[] = {
       {"appsPageTitle", IDS_SETTINGS_APPS_TITLE},
       {"appsMenuItemDescription", IDS_OS_SETTINGS_APPS_MENU_ITEM_DESCRIPTION},
+      {"appsmenuItemDescriptionArcUnavailable",
+       IDS_OS_SETTINGS_APPS_MENU_ITEM_DESCRIPTION_ARC_UNAVAILABLE},
       {"appManagementTitle", IDS_SETTINGS_APPS_LINK_TEXT},
       {"appNotificationsTitle", IDS_SETTINGS_APP_NOTIFICATIONS_LINK_TEXT},
       {"doNotDisturbToggleTitle",
@@ -513,6 +598,30 @@ void AppsSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       {"enableIsolatedWebAppsToggleLabel",
        IDS_SETTINGS_ENABLE_ISOLATED_WEB_APPS_LABEL},
       {"appManagementAppLanguageLabel", IDS_APP_MANAGEMENT_APP_LANGUAGE_LABEL},
+      {"permissionAllowedTextWithTurnOnCameraAccessButton",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_TEXT_WITH_TURN_ON_SYSTEM_CAMERA_ACCESS_BUTTON},
+      {"permissionAllowedTextWithTurnOnMicrophoneAccessButton",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_TEXT_WITH_TURN_ON_SYSTEM_MICROPHONE_ACCESS_BUTTON},
+      {"permissionAllowedTextWithTurnOnLocationAccessButton",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_TEXT_WITH_TURN_ON_SYSTEM_LOCATION_ACCESS_BUTTON},
+      {"permissionAllowedTextWithDetailsAndTurnOnCameraAccessButton",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_TEXT_WITH_DETAILS_AND_TURN_ON_SYSTEM_CAMERA_ACCESS_BUTTON},
+      {"permissionAllowedTextWithDetailsAndTurnOnMicrophoneAccessButton",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_TEXT_WITH_DETAILS_AND_TURN_ON_SYSTEM_MICROPHONE_ACCESS_BUTTON},
+      {"permissionAllowedTextWithDetailsAndTurnOnLocationAccessButton",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_TEXT_WITH_DETAILS_AND_TURN_ON_SYSTEM_LOCATION_ACCESS_BUTTON},
+      {"permissionAllowedButNoCameraConnectedText",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_BUT_NO_CAMERA_CONNECTED_TEXT},
+      {"permissionAllowedButNoMicrophoneConnectedText",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_BUT_NO_MICROPHONE_CONNECTED_TEXT},
+      {"permissionAllowedButNoCameraConnectedTextWithDetails",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_BUT_NO_CAMERA_CONNECTED_TEXT_WITH_DETAILS},
+      {"permissionAllowedButNoMicrophoneConnectedTextWithDetails",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_BUT_NO_MICROPHONE_CONNECTED_TEXT_WITH_DETAILS},
+      {"permissionAllowedButMicrophoneHwSwitchActiveText",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_BUT_MICROPHONE_HW_SWITCH_ACTIVE_TEXT},
+      {"permissionAllowedButMicrophoneHwSwitchActiveTextWithDetails",
+       IDS_APP_MANAGEMENT_PERMISSION_ALLOWED_BUT_MICROPHONE_HW_SWITCH_ACTIVE_TEXT_WITH_DETAILS},
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
@@ -532,33 +641,37 @@ void AppsSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
   // For AOSP images we don't have the Play Store app. In last case we Android
   // apps settings consists only from root link to Android settings and only
   // visible once settings app is registered.
-  html_source->AddBoolean("androidAppsVisible",
-                          arc::IsArcAllowedForProfile(profile()));
+  html_source->AddBoolean("androidAppsVisible", is_arc_allowed_);
   html_source->AddBoolean("isPlayStoreAvailable", arc::IsPlayStoreAvailable());
 
   html_source->AddBoolean(
       "showOsSettingsAppNotificationsRow",
       base::FeatureList::IsEnabled(features::kOsSettingsAppNotificationsPage));
-  html_source->AddBoolean(
-      "showOsSettingsAppBadgingToggle",
-      base::FeatureList::IsEnabled(features::kOsSettingsAppBadgingToggle));
   html_source->AddBoolean("isArcVmEnabled", arc::IsArcVmEnabled());
 
-  // TODO(crbug.com/1481737): Double check that this is the correct feature
-  // check.
-  html_source->AddBoolean(
-      "showManageIsolatedWebAppsRow",
-      content::IsolatedWebAppsPolicy::AreIsolatedWebAppsEnabled(profile()));
+  html_source->AddBoolean("showManageIsolatedWebAppsRow",
+                          web_app::IsIwaUnmanagedInstallEnabled(profile()));
   html_source->AddString(
       "isolatedWebAppsDescription",
       l10n_util::GetStringFUTF16(IDS_SETTINGS_ISOLATED_WEB_APPS_DESCRIPTION,
                                  chrome::kIsolatedWebAppsLearnMoreUrl));
+
+  html_source->AddBoolean("privacyHubAppPermissionsV2Enabled",
+                          features::IsCrosPrivacyHubAppPermissionsV2Enabled());
+
+  html_source->AddBoolean("privacyHubLocationAccessControlEnabled",
+                          ash::features::IsCrosPrivacyHubLocationEnabled());
+
+  html_source->AddBoolean("isAppParentalControlsFeatureAvailable",
+                          on_device_controls::AppControlsServiceFactory::
+                              IsOnDeviceAppControlsAvailable(profile()));
 
   AddAppManagementStrings(html_source);
   AddGuestOsStrings(html_source);
   AddAndroidAppStrings(html_source);
   AddPluginVmLoadTimeData(html_source);
   AddBorealisStrings(html_source);
+  AddAppParentalControlsStrings(html_source);
 
   // Startup subsection exists only when OsSettingsRevampWayfinding is disabled.
   if (startup_subsection_) {
@@ -611,6 +724,7 @@ bool AppsSection::LogMetric(mojom::Setting setting, base::Value& value) const {
 
 void AppsSection::RegisterHierarchy(HierarchyGenerator* generator) const {
   generator->RegisterTopLevelSetting(mojom::Setting::kTurnOnPlayStore);
+  generator->RegisterTopLevelSetting(mojom::Setting::kAppParentalControls);
 
   // Manage apps.
   generator->RegisterTopLevelSubpage(IDS_SETTINGS_APPS_LINK_TEXT,
@@ -692,6 +806,14 @@ void AppsSection::RegisterHierarchy(HierarchyGenerator* generator) const {
       mojom::SearchResultDefaultRank::kMedium,
       mojom::kArcVmUsbPreferencesSubpagePath);
 
+  // On-device parental controls for apps
+  generator->RegisterTopLevelSubpage(
+      IDS_OS_SETTINGS_APP_PARENTAL_CONTROLS_LABEL,
+      mojom::Subpage::kAppParentalControls,
+      mojom::SearchResultIcon::kAppsParentalControls,
+      mojom::SearchResultDefaultRank::kMedium,
+      mojom::kAppParentalControlsSubpagePath);
+
   // Startup subsection exists only when OsSettingsRevampWayfinding is disabled.
   if (startup_subsection_) {
     startup_subsection_->RegisterHierarchy(generator);
@@ -761,6 +883,16 @@ void AppsSection::AddAndroidAppStrings(content::WebUIDataSource* html_source) {
           : l10n_util::GetStringFUTF16(
                 IDS_SETTINGS_ANDROID_APPS_SUBTEXT, ui::GetChromeOSDeviceName(),
                 GetHelpUrlWithBoard(chrome::kAndroidAppsLearnMoreURL)));
+  if (kIsRevampEnabled) {
+    html_source->AddLocalizedString(
+        "androidAppsSubtextDescription",
+        IDS_OS_SETTINGS_REVAMP_ANDROID_APPS_SUBTEXT_DESCRIPTION);
+  } else {
+    html_source->AddString("androidAppsSubtextDescription",
+                           l10n_util::GetStringFUTF16(
+                               IDS_SETTINGS_ANDROID_APPS_SUBTEXT_DESCRIPTION,
+                               ui::GetChromeOSDeviceName()));
+  }
 }
 
 void AppsSection::AddPluginVmLoadTimeData(
@@ -837,9 +969,7 @@ void AppsSection::OnQuietModeChanged(bool in_quiet_mode) {
   if (kIsRevampEnabled) {
     updater.AddSearchTags(GetAppNotificationsManagerSearchConcepts());
   }
-  if (features::IsOsSettingsAppBadgingToggleEnabled()) {
-    updater.AddSearchTags(GetAppBadgingSearchConcepts());
-  }
+  updater.AddSearchTags(GetAppBadgingSearchConcepts());
 
   if (!MessageCenterAsh::Get()->IsQuietMode()) {
     updater.AddSearchTags(GetTurnOnAppNotificationSearchConcepts());

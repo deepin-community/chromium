@@ -101,6 +101,11 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
     friend class HTMLFrameOwnerElement;
   };
 
+  // Node overrides:
+  Node::InsertionNotificationRequest InsertedInto(
+      ContainerNode& insertion_point) override;
+  void RemovedFrom(ContainerNode& insertion_point) override;
+
   // FrameOwner overrides:
   Frame* ContentFrame() const final { return content_frame_.Get(); }
   void SetContentFrame(Frame&) final;
@@ -199,6 +204,9 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
 
   // Checks that the number of frames on the page are within the current limit.
   bool IsCurrentlyWithinFrameLimit() const;
+
+  // Pre-iframe frame-owning elements have certain policies by default.
+  static ParsedPermissionsPolicy GetLegacyFramePolicies();
 
  private:
   // These values are persisted to logs. Entries should not be renumbered and

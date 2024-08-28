@@ -61,7 +61,7 @@ const net::NetworkTrafficAnnotationTag kEarlyHintsPreloadTrafficAnnotation =
       cookies_store: "user"
       setting:
         "This feature cannot be disabled by Settings. This feature is not "
-        "enabled by default yet. TODO(crbug.com/671310): Update this "
+        "enabled by default yet. TODO(crbug.com/40496584): Update this "
         "description once the feature is ready."
       chrome_policy {
         URLBlocklist {
@@ -97,7 +97,7 @@ network::mojom::CSPDirectiveName LinkAsAttributeToCSPDirective(
     case network::mojom::LinkAsAttribute::kFetch:
       return network::mojom::CSPDirectiveName::ConnectSrc;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return network::mojom::CSPDirectiveName::Unknown;
 }
 
@@ -124,7 +124,7 @@ bool CheckContentSecurityPolicyForPreload(
               directive, *it->second, link->href, *(policy->self_origin),
               /*has_followed_redirect=*/false, /*is_response_check=*/false,
               /*is_opaque_fenced_frame=*/false)) {
-        // TODO(https://crbug.com/1305896): Report CSP violation once the final
+        // TODO(crbug.com/40218207): Report CSP violation once the final
         // response is received.
         return false;
       }
@@ -174,7 +174,7 @@ network::mojom::RequestMode CalculateRequestMode(
     case network::mojom::CrossOriginAttribute::kUseCredentials:
       return network::mojom::RequestMode::kCors;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return network::mojom::RequestMode::kSameOrigin;
 }
 
@@ -194,7 +194,7 @@ network::mojom::CredentialsMode CalculateCredentialsMode(
     case network::mojom::CrossOriginAttribute::kAnonymous:
       return network::mojom::CredentialsMode::kSameOrigin;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return network::mojom::CredentialsMode::kOmit;
 }
 
@@ -324,7 +324,7 @@ class NavigationEarlyHintsManager::PreloadURLLoaderClient
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         OnUploadProgressCallback callback) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
   void OnTransferSizeUpdated(int32_t transfer_size_diff) override {
     network::RecordOnTransferSizeUpdatedUMA(
@@ -341,7 +341,7 @@ class NavigationEarlyHintsManager::PreloadURLLoaderClient
   }
 
   // mojo::DataPipeDrainer::Client overrides:
-  void OnDataAvailable(const void* data, size_t num_bytes) override {}
+  void OnDataAvailable(base::span<const uint8_t> data) override {}
   void OnDataComplete() override {
     DCHECK(response_body_drainer_);
     response_body_drainer_.reset();
@@ -405,7 +405,7 @@ void NavigationEarlyHintsManager::HandleEarlyHints(
       Referrer::ReferrerPolicyForUrlRequest(early_hints->referrer_policy);
 
   for (const auto& link : early_hints->headers->link_headers) {
-    // TODO(crbug.com/671310): Support other `rel` attributes.
+    // TODO(crbug.com/40496584): Support other `rel` attributes.
     if (link->rel == network::mojom::LinkRelAttribute::kPreconnect) {
       MaybePreconnect(link);
     } else if (link->rel == network::mojom::LinkRelAttribute::kPreload ||
@@ -536,7 +536,7 @@ void NavigationEarlyHintsManager::MaybePreloadHintedResource(
           base::BindRepeating(&WebContents::FromFrameTreeNodeId,
                               frame_tree_node_id_),
           /*navigation_ui_data=*/nullptr, frame_tree_node_id_,
-          /*navigation_id=*/absl::nullopt);
+          /*navigation_id=*/std::nullopt);
 
   auto loader_client = std::make_unique<PreloadURLLoaderClient>(*this, request);
   auto loader = blink::ThrottlingURLLoader::CreateLoaderAndStart(
@@ -572,12 +572,12 @@ void NavigationEarlyHintsManager::OnPreloadComplete(
         .Run(preloaded_resources_);
   }
 
-  // TODO(crbug.com/671310): Consider to delete `this` when there is no inflight
-  // preloads.
+  // TODO(crbug.com/40496584): Consider to delete `this` when there is no
+  // inflight preloads.
 }
 
 // Used to determine a priority for a speculative subresource request.
-// TODO(crbug.com/671310): This is almost the same as GetRequestPriority() in
+// TODO(crbug.com/40496584): This is almost the same as GetRequestPriority() in
 // loading_predictor_tab_helper.cc and the purpose is the same. Consider merging
 // them if the logic starts to be more mature.
 // platform/loader/fetch/README.md in blink contains more details on

@@ -96,7 +96,6 @@ class CPDF_Parser {
   uint32_t GetLastObjNum() const;
   bool IsValidObjectNumber(uint32_t objnum) const;
   FX_FILESIZE GetObjectPositionOrZero(uint32_t objnum) const;
-  bool IsObjectFreeOrNull(uint32_t objnum) const;
   const RetainPtr<CPDF_SecurityHandler>& GetSecurityHandler() const {
     return m_pSecurityHandler;
   }
@@ -143,8 +142,11 @@ class CPDF_Parser {
     CPDF_CrossRefTable::ObjectInfo info;
   };
 
-  bool LoadAllCrossRefTable(FX_FILESIZE xref_offset);
-  bool LoadAllCrossRefStream(FX_FILESIZE xref_offset);
+  bool LoadAllCrossRefTablesAndStreams(FX_FILESIZE xref_offset);
+  bool FindAllCrossReferenceTablesAndStream(
+      FX_FILESIZE main_xref_offset,
+      std::vector<FX_FILESIZE>& xref_list,
+      std::vector<FX_FILESIZE>& xref_stream_list);
   bool LoadCrossRefStream(FX_FILESIZE* pos, bool is_main_xref);
   void ProcessCrossRefStreamEntry(pdfium::span<const uint8_t> entry_span,
                                   pdfium::span<const uint32_t> field_widths,
@@ -171,8 +173,6 @@ class CPDF_Parser {
 
   bool InitSyntaxParser(RetainPtr<CPDF_ReadValidator> validator);
   bool ParseFileVersion();
-
-  CPDF_CrossRefTable::ObjectType GetObjectType(uint32_t objnum) const;
 
   std::unique_ptr<CPDF_SyntaxParser> m_pSyntax;
   std::unique_ptr<ParsedObjectsHolder> m_pOwnedObjectsHolder;

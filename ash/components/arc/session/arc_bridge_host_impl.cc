@@ -10,6 +10,7 @@
 #include "ash/components/arc/mojom/app.mojom.h"
 #include "ash/components/arc/mojom/app_permissions.mojom.h"
 #include "ash/components/arc/mojom/appfuse.mojom.h"
+#include "ash/components/arc/mojom/arc_wifi.mojom.h"
 #include "ash/components/arc/mojom/audio.mojom.h"
 #include "ash/components/arc/mojom/auth.mojom.h"
 #include "ash/components/arc/mojom/backup_settings.mojom.h"
@@ -21,8 +22,9 @@
 #include "ash/components/arc/mojom/compatibility_mode.mojom.h"
 #include "ash/components/arc/mojom/crash_collector.mojom.h"
 #include "ash/components/arc/mojom/digital_goods.mojom.h"
-#include "ash/components/arc/mojom/disk_quota.mojom.h"
+#include "ash/components/arc/mojom/disk_space.mojom.h"
 #include "ash/components/arc/mojom/enterprise_reporting.mojom.h"
+#include "ash/components/arc/mojom/error_notification.mojom.h"
 #include "ash/components/arc/mojom/file_system.mojom.h"
 #include "ash/components/arc/mojom/iio_sensor.mojom.h"
 #include "ash/components/arc/mojom/ime.mojom.h"
@@ -31,7 +33,6 @@
 #include "ash/components/arc/mojom/keyboard_shortcut.mojom.h"
 #include "ash/components/arc/mojom/keymaster.mojom.h"
 #include "ash/components/arc/mojom/keymint.mojom.h"
-#include "ash/components/arc/mojom/kiosk.mojom.h"
 #include "ash/components/arc/mojom/media_session.mojom.h"
 #include "ash/components/arc/mojom/memory.mojom.h"
 #include "ash/components/arc/mojom/metrics.mojom.h"
@@ -72,21 +73,33 @@
 #include "chromeos/components/payments/mojom/payment_app.mojom.h"
 #include "chromeos/components/sensors/mojom/cros_sensor_service.mojom.h"
 #include "services/accessibility/android/public/mojom/accessibility_helper.mojom.h"
+#include "third_party/cros_system_api/mojo/service_constants.h"
 
 namespace arc {
 
-ArcBridgeHostImpl::ArcBridgeHostImpl(
-    ArcBridgeService* arc_bridge_service,
-    mojo::PendingReceiver<mojom::ArcBridgeHost> pending_receiver)
-    : arc_bridge_service_(arc_bridge_service),
-      receiver_(this, std::move(pending_receiver)) {
+ArcBridgeHostImpl::ArcBridgeHostImpl(ArcBridgeService* arc_bridge_service)
+    : arc_bridge_service_(arc_bridge_service) {
   DCHECK(arc_bridge_service_);
-  receiver_.set_disconnect_handler(
-      base::BindOnce(&ArcBridgeHostImpl::OnClosed, base::Unretained(this)));
+  receivers_.set_disconnect_handler(base::BindRepeating(
+      &ArcBridgeHostImpl::OnClosed, base::Unretained(this)));
+
+  // Register ArcBridgeHost to Mojo Service Manager.
+  if (!ash::mojo_service_manager::IsServiceManagerBound()) {
+    LOG(ERROR) << "mojo service manager not bounded";
+    return;
+  }
+  ash::mojo_service_manager::GetServiceManagerProxy()->Register(
+      chromeos::mojo_services::kChromiumArcBridgeHost,
+      provider_receiver_.BindNewPipeAndPassRemote());
 }
 
 ArcBridgeHostImpl::~ArcBridgeHostImpl() {
   OnClosed();
+}
+
+void ArcBridgeHostImpl::AddReceiver(
+    mojo::PendingReceiver<mojom::ArcBridgeHost> pending_receiver) {
+  receivers_.Add(this, std::move(pending_receiver));
 }
 
 void ArcBridgeHostImpl::OnAccessibilityHelperInstanceReady(
@@ -116,6 +129,11 @@ void ArcBridgeHostImpl::OnAppPermissionsInstanceReady(
 void ArcBridgeHostImpl::OnAppfuseInstanceReady(
     mojo::PendingRemote<mojom::AppfuseInstance> appfuse_remote) {
   OnInstanceReady(arc_bridge_service_->appfuse(), std::move(appfuse_remote));
+}
+
+void ArcBridgeHostImpl::OnArcWifiInstanceReady(
+    mojo::PendingRemote<mojom::ArcWifiInstance> arc_wifi_remote) {
+  OnInstanceReady(arc_bridge_service_->arc_wifi(), std::move(arc_wifi_remote));
 }
 
 void ArcBridgeHostImpl::OnAudioInstanceReady(
@@ -184,10 +202,10 @@ void ArcBridgeHostImpl::OnDigitalGoodsInstanceReady(
                   std::move(digital_goods_remote));
 }
 
-void ArcBridgeHostImpl::OnDiskQuotaInstanceReady(
-    mojo::PendingRemote<mojom::DiskQuotaInstance> disk_quota_remote) {
-  OnInstanceReady(arc_bridge_service_->disk_quota(),
-                  std::move(disk_quota_remote));
+void ArcBridgeHostImpl::OnDiskSpaceInstanceReady(
+    mojo::PendingRemote<mojom::DiskSpaceInstance> disk_space_remote) {
+  OnInstanceReady(arc_bridge_service_->disk_space(),
+                  std::move(disk_space_remote));
 }
 
 void ArcBridgeHostImpl::OnEnterpriseReportingInstanceReady(
@@ -195,6 +213,13 @@ void ArcBridgeHostImpl::OnEnterpriseReportingInstanceReady(
         enterprise_reporting_remote) {
   OnInstanceReady(arc_bridge_service_->enterprise_reporting(),
                   std::move(enterprise_reporting_remote));
+}
+
+void ArcBridgeHostImpl::OnErrorNotificationInstanceReady(
+    mojo::PendingRemote<mojom::ErrorNotificationInstance>
+        error_notification_remote) {
+  OnInstanceReady(arc_bridge_service_->error_notification(),
+                  std::move(error_notification_remote));
 }
 
 void ArcBridgeHostImpl::OnFileSystemInstanceReady(
@@ -243,11 +268,6 @@ void ArcBridgeHostImpl::OnKeymasterInstanceReady(
 void ArcBridgeHostImpl::OnKeyMintInstanceReady(
     mojo::PendingRemote<mojom::keymint::KeyMintInstance> keymint_remote) {
   OnInstanceReady(arc_bridge_service_->keymint(), std::move(keymint_remote));
-}
-
-void ArcBridgeHostImpl::OnKioskInstanceReady(
-    mojo::PendingRemote<mojom::KioskInstance> kiosk_remote) {
-  OnInstanceReady(arc_bridge_service_->kiosk(), std::move(kiosk_remote));
 }
 
 void ArcBridgeHostImpl::OnMediaSessionInstanceReady(
@@ -432,7 +452,15 @@ void ArcBridgeHostImpl::OnWebApkInstanceReady(
 }
 
 size_t ArcBridgeHostImpl::GetNumMojoChannelsForTesting() const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return mojo_channels_.size();
+}
+
+void ArcBridgeHostImpl::Request(
+    chromeos::mojo_service_manager::mojom::ProcessIdentityPtr identity,
+    mojo::ScopedMessagePipeHandle receiver) {
+  receivers_.Add(
+      this, mojo::PendingReceiver<mojom::ArcBridgeHost>(std::move(receiver)));
 }
 
 void ArcBridgeHostImpl::OnClosed() {
@@ -443,7 +471,7 @@ void ArcBridgeHostImpl::OnClosed() {
 
   // Close all mojo channels.
   mojo_channels_.clear();
-  receiver_.reset();
+  receivers_.Clear();
 
   arc_bridge_service_->ObserveAfterArcBridgeClosed();
 }
@@ -453,7 +481,7 @@ void ArcBridgeHostImpl::OnInstanceReady(
     ConnectionHolder<InstanceType, HostType>* holder,
     mojo::PendingRemote<InstanceType> remote) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(receiver_.is_bound());
+  DCHECK(receivers_.size());
   DCHECK(remote.is_valid());
 
   // Track |channel|'s lifetime via |mojo_channels_| so that it will be

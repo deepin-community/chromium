@@ -4,6 +4,7 @@
 
 #include "chrome/browser/enterprise/browser_management/browser_management_service.h"
 
+#include "base/logging.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/enterprise/browser_management/browser_management_status_provider.h"
 #include "chrome/browser/profiles/profile.h"

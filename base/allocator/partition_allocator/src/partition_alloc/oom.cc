@@ -4,18 +4,18 @@
 
 #include "partition_alloc/oom.h"
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
 #include "partition_alloc/oom_callback.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/debug/alias.h"
 #include "partition_alloc/partition_alloc_base/immediate_crash.h"
 
-#if BUILDFLAG(IS_WIN)
+#if PA_BUILDFLAG(IS_WIN)
 #include <windows.h>
 
 #include <array>
 #include <cstdlib>
-#endif  // BUILDFLAG(IS_WIN)
+#endif  // PA_BUILDFLAG(IS_WIN)
 
 namespace partition_alloc {
 
@@ -24,11 +24,11 @@ size_t g_oom_size = 0U;
 namespace internal {
 
 // Crash server classifies base::internal::OnNoMemoryInternal as OOM.
-// TODO(crbug.com/1151236): Update to
+// TODO(crbug.com/40158212): Update to
 // partition_alloc::internal::base::internal::OnNoMemoryInternal
 PA_NOINLINE void OnNoMemoryInternal(size_t size) {
   g_oom_size = size;
-#if BUILDFLAG(IS_WIN)
+#if PA_BUILDFLAG(IS_WIN)
   // Kill the process. This is important for security since most of code
   // does not check the result of memory allocation.
   // https://msdn.microsoft.com/en-us/library/het71c37.aspx
@@ -55,7 +55,7 @@ PA_NOINLINE void OnNoMemoryInternal(size_t size) {
   // to be able to successfully unwind through libc to get to the correct
   // address, which is particularly an issue on Android.
   PA_IMMEDIATE_CRASH();
-#endif  // BUILDFLAG(IS_WIN)
+#endif  // PA_BUILDFLAG(IS_WIN)
 }
 
 }  // namespace internal

@@ -49,8 +49,6 @@
 #include "third_party/blink/renderer/core/style/basic_shapes.h"
 #include "third_party/blink/renderer/core/style/computed_style_base_constants.h"
 #include "third_party/blink/renderer/platform/geometry/layout_point.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
-#include "third_party/blink/renderer/platform/geometry/layout_size.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/geometry/length_functions.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -94,8 +92,9 @@ void LayoutReplaced::StyleDidChange(StyleDifference diff,
 
   // Replaced elements can have border-radius clips without clipping overflow;
   // the overflow clipping case is already covered in LayoutBox::StyleDidChange
-  if (old_style && !old_style->RadiiEqual(StyleRef()))
+  if (old_style && diff.BorderRadiusChanged()) {
     SetNeedsPaintPropertyUpdate();
+  }
 
   bool had_style = !!old_style;
   float old_zoom = had_style ? old_style->EffectiveZoom()
@@ -117,16 +116,6 @@ void LayoutReplaced::StyleDidChange(StyleDifference diff,
     constexpr bool kDiscardDuplicates = true;
     GetDocument().AddConsoleMessage(console_message, kDiscardDuplicates);
   }
-}
-
-void LayoutReplaced::UpdateLayout() {
-  NOT_DESTROYED();
-  DCHECK(NeedsLayout());
-
-  ClearScrollableOverflow();
-  ClearSelfNeedsScrollableOverflowRecalc();
-  ClearChildNeedsScrollableOverflowRecalc();
-  ClearNeedsLayout();
 }
 
 void LayoutReplaced::IntrinsicSizeChanged() {
@@ -185,17 +174,6 @@ void LayoutReplaced::RecalcVisualOverflow() {
   // LayoutBox::VisualOverflowRect.
   if (RespectsCSSOverflow())
     AddContentsVisualOverflow(ReplacedContentRect());
-}
-
-std::optional<gfx::SizeF>
-LayoutReplaced::ComputeObjectViewBoxSizeForIntrinsicSizing() const {
-  if (IntrinsicWidthOverride() || IntrinsicHeightOverride())
-    return std::nullopt;
-
-  if (auto view_box = ComputeObjectViewBoxRect())
-    return static_cast<gfx::SizeF>(view_box->size);
-
-  return std::nullopt;
 }
 
 std::optional<PhysicalRect> LayoutReplaced::ComputeObjectViewBoxRect(
@@ -349,7 +327,7 @@ PhysicalRect LayoutReplaced::ComputeObjectFitAndPositionRect(
     case EObjectFit::kFill:
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   LayoutUnit x_offset =
@@ -376,11 +354,6 @@ PhysicalRect LayoutReplaced::ReplacedContentRectFrom(
   return ComputeReplacedContentRect(base_content_rect);
 }
 
-PhysicalRect LayoutReplaced::PhysicalContentBoxRectFromNG() const {
-  NOT_DESTROYED();
-  return new_content_rect_ ? *new_content_rect_ : PhysicalContentBoxRect();
-}
-
 PhysicalRect LayoutReplaced::PreSnappedRectForPersistentSizing(
     const PhysicalRect& rect) {
   return PhysicalRect(rect.offset, PhysicalSize(ToRoundedSize(rect.size)));
@@ -391,8 +364,8 @@ void LayoutReplaced::ComputeIntrinsicSizingInfo(
   NOT_DESTROYED();
   DCHECK(!ShouldApplySizeContainment());
 
-  if (auto view_box_size = ComputeObjectViewBoxSizeForIntrinsicSizing()) {
-    intrinsic_sizing_info.size = *view_box_size;
+  if (auto view_box = ComputeObjectViewBoxRect()) {
+    intrinsic_sizing_info.size = gfx::SizeF(view_box->size);
   } else {
     intrinsic_sizing_info.size = gfx::SizeF(IntrinsicSize());
   }

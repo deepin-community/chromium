@@ -78,14 +78,13 @@ ViewTreeHostRootViewFrameFactory::CreateUiResource(
   gpu::SharedImageInterface* sii =
       resource->context_provider->SharedImageInterface();
 
-  uint32_t usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+  gpu::SharedImageUsageSet usage = gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
   if (is_overlay_candidate) {
     usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
   }
 
   auto client_shared_image = sii->CreateSharedImage(
-      format, size, gfx::ColorSpace(), kTopLeft_GrSurfaceOrigin,
-      kPremul_SkAlphaType, usage, "FastInkRootViewFrame",
+      {format, size, gfx::ColorSpace(), usage, "FastInkRootViewFrame"},
       gpu::kNullSurfaceHandle, gfx::BufferUsage::SCANOUT_CPU_READ_WRITE);
   if (!client_shared_image) {
     LOG(ERROR) << "Failed to create MappableSharedImage";
@@ -178,7 +177,7 @@ ViewTreeHostRootViewFrameFactory::CreateCompositorFrame(
   frame->metadata.begin_frame_ack.has_damage = true;
   frame->metadata.device_scale_factor = device_scale_factor;
 
-  // TODO(crbug.com/1131623): Should this be ceil? Why do we choose floor?
+  // TODO(crbug.com/40150287): Should this be ceil? Why do we choose floor?
   gfx::Size size_in_pixel = gfx::ToFlooredSize(
       gfx::ConvertSizeToPixels(content_rect.size(), device_scale_factor));
 

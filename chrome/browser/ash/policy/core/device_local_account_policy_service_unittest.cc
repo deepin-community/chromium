@@ -25,18 +25,21 @@
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_provider.h"
 #include "chrome/browser/ash/policy/invalidation/fake_affiliated_invalidation_service_provider.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chrome/browser/ash/settings/cros_settings_holder.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/ui/webui/certificates_handler.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/dbus/power/power_policy_controller.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_service.h"
 #include "components/policy/core/common/cloud/mock_device_management_service.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
+#include "components/policy/core/common/device_local_account_type.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_bundle.h"
@@ -133,7 +136,7 @@ class DeviceLocalAccountPolicyServiceTestBase
   void AddDeviceLocalAccountToPolicy(const std::string& account_id);
   void AddWebKioskToPolicy(const std::string& account_id);
   virtual void InstallDevicePolicy();
-  virtual DeviceLocalAccount::Type type() const;
+  virtual DeviceLocalAccountType type() const;
 
   const std::string account_1_user_id_;
   const std::string account_2_user_id_;
@@ -141,7 +144,8 @@ class DeviceLocalAccountPolicyServiceTestBase
 
   PolicyMap expected_policy_map_;
   UserPolicyBuilder device_local_account_policy_;
-  std::unique_ptr<ash::CrosSettings> cros_settings_;
+  std::unique_ptr<ash::ScopedStubInstallAttributes> install_attributes_;
+  std::unique_ptr<ash::CrosSettingsHolder> cros_settings_holder_;
   scoped_refptr<base::TestSimpleTaskRunner> extension_cache_task_runner_;
   testing::StrictMock<MockJobCreationHandler> job_creation_handler_;
   FakeDeviceManagementService fake_device_management_service_{
@@ -176,15 +180,16 @@ class DeviceLocalAccountPolicyServiceTest
 
 DeviceLocalAccountPolicyServiceTestBase::
     DeviceLocalAccountPolicyServiceTestBase()
-    : account_1_user_id_(GenerateDeviceLocalAccountUserId(
+    : DeviceSettingsTestBase(/*profile_creation_enabled=*/false),
+      account_1_user_id_(GenerateDeviceLocalAccountUserId(
           kAccount1,
-          DeviceLocalAccount::TYPE_PUBLIC_SESSION)),
+          DeviceLocalAccountType::kPublicSession)),
       account_2_user_id_(GenerateDeviceLocalAccountUserId(
           kAccount2,
-          DeviceLocalAccount::TYPE_PUBLIC_SESSION)),
+          DeviceLocalAccountType::kPublicSession)),
       account_1_web_kiosk_user_id_(GenerateDeviceLocalAccountUserId(
           kAccount1,
-          DeviceLocalAccount::TYPE_WEB_KIOSK_APP)) {}
+          DeviceLocalAccountType::kWebKioskApp)) {}
 
 DeviceLocalAccountPolicyServiceTestBase::
     ~DeviceLocalAccountPolicyServiceTestBase() = default;
@@ -192,12 +197,13 @@ DeviceLocalAccountPolicyServiceTestBase::
 void DeviceLocalAccountPolicyServiceTestBase::SetUp() {
   ash::DeviceSettingsTestBase::SetUp();
 
-  cros_settings_ = std::make_unique<ash::CrosSettings>(
+  install_attributes_ = std::make_unique<ash::ScopedStubInstallAttributes>();
+  cros_settings_holder_ = std::make_unique<ash::CrosSettingsHolder>(
       device_settings_service_.get(),
       TestingBrowserProcess::GetGlobal()->local_state());
   extension_cache_task_runner_ = new base::TestSimpleTaskRunner;
 
-  if (type() == DeviceLocalAccount::TYPE_PUBLIC_SESSION) {
+  if (type() == DeviceLocalAccountType::kPublicSession) {
     expected_policy_map_.Set(key::kSearchSuggestEnabled, POLICY_LEVEL_MANDATORY,
                              POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
                              base::Value(true), nullptr);
@@ -217,14 +223,15 @@ void DeviceLocalAccountPolicyServiceTestBase::TearDown() {
   service_->Shutdown();
   service_.reset();
   extension_cache_task_runner_->RunUntilIdle();
-  cros_settings_.reset();
+  cros_settings_holder_.reset();
+  install_attributes_.reset();
   ash::DeviceSettingsTestBase::TearDown();
 }
 
 void DeviceLocalAccountPolicyServiceTestBase::CreatePolicyService() {
   service_ = std::make_unique<DeviceLocalAccountPolicyService>(
       &session_manager_client_, device_settings_service_.get(),
-      cros_settings_.get(), &affiliated_invalidation_service_provider_,
+      ash::CrosSettings::Get(), &affiliated_invalidation_service_provider_,
       base::SingleThreadTaskRunner::GetCurrentDefault(),
       extension_cache_task_runner_,
       base::SingleThreadTaskRunner::GetCurrentDefault(),
@@ -289,8 +296,8 @@ void DeviceLocalAccountPolicyServiceTest::InstallDevicePolicy() {
   Mock::VerifyAndClearExpectations(&service_observer_);
 }
 
-DeviceLocalAccount::Type DeviceLocalAccountPolicyServiceTestBase::type() const {
-  return DeviceLocalAccount::TYPE_PUBLIC_SESSION;
+DeviceLocalAccountType DeviceLocalAccountPolicyServiceTestBase::type() const {
+  return DeviceLocalAccountType::kPublicSession;
 }
 
 TEST_F(DeviceLocalAccountPolicyServiceTest, NoAccounts) {
@@ -708,9 +715,10 @@ TEST_F(DeviceLocalAccountPolicyExtensionCacheTest, OnStoreLoaded) {
       service_->GetBrokerForUser(account_1_user_id_);
   ASSERT_TRUE(broker);
 
+  TestingProfile profile;
   MockExternalPolicyProviderVisitor visitor;
   auto external_provider = std::make_unique<extensions::ExternalProviderImpl>(
-      &visitor, broker->extension_loader(), profile_.get(),
+      &visitor, broker->extension_loader(), &profile,
       ManifestLocation::kExternalPolicy,
       ManifestLocation::kExternalPolicyDownload,
       extensions::Extension::InitFromValueFlags::NO_FLAGS);
@@ -722,7 +730,7 @@ TEST_F(DeviceLocalAccountPolicyExtensionCacheTest, OnStoreLoaded) {
   loop.Run();
 
   base::Value::Dict extension_dict =
-      broker->GetCachedExtensions().FindDict(kExtensionID)->Clone();
+      broker->GetCachedExtensionsForTesting().FindDict(kExtensionID)->Clone();
   EXPECT_EQ(*extension_dict.FindString(
                 extensions::ExternalProviderImpl::kExternalCrx),
             full_crx_path.value());
@@ -923,7 +931,6 @@ class DeviceLocalAccountPolicyProviderTest
   SchemaRegistry schema_registry_;
   std::unique_ptr<DeviceLocalAccountPolicyProvider> provider_;
   MockConfigurationPolicyObserver provider_observer_;
-  std::unique_ptr<ash::ScopedCrosSettingsTestHelper> cros_settings_helper_;
 };
 
 DeviceLocalAccountPolicyProviderTest::DeviceLocalAccountPolicyProviderTest()
@@ -937,12 +944,9 @@ void DeviceLocalAccountPolicyProviderTest::SetUp() {
       false /*force_immediate_load*/);
   provider_->Init(&schema_registry_);
   provider_->AddObserver(&provider_observer_);
-  cros_settings_helper_ = std::make_unique<ash::ScopedCrosSettingsTestHelper>(
-      false /*create_service*/);
-  cros_settings_helper_->ReplaceDeviceSettingsProviderWithStub();
 
   // Values implicitly enforced for public accounts.
-  if (type() == DeviceLocalAccount::TYPE_PUBLIC_SESSION) {
+  if (type() == DeviceLocalAccountType::kPublicSession) {
     expected_policy_map_.Set(key::kShelfAutoHideBehavior,
                              POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
                              POLICY_SOURCE_ENTERPRISE_DEFAULT,
@@ -961,15 +965,14 @@ void DeviceLocalAccountPolicyProviderTest::TearDown() {
   provider_->RemoveObserver(&provider_observer_);
   provider_->Shutdown();
   provider_.reset();
-  cros_settings_helper_.reset();
   DeviceLocalAccountPolicyServiceTestBase::TearDown();
 }
 
 class DeviceLocalAccountPolicyProviderKioskTest
     : public DeviceLocalAccountPolicyProviderTest {
  protected:
-  DeviceLocalAccount::Type type() const override {
-    return DeviceLocalAccount::TYPE_WEB_KIOSK_APP;
+  DeviceLocalAccountType type() const override {
+    return DeviceLocalAccountType::kWebKioskApp;
   }
 };
 
@@ -1225,7 +1228,7 @@ TEST_F(DeviceLocalAccountPolicyProviderLoadImmediateTest, Initialization) {
 
   provider_ = DeviceLocalAccountPolicyProvider::Create(
       GenerateDeviceLocalAccountUserId(kAccount1,
-                                       DeviceLocalAccount::TYPE_PUBLIC_SESSION),
+                                       DeviceLocalAccountType::kPublicSession),
       service_.get(), true /*force_immediate_load*/);
 
   EXPECT_TRUE(provider_->IsInitializationComplete(POLICY_DOMAIN_CHROME));

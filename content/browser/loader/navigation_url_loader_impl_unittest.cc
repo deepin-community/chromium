@@ -3,8 +3,6 @@
 // found in the LICENSE file.
 
 #include "content/browser/loader/navigation_url_loader_impl.h"
-#include "base/memory/raw_ptr.h"
-#include "build/build_config.h"
 
 #include <memory>
 #include <string>
@@ -12,10 +10,12 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/unguessable_token.h"
+#include "build/build_config.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/browser/loader/navigation_loader_interceptor.h"
 #include "content/browser/loader/navigation_url_loader.h"
@@ -39,6 +39,7 @@
 #include "net/base/load_flags.h"
 #include "net/base/mock_network_change_notifier.h"
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
+#include "net/storage_access_api/status.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request_context.h"
@@ -122,6 +123,7 @@ class TestNavigationLoaderInterceptor : public NavigationLoaderInterceptor {
         /*keepalive_request_size=*/0,
         /*keepalive_statistics_recorder=*/nullptr,
         /*trust_token_helper=*/nullptr,
+        /*shared_dictionary_manager=*/nullptr,
         /*shared_dictionary_checker=*/nullptr,
         /*cookie_observer=*/mojo::NullRemote(),
         /*trust_token_observer=*/mojo::NullRemote(),
@@ -192,7 +194,7 @@ class NavigationURLLoaderImplTest : public testing::Test {
 
   void SetUp() override {
     scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kClientHintsFormFactor);
+        blink::features::kClientHintsFormFactors);
     // Do not create TestNavigationURLLoaderFactory as this tests creates
     // NavigationURLLoaders explicitly and TestNavigationURLLoaderFactory
     // interferes with that.
@@ -244,8 +246,7 @@ class NavigationURLLoaderImplTest : public testing::Test {
             blink::mojom::NavigationInitiatorActivationAndAdStatus::
                 kDidNotStartWithTransientActivation,
             false /* is_container_initiated */,
-            false /* is_fullscreen_requested */,
-            false /* has_storage_access */);
+            net::StorageAccessApiStatus::kNone, false /* has_rel_opener */);
 
     auto common_params = blink::CreateCommonNavigationParams();
     common_params->url = url;
@@ -286,7 +287,8 @@ class NavigationURLLoaderImplTest : public testing::Test {
             nullptr /* serving_page_metrics_container */,
             false /* allow_cookies_from_browser */, 0 /* navigation_id */,
             false /* shared_storage_writable */,
-            is_ad_tagged /* is_ad_tagged */));
+            is_ad_tagged /* is_ad_tagged */,
+            false /* force_no_https_upgrade */));
     std::vector<std::unique_ptr<NavigationLoaderInterceptor>> interceptors;
     most_recent_resource_request_ = std::nullopt;
     interceptors.push_back(std::make_unique<TestNavigationLoaderInterceptor>(
@@ -594,7 +596,7 @@ TEST_F(NavigationURLLoaderImplTest, NavigationTimeoutTest) {
 
 // Like NavigationTimeoutTest but the navigation initially results in a redirect
 // before hanging, to test a slightly more complicated navigation.
-// TODO(crbug.com/1271228): Flaky on Linux.
+// TODO(crbug.com/40805451): Flaky on Linux.
 #if BUILDFLAG(IS_LINUX)
 #define MAYBE_NavigationTimeoutRedirectTest \
   DISABLED_NavigationTimeoutRedirectTest

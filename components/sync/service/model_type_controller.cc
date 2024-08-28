@@ -36,20 +36,43 @@ SyncStopMetadataFate TakeStrictestMetadataFate(SyncStopMetadataFate fate1,
     case KEEP_METADATA:
       return fate2;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return KEEP_METADATA;
 }
 
 }  // namespace
 
-ModelTypeController::ModelTypeController(ModelType type)
-    : DataTypeController(type) {}
+// static
+std::string ModelTypeController::StateToString(State state) {
+  switch (state) {
+    case NOT_RUNNING:
+      return "Not Running";
+    case MODEL_STARTING:
+      return "Model Starting";
+    case MODEL_LOADED:
+      return "Model Loaded";
+    case RUNNING:
+      return "Running";
+    case STOPPING:
+      return "Stopping";
+    case FAILED:
+      return "Failed";
+  }
+  NOTREACHED_IN_MIGRATION();
+  return "Invalid";
+}
+
+ModelTypeController::ModelTypeController(
+    ModelType type,
+    std::unique_ptr<ModelTypeLocalDataBatchUploader> batch_uploader)
+    : type_(type), batch_uploader_(std::move(batch_uploader)) {}
 
 ModelTypeController::ModelTypeController(
     ModelType type,
     std::unique_ptr<ModelTypeControllerDelegate> delegate_for_full_sync_mode,
-    std::unique_ptr<ModelTypeControllerDelegate> delegate_for_transport_mode)
-    : ModelTypeController(type) {
+    std::unique_ptr<ModelTypeControllerDelegate> delegate_for_transport_mode,
+    std::unique_ptr<ModelTypeLocalDataBatchUploader> batch_uploader)
+    : ModelTypeController(type, std::move(batch_uploader)) {
   InitModelTypeController(std::move(delegate_for_full_sync_mode),
                           std::move(delegate_for_transport_mode));
 }
@@ -84,34 +107,29 @@ void ModelTypeController::InitModelTypeController(
     //   delegate, see SyncEngineBackend::LoadAndConnectNigoriController().
     // * BOOKMARKS and READING_LIST: Support is WIP.
     // * PASSWORDS: Already supported on desktop; mobile is WIP.
-    // * INCOMING_PASSWORD_SHARING_INVITATION: Depends on PASSWORDS support.
     // * PREFERENCES in all variants: Support is WIP.
     // * History-related types (HISTORY, HISTORY_DELETE_DIRECTIVES, SESSIONS)
     //   are okay to *not* support transport mode.
     // * APPS/APP_SETTINGS: Deprecated and will eventually be removed.
     // * AUTOFILL/AUTOFILL_PROFILE: Semi-deprecated; will eventually be removed
     //   or replaced by CONTACT_INFO.
-    // * AUTOFILL_WALLET_DATA: Can be removed from here once the corresponding
-    //   feature flag has been cleaned up (crbug.com/1413724).
     //
     // Note on ChromeOS-Ash: On this platform, the sync machinery always runs in
     // full-sync mode, never transport-mode. So for data types that only exist
     // on this platform, it doesn't matter if they support transport mode or not
     // (this includes PRINTERS, WIFI_CONFIGURATIONS, OS_PREFERENCES,
-    // OS_PRIORITY_PREFERENCES, WORKSPACE_DESK, PRINTERS_AUTHORIZATION_SERVERS).
+    // OS_PRIORITY_PREFERENCES, WORKSPACE_DESK, PRINTERS_AUTHORIZATION_SERVERS,
+    // COOKIES).
     //
     // All other data types listed here will likely have to be migrated.
     static constexpr ModelTypeSet kLegacyTypes = {
         BOOKMARKS,
         PREFERENCES,
         PASSWORDS,
-        INCOMING_PASSWORD_SHARING_INVITATION,
         AUTOFILL_PROFILE,
         AUTOFILL,
-        AUTOFILL_WALLET_DATA,
         AUTOFILL_WALLET_METADATA,
         AUTOFILL_WALLET_OFFER,
-        AUTOFILL_WALLET_USAGE,
         THEMES,
         EXTENSIONS,
         SEARCH_ENGINES,
@@ -132,9 +150,9 @@ void ModelTypeController::InitModelTypeController(
         WORKSPACE_DESK,
         HISTORY,
         PRINTERS_AUTHORIZATION_SERVERS,
-        SAVED_TAB_GROUP,
         POWER_BOOKMARK,
-        NIGORI};
+        NIGORI,
+        COOKIES};
     CHECK(kLegacyTypes.Has(type()))
         << ModelTypeToDebugString(type())
         << " must support running in transport mode!";
@@ -161,7 +179,8 @@ void ModelTypeController::LoadModels(
   request.error_handler = base::BindRepeating(
       &ReportErrorOnModelThread, base::SequencedTaskRunner::GetCurrentDefault(),
       base::BindRepeating(&ModelTypeController::ReportModelError,
-                          base::AsWeakPtr(this), SyncError::DATATYPE_ERROR));
+                          weak_ptr_factory_.GetWeakPtr(),
+                          SyncError::DATATYPE_ERROR));
   request.authenticated_account_id = configure_context.authenticated_account_id;
   request.cache_guid = configure_context.cache_guid;
   request.sync_mode = configure_context.sync_mode;
@@ -173,7 +192,7 @@ void ModelTypeController::LoadModels(
   // Ask the delegate to actually start the datatype.
   delegate_->OnSyncStarting(
       request, base::BindOnce(&ModelTypeController::OnDelegateStarted,
-                              base::AsWeakPtr(this)));
+                              weak_ptr_factory_.GetWeakPtr()));
 
   // Ensure that the metadata for any *other* delegate is cleared. Note that
   // this is a no-op for the delegate that was just started. Note^2 that that
@@ -246,8 +265,13 @@ void ModelTypeController::Stop(SyncStopMetadataFate fate,
   }
 }
 
-DataTypeController::State ModelTypeController::state() const {
+ModelTypeController::State ModelTypeController::state() const {
   return state_;
+}
+
+ModelTypeController::PreconditionState
+ModelTypeController::GetPreconditionState() const {
+  return PreconditionState::kPreconditionsMet;
 }
 
 bool ModelTypeController::ShouldRunInTransportOnlyMode() const {
@@ -256,6 +280,15 @@ bool ModelTypeController::ShouldRunInTransportOnlyMode() const {
   // supports it in principle. Subclass can still override this with more
   // specific logic.
   return delegate_map_.count(SyncMode::kTransportOnly) != 0;
+}
+
+void ModelTypeController::HasUnsyncedData(
+    base::OnceCallback<void(bool)> callback) {
+  if (!delegate_) {
+    std::move(callback).Run(false);
+    return;
+  }
+  delegate_->HasUnsyncedData(std::move(callback));
 }
 
 void ModelTypeController::GetAllNodes(AllNodesCallback callback) {
@@ -277,6 +310,11 @@ void ModelTypeController::RecordMemoryUsageAndCountsHistograms() {
   if (delegate_) {
     delegate_->RecordMemoryUsageAndCountsHistograms();
   }
+}
+
+ModelTypeLocalDataBatchUploader*
+ModelTypeController::GetModelTypeLocalDataBatchUploader() {
+  return batch_uploader_.get();
 }
 
 void ModelTypeController::ReportBridgeErrorForTest() {
@@ -330,6 +368,10 @@ void ModelTypeController::ReportModelError(SyncError::ErrorType error_type,
       SyncError(error.location(), error_type, error.message(), type()));
 }
 
+bool ModelTypeController::CalledOnValidThread() const {
+  return sequence_checker_.CalledOnValidSequence();
+}
+
 void ModelTypeController::RecordStartFailure() const {
   DCHECK(CalledOnValidThread());
   UMA_HISTOGRAM_ENUMERATION("Sync.DataTypeStartFailures2",
@@ -369,8 +411,8 @@ void ModelTypeController::OnDelegateStarted(
     case MODEL_LOADED:
     case RUNNING:
     case NOT_RUNNING:
-      NOTREACHED() << " type " << ModelTypeToDebugString(type()) << " state "
-                   << StateToString(state_);
+      NOTREACHED_IN_MIGRATION() << " type " << ModelTypeToDebugString(type())
+                                << " state " << StateToString(state_);
   }
 
   TriggerCompletionCallbacks(SyncError());
@@ -404,7 +446,7 @@ void ModelTypeController::TriggerCompletionCallbacks(const SyncError& error) {
 void ModelTypeController::ClearMetadataIfStopped() {
   for (auto& [sync_mode, delegate] : delegate_map_) {
     // `delegate` can be null during testing.
-    // TODO(crbug.com/1418351): Remove test-only code-path.
+    // TODO(crbug.com/40894683): Remove test-only code-path.
     if (delegate) {
       delegate->ClearMetadataIfStopped();
     }

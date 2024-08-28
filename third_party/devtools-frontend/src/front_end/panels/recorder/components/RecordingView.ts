@@ -12,7 +12,6 @@ import type * as PuppeteerReplay from '../../../third_party/puppeteer-replay/pup
 import * as Buttons from '../../../ui/components/buttons/buttons.js';
 import * as CodeHighlighter from '../../../ui/components/code_highlighter/code_highlighter.js';
 import * as Dialogs from '../../../ui/components/dialogs/dialogs.js';
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
 import * as IconButton from '../../../ui/components/icon_button/icon_button.js';
 import * as Input from '../../../ui/components/input/input.js';
 import * as Menus from '../../../ui/components/menus/menus.js';
@@ -29,10 +28,10 @@ import * as Actions from '../recorder-actions/recorder-actions.js';
 import {ExtensionView} from './ExtensionView.js';
 import recordingViewStyles from './recordingView.css.js';
 import {
-  ReplayButton,
-  type ReplayButtonData,
+  ReplaySection,
+  type ReplaySectionData,
   type StartReplayEvent,
-} from './ReplayButton.js';
+} from './ReplaySection.js';
 import {
   type CopyStepEvent,
   State,
@@ -270,7 +269,8 @@ const networkConditionPresets = [
   SDK.NetworkManager.NoThrottlingConditions,
   SDK.NetworkManager.OfflineConditions,
   SDK.NetworkManager.Slow3GConditions,
-  SDK.NetworkManager.Fast3GConditions,
+  SDK.NetworkManager.Slow4GConditions,
+  SDK.NetworkManager.Fast4GConditions,
 ];
 
 function converterIdToFlowMetric(
@@ -781,7 +781,7 @@ export class RecordingView extends HTMLElement {
             value=${
               this.#settings.timeout || Models.RecordingPlayer.defaultTimeout
             }
-            jslog=${VisualLogging.textField('timeout').track({keydown: true})}
+            jslog=${VisualLogging.textField('timeout').track({change: true})}
             class="devtools-text-input"
             type="number">
         </label>
@@ -872,7 +872,7 @@ export class RecordingView extends HTMLElement {
           <div slot="main">
             ${this.#renderSections()}
           </div>
-          <div slot="sidebar" jslog=${VisualLogging.pane('source-code')}>
+          <div slot="sidebar" jslog=${VisualLogging.pane('source-code').track({resize: true})}>
             <div class="section-toolbar" jslog=${VisualLogging.toolbar()}>
               <${Menus.SelectMenu.SelectMenu.litTagName}
                 @selectmenuselected=${this.#onCodeFormatChange}
@@ -898,7 +898,7 @@ export class RecordingView extends HTMLElement {
                   return LitHtml.html`<${Menus.Menu.MenuItem.litTagName}
                     .value=${converter.getId()}
                     .selected=${this.#converterId === converter.getId()}
-                    jslog=${VisualLogging.action().track({click: true}).context(`converter-${Platform.StringUtilities.toKebabCase(converter.getId())}`)}
+                    jslog=${VisualLogging.action().track({click: true}).context('converter-extension')}
                   >
                     ${converter.getFormatName()}
                   </${Menus.Menu.MenuItem.litTagName}>`;
@@ -911,7 +911,7 @@ export class RecordingView extends HTMLElement {
                 )}
                 .data=${
                   {
-                    variant: Buttons.Button.Variant.ROUND,
+                    variant: Buttons.Button.Variant.ICON,
                     size: Buttons.Button.Size.SMALL,
                     iconName: 'cross',
                   } as Buttons.Button.ButtonData
@@ -920,7 +920,7 @@ export class RecordingView extends HTMLElement {
                 jslog=${VisualLogging.close().track({click: true})}
               ></${Buttons.Button.Button.litTagName}>
             </div>
-            <div class="text-editor" jslog=${VisualLogging.textField().track({keydown: true})}>
+            <div class="text-editor" jslog=${VisualLogging.textField().track({change: true})}>
               <${TextEditor.TextEditor.TextEditor.litTagName} .state=${
           this.#editorState
         }></${TextEditor.TextEditor.TextEditor.litTagName}>
@@ -951,23 +951,23 @@ export class RecordingView extends HTMLElement {
     if (this.#replayState.isPlaying) {
       return LitHtml.html`
         <${Buttons.Button.Button.litTagName} .jslogContext=${'abort-replay'} @click=${
-          this.#handleAbortReplay} .iconName=${'pause'} .variant=${Buttons.Button.Variant.SECONDARY}>
+          this.#handleAbortReplay} .iconName=${'pause'} .variant=${Buttons.Button.Variant.OUTLINED}>
           ${i18nString(UIStrings.cancelReplay)}
         </${Buttons.Button.Button.litTagName}>`;
     }
 
     // clang-format off
-    return LitHtml.html`<${ReplayButton.litTagName}
+    return LitHtml.html`<${ReplaySection.litTagName}
         .data=${
           {
             settings: this.#recorderSettings,
             replayExtensions: this.#replayExtensions,
-          } as ReplayButtonData
+          } as ReplaySectionData
         }
         .disabled=${this.#replayState.isPlaying}
         @startreplay=${this.#handleTogglePlaying}
         >
-      </${ReplayButton.litTagName}>`;
+      </${ReplaySection.litTagName}>`;
     // clang-format on
   }
 
@@ -1085,7 +1085,7 @@ export class RecordingView extends HTMLElement {
           class="show-code"
           .data=${
             {
-              variant: Buttons.Button.Variant.SECONDARY,
+              variant: Buttons.Button.Variant.OUTLINED,
               title: Models.Tooltip.getTooltipForActions(
                 i18nString(UIStrings.showCode),
                 Actions.RecorderActions.ToggleCodeView,
@@ -1146,7 +1146,7 @@ export class RecordingView extends HTMLElement {
                     class="step add-assertion-button"
                     .data=${
                       {
-                        variant: Buttons.Button.Variant.SECONDARY,
+                        variant: Buttons.Button.Variant.OUTLINED,
                         title: i18nString(UIStrings.addAssertion),
                         jslogContext: 'add-assertion',
                       } as Buttons.Button.ButtonData
@@ -1224,7 +1224,7 @@ export class RecordingView extends HTMLElement {
                   .data=${
                     {
                       disabled: this.#replayState.isPlaying,
-                      variant: Buttons.Button.Variant.SECONDARY,
+                      variant: Buttons.Button.Variant.OUTLINED,
                       iconName: 'performance',
                       title: i18nString(UIStrings.performancePanel),
                       jslogContext: 'measure-performance',
@@ -1233,6 +1233,7 @@ export class RecordingView extends HTMLElement {
                 >
                   ${i18nString(UIStrings.performancePanel)}
                 </${Buttons.Button.Button.litTagName}>
+                <div class="separator"></div>
                 ${this.#renderReplayOrAbortButton()}
               </div>`
             : ''
@@ -1310,7 +1311,7 @@ export class RecordingView extends HTMLElement {
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent(
+customElements.define(
     'devtools-recording-view',
     RecordingView,
 );

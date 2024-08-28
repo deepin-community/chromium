@@ -20,6 +20,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
@@ -73,8 +74,8 @@
 namespace extensions {
 namespace {
 
-// TODO(crbug.com/1213400): Consider removing traces when the cause of the issue
-// is identified.
+// TODO(crbug.com/40768738): Consider removing traces when the cause of the
+// issue is identified.
 constexpr char kWebRequestProxyingURLLoaderFactoryScope[] =
     "WebRequestProxyingURLLoaderFactory";
 
@@ -891,7 +892,7 @@ void WebRequestProxyingURLLoaderFactory::InProgressRequest::
         pending_follow_redirect_params_->modified_headers.SetHeader(
             set_header, header_value);
       } else {
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
       }
     }
 
@@ -1014,7 +1015,7 @@ void WebRequestProxyingURLLoaderFactory::InProgressRequest::
       state_ = State::kRejectedByOnAuthRequired;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
   }
 
@@ -1126,7 +1127,7 @@ void WebRequestProxyingURLLoaderFactory::InProgressRequest::
   // 'extraHeaders' option. We need to repopulate the ParsedHeader to reflect
   // the modified headers.
   //
-  // TODO(https://crbug.com/1208142): Once problems with 'extraHeaders' are
+  // TODO(crbug.com/40765899): Once problems with 'extraHeaders' are
   // sorted out, migrate these headers over to requiring 'extraHeaders' and
   // remove this code.
   //
@@ -1285,12 +1286,13 @@ void WebRequestProxyingURLLoaderFactory::InProgressRequest::
   if (request_.url.SchemeIsHTTPOrHTTPS() ||
       request_.url.SchemeIs(url::kUuidInPackageScheme)) {
     DCHECK(info_.has_value());
-    int result =
-        WebRequestEventRouter::Get(factory_->browser_context_)
-            ->OnHeadersReceived(factory_->browser_context_, &info_.value(),
-                                std::move(callback_pair.first),
-                                current_response_->headers.get(),
-                                &override_headers_, &redirect_url_);
+    bool should_collapse_initiator = false;
+    int result = WebRequestEventRouter::Get(factory_->browser_context_)
+                     ->OnHeadersReceived(
+                         factory_->browser_context_, &info_.value(),
+                         std::move(callback_pair.first),
+                         current_response_->headers.get(), &override_headers_,
+                         &redirect_url_, &should_collapse_initiator);
     if (result == net::ERR_BLOCKED_BY_CLIENT) {
       const int status_code = current_response_->headers
                                   ? current_response_->headers->response_code()
@@ -1304,7 +1306,9 @@ void WebRequestProxyingURLLoaderFactory::InProgressRequest::
       } else {
         state = State::kRejectedByOnHeadersReceivedForFinalResponse;
       }
-      OnRequestError(CreateURLLoaderCompletionStatus(result), state);
+      OnRequestError(
+          CreateURLLoaderCompletionStatus(result, should_collapse_initiator),
+          state);
       return;
     }
 
@@ -1404,21 +1408,24 @@ void WebRequestProxyingURLLoaderFactory::InProgressRequest::
 
 // Determines whether it is safe to redirect from |from_url| to |to_url|.
 bool WebRequestProxyingURLLoaderFactory::InProgressRequest::IsRedirectSafe(
-    const GURL& from_url,
-    const GURL& to_url,
+    const GURL& upstream_url,
+    const GURL& target_url,
     bool is_navigation_request) {
   // For navigations, non-web accessible resources will be blocked by
   // ExtensionNavigationThrottle.
-  if (!is_navigation_request && to_url.SchemeIs(extensions::kExtensionScheme)) {
+  if (!is_navigation_request &&
+      target_url.SchemeIs(extensions::kExtensionScheme)) {
     const Extension* extension =
         ExtensionRegistry::Get(factory_->browser_context_)
             ->enabled_extensions()
-            .GetByID(to_url.host());
-    return extension && WebAccessibleResourcesInfo::IsResourceWebAccessible(
-                            extension, to_url.path(),
-                            base::OptionalToPtr(original_initiator_));
+            .GetByID(target_url.host());
+    if (!extension) {
+      return false;
+    }
+    return WebAccessibleResourcesInfo::IsResourceWebAccessibleRedirect(
+        extension, target_url, original_initiator_, upstream_url);
   }
-  return content::IsSafeRedirectTarget(from_url, to_url);
+  return content::IsSafeRedirectTarget(upstream_url, target_url);
 }
 
 network::URLLoaderCompletionStatus WebRequestProxyingURLLoaderFactory::
@@ -1582,7 +1589,7 @@ void WebRequestProxyingURLLoaderFactory::OnLoaderCreated(
     return;
 
   auto request_it = requests_.find(it->second);
-  DCHECK(request_it != requests_.end());
+  CHECK(request_it != requests_.end(), base::NotFatalUntil::M130);
   request_it->second->OnLoaderCreated(std::move(receiver));
 }
 
@@ -1622,7 +1629,7 @@ void WebRequestProxyingURLLoaderFactory::HandleAuthRequest(
   }
 
   auto request_it = requests_.find(it->second);
-  DCHECK(request_it != requests_.end());
+  CHECK(request_it != requests_.end(), base::NotFatalUntil::M130);
   request_it->second->HandleAuthRequest(auth_info, std::move(response_headers),
                                         std::move(callback));
 }

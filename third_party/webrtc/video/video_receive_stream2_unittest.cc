@@ -15,7 +15,6 @@
 #include <deque>
 #include <limits>
 #include <memory>
-#include <ostream>
 #include <queue>
 #include <tuple>
 #include <utility>
@@ -55,25 +54,6 @@
 #include "test/time_controller/simulated_time_controller.h"
 #include "test/video_decoder_proxy_factory.h"
 #include "video/call_stats2.h"
-
-namespace webrtc {
-
-// Printing SdpVideoFormat for gmock argument matchers.
-void PrintTo(const SdpVideoFormat& value, std::ostream* os) {
-  *os << value.ToString();
-}
-
-void PrintTo(const RecordableEncodedFrame::EncodedResolution& value,
-             std::ostream* os) {
-  *os << value.width << "x" << value.height;
-}
-
-void PrintTo(const RecordableEncodedFrame& value, std::ostream* os) {
-  *os << "RecordableEncodedFrame(render_time=" << value.render_time()
-      << " resolution=" << ::testing::PrintToString(value.resolution()) << ")";
-}
-
-}  // namespace webrtc
 
 namespace webrtc {
 
@@ -126,10 +106,10 @@ class FakeVideoRenderer : public rtc::VideoSinkInterface<VideoFrame> {
 
   void OnFrame(const VideoFrame& frame) override {
     RTC_LOG(LS_VERBOSE) << "Received frame with timestamp="
-                        << frame.timestamp();
+                        << frame.rtp_timestamp();
     if (!last_frame_.empty()) {
       RTC_LOG(LS_INFO) << "Already had frame queue with timestamp="
-                       << last_frame_.back().timestamp();
+                       << last_frame_.back().rtp_timestamp();
     }
     last_frame_.push_back(frame);
   }
@@ -164,9 +144,9 @@ MATCHER_P2(MatchResolution, w, h, "") {
 }
 
 MATCHER_P(RtpTimestamp, timestamp, "") {
-  if (arg.timestamp() != timestamp) {
+  if (arg.rtp_timestamp() != timestamp) {
     *result_listener->stream()
-        << "rtp timestamp was " << arg.timestamp() << " != " << timestamp;
+        << "rtp timestamp was " << arg.rtp_timestamp() << " != " << timestamp;
     return false;
   }
   return true;
@@ -199,6 +179,7 @@ class VideoReceiveStream2Test : public ::testing::TestWithParam<bool> {
         config_(&mock_transport_, &mock_h264_decoder_factory_),
         call_stats_(&env_.clock(), time_controller_.GetMainThread()),
         fake_renderer_(&time_controller_),
+        fake_call_(env_),
         fake_metronome_(TimeDelta::Millis(16)),
         decode_sync_(&env_.clock(),
                      &fake_metronome_,
@@ -238,7 +219,7 @@ class VideoReceiveStream2Test : public ::testing::TestWithParam<bool> {
     config_.renderer = &fake_renderer_;
     VideoReceiveStreamInterface::Decoder h264_decoder;
     h264_decoder.payload_type = 99;
-    h264_decoder.video_format = SdpVideoFormat("H264");
+    h264_decoder.video_format = SdpVideoFormat::H264();
     h264_decoder.video_format.parameters.insert(
         {"sprop-parameter-sets", "Z0IACpZTBYmI,aMljiA=="});
     VideoReceiveStreamInterface::Decoder h265_decoder;
@@ -1020,7 +1001,8 @@ TEST_P(VideoReceiveStream2Test, RtpTimestampWrapAround) {
           .Build());
   EXPECT_CALL(mock_decoder_, Decode(test::RtpTimestamp(kWrapAroundRtp), _))
       .Times(1);
-  EXPECT_THAT(fake_renderer_.WaitForFrame(TimeDelta::Zero()), RenderedFrame());
+  EXPECT_THAT(fake_renderer_.WaitForFrame(TimeDelta::Seconds(1)),
+              RenderedFrame());
 
   video_receive_stream_->Stop();
 }

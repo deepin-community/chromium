@@ -7,10 +7,8 @@
 #include <memory>
 
 #include "base/feature_list.h"
-#include "base/memory/ptr_util.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
-#include "cc/raster/categorized_worker_pool.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "third_party/blink/public/mojom/dom_storage/session_storage_namespace.mojom-blink.h"
 #include "third_party/blink/public/mojom/filesystem/file_system.mojom-blink.h"
@@ -38,6 +36,7 @@
 #include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/scheduler/task_attribution_tracker_impl.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.h"
 #include "third_party/blink/renderer/modules/accessibility/inspector_accessibility_agent.h"
 #include "third_party/blink/renderer/modules/app_banner/app_banner_controller.h"
@@ -62,6 +61,7 @@
 #include "third_party/blink/renderer/modules/event_modules_factory.h"
 #include "third_party/blink/renderer/modules/event_target_modules_names.h"
 #include "third_party/blink/renderer/modules/exported/web_embedded_worker_impl.h"
+#include "third_party/blink/renderer/modules/file_system_access/bucket_file_system_agent.h"
 #include "third_party/blink/renderer/modules/filesystem/dragged_isolated_file_system_impl.h"
 #include "third_party/blink/renderer/modules/filesystem/file_system_dispatcher.h"
 #include "third_party/blink/renderer/modules/gamepad/navigator_gamepad.h"
@@ -80,7 +80,6 @@
 #include "third_party/blink/renderer/modules/push_messaging/push_messaging_client.h"
 #include "third_party/blink/renderer/modules/remoteplayback/html_media_element_remote_playback.h"
 #include "third_party/blink/renderer/modules/remoteplayback/remote_playback.h"
-#include "third_party/blink/renderer/modules/scheduler/task_attribution_tracker_impl.h"
 #include "third_party/blink/renderer/modules/screen_details/screen_details.h"
 #include "third_party/blink/renderer/modules/screen_details/window_screen_details.h"
 #include "third_party/blink/renderer/modules/screen_orientation/screen_orientation_controller.h"
@@ -93,7 +92,6 @@
 #include "third_party/blink/renderer/modules/webaudio/audio_graph_tracer.h"
 #include "third_party/blink/renderer/modules/webaudio/inspector_web_audio_agent.h"
 #include "third_party/blink/renderer/modules/webdatabase/database_client.h"
-#include "third_party/blink/renderer/modules/webdatabase/database_manager.h"
 #include "third_party/blink/renderer/modules/webdatabase/inspector_database_agent.h"
 #include "third_party/blink/renderer/modules/webdatabase/web_database_host.h"
 #include "third_party/blink/renderer/modules/webdatabase/web_database_impl.h"
@@ -110,6 +108,7 @@
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/webrtc_overrides/init_webrtc.h"
 #include "ui/accessibility/accessibility_features.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -122,12 +121,6 @@
 
 namespace blink {
 namespace {
-
-// Controls whether media players use base::ThreadPool or (legacy) the
-// CategorizedWorkerPool, which predates the base thread pool.
-BASE_FEATURE(kBlinkMediaPlayerUsesBaseThreadPool,
-             "BlinkMediaPlayerUsesThreadPool",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Serves as a kill switch.
 BASE_FEATURE(kBlinkEnableInnerTextAgent,
@@ -236,8 +229,10 @@ void ModulesInitializer::Initialize() {
   OffscreenCanvas::RegisterRenderingContextFactory(
       std::make_unique<GPUCanvasContext::Factory>());
 
-  ThreadScheduler::Current()->InitializeTaskAttributionTracker(
-      std::make_unique<scheduler::TaskAttributionTrackerImpl>());
+  V8PerIsolateData::SetTaskAttributionTrackerFactory(
+      &scheduler::TaskAttributionTrackerImpl::Create);
+
+  ::InitializeWebRtcModule();
 }
 
 void ModulesInitializer::InitLocalFrame(LocalFrame& frame) const {
@@ -309,6 +304,7 @@ void ModulesInitializer::InitInspectorAgentSession(
                                                         dom_agent);
   session->CreateAndAppend<InspectorWebAudioAgent>(page);
   session->CreateAndAppend<InspectorCacheStorageAgent>(inspected_frames);
+  session->CreateAndAppend<BucketFileSystemAgent>(inspected_frames);
   if (allow_view_agents) {
     session->CreateAndAppend<InspectorDatabaseAgent>(page);
   }
@@ -359,14 +355,11 @@ std::unique_ptr<WebMediaPlayer> ModulesInitializer::CreateWebMediaPlayer(
       *To<LocalDOMWindow>(html_media_element.GetExecutionContext()));
   FrameWidget* frame_widget =
       html_media_element.GetDocument().GetFrame()->GetWidgetForLocalRoot();
-  return base::WrapUnique(web_frame_client->CreateMediaPlayer(
+  return web_frame_client->CreateMediaPlayer(
       source, media_player_client, context_impl, &encrypted_media,
       encrypted_media.ContentDecryptionModule(), sink_id,
       frame_widget->GetLayerTreeSettings(),
-      base::FeatureList::IsEnabled(kBlinkMediaPlayerUsesBaseThreadPool)
-          ? base::ThreadPool::CreateTaskRunner(base::TaskTraits{})
-          : cc::CategorizedWorkerPool::GetOrCreate(
-                &BlinkCategorizedWorkerPoolDelegate::Get())));
+      base::ThreadPool::CreateTaskRunner(base::TaskTraits{}));
 }
 
 WebRemotePlaybackClient* ModulesInitializer::CreateWebRemotePlaybackClient(

@@ -43,9 +43,6 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
   void set_on_session_state_changed_callback(base::OnceClosure callback) {
     on_session_state_changed_callback_ = std::move(callback);
   }
-  void set_on_recording_started_callback(base::OnceClosure callback) {
-    on_recording_started_callback_ = std::move(callback);
-  }
   void set_is_allowed_by_dlp(bool value) { is_allowed_by_dlp_ = value; }
   void set_is_allowed_by_policy(bool value) { is_allowed_by_policy_ = value; }
   void set_should_save_after_dlp_check(bool value) {
@@ -59,6 +56,9 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
   }
   void set_fake_drive_fs_free_bytes(int64_t bytes) {
     fake_drive_fs_free_bytes_ = bytes;
+  }
+  void set_policy_capture_path(PolicyCapturePath policy_capture_path) {
+    policy_capture_path_ = policy_capture_path;
   }
 
   // Resets |is_allowed_by_policy_| and |is_allowed_by_dlp_| back to true.
@@ -90,7 +90,7 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
 
   // CaptureModeDelegate:
   base::FilePath GetUserDefaultDownloadsFolder() const override;
-  void ShowScreenCaptureItemInFolder(const base::FilePath& file_path) override;
+  void OpenScreenCaptureItem(const base::FilePath& file_path) override;
   void OpenScreenshotInImageEditor(const base::FilePath& file_path) override;
   bool Uses24HourFormat() const override;
   void CheckCaptureModeInitRestrictionByDlp(
@@ -117,8 +117,8 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
   bool GetDriveFsMountPointPath(base::FilePath* result) const override;
   base::FilePath GetAndroidFilesPath() const override;
   base::FilePath GetLinuxFilesPath() const override;
-  std::unique_ptr<RecordingOverlayView> CreateRecordingOverlayView()
-      const override;
+  base::FilePath GetOneDriveMountPointPath() const override;
+  PolicyCapturePath GetPolicyCapturePath() const override;
   void ConnectToVideoSourceProvider(
       mojo::PendingReceiver<video_capture::mojom::VideoSourceProvider> receiver)
       override;
@@ -134,13 +134,16 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
       crosapi::mojom::VideoConferenceMediaUsageStatusPtr status) override;
   void NotifyDeviceUsedWhileDisabled(
       crosapi::mojom::VideoConferenceMediaDevice device) override;
+  void FinalizeSavedFile(
+      base::OnceCallback<void(bool, const base::FilePath&)> callback,
+      const base::FilePath& path) override;
+  base::FilePath RedirectFilePath(const base::FilePath& path) override;
 
  private:
   std::unique_ptr<recording::RecordingServiceTestApi> recording_service_;
   std::unique_ptr<FakeVideoSourceProvider> video_source_provider_;
   base::ScopedTempDir fake_downloads_dir_;
   base::OnceClosure on_session_state_changed_callback_;
-  base::OnceClosure on_recording_started_callback_;
   bool is_session_active_ = false;
   bool is_allowed_by_dlp_ = true;
   bool is_allowed_by_policy_ = true;
@@ -150,7 +153,10 @@ class TestCaptureModeDelegate : public CaptureModeDelegate {
   base::ScopedTempDir fake_drive_fs_mount_path_;
   base::ScopedTempDir fake_android_files_path_;
   base::ScopedTempDir fake_linux_files_path_;
+  base::ScopedTempDir fake_one_drive_mount_path_;
   int64_t fake_drive_fs_free_bytes_ = std::numeric_limits<int64_t>::max();
+  PolicyCapturePath policy_capture_path_ = {base::FilePath(),
+                                            CapturePathEnforcement::kNone};
 };
 
 }  // namespace ash

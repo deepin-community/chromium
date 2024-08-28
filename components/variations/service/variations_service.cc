@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -64,7 +66,7 @@ namespace {
 // seed over http.
 const char kEncryptedMessageLabel[] = "chrome variations";
 
-// TODO(crbug.com/792239): Change this key to a unique VariationsService one,
+// TODO(crbug.com/41359527): Change this key to a unique VariationsService one,
 // once the matching private key is changed server side.
 // Key is used to encrypt headers in seed retrieval requests that happen over
 // HTTP connections (when retrying after an unsuccessful HTTPS retrieval
@@ -159,14 +161,14 @@ ResourceRequestsAllowedState ResourceRequestStateToHistogramValue(
     case ResourceRequestAllowedNotifier::ALLOWED:
       return RESOURCE_REQUESTS_ALLOWED;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return RESOURCE_REQUESTS_NOT_ALLOWED;
 }
 
 // Returns the header value for |name| from |headers| or an empty string if not
 // set.
 std::string GetHeaderValue(const net::HttpResponseHeaders* headers,
-                           const base::StringPiece& name) {
+                           std::string_view name) {
   std::string value;
   headers->EnumerateHeader(nullptr, name, &value);
   return value;
@@ -176,7 +178,7 @@ std::string GetHeaderValue(const net::HttpResponseHeaders* headers,
 // set, return an empty list.
 std::vector<std::string> GetHeaderValuesList(
     const net::HttpResponseHeaders* headers,
-    const base::StringPiece& name) {
+    std::string_view name) {
   std::vector<std::string> values;
   size_t iter = 0;
   std::string value;
@@ -258,7 +260,7 @@ std::unique_ptr<SeedResponse> MaybeImportFirstRunSeed(
 // This is a utility which syncs the policy-managed value of
 // |prefs::kDeviceVariationsRestrictionsByPolicy| into
 // |prefs::kVariationsRestrictionsByPolicy|.
-// TODO(crbug.com/1060224): Remove this workaround and implement a better long
+// TODO(crbug.com/40121933): Remove this workaround and implement a better long
 // term solution.
 class DeviceVariationsRestrictionByPolicyApplicator {
  public:
@@ -308,7 +310,7 @@ class DeviceVariationsRestrictionByPolicyApplicator {
   // and saves and retrieve its local state value, then sets
   // prefs::kVariationsRestrictParameter with that new value. That's to
   // reflect the changes of chromeos policy into the user policy.
-  // TODO(crbug.com/1060224): Remove that workaround, and make a better long
+  // TODO(crbug.com/40121933): Remove that workaround, and make a better long
   // term solution.
   void OnDevicePolicyChange() {
     const std::string& device_policy =
@@ -344,7 +346,9 @@ VariationsService::VariationsService(
       local_state_(local_state),
       synthetic_trial_registry_(synthetic_trial_registry),
       state_manager_(state_manager),
-      limited_entropy_synthetic_trial_(local_state),
+      limited_entropy_synthetic_trial_(
+          local_state,
+          client_.get()->GetChannelForVariations()),
       policy_pref_service_(local_state),
       resource_request_allowed_notifier_(std::move(notifier)),
       safe_seed_manager_(local_state),
@@ -447,6 +451,17 @@ bool VariationsService::IsLikelyDogfoodClient() const {
   return !restrict_mode.empty();
 }
 
+void VariationsService::SetIsLikelyDogfoodClientForTesting(
+    bool is_dogfood_client) {
+  // Any non-empty value for the `restrict_mode_` is treated as a dogfood client
+  // (see above).
+  if (is_dogfood_client) {
+    restrict_mode_ = "nonempty";
+  } else {
+    restrict_mode_ = std::string();
+  }
+}
+
 GURL VariationsService::GetVariationsServerURL(HttpOptions http_options) {
   const bool secure = http_options == USE_HTTPS;
   const std::string restrict_mode = GetRestrictParameterValue(
@@ -509,7 +524,7 @@ void VariationsService::EnsureLocaleEquals(const std::string& locale) {
   // problems in this area may only appear in the wild due to official builds
   // and end user machines.
   if (locale != field_trial_creator_.application_locale()) {
-    // TODO(crbug.com/912320): Report the two values in crash keys.
+    // TODO(crbug.com/41430274): Report the two values in crash keys.
     static auto* lhs_key = base::debug::AllocateCrashKeyString(
         "mismatched_locale_lhs", base::debug::CrashKeySize::Size256);
     static auto* rhs_key = base::debug::AllocateCrashKeyString(
@@ -577,15 +592,13 @@ std::unique_ptr<VariationsService> VariationsService::Create(
     web_resource::ResourceRequestAllowedNotifier::NetworkConnectionTrackerGetter
         network_connection_tracker_getter,
     SyntheticTrialRegistry* synthetic_trial_registry) {
-  std::unique_ptr<VariationsService> result;
-  result.reset(new VariationsService(
+  return base::WrapUnique(new VariationsService(
       std::move(client),
       std::make_unique<web_resource::ResourceRequestAllowedNotifier>(
           local_state, disable_network_switch,
           std::move(network_connection_tracker_getter)),
       local_state, state_manager, ui_string_overrider,
       synthetic_trial_registry));
-  return result;
 }
 
 // static
@@ -976,7 +989,7 @@ std::vector<StudyGroupNames> VariationsService::GetStudiesAvailableToForce() {
     return {};
   }
 
-  // TODO(crbug.com/1519232): chrome://field-trial-internals will not support
+  // TODO(crbug.com/41492213): chrome://field-trial-internals will not support
   // studies that are constrained to a layer with LIMITED entropy mode before
   // limited entropy randomization fully lands.
   auto entropy_providers = state_manager_->CreateEntropyProviders(

@@ -65,7 +65,13 @@ class FixedTopicsContentBrowserClient
   StoragePartitionConfig GetStoragePartitionConfigForSite(
       BrowserContext* browser_context,
       const GURL& site) override {
-    if (site == GURL("https://b.test/")) {
+    // Use a different StoragePartition for URLs from b.test (to test the fix
+    // for crbug.com/40855090). Note that the port should be removed from site
+    // to simplify the comparison, because non-default ports are included in
+    // site URLs when kOriginKeyedProcessesByDefault is enabled.
+    GURL::Replacements replacements;
+    replacements.ClearPort();
+    if (site.ReplaceComponents(replacements) == GURL("https://b.test/")) {
       return StoragePartitionConfig::Create(browser_context,
                                             /*partition_domain=*/"b.test",
                                             /*partition_name=*/"test_partition",
@@ -190,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ("[]", InvokeTopicsAPI(web_contents()));
 }
 
-// TODO(crbug.com/1381167): migrate to WPT.
+// TODO(crbug.com/40245082): migrate to WPT.
 IN_PROC_BROWSER_TEST_F(BrowsingTopicsBrowserTest,
                        Fetch_TopicsHeaderNotVisibleInServiceWorker) {
   GURL main_frame_url = https_server_.GetURL(

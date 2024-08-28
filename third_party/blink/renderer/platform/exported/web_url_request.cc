@@ -76,7 +76,7 @@ net::RequestPriority WebURLRequest::ConvertToNetPriority(
 
     case WebURLRequest::Priority::kUnresolved:
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return net::LOW;
   }
 }
@@ -341,14 +341,6 @@ network::mojom::RedirectMode WebURLRequest::GetRedirectMode() const {
 
 void WebURLRequest::SetRedirectMode(network::mojom::RedirectMode redirect) {
   return resource_request_->SetRedirectMode(redirect);
-}
-
-WebString WebURLRequest::GetFetchIntegrity() const {
-  return resource_request_->GetFetchIntegrity();
-}
-
-void WebURLRequest::SetFetchIntegrity(const WebString& integrity) {
-  return resource_request_->SetFetchIntegrity(integrity);
 }
 
 const scoped_refptr<WebURLRequestExtraData>&

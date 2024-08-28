@@ -28,7 +28,6 @@
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
@@ -353,7 +352,8 @@ class HTMLPreloadScannerTest : public PageTestBase {
                 network::mojom::ReferrerPolicy document_referrer_policy =
                     network::mojom::ReferrerPolicy::kDefault,
                 bool use_secure_document_url = false,
-                Vector<ElementLocator> locators = {}) {
+                Vector<ElementLocator> locators = {},
+                bool disable_preload_scanning = false) {
     HTMLParserOptions options(&GetDocument());
     KURL document_url = KURL("http://whatever.test/");
     if (use_secure_document_url)
@@ -372,7 +372,8 @@ class HTMLPreloadScannerTest : public PageTestBase {
         CreateMediaValuesData(),
         TokenPreloadScanner::ScannerType::kMainDocument,
         /* script_token_scanner=*/nullptr,
-        /* take_preload=*/HTMLPreloadScanner::TakePreloadFn(), locators);
+        /* take_preload=*/HTMLPreloadScanner::TakePreloadFn(), locators,
+        disable_preload_scanning);
   }
 
   void SetUp() override {
@@ -1236,6 +1237,13 @@ TEST_F(HTMLPreloadScannerTest, testAttributionSrc) {
   static constexpr char kSecureBaseURL[] = "https://example.test";
   static constexpr char kInsecureBaseURL[] = "http://example.test";
 
+  url_test_helpers::RegisterMockedURLLoad(
+      url_test_helpers::ToKURL("https://example.test/script"), "");
+  url_test_helpers::RegisterMockedURLLoad(
+      url_test_helpers::ToKURL("http://example.test/script"), "");
+
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+
   AttributionSrcTestCase test_cases[] = {
       // Insecure context
       {kInsecureDocumentUrl, kSecureBaseURL,
@@ -1896,6 +1904,22 @@ TEST_P(HTMLPreloadScannerLCPPLazyLoadImageTest,
         )HTML",
                                       nullptr, false});
       break;
+  }
+}
+
+TEST_F(HTMLPreloadScannerTest, PreloadScanDisabled_NoPreloads) {
+  PreloadScannerTestCase test_cases[] = {
+      {"http://example.test", "<img src='bla.gif'>", /* preloaded_url=*/nullptr,
+       "http://example.test/", ResourceType::kImage, 0},
+      {"http://example.test", "<script src='test.js'></script>",
+       /* preloaded_url=*/nullptr, "http://example.test/",
+       ResourceType::kScript, 0}};
+
+  for (const auto& test_case : test_cases) {
+    RunSetUp(kViewportDisabled, kPreloadEnabled,
+             network::mojom::ReferrerPolicy::kDefault, true, {},
+             /* disable_preload_scanning=*/true);
+    Test(test_case);
   }
 }
 

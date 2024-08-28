@@ -15,6 +15,7 @@
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
+#include "base/rand_util.h"
 #include "base/time/time.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/quads/draw_quad.h"
@@ -64,10 +65,10 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
 
   SurfaceAggregator(SurfaceManager* manager,
                     DisplayResourceProvider* provider,
-                    bool aggregate_only_damaged,
                     bool needs_surface_damage_rect_list,
                     ExtraPassForReadbackOption extra_pass_option =
-                        ExtraPassForReadbackOption::kNone);
+                        ExtraPassForReadbackOption::kNone,
+                    bool prevent_merging_surfaces_to_root_pass = false);
 
   SurfaceAggregator(const SurfaceAggregator&) = delete;
   SurfaceAggregator& operator=(const SurfaceAggregator&) = delete;
@@ -111,7 +112,16 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
 
   void SetMaxRenderTargetSize(int max_size);
 
-  bool NotifySurfaceDamageAndCheckForDisplayDamage(const SurfaceId& surface_id);
+  // Checks if damage to `surface_id` potentially contributes to the display
+  // damage.
+  bool CheckForDisplayDamage(const SurfaceId& surface_id);
+
+  // When a client submits a CompositorFrame without resources it's typically
+  // done to force return of existing resources to the client. This function
+  // forces the release in this cases. Returns true if some resources were
+  // released and draw needs to happen for DisplayResourceProvider to unlock
+  // them.
+  bool ForceReleaseResourcesIfNeeded(const SurfaceId& surface_id);
 
   bool HasFrameAnnotator() const;
   void SetFrameAnnotator(std::unique_ptr<FrameAnnotator> frame_annotator);
@@ -129,9 +139,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
     // True if the current frame contains a unembedded render pass.
     bool has_unembedded_pass = false;
 
-    // The number of render passes in the final frame that are not embedded from
-    // root render pass or needed to fulfill a CopyOutputRequest.
-    int orphaned_render_pass = 0;
     base::TimeDelta prewalk_time;
     base::TimeDelta copy_time;
   };
@@ -165,9 +172,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
       const std::optional<gfx::Rect> added_clip_rect,
       const std::optional<gfx::Rect> dest_root_target_clip_rect,
       AggregatedRenderPass* dest_pass,
-      bool ignore_undamaged,
-      gfx::Rect* damage_rect_in_quad_space,
-      bool* damage_rect_in_quad_space_valid,
       const MaskFilterInfoExt& mask_filter_info_pair);
 
   void EmitSurfaceContent(
@@ -179,9 +183,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
       const std::optional<gfx::Rect> added_clip_rect,
       const std::optional<gfx::Rect> dest_root_target_clip_rect,
       AggregatedRenderPass* dest_pass,
-      bool ignore_undamaged,
-      gfx::Rect* damage_rect_in_quad_space,
-      bool* damage_rect_in_quad_space_valid,
       const MaskFilterInfoExt& mask_filter_info_pair);
 
   void EmitDefaultBackgroundColorQuad(
@@ -211,7 +212,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
       const gfx::Transform& target_transform,
       const std::optional<gfx::Rect> clip_rect,
       const std::optional<gfx::Rect> dest_root_target_clip_rect,
-      const Surface* surface,
       const MaskFilterInfoExt& mask_filter_info_pair);
 
   // Recursively walks through the render pass and updates the
@@ -254,12 +254,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
                            const gfx::Rect& damage_from_parent,
                            PrewalkResult& result);
 
-  // Processes a new resolved CompositorFrame. This declares all of the
-  // transferable resources plus what resources that are used in the
-  // render_pass_list to the resource provider. Also repopulates render pass and
-  // quad data in |resolved_frame| based on the active CompositorFrame.
-  void ProcessResolvedFrame(ResolvedFrameData& resolved_frame);
-
   void CopyUndrawnSurfaces(PrewalkResult* prewalk);
   void CopyPasses(ResolvedFrameData& resolved_frame);
   void AddColorConversionPass();
@@ -284,7 +278,7 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
 
   void MarkAndPropagateCopyRequestPasses(ResolvedPassData& resolved_pass);
 
-  bool CheckFrameSinksChanged(const Surface* surface);
+  bool CheckFrameSinksChanged(const SurfaceId& surface_id);
 
   // This function adds a damage rect to |surface_damage_rect_list_|. The
   // surface damage rect comes from |resolved_frame| if provided, otherwise
@@ -316,7 +310,6 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
       const CompositorRenderPass& source_pass,
       AggregatedRenderPass* dest_pass,
       const gfx::Transform& pass_to_root_target_transform,
-      const Surface* surface,
       size_t* overlay_damage_index);
 
   bool IsRootSurface(const Surface* surface) const;
@@ -349,12 +342,17 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
   const raw_ptr<SurfaceManager> manager_;
   const raw_ptr<DisplayResourceProvider> provider_;
 
-  const bool aggregate_only_damaged_;
-
   // If true, per-surface damage rect list will be produced.
   const bool needs_surface_damage_rect_list_;
 
   const ExtraPassForReadbackOption extra_pass_for_readback_option_;
+
+  // If true, don't merge surfaces in the root render pass. This means renderer
+  // frames get put into their own RPDQ overlay. Note that if delegated
+  // compositing on the UI quads fails, we will end up with an unnecessary
+  // render pass backing since we can't re-merge these surfaces after overlay
+  // processing.
+  const bool prevent_merging_surfaces_to_root_pass_ = false;
 
   // Will be true for duration of Aggregate() function.
   bool is_inside_aggregate_ = false;
@@ -441,6 +439,9 @@ class VIZ_SERVICE_EXPORT SurfaceAggregator : public SurfaceObserver {
 
   // Used to annotate the aggregated frame for debugging.
   std::unique_ptr<FrameAnnotator> frame_annotator_;
+
+  // Used to avoid excessive UMA logging per frame.
+  base::MetricsSubSampler metrics_subsampler_;
 
   // Whether the last drawn frame had a color conversion pass applied. Used in
   // production on Windows only (does not interact with jelly).

@@ -52,7 +52,7 @@ SyncerError ServerConnectionErrorAsSyncerError(
           static_cast<net::HttpStatusCode>(http_status_code));
     case HttpResponse::SERVER_CONNECTION_OK:
     case HttpResponse::NONE:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return SyncerError::Success();
   }
 }
@@ -82,7 +82,7 @@ SyncProtocolErrorType PBErrorTypeToSyncProtocolErrorType(
       return ENCRYPTION_OBSOLETE;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return UNKNOWN_ERROR;
 }
 
@@ -94,7 +94,7 @@ ClientAction PBActionToClientAction(const sync_pb::SyncEnums::Action& action) {
       return UNKNOWN_ACTION;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return UNKNOWN_ACTION;
 }
 
@@ -291,7 +291,7 @@ SyncerError SyncerProtoUtil::HandleClientToServerMessageResponse(
       should_report_success = true;
       break;
     case THROTTLED:
-      if (sync_protocol_error.error_data_types.Empty()) {
+      if (sync_protocol_error.error_data_types.empty()) {
         DLOG(WARNING) << "Client fully throttled by syncer.";
         cycle->delegate()->OnThrottled(GetThrottleDelay(response));
       } else {
@@ -314,7 +314,7 @@ SyncerError SyncerProtoUtil::HandleClientToServerMessageResponse(
       break;
     case PARTIAL_FAILURE:
       // This only happens when partial backoff during GetUpdates.
-      if (!sync_protocol_error.error_data_types.Empty()) {
+      if (!sync_protocol_error.error_data_types.empty()) {
         DLOG(WARNING)
             << "Some types got partial failure by syncer during GetUpdates.";
         cycle->delegate()->OnTypesBackedOff(
@@ -334,7 +334,7 @@ SyncerError SyncerProtoUtil::HandleClientToServerMessageResponse(
     case CONFLICT:
     case INVALID_MESSAGE:
       // These error types should not be used at this stage.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   if (should_report_success) {

@@ -22,6 +22,13 @@ import("//testing/libfuzzer/fuzzer_test.gni")
 import("//third_party/widevine/cdm/widevine.gni")
 import("//tools/grit/grit_rule.gni")
 
+assert(enable_supervised_users)
+assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
+
+declare_args() {
+  enable_android_site_isolation = is_desktop_android
+}
+
 fuzzer_test("ini_parser_fuzzer") {
   sources = [ "ini_parser_fuzzer.cc" ]
   deps = [
@@ -48,6 +55,8 @@ buildflag_header("buildflags") {
   flags = [
     "CHROME_ENABLE_LOGGING_BY_DEFAULT=$chrome_enable_logging_by_default",
     "CHROME_CERTIFICATE_POLICIES_SUPPORTED=$chrome_certificate_policies_supported",
+    "CHROME_ROOT_STORE_CERT_MANAGEMENT_UI=$chrome_root_store_cert_management_ui",
+    "ENABLE_ANDROID_SITE_ISOLATION=$enable_android_site_isolation",
     "ENABLE_BACKGROUND_MODE=$enable_background_mode",
     "ENABLE_BACKGROUND_CONTENTS=$enable_background_contents",
     "ENABLE_CHROME_NOTIFICATIONS=$enable_chrome_notifications",
@@ -90,16 +99,11 @@ source_set("channel_info") {
     public_deps += [ "//components/version_info/android:channel_getter" ]
   } else if (is_chromeos_ash) {
     sources += [ "channel_info_chromeos.cc" ]
-    deps += [
-      "//chromeos/crosapi/cpp",
-      "//chromeos/crosapi/cpp:crosapi_constants",
-    ]
+    deps += [ "//chromeos/ash/components/channel" ]
   } else if (is_chromeos_lacros) {
     sources += [ "channel_info_lacros.cc" ]
   } else if (is_posix) {
     sources += [ "channel_info_posix.cc" ]
-  } else if (is_fuchsia) {
-    sources += [ "channel_info_fuchsia.cc" ]
   }
 }
 
@@ -115,7 +119,7 @@ source_set("ini_parser") {
 group("common") {
   public_deps = [ ":common_lib" ]
   if (is_win) {
-    public_deps += [ "//chrome/common/win:delay_load_failure_hook" ]
+    public_deps += [ "//chrome/common/win:delay_load_hooks" ]
   }
 }
 
@@ -224,6 +228,7 @@ static_library("common_lib") {
     "//components/services/app_service",
     "//components/services/heap_profiling/public/cpp",
     "//components/strings",
+    "//components/supervised_user/core/common",
     "//components/translate/content/common",
     "//components/translate/core/common",
     "//components/url_formatter",
@@ -257,7 +262,10 @@ static_library("common_lib") {
 
   deps = [
     "//build:chromeos_buildflags",
+    "//components/crash/core/app",
     "//components/google/core/common",
+    "//components/heap_profiling/in_process",
+    "//components/heap_profiling/in_process:mojom",
     "//components/live_caption:constants",
     "//components/metrics:call_stack_profile_builder",
     "//components/no_state_prefetch/common",
@@ -268,10 +276,6 @@ static_library("common_lib") {
 
   if (is_android || enable_library_cdms) {
     public_deps += [ "//components/cdm/common" ]
-  }
-
-  if (enable_supervised_users) {
-    public_deps += [ "//components/supervised_user/core/common" ]
   }
 
   if (enable_ppapi) {
@@ -330,6 +334,8 @@ static_library("common_lib") {
       "extensions/sync_helper.h",
       "extensions/webstore_install_result.cc",
       "extensions/webstore_install_result.h",
+      "extensions/webstore_override.cc",
+      "extensions/webstore_override.h",
       "initialize_extensions_client.cc",
       "initialize_extensions_client.h",
     ]
@@ -347,13 +353,8 @@ static_library("common_lib") {
       "//extensions/common:core_api_provider",
       "//extensions/common/api",
       "//extensions/strings",
-      "//media/cast:net",
       "//services/device/public/cpp/usb",
     ]
-  }
-
-  if (!is_fuchsia) {
-    deps += [ "//components/crash/core/app" ]
   }
 
   if (is_mac) {
@@ -371,14 +372,11 @@ static_library("common_lib") {
       "extensions/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.cc",
       "extensions/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h",
     ]
+    public_deps += [ "//chrome/common/extensions/api" ]
     deps += [ "//chrome/common/chromeos/extensions" ]
   }
   if (is_chromeos_ash) {
     assert(enable_extensions)
-    sources += [
-      "extensions/api/input_ime/input_components_handler.cc",
-      "extensions/api/input_ime/input_components_handler.h",
-    ]
     public_deps += [ "//ash/keyboard/ui" ]
     deps += [ "//ash/constants" ]
   } else if (is_chromeos_lacros) {
@@ -635,7 +633,6 @@ static_library("constants") {
   deps = [
     ":version_header",
     "//base",
-    "//base/third_party/dynamic_annotations",
     "//build:branding_buildflags",
     "//build:chromeos_buildflags",
     "//components/bookmarks/common",
@@ -685,9 +682,6 @@ static_library("constants") {
   if (is_win) {
     sources += [ "chrome_paths_win.cc" ]
     deps += [ "//chrome/install_static:install_static_util" ]
-  }
-  if (is_fuchsia) {
-    sources += [ "chrome_paths_fuchsia.cc" ]
   }
 
   if (enable_widevine && enable_library_cdms) {
@@ -752,7 +746,6 @@ mojom("mojo_bindings") {
 
   sources = [
     "chrome_render_frame.mojom",
-    "draggable_regions.mojom",
     "google_accounts_private_api_extension.mojom",
     "media/webrtc_logging.mojom",
     "metrics.mojom",
@@ -775,6 +768,8 @@ mojom("mojo_bindings") {
 
   if (is_mac) {
     sources += [ "mac/app_shim.mojom" ]
+    deps +=
+        [ "//components/metrics/public/mojom:histogram_fetcher_mojo_bindings" ]
     cpp_typemaps = [
       {
         types = [
@@ -804,6 +799,7 @@ mojom("mojo_bindings") {
     "//components/no_state_prefetch/common:mojo_bindings",
     "//content/public/common:interfaces",
     "//mojo/public/mojom/base",
+    "//third_party/blink/public/mojom:mojom_core",
     "//third_party/blink/public/mojom:mojom_platform",
     "//ui/gfx/geometry/mojom",
     "//ui/gfx/image/mojom",
@@ -824,6 +820,7 @@ mojom("mojo_bindings") {
 
   overridden_deps = [
     "//content/public/common:interfaces",
+    "//third_party/blink/public/mojom:mojom_core",
     "//third_party/blink/public/mojom:mojom_platform",
   ]
 

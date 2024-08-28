@@ -10,7 +10,7 @@
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "components/autofill/core/browser/ui/payments/payments_bubble_closed_reasons.h"
-#include "components/autofill/core/browser/ui/payments/save_card_and_virtual_card_enroll_confirmation_ui_params.h"
+#include "components/autofill/core/browser/ui/payments/save_payment_method_and_virtual_card_enroll_confirmation_ui_params.h"
 
 class Browser;
 class PageActionIconView;
@@ -62,11 +62,15 @@ class AutofillBubbleHandlerImpl : public AutofillBubbleHandler {
       bool is_user_gesture) override;
   AutofillBubbleBase* ShowSaveAddressProfileBubble(
       content::WebContents* web_contents,
-      SaveUpdateAddressProfileBubbleController* controller,
+      std::unique_ptr<SaveAddressBubbleController> controller,
       bool is_user_gesture) override;
   AutofillBubbleBase* ShowUpdateAddressProfileBubble(
       content::WebContents* web_contents,
-      SaveUpdateAddressProfileBubbleController* controller,
+      std::unique_ptr<UpdateAddressBubbleController> controller,
+      bool is_user_gesture) override;
+  AutofillBubbleBase* ShowAddNewAddressProfileBubble(
+      content::WebContents* web_contents,
+      std::unique_ptr<AddNewAddressBubbleController> controller,
       bool is_user_gesture) override;
   AutofillBubbleBase* ShowVirtualCardManualFallbackBubble(
       content::WebContents* web_contents,
@@ -96,7 +100,7 @@ class AutofillBubbleHandlerImpl : public AutofillBubbleHandler {
       base::OnceCallback<void(PaymentsBubbleClosedReason)>
           controller_hide_callback,
       PageActionIconView* icon_view,
-      SaveCardAndVirtualCardEnrollConfirmationUiParams ui_params);
+      SavePaymentMethodAndVirtualCardEnrollConfirmationUiParams ui_params);
 
   raw_ptr<Browser> browser_ = nullptr;
 

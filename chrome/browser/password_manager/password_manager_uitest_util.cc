@@ -29,8 +29,9 @@ GenerationUIState TestGenerationPopupObserver::state() const {
 
 // Waits until the popup is in specified status.
 void TestGenerationPopupObserver::WaitForStatus(GenerationPopup status) {
-  if (status == popup_showing_)
+  if (status == popup_showing_) {
     return;
+  }
   SCOPED_TRACE(::testing::Message()
                << "WaitForStatus " << static_cast<int>(status));
   base::RunLoop run_loop;
@@ -64,10 +65,11 @@ void ObservingAutofillClient::WaitForAutofillPopup() {
   DCHECK(!run_loop_);
 }
 
-void ObservingAutofillClient::ShowAutofillPopup(
+void ObservingAutofillClient::ShowAutofillSuggestions(
     const autofill::AutofillClient::PopupOpenArgs& open_args,
-    base::WeakPtr<autofill::AutofillPopupDelegate> delegate) {
-  if (run_loop_)
+    base::WeakPtr<autofill::AutofillSuggestionDelegate> delegate) {
+  if (run_loop_) {
     run_loop_->Quit();
+  }
   run_loop_ = nullptr;
 }

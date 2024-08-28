@@ -20,6 +20,7 @@
 #include "base/functional/callback.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/notreached.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -41,10 +42,12 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/install_verifier.h"
-#include "chrome/browser/extensions/permissions_updater.h"
-#include "chrome/browser/extensions/scripting_permissions_modifier.h"
+#include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
+#include "chrome/browser/extensions/mv2_experiment_stage.h"
+#include "chrome/browser/extensions/permissions/permissions_updater.h"
+#include "chrome/browser/extensions/permissions/scripting_permissions_modifier.h"
+#include "chrome/browser/extensions/permissions/site_permissions_helper.h"
 #include "chrome/browser/extensions/shared_module_service.h"
-#include "chrome/browser/extensions/site_permissions_helper.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/extensions/webstore_reinstaller.h"
@@ -67,7 +70,7 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/policy/core/common/policy_pref_names.h"
-#include "components/supervised_user/core/common/buildflags.h"
+#include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -127,19 +130,13 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "components/supervised_user/core/browser/supervised_user_preferences.h"
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
-
 namespace extensions {
 
 namespace developer = api::developer_private;
 
 namespace {
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
 const char kCannotUpdateChildAccountProfileSettingsError[] =
     "Cannot change settings for a child account profile.";
-#endif
 const char kNoSuchExtensionError[] = "No such extension.";
 const char kRequiresUserGestureError[] =
     "This action requires a user gesture.";
@@ -174,6 +171,9 @@ const char kFailToUninstallEnterpriseOrComponentExtensions[] =
 const char kFailToUninstallNoneExistentExtensions[] =
     "Cannot uninstall non-existent extensions in your list.";
 const char kUserCancelledError[] = "User cancelled uninstall";
+const char kNoExtensionError[] = "Extension with ID '*' doesn't exist.";
+const char kExtensionNotAffectedByMV2Deprecation[] =
+    "Extension with ID '*' is not affected by the MV2 deprecation.";
 
 const char kUnpackedAppsFolder[] = "apps_target";
 const char kManifestFile[] = "manifest.json";
@@ -458,12 +458,8 @@ DeveloperPrivateAPI::GetFactoryInstance() {
 std::unique_ptr<developer::ProfileInfo> DeveloperPrivateAPI::CreateProfileInfo(
     Profile* profile) {
   std::unique_ptr<developer::ProfileInfo> info(new developer::ProfileInfo());
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   info->is_child_account =
       supervised_user::AreExtensionsPermissionsEnabled(*profile->GetPrefs());
-#else
-  info->is_child_account = false;
-#endif
   PrefService* prefs = profile->GetPrefs();
   const PrefService::Preference* pref =
       prefs->FindPreference(prefs::kExtensionsUIDeveloperMode);
@@ -476,6 +472,10 @@ std::unique_ptr<developer::ProfileInfo> DeveloperPrivateAPI::CreateProfileInfo(
   info->can_load_unpacked =
       ExtensionManagementFactory::GetForBrowserContext(profile)
           ->HasAllowlistedExtension();
+  info->is_mv2_deprecation_notice_dismissed =
+      ManifestV2ExperimentManager::Get(profile)
+          ->DidUserAcknowledgeNoticeGlobally();
+
   return info;
 }
 
@@ -527,6 +527,14 @@ DeveloperPrivateEventRouter::DeveloperPrivateEventRouter(Profile* profile)
   // callback on destruction.
   pref_change_registrar_.Add(
       prefs::kExtensionsUIDeveloperMode,
+      base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      kMV2DeprecationWarningAcknowledgedGloballyPref.name,
+      base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      kMV2DeprecationDisabledAcknowledgedGloballyPref.name,
       base::BindRepeating(&DeveloperPrivateEventRouter::OnProfilePrefChanged,
                           base::Unretained(this)));
 }
@@ -712,7 +720,7 @@ void DeveloperPrivateEventRouter::OnExtensionPermissionsUpdated(
 void DeveloperPrivateEventRouter::OnToolbarPinnedActionsChanged() {
   // Currently, only enabled extensions are considered since they are the only
   // ones that have extension actions.
-  // TODO(crbug.com/1477884): Since pinned info is stored as a pref, include
+  // TODO(crbug.com/40280426): Since pinned info is stored as a pref, include
   // disabled extensions in this event as well.
   const ExtensionSet& extensions =
       ExtensionRegistry::Get(profile_)->enabled_extensions();
@@ -1051,13 +1059,16 @@ DeveloperPrivateUpdateProfileConfigurationFunction::Run() {
   if (update.in_developer_mode) {
     Profile* profile = Profile::FromBrowserContext(browser_context());
     CHECK(profile);
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
     if (supervised_user::AreExtensionsPermissionsEnabled(
             *profile->GetPrefs())) {
       return RespondNow(Error(kCannotUpdateChildAccountProfileSettingsError));
     }
-#endif
     util::SetDeveloperModeForProfile(profile, *update.in_developer_mode);
+  }
+
+  if (update.is_mv2_deprecation_notice_dismissed.value_or(false)) {
+    ManifestV2ExperimentManager::Get(browser_context())
+        ->MarkNoticeAsAcknowledgedGlobally();
   }
 
   return RespondNow(NoArguments());
@@ -1119,7 +1130,7 @@ DeveloperPrivateUpdateExtensionConfigurationFunction::Run() {
         modifier.SetWithholdHostPermissions(false);
         break;
       case developer::HostAccess::kNone:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
   if (update.show_access_requests_in_toolbar) {
@@ -1127,10 +1138,12 @@ DeveloperPrivateUpdateExtensionConfigurationFunction::Run() {
         .SetShowAccessRequestsInToolbar(
             extension->id(), *update.show_access_requests_in_toolbar);
   }
-  if (update.acknowledge_safety_check_warning) {
+  if (update.acknowledge_safety_check_warning_reason !=
+      developer_private::SafetyCheckWarningReason::kNone) {
     ExtensionPrefs::Get(browser_context())
-        ->SetBooleanPref(extension->id(), kPrefAcknowledgeSafetyCheckWarning,
-                         *update.acknowledge_safety_check_warning);
+        ->SetIntegerPref(
+            extension->id(), kPrefAcknowledgeSafetyCheckWarningReason,
+            static_cast<int>(update.acknowledge_safety_check_warning_reason));
     DeveloperPrivateEventRouter* event_router =
         DeveloperPrivateAPI::Get(browser_context())
             ->developer_private_event_router();
@@ -1267,13 +1280,11 @@ ExtensionFunction::ResponseAction DeveloperPrivateLoadUnpackedFunction::Run() {
     return RespondNow(Error(kCouldNotFindWebContentsError));
 
   Profile* profile = Profile::FromBrowserContext(browser_context());
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   if (profile &&
       supervised_user::AreExtensionsPermissionsEnabled(*profile->GetPrefs())) {
     return RespondNow(
         Error("Child account users cannot load unpacked extensions."));
   }
-#endif
   PrefService* prefs = profile->GetPrefs();
   if (!prefs->GetBoolean(prefs::kExtensionsUIDeveloperMode)) {
     return RespondNow(
@@ -1343,6 +1354,7 @@ void DeveloperPrivateLoadUnpackedFunction::FileSelectionCanceled() {
   // This isn't really an error, but we should keep it like this for
   // backward compatability.
   Respond(Error(kFileSelectionCanceled));
+  // TODO(crbug.com/353743644): Test needed to verify that it's safe to Release.
   Release();  // Balanced in Run().
 }
 
@@ -1480,6 +1492,10 @@ bool DeveloperPrivateChooseEntryFunction::ShowPicker(
   // and subsequent sending of the function response) until the user has
   // selected a file or cancelled the picker. At that point, the picker will
   // delete itself.
+  // TODO(crbug.com/353743644): This causes a dangling pointer when file dialog
+  // is cancelled and DeveloperPrivateLoadUnpackedFunction() is destructed
+  // before EntryPicker is destructed, which still holds a pointer to this
+  // function instance.
   new EntryPicker(
       this, web_contents, picker_type,
       DeveloperPrivateAPI::Get(browser_context())->last_unpacked_directory(),
@@ -1828,7 +1844,7 @@ ExtensionFunction::ResponseAction DeveloperPrivateChoosePathFunction::Run() {
     info.include_all_files = true;
     file_type_index = 1;
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   if (!ShowPicker(
@@ -1860,14 +1876,10 @@ DeveloperPrivateChoosePathFunction::~DeveloperPrivateChoosePathFunction() {}
 
 ExtensionFunction::ResponseAction
 DeveloperPrivateIsProfileManagedFunction::Run() {
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   Profile* profile = Profile::FromBrowserContext(browser_context());
   return RespondNow(WithArguments(
       profile &&
       supervised_user::AreExtensionsPermissionsEnabled(*profile->GetPrefs())));
-#else
-  return RespondNow(WithArguments(false));
-#endif
 }
 
 DeveloperPrivateIsProfileManagedFunction::
@@ -2058,8 +2070,8 @@ DeveloperPrivateDeleteExtensionErrorsFunction::Run() {
   int type = -1;
   if (properties.type != developer::ErrorType::kNone) {
     type = properties.type == developer::ErrorType::kManifest
-               ? ExtensionError::MANIFEST_ERROR
-               : ExtensionError::RUNTIME_ERROR;
+               ? static_cast<int>(ExtensionError::Type::kManifestError)
+               : static_cast<int>(ExtensionError::Type::kRuntimeError);
   }
   std::set<int> error_ids;
   if (properties.error_ids) {
@@ -2337,7 +2349,7 @@ DeveloperPrivateAddUserSpecifiedSitesFunction::Run() {
       return RespondNow(
           Error("Site set must be USER_PERMITTED or USER_RESTRICTED"));
     case developer::SiteSet::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   return RespondNow(NoArguments());
@@ -2376,7 +2388,7 @@ DeveloperPrivateRemoveUserSpecifiedSitesFunction::Run() {
       return RespondNow(
           Error("Site set must be USER_PERMITTED or USER_RESTRICTED"));
     case developer::SiteSet::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   return RespondNow(NoArguments());
@@ -2513,7 +2525,7 @@ DeveloperPrivateGetMatchingExtensionsForSiteFunction::Run() {
     // have access to any sites that match `site_pattern`.
     developer::HostAccess host_access = developer::HostAccess::kOnClick;
 
-    // TODO(crbug.com/1472899): Add a version of CanUserSelectSiteAccess to
+    // TODO(crbug.com/40278776): Add a version of CanUserSelectSiteAccess to
     // PermissionsManager which takes in a URLPattern.
     bool can_request_all_sites =
         granted_permissions->ShouldWarnAllHosts(kIncludeApiPermissions) ||
@@ -2617,7 +2629,7 @@ DeveloperPrivateUpdateSiteAccessFunction::Run() {
         done_callback.Run();
         break;
       case developer::HostAccess::kNone:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
 
@@ -2734,6 +2746,117 @@ DeveloperPrivateDismissSafetyHubExtensionsMenuNotificationFunction::Run() {
       ->DismissActiveNotificationOfModule(
           safety_hub::SafetyHubModuleType::EXTENSIONS);
   return RespondNow(NoArguments());
+}
+
+DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::
+    DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction() = default;
+DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::
+    ~DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction() =
+        default;
+
+ExtensionFunction::ResponseAction
+DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::Run() {
+  std::optional<developer::DismissMv2DeprecationNoticeForExtension::Params>
+      params =
+          developer::DismissMv2DeprecationNoticeForExtension::Params::Create(
+              args());
+  EXTENSION_FUNCTION_VALIDATE(params);
+  extension_id_ = std::move(params->extension_id);
+
+  ManifestV2ExperimentManager* experiment_manager =
+      ManifestV2ExperimentManager::Get(browser_context());
+
+  // Extension must be affected by the MV2 deprecation.
+  const Extension* extension =
+      ExtensionRegistry::Get(browser_context())
+          ->GetExtensionById(extension_id_, ExtensionRegistry::EVERYTHING);
+  if (!extension) {
+    return RespondNow(Error(
+        ErrorUtils::FormatErrorMessage(kNoExtensionError, extension_id_)));
+  }
+  if (!experiment_manager->IsExtensionAffected(*extension)) {
+    return RespondNow(Error(ErrorUtils::FormatErrorMessage(
+        kExtensionNotAffectedByMV2Deprecation, extension_id_)));
+  }
+
+  MV2ExperimentStage experiment_stage =
+      experiment_manager->GetCurrentExperimentStage();
+  switch (experiment_stage) {
+    case MV2ExperimentStage::kNone:
+      NOTREACHED_NORETURN();
+
+    case MV2ExperimentStage::kWarning: {
+      // Immediately dismiss the notice.
+      DismissExtensionNotice();
+      return RespondNow(NoArguments());
+    }
+
+    case MV2ExperimentStage::kDisableWithReEnable: {
+      // Prompt for user confirmation before dismissing the notice.
+      if (accept_bubble_for_testing_.has_value()) {
+        if (*accept_bubble_for_testing_) {
+          OnDialogAccepted();
+        } else {
+          OnDialogCancelled();
+        }
+        return AlreadyResponded();
+      }
+
+      content::WebContents* web_contents = GetSenderWebContents();
+      if (!web_contents) {
+        return RespondNow(Error(kCouldNotFindWebContentsError));
+      }
+      gfx::NativeWindow parent = web_contents->GetTopLevelNativeWindow();
+
+      ShowMv2DeprecationKeepDialog(
+          browser_context(), parent, *extension,
+          base::BindOnce(
+              &DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::
+                  OnDialogAccepted,
+              this),
+          base::BindOnce(
+              &DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::
+                  OnDialogCancelled,
+              this));
+
+      return RespondLater();
+    }
+  }
+}
+
+void DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::
+    DismissExtensionNotice() {
+  ManifestV2ExperimentManager* experiment_manager =
+      ManifestV2ExperimentManager::Get(browser_context());
+  experiment_manager->MarkNoticeAsAcknowledged(extension_id_);
+
+  // There isn't a separate observer for the MV2 acknowledged state changing,
+  // but this is the only place it's changed. Just fire the event directly.
+  DeveloperPrivateEventRouter* event_router =
+      DeveloperPrivateAPI::Get(browser_context())
+          ->developer_private_event_router();
+  if (event_router) {
+    event_router->OnExtensionConfigurationChanged(extension_id_);
+  }
+}
+
+void DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::
+    OnDialogAccepted() {
+  if (!browser_context()) {
+    return;
+  }
+
+  DismissExtensionNotice();
+  Respond(NoArguments());
+}
+
+void DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction::
+    OnDialogCancelled() {
+  if (!browser_context()) {
+    return;
+  }
+
+  Respond(NoArguments());
 }
 
 }  // namespace api

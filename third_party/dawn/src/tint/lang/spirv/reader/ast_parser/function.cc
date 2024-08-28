@@ -38,7 +38,6 @@
 #include "src/tint/lang/core/type/texture_dimension.h"
 #include "src/tint/lang/spirv/reader/ast_lower/atomics.h"
 #include "src/tint/lang/wgsl/ast/assignment_statement.h"
-#include "src/tint/lang/wgsl/ast/bitcast_expression.h"
 #include "src/tint/lang/wgsl/ast/break_statement.h"
 #include "src/tint/lang/wgsl/ast/builtin_attribute.h"
 #include "src/tint/lang/wgsl/ast/call_statement.h"
@@ -2523,8 +2522,7 @@ bool FunctionEmitter::EmitFunctionVariables() {
             }
         }
         auto* var = parser_impl_.MakeVar(inst.result_id(), core::AddressSpace::kUndefined,
-                                         core::Access::kUndefined, var_store_type, initializer,
-                                         Attributes{});
+                                         var_store_type, initializer, Attributes{});
         auto* var_decl_stmt = create<ast::VariableDeclStatement>(Source{}, var);
         AddStatement(var_decl_stmt);
         auto* var_type = ty_.Reference(core::AddressSpace::kUndefined, var_store_type);
@@ -3370,9 +3368,8 @@ bool FunctionEmitter::EmitStatementsInBasicBlock(const BlockInfo& block_info,
         // no need to remap pointer properties.
         auto* store_type = parser_impl_.ConvertType(def_inst->type_id());
         AddStatement(create<ast::VariableDeclStatement>(
-            Source{},
-            parser_impl_.MakeVar(id, core::AddressSpace::kUndefined, core::Access::kUndefined,
-                                 store_type, nullptr, Attributes{})));
+            Source{}, parser_impl_.MakeVar(id, core::AddressSpace::kUndefined, store_type, nullptr,
+                                           Attributes{})));
         auto* type = ty_.Reference(core::AddressSpace::kUndefined, store_type);
         identifier_types_.emplace(id, type);
     }
@@ -4920,7 +4917,6 @@ DefInfo::Pointer FunctionEmitter::GetPointerInfo(uint32_t id) {
                 break;
         }
         TINT_UNREACHABLE() << "expected a memory object declaration";
-        return {};
     };
 
     auto where = def_info_.find(id);
@@ -5836,7 +5832,9 @@ bool FunctionEmitter::EmitImageQuery(const spvtools::opt::Instruction& inst) {
                     : exprs[0],
             };
 
-            expr = ToSignedIfUnsigned(expr);
+            if (result_type->IsSignedScalarOrVector()) {
+                expr = ToSignedIfUnsigned(expr);
+            }
 
             return EmitConstDefOrWriteToHoistedVar(inst, expr);
         }

@@ -260,7 +260,7 @@ class TestPasswordsDelegate : public extensions::TestPasswordsPrivateDelegate {
   password_manager::SavedPasswordsPresenter presenter_{
       &affiliation_service_, store_, /*account_store=*/nullptr};
   password_manager::InsecureCredentialsManager credentials_manager_{
-      &presenter_, store_, /*account_store=*/nullptr};
+      &presenter_};
 };
 
 class TestSafetyCheckExtensionService : public TestExtensionService {
@@ -502,8 +502,8 @@ TEST_F(SafetyCheckHandlerTest, CheckUpdates_Relaunch) {
 TEST_F(SafetyCheckHandlerTest, CheckUpdates_Disabled) {
   version_updater_->SetReturnedStatus(VersionUpdater::Status::DISABLED);
   safety_check_->PerformSafetyCheck();
-  // TODO(crbug/1072432): Since the UNKNOWN state is not present in JS in M83,
-  // use FAILED_OFFLINE, which uses the same icon.
+  // TODO(crbug.com/40127188): Since the UNKNOWN state is not present in JS in
+  // M83, use FAILED_OFFLINE, which uses the same icon.
   const base::Value::Dict* event = GetSafetyCheckStatusChangedWithDataIfExists(
       kUpdates,
       static_cast<int>(SafetyCheckHandler::UpdateStatus::kFailedOffline));

@@ -44,6 +44,7 @@ class Shape {
   Shape(const Shape&);
   Shape(Shape&&);
   Shape& operator=(const Shape&);
+  Shape& operator=(Shape&&);
 
   // Construct a shape from a ShapeProto.
   explicit Shape(const ShapeProto& shape_proto);
@@ -59,6 +60,8 @@ class Shape {
 
   // Returns a ShapeProto representation of the Shape.
   ShapeProto ToProto() const;
+  // Sets a ShapeProto to the representation of the Shape.
+  void SetProto(ShapeProto& proto) const;
 
   // Prints a human-readable string that represents the given shape, with or
   // without layout. e.g. "F32[42,12] {0, 1}" or "F32[64]".
@@ -128,6 +131,11 @@ class Shape {
   // Returns true if the given dimension is dynamically-sized.
   bool is_dynamic_dimension(int dimension) const {
     return dynamic_dimensions_[dimension];
+  }
+
+  // Returns true if the given dimension is statically-sized.
+  bool is_static_dimension(int dimension) const {
+    return !dynamic_dimensions_[dimension];
   }
 
   // Sets whether or not the given dimension is dynamically-sized.
@@ -281,6 +289,7 @@ class Shape {
       ignore_element_size_in_layout_ = true;
       ignore_memory_space_in_layout_ = true;
       ignore_tail_padding_alignment_in_elements_in_layout_ = true;
+      ignore_split_config_in_layout_ = true;
       return *this;
     }
     Equal& IgnoreElementType() {
@@ -303,6 +312,10 @@ class Shape {
       ignore_tail_padding_alignment_in_elements_in_layout_ = true;
       return *this;
     }
+    Equal& IgnoreSplitConfigInLayout() {
+      ignore_split_config_in_layout_ = true;
+      return *this;
+    }
 
    private:
     bool ignore_layout_ = false;
@@ -314,6 +327,7 @@ class Shape {
     bool ignore_dynamic_dimension_ = false;
     bool ignore_dimensions_ = false;
     bool ignore_tail_padding_alignment_in_elements_in_layout_ = false;
+    bool ignore_split_config_in_layout_ = false;
   };
 
   // Test that all fields of the shape are the same, equivalent to Equal().
@@ -370,6 +384,7 @@ class ProgramShape {
   ProgramShape(const ProgramShape&);
   ProgramShape(ProgramShape&&);
   ProgramShape& operator=(const ProgramShape&);
+  ProgramShape& operator=(ProgramShape&&);
 
   // Creates a ProgramShape from a ProgramShapeProto protobuf.
   explicit ProgramShape(const ProgramShapeProto& program_shape_proto);

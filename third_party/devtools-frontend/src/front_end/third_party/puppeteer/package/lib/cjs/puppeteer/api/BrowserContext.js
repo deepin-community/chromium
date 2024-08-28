@@ -10,6 +10,7 @@ const rxjs_js_1 = require("../../third_party/rxjs/rxjs.js");
 const EventEmitter_js_1 = require("../common/EventEmitter.js");
 const util_js_1 = require("../common/util.js");
 const disposable_js_1 = require("../util/disposable.js");
+const Mutex_js_1 = require("../util/Mutex.js");
 /**
  * {@link BrowserContext} represents individual user contexts within a
  * {@link Browser | browser}.
@@ -49,6 +50,32 @@ class BrowserContext extends EventEmitter_js_1.EventEmitter {
         super();
     }
     /**
+     * If defined, indicates an ongoing screenshot opereation.
+     */
+    #pageScreenshotMutex;
+    #screenshotOperationsCount = 0;
+    /**
+     * @internal
+     */
+    startScreenshot() {
+        const mutex = this.#pageScreenshotMutex || new Mutex_js_1.Mutex();
+        this.#pageScreenshotMutex = mutex;
+        this.#screenshotOperationsCount++;
+        return mutex.acquire(() => {
+            this.#screenshotOperationsCount--;
+            if (this.#screenshotOperationsCount === 0) {
+                // Remove the mutex to indicate no ongoing screenshot operation.
+                this.#pageScreenshotMutex = undefined;
+            }
+        });
+    }
+    /**
+     * @internal
+     */
+    waitForScreenshotOperations() {
+        return this.#pageScreenshotMutex?.acquire();
+    }
+    /**
      * Waits until a {@link Target | target} matching the given `predicate`
      * appears and returns it.
      *
@@ -65,7 +92,7 @@ class BrowserContext extends EventEmitter_js_1.EventEmitter {
      */
     async waitForTarget(predicate, options = {}) {
         const { timeout: ms = 30000 } = options;
-        return await (0, rxjs_js_1.firstValueFrom)((0, rxjs_js_1.merge)((0, util_js_1.fromEmitterEvent)(this, "targetcreated" /* BrowserContextEvent.TargetCreated */), (0, util_js_1.fromEmitterEvent)(this, "targetchanged" /* BrowserContextEvent.TargetChanged */), (0, rxjs_js_1.from)(this.targets())).pipe((0, rxjs_js_1.filterAsync)(predicate), (0, rxjs_js_1.raceWith)((0, util_js_1.timeout)(ms))));
+        return await (0, rxjs_js_1.firstValueFrom)((0, rxjs_js_1.merge)((0, util_js_1.fromEmitterEvent)(this, "targetcreated" /* BrowserContextEvent.TargetCreated */), (0, util_js_1.fromEmitterEvent)(this, "targetchanged" /* BrowserContextEvent.TargetChanged */), (0, rxjs_js_1.from)(this.targets())).pipe((0, util_js_1.filterAsync)(predicate), (0, rxjs_js_1.raceWith)((0, util_js_1.timeout)(ms))));
     }
     /**
      * Whether this {@link BrowserContext | browser context} is closed.

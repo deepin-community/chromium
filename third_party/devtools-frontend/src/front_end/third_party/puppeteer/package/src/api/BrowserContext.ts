@@ -5,15 +5,20 @@
  */
 
 import {
-  filterAsync,
   firstValueFrom,
   from,
   merge,
   raceWith,
 } from '../../third_party/rxjs/rxjs.js';
 import {EventEmitter, type EventType} from '../common/EventEmitter.js';
-import {debugError, fromEmitterEvent, timeout} from '../common/util.js';
+import {
+  debugError,
+  fromEmitterEvent,
+  filterAsync,
+  timeout,
+} from '../common/util.js';
 import {asyncDisposeSymbol, disposeSymbol} from '../util/disposable.js';
+import {Mutex} from '../util/Mutex.js';
 
 import type {Browser, Permission, WaitForTargetOptions} from './Browser.js';
 import type {Page} from './Page.js';
@@ -101,6 +106,37 @@ export abstract class BrowserContext extends EventEmitter<BrowserContextEvents> 
   abstract targets(): Target[];
 
   /**
+   * If defined, indicates an ongoing screenshot opereation.
+   */
+  #pageScreenshotMutex?: Mutex;
+  #screenshotOperationsCount = 0;
+
+  /**
+   * @internal
+   */
+  startScreenshot(): Promise<InstanceType<typeof Mutex.Guard>> {
+    const mutex = this.#pageScreenshotMutex || new Mutex();
+    this.#pageScreenshotMutex = mutex;
+    this.#screenshotOperationsCount++;
+    return mutex.acquire(() => {
+      this.#screenshotOperationsCount--;
+      if (this.#screenshotOperationsCount === 0) {
+        // Remove the mutex to indicate no ongoing screenshot operation.
+        this.#pageScreenshotMutex = undefined;
+      }
+    });
+  }
+
+  /**
+   * @internal
+   */
+  waitForScreenshotOperations():
+    | Promise<InstanceType<typeof Mutex.Guard>>
+    | undefined {
+    return this.#pageScreenshotMutex?.acquire();
+  }
+
+  /**
    * Waits until a {@link Target | target} matching the given `predicate`
    * appears and returns it.
    *
@@ -144,6 +180,17 @@ export abstract class BrowserContext extends EventEmitter<BrowserContextEvents> 
    * In Chrome, the
    * {@link Browser.defaultBrowserContext | default browser context} is the only
    * non-incognito browser context.
+   *
+   * @deprecated In Chrome, the
+   * {@link Browser.defaultBrowserContext | default browser context} can also be
+   * "incognito" if configured via the arguments and in such cases this getter
+   * returns wrong results (see
+   * https://github.com/puppeteer/puppeteer/issues/8836). Also, the term
+   * "incognito" is not applicable to other browsers. To migrate, check the
+   * {@link Browser.defaultBrowserContext | default browser context} instead: in
+   * Chrome all non-default contexts are incognito, and the default context
+   * might be incognito if you provide the `--incognito` argument when launching
+   * the browser.
    */
   abstract isIncognito(): boolean;
 

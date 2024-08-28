@@ -12,6 +12,7 @@
 #include "ash/display/privacy_screen_controller.h"
 #include "ash/shell.h"
 #include "ash/system/input_device_settings/input_device_settings_controller_impl.h"
+#include "ash/system/input_device_settings/input_device_settings_utils.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
@@ -137,6 +138,7 @@ bool ShouldAlwaysShowWithExternalKeyboard(ui::TopRowActionKey action_key) {
     case ui::TopRowActionKey::kKeyboardBacklightToggle:
     case ui::TopRowActionKey::kPrivacyScreenToggle:
     case ui::TopRowActionKey::kAllApplications:
+    case ui::TopRowActionKey::kAccessibility:
       return false;
     case ui::TopRowActionKey::kDictation:
     case ui::TopRowActionKey::kFullscreen:
@@ -307,6 +309,30 @@ std::vector<ui::Accelerator> AcceleratorAliasConverter::CreateAcceleratorAlias(
   }
 
   // Generate aliases for both the priority external keyboard + the internal
+  // keyboard for CapsLock key.
+  if (priority_external_keyboard) {
+    if (const auto alias =
+            CreateCapsLockAliases(*priority_external_keyboard, accelerator);
+        alias) {
+      aliases_set.insert(*alias);
+      // Always add the original accelerator if an external keyboard is present.
+      aliases_set.insert(accelerator);
+    }
+  }
+  if (internal_keyboard) {
+    if (const auto alias =
+            CreateCapsLockAliases(*internal_keyboard, accelerator);
+        alias) {
+      aliases_set.insert(*alias);
+      // Always add the original accelerator if an internal keyboard is present.
+      aliases_set.insert(accelerator);
+    }
+  }
+  if (!aliases_set.empty()) {
+    return FilterAliasBySupportedKeys(std::move(aliases_set).extract());
+  }
+
+  // Generate aliases for both the priority external keyboard + the internal
   // keyboard for f-keys.
   if (priority_external_keyboard) {
     if (const auto alias =
@@ -382,7 +408,19 @@ AcceleratorAliasConverter::CreateFunctionKeyAliases(
   }
 
   const bool top_row_are_fkeys = AreTopRowFKeys(keyboard);
-  if (IsChromeOSKeyboard(keyboard)) {
+  if (IsSplitModifierKeyboard(keyboard.id)) {
+    // If its a split modifier Keyboard, the UI should show the Action Key
+    // glyph. If `top_row_are_fkeys` is false, function key must be added so
+    // convert the "F-Key" into the action key.
+    if (top_row_are_fkeys) {
+      return {ui::Accelerator(*action_vkey, accelerator.modifiers(),
+                              accelerator.key_state())};
+    } else {
+      return {ui::Accelerator(*action_vkey,
+                              accelerator.modifiers() | ui::EF_FUNCTION_DOWN,
+                              accelerator.key_state())};
+    }
+  } else if (IsChromeOSKeyboard(keyboard)) {
     // If `priority_keyboard` is a ChromeOS keyboard, the UI should show the
     // corresponding action key, the the F-Key glyph.
     if (top_row_are_fkeys) {
@@ -461,6 +499,20 @@ AcceleratorAliasConverter::CreateExtendedFKeysAliases(
   return ui::Accelerator(key_code, modifiers);
 }
 
+std::optional<ui::Accelerator> AcceleratorAliasConverter::CreateCapsLockAliases(
+    const ui::KeyboardDevice& keyboard,
+    const ui::Accelerator& accelerator) const {
+  if (accelerator.key_code() != ui::VKEY_CAPITAL) {
+    return std::nullopt;
+  }
+
+  if (Shell::Get()->keyboard_capability()->HasFunctionKey(keyboard)) {
+    return {ui::Accelerator(ui::VKEY_RIGHT_ALT, ui::EF_FUNCTION_DOWN)};
+  }
+
+  return accelerator;
+}
+
 std::optional<ui::Accelerator> AcceleratorAliasConverter::CreateTopRowAliases(
     const ui::KeyboardDevice& keyboard,
     const ui::Accelerator& accelerator) const {
@@ -484,7 +536,20 @@ std::optional<ui::Accelerator> AcceleratorAliasConverter::CreateTopRowAliases(
   }
 
   const bool top_row_are_fkeys = AreTopRowFKeys(keyboard);
-  if (IsChromeOSKeyboard(keyboard)) {
+  if (IsSplitModifierKeyboard(keyboard.id)) {
+    // If its a split modifier Keyboard, the UI should show the Action Key
+    // glyph. If `top_row_are_fkeys` is true, function key must be added so
+    // convert the "F-Key" into the action key.
+    if (top_row_are_fkeys) {
+      return {ui::Accelerator(accelerator.key_code(),
+                              accelerator.modifiers() | ui::EF_FUNCTION_DOWN,
+                              accelerator.key_state())};
+    } else {
+      // Otherwise if `top_row_are_fkeys` is false, the identity accelerator
+      // should be returned.
+      return {accelerator};
+    }
+  } else if (IsChromeOSKeyboard(keyboard)) {
     // If its a ChromeOS Keyboard, the UI should show the Action Key glyph. If
     // `top_row_are_fkeys` is true, Search must be added so convert the "F-Key"
     // into the action key.
@@ -523,6 +588,20 @@ std::vector<ui::Accelerator> AcceleratorAliasConverter::CreateSixPackAliases(
   if (features::IsAltClickAndSixPackCustomizationEnabled() &&
       !device_id.has_value()) {
     return std::vector<ui::Accelerator>();
+  }
+
+  if (features::IsModifierSplitEnabled() &&
+      IsSplitModifierKeyboard(device_id.value())) {
+    const auto iter = ui::kSixPackKeyToFnKeyMap.find(accelerator.key_code());
+    // [Insert] is technically a six pack key but has no Fn based rewrite. Need
+    // to make sure we return no aliased accelerator for this case.
+    if (iter == ui::kSixPackKeyToFnKeyMap.end()) {
+      return std::vector<ui::Accelerator>();
+    }
+
+    return {ui::Accelerator(iter->second,
+                            accelerator.modifiers() | ui::EF_FUNCTION_DOWN,
+                            accelerator.key_state())};
   }
 
   // Edge cases:
@@ -719,6 +798,28 @@ AcceleratorAliasConverter::FilterAliasBySupportedKeys(
     // Search should be shown in the shortcuts app.
     if (accelerator.key_code() == ui::VKEY_MENU &&
         accelerator.modifiers() == ui::EF_COMMAND_DOWN) {
+      continue;
+    }
+
+    // Add [CapsLock] to the accelerators list if keyboard has CapsLock.
+    if (accelerator.key_code() == ui::VKEY_CAPITAL) {
+      if ((priority_keyboard &&
+           keyboard_capability->HasCapsLockKey(*priority_keyboard)) ||
+          (internal_keyboard &&
+           keyboard_capability->HasCapsLockKey(*internal_keyboard))) {
+        filtered_accelerators.push_back(accelerator);
+      }
+      continue;
+    }
+
+    // Add Alt + Search to the accelerators list.
+    if (accelerator.key_code() == ui::VKEY_LWIN &&
+        accelerator.modifiers() == ui::EF_ALT_DOWN) {
+      if ((internal_keyboard &&
+           !IsSplitModifierKeyboard(internal_keyboard->id)) ||
+          priority_keyboard) {
+        filtered_accelerators.push_back(accelerator);
+      }
       continue;
     }
 

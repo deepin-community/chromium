@@ -25,7 +25,7 @@ import {CameraManager} from './device/index.js';
 import {ModeConstraints} from './device/type.js';
 import * as dom from './dom.js';
 import {reportError} from './error.js';
-import * as expert from './expert.js';
+import {Flag} from './flag.js';
 import {Intent} from './intent.js';
 import * as Comlink from './lib/comlink.js';
 import {startMeasuringMemoryUsage} from './memory_usage.js';
@@ -58,8 +58,10 @@ import {
 import {addUnloadCallback} from './unload.js';
 import * as util from './util.js';
 import {Camera} from './views/camera.js';
+import {toggleIndicatorOnOpenPTZButton} from './views/camera/options.js';
 import * as timertick from './views/camera/timertick.js';
 import {CameraIntent} from './views/camera_intent.js';
+import {SuperResIntroDialog} from './views/dialog.js';
 import {View} from './views/view.js';
 import {Warning, WarningType} from './views/warning.js';
 import {WaitableEvent} from './waitable_event.js';
@@ -90,11 +92,15 @@ function setupTooltip() {
           elements.push(target);
         }
       } else if (mutation.type === 'childList') {
-        const {target} = mutation;
-        if (target instanceof HTMLElement) {
-          elements.push(
-              ...dom.getAllFrom(target, tooltipAttributeSelector, HTMLElement),
-          );
+        // Check newly added nodes.
+        for (const node of mutation.addedNodes) {
+          if (node instanceof HTMLElement) {
+            if (node.hasAttribute(tooltipAttribute)) {
+              elements.push(node);
+            }
+            elements.push(
+                ...dom.getAllFrom(node, tooltipAttributeSelector, HTMLElement));
+          }
         }
       }
     }
@@ -293,7 +299,7 @@ async function setupMultiWindowHandling(
         // CCA must get camera usage for completing its initialization when
         // first launched.
         await cameraManager.initialize(cameraView);
-        await cameraView.initialize();
+        cameraView.initialize();
         cameraResourceInitialized.signal();
       }
     } catch (e) {
@@ -356,56 +362,6 @@ async function setupMultiWindowHandling(
   });
 }
 
-function createPerfLogger(): PerfLogger {
-  const perfLogger = new PerfLogger();
-
-  // Setup listener for performance events.
-  perfLogger.addListener(async ({event, duration, perfInfo}) => {
-    metrics.sendPerfEvent({event, duration, perfInfo});
-
-    // Setup for console perf logger.
-    if (expert.isEnabled(expert.ExpertOption.PRINT_PERFORMANCE_LOGS)) {
-      // eslint-disable-next-line no-console
-      console.log(
-          '%c%s %s ms %s', 'color: #4E4F97; font-weight: bold;',
-          event.padEnd(40), duration.toFixed(0).padStart(4),
-          JSON.stringify(perfInfo));
-    }
-
-    // Setup for Tast tests logger.
-    await window.appWindow?.reportPerf({event, duration, perfInfo});
-  });
-
-  state.addObserver(state.State.TAKING, (val, extras) => {
-    // 'taking' state indicates either taking photo or video. Skips for
-    // video-taking case since we only want to collect the metrics of
-    // photo-taking.
-    if (state.get(Mode.VIDEO)) {
-      return;
-    }
-    const event = PerfEvent.PHOTO_TAKING;
-
-    if (val) {
-      perfLogger.start(event);
-    } else {
-      perfLogger.stop(event, extras);
-    }
-  });
-
-  const states = Object.values(PerfEvent);
-  for (const event of states) {
-    state.addObserver(event, (val, extras) => {
-      if (val) {
-        perfLogger.start(event);
-      } else {
-        perfLogger.stop(event, extras);
-      }
-    });
-  }
-
-  return perfLogger;
-}
-
 function setupSvgs() {
   for (const el of dom.getAll('[data-svg]', HTMLElement)) {
     const imageName = assertExists(el.dataset['svg']);
@@ -415,6 +371,20 @@ function setupSvgs() {
     // other possible children (e.g. inkdrop effect).
     el.prepend(svg);
   }
+}
+
+function maybeIntroduceSuperRes() {
+  // Only introduce the feature when both digital zoom and super res flags are
+  // enabled for the first time.
+  if (!loadTimeData.getChromeFlag(Flag.DIGITAL_ZOOM) ||
+      !loadTimeData.getChromeFlag(Flag.SUPER_RES) ||
+      localStorage.getBool(LocalStorageKey.SUPER_RES_DIALOG_SHOWN) ||
+      window.isInTestSession) {
+    return;
+  }
+  nav.open(ViewName.SUPER_RES_INTRO_DIALOG);
+  toggleIndicatorOnOpenPTZButton(true);
+  localStorage.set(LocalStorageKey.SUPER_RES_DIALOG_SHOWN, true);
 }
 
 /**
@@ -440,8 +410,6 @@ async function main() {
     // Disable metrics when in testing.
     void metrics.setEnabled(false);
   }
-
-  const perfLogger = createPerfLogger();
 
   // toast and splash style depends on dynamic color css being imported.
   await setupDynamicColor();
@@ -471,17 +439,20 @@ async function main() {
     kind: shouldHandleIntentResult && mode !== null ? 'exact' : 'default',
     mode: mode ?? Mode.PHOTO,
   };
-  const cameraManager = new CameraManager(perfLogger, facing, modeConstraints);
+
+  PerfLogger.initializeInstance();
+  const cameraManager = new CameraManager(facing, modeConstraints);
 
   const resultSaver = new DefaultResultSaver();
 
   const cameraView = shouldHandleIntentResult ?
-      new CameraIntent(intent, cameraManager, perfLogger) :
-      new Camera(resultSaver, cameraManager, perfLogger);
+      new CameraIntent(intent, cameraManager) :
+      new Camera(resultSaver, cameraManager);
 
   // Set up views navigation by their DOM z-order.
   nav.setup([
     cameraView,
+    new SuperResIntroDialog(),
     new Warning(),
     new View(ViewName.SPLASH),
   ]);
@@ -514,16 +485,6 @@ async function main() {
                                                 metrics.LaunchType.DEFAULT;
 
   await DeviceOperator.initializeInstance();
-  try {
-    await filesystem.initialize();
-    const cameraDir = filesystem.getCameraDirectory();
-    if (!shouldHandleIntentResult) {
-      await resultSaver.initialize(cameraDir);
-    }
-  } catch (error) {
-    reportError(ErrorType.FILE_SYSTEM_FAILURE, ErrorLevel.ERROR, error);
-    nav.open(ViewName.WARNING, WarningType.FILESYSTEM_FAILURE);
-  }
 
   // Create a promise to finish the intent, that runs in parallel with starting
   // camera.
@@ -546,12 +507,28 @@ async function main() {
   metrics.sendLaunchEvent({launchType});
 
   await cameraResourceInitialized.wait();
-  const cameraStartSuccessful = await cameraManager.requestResume();
+  const cameraStartSuccessful = await cameraManager.reconfigure();
 
-  if (cameraStartSuccessful) {
+  try {
+    await filesystem.initialize();
+    const cameraDir = filesystem.getCameraDirectory();
+    if (!shouldHandleIntentResult) {
+      await resultSaver.initialize(cameraDir);
+    }
+  } catch (error) {
+    reportError(ErrorType.FILE_SYSTEM_FAILURE, ErrorLevel.ERROR, error);
+    nav.open(ViewName.WARNING, WarningType.FILESYSTEM_FAILURE);
+  }
+
+  // To align window behavior with other apps, defaultWindowSize is only applied
+  // when the camera app is first opened. Later, the window will be opened in
+  // the size that a user prefers.
+  if (cameraStartSuccessful &&
+      localStorage.getBool(LocalStorageKey.FIRST_OPENING, true)) {
     const {aspectRatio} = cameraManager.getPreviewResolution();
     const {width, height} = getDefaultWindowSize(aspectRatio);
     window.resizeTo(width, height);
+    localStorage.set(LocalStorageKey.FIRST_OPENING, false);
   }
 
   // Waits for the intent to finish before switching to main camera view.
@@ -562,11 +539,14 @@ async function main() {
   nav.close(ViewName.SPLASH);
   nav.open(ViewName.CAMERA);
 
+  const perfLogger = PerfLogger.getInstance();
   perfLogger.start(
       PerfEvent.LAUNCHING_FROM_WINDOW_CREATION, window.windowCreationTime);
   perfLogger.stop(
       PerfEvent.LAUNCHING_FROM_WINDOW_CREATION,
       {hasError: !cameraStartSuccessful});
+
+  maybeIntroduceSuperRes();
 
   // Start the memory measurement when the camera preview is ready. The first
   // measurement is performed immediately. The following measurements are

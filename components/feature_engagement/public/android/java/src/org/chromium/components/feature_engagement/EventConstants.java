@@ -28,7 +28,16 @@ public final class EventConstants {
     /** The user clicked the minimize button on the toolbar. */
     public static final String CCT_MINIMIZE_BUTTON_CLICKED = "cct_minimize_button_clicked";
 
-    /** User performed a web search for a query by choosing the Web Search option on the popup menu. */
+    /** The user clicked the history item on the menu in the custom tab toolbar. */
+    public static final String CCT_HISTORY_MENU_ITEM_CLICKED = "cct_history_menu_item_clicked";
+
+    /** The user clicked the search button on the history toolbar. */
+    public static final String HISTORY_TOOLBAR_SEARCH_MENU_ITEM_CLICKED =
+            "history_toolbar_search_menu_item_clicked";
+
+    /**
+     * User performed a web search for a query by choosing the Web Search option on the popup menu.
+     */
     public static final String WEB_SEARCH_PERFORMED = "web_search_performed";
 
     /** The partner homepage was pressed. */
@@ -58,6 +67,10 @@ public final class EventConstants {
 
     /** The keyboard accessory was swiped to reveal more suggestions. */
     public static final String KEYBOARD_ACCESSORY_BAR_SWIPED = "keyboard_accessory_bar_swiped";
+
+    /** The keyboard accessory was used to create a new plus address. */
+    public static final String KEYBOARD_ACCESSORY_PLUS_ADDRESS_CREATE_SUGGESTION =
+            "keyboard_accessory_plus_address_create_suggestion";
 
     /** User has finished drop-to-merge to create a group. */
     public static final String TAB_DRAG_AND_DROP_TO_GROUP = "tab_drag_and_drop_to_group";
@@ -187,6 +200,8 @@ public final class EventConstants {
             "restore_tabs_on_first_run_show_promo";
 
     public static final String RESTORE_TABS_PROMO_USED = "restore_tabs_promo_used";
+
+    public static final String TAB_GROUP_SYNC_ON_STRIP_USED = "tab_group_sync_on_strip_used";
 
     /** Do not instantiate. */
     private EventConstants() {}

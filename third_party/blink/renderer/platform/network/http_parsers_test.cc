@@ -2,13 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/network/http_parsers.h"
 
-#include "base/strings/string_piece.h"
+#include <string_view>
+
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "net/base/features.h"
-#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/content_security_policy.mojom-blink-forward.h"
 #include "services/network/public/mojom/content_security_policy.mojom-blink.h"
 #include "services/network/public/mojom/parsed_headers.mojom-blink.h"
@@ -297,11 +302,11 @@ TEST(HTTPParsersTest, ParseHTTPRefresh) {
 
   EXPECT_TRUE(
       ParseHTTPRefresh("1.5; url=dest", IsASCIISpace<UChar>, delay, url));
-  EXPECT_EQ(base::Seconds(1.5), delay);
+  EXPECT_EQ(base::Seconds(1), delay);
   EXPECT_EQ("dest", url);
   EXPECT_TRUE(
       ParseHTTPRefresh("1.5.9; url=dest", IsASCIISpace<UChar>, delay, url));
-  EXPECT_EQ(base::Seconds(1.5), delay);
+  EXPECT_EQ(base::Seconds(1), delay);
   EXPECT_EQ("dest", url);
   EXPECT_TRUE(
       ParseHTTPRefresh("7..; url=dest", IsASCIISpace<UChar>, delay, url));
@@ -871,47 +876,8 @@ TEST(HTTPParsersTest, ParseContentSecurityPoliciesSourceBasic) {
   }
 }
 
-class NoVarySearchPrefetchDisabledTest
-    : public ::testing::Test,
-      public ::testing::WithParamInterface<base::StringPiece> {
- public:
-  NoVarySearchPrefetchDisabledTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        network::features::kPrefetchNoVarySearch);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_P(NoVarySearchPrefetchDisabledTest, ParsingNVSReturnsDefaultURLVariance) {
-  const auto parsed_headers =
-      ParseHeaders(WTF::String::FromUTF8(GetParam()), KURL("https://a.com"));
-
-  ASSERT_TRUE(parsed_headers);
-  EXPECT_FALSE(parsed_headers->no_vary_search_with_parse_error);
-}
-
-constexpr base::StringPiece no_vary_search_prefetch_disabled_data[] = {
-    // No No-Vary-Search header.
-    "HTTP/1.1 200 OK\r\n"
-    "Set-Cookie: a\r\n"
-    "Set-Cookie: b\r\n\r\n",
-    // No-Vary-Search header present.
-    "HTTP/1.1 200 OK\r\n"
-    R"(No-Vary-Search: params=("a"))"
-    "\r\n\r\n",
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    NoVarySearchPrefetchDisabledTest,
-    NoVarySearchPrefetchDisabledTest,
-    testing::ValuesIn(no_vary_search_prefetch_disabled_data));
-
 TEST(NoVarySearchPrefetchEnabledTest, ParsingNVSReturnsDefaultURLVariance) {
-  base::test::ScopedFeatureList feature_list(
-      network::features::kPrefetchNoVarySearch);
-  const base::StringPiece headers =
+  const std::string_view headers =
       "HTTP/1.1 200 OK\r\n"
       "Set-Cookie: a\r\n"
       "Set-Cookie: b\r\n\r\n";
@@ -936,16 +902,7 @@ struct NoVarySearchTestData {
 
 class NoVarySearchPrefetchEnabledTest
     : public ::testing::Test,
-      public ::testing::WithParamInterface<NoVarySearchTestData> {
- public:
-  NoVarySearchPrefetchEnabledTest() {
-    feature_list_.InitAndEnableFeature(
-        network::features::kPrefetchNoVarySearch);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
+      public ::testing::WithParamInterface<NoVarySearchTestData> {};
 
 TEST_P(NoVarySearchPrefetchEnabledTest, ParsingSuccess) {
   const auto& test_data = GetParam();
@@ -1033,6 +990,16 @@ Vector<NoVarySearchTestData> GetNoVarySearchParsingSuccessTestData() {
           {},                                   // expected_vary_params
           false,                                // expected_vary_on_key_order
           true                                  // expected_vary_by_default
+      },
+      // Vary on multiple search params but don't vary on search params order.
+      {
+          "HTTP/1.1 200 OK\r\n"
+          R"(No-Vary-Search: key-order, params, except=("a" "b" "c"))"
+          "\r\n\r\n",                       // raw_headers
+          {},                               // expected_no_vary_params
+          Vector<String>({"a", "b", "c"}),  // expected_vary_params
+          false,                            // expected_vary_on_key_order
+          false                             // expected_vary_by_default
       },
   };
   return test_data;

@@ -11,7 +11,7 @@ namespace syncer {
 ForwardingModelTypeControllerDelegate::ForwardingModelTypeControllerDelegate(
     ModelTypeControllerDelegate* other)
     : other_(other) {
-  // TODO(crbug.com/895340): Put "DCHECK(other_);"" back once
+  // TODO(crbug.com/41420679): Put "DCHECK(other_);"" back once
   // FakeUserEventService provides a proper non-null test double.
 }
 
@@ -27,6 +27,11 @@ void ForwardingModelTypeControllerDelegate::OnSyncStarting(
 void ForwardingModelTypeControllerDelegate::OnSyncStopping(
     SyncStopMetadataFate metadata_fate) {
   other_->OnSyncStopping(metadata_fate);
+}
+
+void ForwardingModelTypeControllerDelegate::HasUnsyncedData(
+    base::OnceCallback<void(bool)> callback) {
+  other_->HasUnsyncedData(std::move(callback));
 }
 
 void ForwardingModelTypeControllerDelegate::GetAllNodesForDebugging(
@@ -46,7 +51,7 @@ void ForwardingModelTypeControllerDelegate::
 
 void ForwardingModelTypeControllerDelegate::ClearMetadataIfStopped() {
   // `other_` can be null during testing.
-  // TODO(crbug.com/1418351): Remove test-only code-path.
+  // TODO(crbug.com/40894683): Remove test-only code-path.
   if (other_) {
     other_->ClearMetadataIfStopped();
   }

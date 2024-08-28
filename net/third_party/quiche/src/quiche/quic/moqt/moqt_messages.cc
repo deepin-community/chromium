@@ -10,11 +10,54 @@
 
 namespace moqt {
 
+MoqtObjectStatus IntegerToObjectStatus(uint64_t integer) {
+  if (integer >= 0x5) {
+    return MoqtObjectStatus::kInvalidObjectStatus;
+  }
+  return static_cast<MoqtObjectStatus>(integer);
+}
+
+MoqtFilterType GetFilterType(const MoqtSubscribe& message) {
+  if (!message.end_group.has_value() && message.end_object.has_value()) {
+    return MoqtFilterType::kNone;
+  }
+  bool has_start =
+      message.start_group.has_value() && message.start_object.has_value();
+  if (message.end_group.has_value()) {
+    if (has_start) {
+      if (*message.end_group < *message.start_group) {
+        return MoqtFilterType::kNone;
+      } else if (*message.end_group == *message.start_group &&
+                 *message.end_object <= *message.start_object) {
+        if (*message.end_object < *message.start_object) {
+          return MoqtFilterType::kNone;
+        } else if (*message.end_object == *message.start_object) {
+          return MoqtFilterType::kAbsoluteStart;
+        }
+      }
+      return MoqtFilterType::kAbsoluteRange;
+    }
+  } else {
+    if (has_start) {
+      return MoqtFilterType::kAbsoluteStart;
+    } else if (!message.start_group.has_value()) {
+      if (message.start_object.has_value()) {
+        if (message.start_object.value() == 0) {
+          return MoqtFilterType::kLatestGroup;
+        }
+      } else {
+        return MoqtFilterType::kLatestObject;
+      }
+    }
+  }
+  return MoqtFilterType::kNone;
+}
+
 std::string MoqtMessageTypeToString(const MoqtMessageType message_type) {
   switch (message_type) {
     case MoqtMessageType::kObjectStream:
       return "OBJECT_STREAM";
-    case MoqtMessageType::kObjectPreferDatagram:
+    case MoqtMessageType::kObjectDatagram:
       return "OBJECT_PREFER_DATAGRAM";
     case MoqtMessageType::kClientSetup:
       return "CLIENT_SETUP";
@@ -28,10 +71,16 @@ std::string MoqtMessageTypeToString(const MoqtMessageType message_type) {
       return "SUBSCRIBE_ERROR";
     case MoqtMessageType::kUnsubscribe:
       return "UNSUBSCRIBE";
-    case MoqtMessageType::kSubscribeFin:
-      return "SUBSCRIBE_FIN";
-    case MoqtMessageType::kSubscribeRst:
-      return "SUBSCRIBE_RST";
+    case MoqtMessageType::kSubscribeDone:
+      return "SUBSCRIBE_DONE";
+    case MoqtMessageType::kSubscribeUpdate:
+      return "SUBSCRIBE_UPDATE";
+    case MoqtMessageType::kAnnounceCancel:
+      return "ANNOUNCE_CANCEL";
+    case MoqtMessageType::kTrackStatusRequest:
+      return "TRACK_STATUS_REQUEST";
+    case MoqtMessageType::kTrackStatus:
+      return "TRACK_STATUS";
     case MoqtMessageType::kAnnounce:
       return "ANNOUNCE";
     case MoqtMessageType::kAnnounceOk:
@@ -71,7 +120,7 @@ MoqtForwardingPreference GetForwardingPreference(MoqtMessageType type) {
   switch (type) {
     case MoqtMessageType::kObjectStream:
       return MoqtForwardingPreference::kObject;
-    case MoqtMessageType::kObjectPreferDatagram:
+    case MoqtMessageType::kObjectDatagram:
       return MoqtForwardingPreference::kDatagram;
     case MoqtMessageType::kStreamHeaderTrack:
       return MoqtForwardingPreference::kTrack;
@@ -91,7 +140,7 @@ MoqtMessageType GetMessageTypeForForwardingPreference(
     case MoqtForwardingPreference::kObject:
       return MoqtMessageType::kObjectStream;
     case MoqtForwardingPreference::kDatagram:
-      return MoqtMessageType::kObjectPreferDatagram;
+      return MoqtMessageType::kObjectDatagram;
     case MoqtForwardingPreference::kTrack:
       return MoqtMessageType::kStreamHeaderTrack;
     case MoqtForwardingPreference::kGroup:

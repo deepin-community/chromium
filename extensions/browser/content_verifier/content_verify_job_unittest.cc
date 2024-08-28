@@ -127,14 +127,14 @@ class ContentVerifyJobUnittest : public ExtensionsTest {
     TestContentVerifySingleJobObserver observer(extension.id(), resource_path);
     scoped_refptr<ContentVerifyJob> verify_job = new ContentVerifyJob(
         extension.id(), extension.version(), extension.path(), resource_path,
-        base::DoNothing());
+        extension.manifest_version(), base::DoNothing());
 
     auto run_content_read_step = [](ContentVerifyJob* verify_job,
                                     std::string* resource_contents) {
       // Simulate serving |resource_contents| from |resource_path|.
-      verify_job->Read(std::data(*resource_contents), resource_contents->size(),
-                       MOJO_RESULT_OK);
-      verify_job->Done();
+      verify_job->BytesRead(std::data(*resource_contents),
+                            resource_contents->size(), MOJO_RESULT_OK);
+      verify_job->DoneReading();
     };
 
     switch (run_mode) {
@@ -168,7 +168,7 @@ class ContentVerifyJobUnittest : public ExtensionsTest {
                              const base::FilePath& resource_path) {
     auto verify_job = base::MakeRefCounted<ContentVerifyJob>(
         extension.id(), extension.version(), extension.path(), resource_path,
-        base::DoNothing());
+        extension.manifest_version(), base::DoNothing());
     StartJob(verify_job);
   }
 
@@ -843,15 +843,15 @@ TEST_F(ContentVerifyJobWithHashFetchUnittest, ReadErrorBeforeHashReady) {
     scoped_refptr<ContentVerifyJob> verify_job =
         base::MakeRefCounted<ContentVerifyJob>(
             extension->id(), extension->version(), extension->path(),
-            resource_path, base::DoNothing());
+            resource_path, extension->manifest_version(), base::DoNothing());
     auto do_read_abort_and_done =
         [](scoped_refptr<ContentVerifyJob> job,
            scoped_refptr<ContentVerifier> content_verifier,
            base::OnceClosure done_callback) {
           DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
           job->Start(content_verifier.get());
-          job->Read(nullptr, 0u, MOJO_RESULT_ABORTED);
-          job->Done();
+          job->BytesRead(nullptr, 0u, MOJO_RESULT_ABORTED);
+          job->DoneReading();
           std::move(done_callback).Run();
         };
 

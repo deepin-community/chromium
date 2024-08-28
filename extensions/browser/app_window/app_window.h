@@ -23,6 +23,7 @@
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/frame.mojom-forward.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom-forward.h"
 #include "ui/base/ui_base_types.h"  // WindowShowState
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/image/image.h"
@@ -216,7 +217,7 @@ class AppWindow : public content::WebContentsDelegate,
   // Convert draggable regions in raw format to SkRegion format. Caller is
   // responsible for deleting the returned SkRegion instance.
   static SkRegion* RawDraggableRegionsToSkRegion(
-      const std::vector<mojom::DraggableRegionPtr>& regions);
+      const std::vector<blink::mojom::DraggableRegionPtr>& regions);
 
   // The constructor and Init methods are public for constructing a AppWindow
   // with a non-standard render interface (e.g.
@@ -287,10 +288,6 @@ class AppWindow : public content::WebContentsDelegate,
 
   // Sets the window shape. Passing a nullptr |rects| sets the default shape.
   void UpdateShape(std::unique_ptr<ShapeRects> rects);
-
-  // Called from the render interface to modify the draggable regions.
-  void UpdateDraggableRegions(
-      const std::vector<mojom::DraggableRegionPtr>& regions);
 
   // Notify hat an app window is ready and can resume resource requests.
   void AppWindowReady();
@@ -394,7 +391,7 @@ class AppWindow : public content::WebContentsDelegate,
     native_app_window_ = std::move(native_app_window);
   }
 
-  void SetOnUpdateDraggableRegionsForTesting(base::OnceClosure callback) {
+  void SetOnDraggableRegionsChangedForTesting(base::OnceClosure callback) {
     on_update_draggable_regions_callback_for_testing_ = std::move(callback);
   }
 
@@ -434,7 +431,9 @@ class AppWindow : public content::WebContentsDelegate,
                                   blink::mojom::MediaStreamType type) override;
   content::WebContents* OpenURLFromTab(
       content::WebContents* source,
-      const content::OpenURLParams& params) override;
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+          navigation_handle_callback) override;
   void AddNewContents(content::WebContents* source,
                       std::unique_ptr<content::WebContents> new_contents,
                       const GURL& target_url,
@@ -444,10 +443,9 @@ class AppWindow : public content::WebContentsDelegate,
                       bool* was_blocked) override;
   content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
       content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
+      const input::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
   void RequestPointerLock(content::WebContents* web_contents,
                           bool user_gesture,
                           bool last_unlocked_by_target) override;
@@ -458,6 +456,9 @@ class AppWindow : public content::WebContentsDelegate,
       content::WebContents* web_contents) override;
   void ExitPictureInPicture() override;
   bool ShouldShowStaleContentOnEviction(content::WebContents* source) override;
+  void DraggableRegionsChanged(
+      const std::vector<blink::mojom::DraggableRegionPtr>& draggable_regions,
+      content::WebContents* contents) override;
 
   // content::WebContentsObserver implementation.
   void RenderFrameCreated(content::RenderFrameHost* frame_host) override;
@@ -544,6 +545,15 @@ class AppWindow : public content::WebContentsDelegate,
   // be fetched and set using this URL.
   GURL app_icon_url_;
 
+  // These callbacks are called when the navigation is finished on both browser
+  // and renderer sides.
+  std::vector<DidFinishFirstNavigationCallback>
+      on_did_finish_first_navigation_callbacks_;
+
+  // Whether the first navigation was completed in both browser and renderer
+  // processes.
+  bool did_finish_first_navigation_ = false;
+
   std::unique_ptr<NativeAppWindow> native_app_window_;
   std::unique_ptr<AppWindowContents> app_window_contents_;
   std::unique_ptr<AppDelegate> app_delegate_;
@@ -588,14 +598,6 @@ class AppWindow : public content::WebContentsDelegate,
   // Whether the app window is loaded and ready. It is used to resolve the
   // race condition of loading custom app icon and app content simultaneously.
   bool window_ready_ = false;
-
-  // These callbacks are called when the navigation is finished on both browser
-  // and renderer sides.
-  std::vector<DidFinishFirstNavigationCallback>
-      on_did_finish_first_navigation_callbacks_;
-  // Whether the first navigation was completed in both browser and renderer
-  // processes.
-  bool did_finish_first_navigation_ = false;
 
   // Allows tests to wait for draggable regions to be sent from the renderer.
   base::OnceClosure on_update_draggable_regions_callback_for_testing_;

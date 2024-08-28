@@ -28,7 +28,6 @@
 #include "src/tint/lang/core/ir/transform/robustness.h"
 
 #include <algorithm>
-#include <utility>
 
 #include "src/tint/lang/core/ir/builder.h"
 #include "src/tint/lang/core/ir/module.h"
@@ -65,48 +64,45 @@ struct State {
         Vector<ir::LoadVectorElement*, 64> vector_loads;
         Vector<ir::StoreVectorElement*, 64> vector_stores;
         Vector<ir::CoreBuiltinCall*, 64> texture_calls;
-        for (auto* inst : ir.instructions.Objects()) {
-            if (inst->Alive()) {
-                tint::Switch(
-                    inst,  //
-                    [&](ir::Access* access) {
-                        // Check if accesses into this object should be clamped.
-                        auto* ptr = access->Object()->Type()->As<type::Pointer>();
-                        if (ptr) {
-                            if (ShouldClamp(ptr->AddressSpace())) {
-                                accesses.Push(access);
-                            }
-                        } else {
-                            if (config.clamp_value) {
-                                accesses.Push(access);
-                            }
-                        }
-                    },
-                    [&](ir::LoadVectorElement* lve) {
-                        // Check if loads from this address space should be clamped.
-                        auto* ptr = lve->From()->Type()->As<type::Pointer>();
+        for (auto* inst : ir.Instructions()) {
+            tint::Switch(
+                inst,  //
+                [&](ir::Access* access) {
+                    // Check if accesses into this object should be clamped.
+                    auto* ptr = access->Object()->Type()->As<type::Pointer>();
+                    if (ptr) {
                         if (ShouldClamp(ptr->AddressSpace())) {
-                            vector_loads.Push(lve);
+                            accesses.Push(access);
                         }
-                    },
-                    [&](ir::StoreVectorElement* sve) {
-                        // Check if stores to this address space should be clamped.
-                        auto* ptr = sve->To()->Type()->As<type::Pointer>();
-                        if (ShouldClamp(ptr->AddressSpace())) {
-                            vector_stores.Push(sve);
+                    } else {
+                        if (config.clamp_value) {
+                            accesses.Push(access);
                         }
-                    },
-                    [&](ir::CoreBuiltinCall* call) {
-                        // Check if this is a texture builtin that needs to be clamped.
-                        if (config.clamp_texture) {
-                            if (call->Func() == core::BuiltinFn::kTextureDimensions ||
-                                call->Func() == core::BuiltinFn::kTextureLoad ||
-                                call->Func() == core::BuiltinFn::kTextureStore) {
-                                texture_calls.Push(call);
-                            }
+                    }
+                },
+                [&](ir::LoadVectorElement* lve) {
+                    // Check if loads from this address space should be clamped.
+                    auto* ptr = lve->From()->Type()->As<type::Pointer>();
+                    if (ShouldClamp(ptr->AddressSpace())) {
+                        vector_loads.Push(lve);
+                    }
+                },
+                [&](ir::StoreVectorElement* sve) {
+                    // Check if stores to this address space should be clamped.
+                    auto* ptr = sve->To()->Type()->As<type::Pointer>();
+                    if (ShouldClamp(ptr->AddressSpace())) {
+                        vector_stores.Push(sve);
+                    }
+                },
+                [&](ir::CoreBuiltinCall* call) {
+                    // Check if this is a texture builtin that needs to be clamped.
+                    if (config.clamp_texture) {
+                        if (call->Func() == core::BuiltinFn::kTextureDimensions ||
+                            call->Func() == core::BuiltinFn::kTextureLoad) {
+                            texture_calls.Push(call);
                         }
-                    });
-            }
+                    }
+                });
         }
 
         // Clamp access indices.
@@ -143,6 +139,7 @@ struct State {
 
         // TODO(jrprice): Handle config.bindings_ignored.
         if (!config.bindings_ignored.empty()) {
+            // Also update robustness_fuzz.cc
             TINT_UNIMPLEMENTED();
         }
     }
@@ -235,8 +232,7 @@ struct State {
                     if (arr->ConstantCount()) {
                         return b.Constant(u32(arr->ConstantCount().value() - 1u));
                     }
-                    TINT_ASSERT_OR_RETURN_VALUE(arr->Count()->Is<type::RuntimeArrayCount>(),
-                                                nullptr);
+                    TINT_ASSERT(arr->Count()->Is<type::RuntimeArrayCount>());
 
                     // Skip clamping runtime-sized array indices if requested.
                     if (config.disable_runtime_sized_array_index_clamping) {
@@ -248,8 +244,8 @@ struct State {
                         // Generate a pointer to the runtime-sized array if it isn't the base of
                         // this access instruction.
                         auto* base_ptr = object->Type()->As<type::Pointer>();
-                        TINT_ASSERT_OR_RETURN_VALUE(base_ptr != nullptr, nullptr);
-                        TINT_ASSERT_OR_RETURN_VALUE(i == 1, nullptr);
+                        TINT_ASSERT(base_ptr != nullptr);
+                        TINT_ASSERT(i == 1);
                         auto* arr_ptr = ty.ptr(base_ptr->AddressSpace(), arr, base_ptr->Access());
                         object = b.Access(arr_ptr, object, indices[0])->Result(0);
                     }
@@ -290,12 +286,9 @@ struct State {
 
         // Helper for clamping the coordinates.
         auto clamp_coords = [&](uint32_t idx) {
-            const type::Type* type = ty.u32();
-            auto* one = b.Constant(1_u);
-            if (auto* vec = args[idx]->Type()->As<type::Vector>()) {
-                type = ty.vec(type, vec->Width());
-                one = b.Splat(type, one, vec->Width());
-            }
+            auto* arg_ty = args[idx]->Type();
+            const type::Type* type = ty.match_width(ty.u32(), arg_ty);
+            auto* one = b.MatchWidth(1_u, arg_ty);
             auto* dims = clamped_level ? b.Call(type, core::BuiltinFn::kTextureDimensions, args[0],
                                                 clamped_level)
                                        : b.Call(type, core::BuiltinFn::kTextureDimensions, args[0]);

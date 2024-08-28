@@ -8,7 +8,9 @@
 #include <utility>
 
 #include "base/feature_list.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/trace_event/typed_macros.h"
 #include "base/unguessable_token.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
@@ -34,6 +36,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/inspector/main_thread_debugger.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
@@ -179,19 +182,33 @@ void DedicatedWorker::postMessage(ScriptState* script_state,
   transferable_message.sender_stack_trace_id =
       ThreadDebugger::From(script_state->GetIsolate())
           ->StoreCurrentStackTrace("Worker.postMessage");
+  uint64_t trace_id = base::trace_event::GetNextGlobalTraceId();
+  transferable_message.trace_id = trace_id;
   context_proxy_->PostMessageToWorkerGlobalScope(
       std::move(transferable_message));
+  TRACE_EVENT_INSTANT(
+      "devtools.timeline", "SchedulePostMessage", "data",
+      [&](perfetto::TracedValue context) {
+        inspector_schedule_post_message_event::Data(
+            std::move(context), GetExecutionContext(), trace_id);
+      },
+      perfetto::Flow::Global(trace_id));  // SchedulePostMessage
 }
 
 // https://html.spec.whatwg.org/C/#worker-processing-model
 void DedicatedWorker::Start() {
+  TRACE_EVENT("blink.worker", "DedicatedWorker::Start");
   DCHECK(GetExecutionContext()->IsContextThread());
+  start_time_ = base::TimeTicks::Now();
 
   // This needs to be done after the UpdateStateIfNeeded is called as
   // calling into the debugger can cause a breakpoint.
   v8_stack_trace_id_ = ThreadDebugger::From(GetExecutionContext()->GetIsolate())
                            ->StoreCurrentStackTrace("Worker Created");
   if (base::FeatureList::IsEnabled(features::kPlzDedicatedWorker)) {
+    TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("blink.worker",
+                                      "PlzDedicatedWorker Specific Setup",
+                                      TRACE_ID_LOCAL(this));
     // For classic script, always use "same-origin" credentials mode.
     // https://html.spec.whatwg.org/C/#fetch-a-classic-worker-script
     // For module script, respect the credentials mode specified by
@@ -214,11 +231,15 @@ void DedicatedWorker::Start() {
     factory_client_->CreateWorkerHost(
         token_, script_request_url_, credentials_mode,
         WebFetchClientSettingsObject(*outside_fetch_client_settings_object_),
-        std::move(blob_url_token), GetExecutionContext()->HasStorageAccess());
+        std::move(blob_url_token),
+        GetExecutionContext()->GetStorageAccessApiStatus());
     // Continue in OnScriptLoadStarted() or OnScriptLoadStartFailed().
     return;
   }
 
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("blink.worker",
+                                    "LegacyDedicatedWorker Specific Setup",
+                                    TRACE_ID_LOCAL(this));
   mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
       blob_url_loader_factory;
   if (script_request_url_.ProtocolIs("blob")) {
@@ -284,7 +305,8 @@ void DedicatedWorker::OnHostCreated(
                   std::move(back_forward_cache_controller_host));
     return;
   }
-  NOTREACHED() << "Invalid type: " << IDLEnumAsString(options_->type());
+  NOTREACHED_IN_MIGRATION()
+      << "Invalid type: " << IDLEnumAsString(options_->type());
 }
 
 void DedicatedWorker::terminate() {
@@ -312,6 +334,7 @@ void DedicatedWorker::OnWorkerHostCreated(
         browser_interface_broker,
     CrossVariantMojoRemote<mojom::blink::DedicatedWorkerHostInterfaceBase>
         dedicated_worker_host) {
+  TRACE_EVENT("blink.worker", "DedicatedWorker::OnWorkerHostCreated");
   DCHECK(!browser_interface_broker_);
   browser_interface_broker_ = std::move(browser_interface_broker);
   pending_dedicated_worker_host_ = std::move(dedicated_worker_host);
@@ -324,6 +347,10 @@ void DedicatedWorker::OnScriptLoadStarted(
         mojom::blink::BackForwardCacheControllerHostInterfaceBase>
         back_forward_cache_controller_host) {
   DCHECK(base::FeatureList::IsEnabled(features::kPlzDedicatedWorker));
+  TRACE_EVENT_NESTABLE_ASYNC_END0("blink.worker",
+                                  "PlzDedicatedWorker Specific Setup",
+                                  TRACE_ID_LOCAL(this));
+  TRACE_EVENT("blink.worker", "DedicatedWorker::OnScriptLoadStarted");
   // Specify empty source code here because scripts will be fetched on the
   // worker thread.
   ContinueStart(script_request_url_, std::move(worker_main_script_load_params),
@@ -335,6 +362,11 @@ void DedicatedWorker::OnScriptLoadStarted(
 
 void DedicatedWorker::OnScriptLoadStartFailed() {
   DCHECK(base::FeatureList::IsEnabled(features::kPlzDedicatedWorker));
+  TRACE_EVENT_NESTABLE_ASYNC_END0("blink.worker",
+                                  "PlzDedicatedWorker Specific Setup",
+                                  TRACE_ID_LOCAL(this));
+  TRACE_EVENT("blink.worker", "DedicatedWorker::OnScriptLoadStartFailed");
+  // Specify empty source code here because scripts will be fetched on the
   context_proxy_->DidFailToFetchScript();
   factory_client_.reset();
 }
@@ -369,6 +401,10 @@ void DedicatedWorker::OnFinished(
     mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
         back_forward_cache_controller_host) {
   DCHECK(GetExecutionContext()->IsContextThread());
+  TRACE_EVENT("blink.worker", "DedicatedWorker::OnFinished");
+  TRACE_EVENT_NESTABLE_ASYNC_END0("blink.worker",
+                                  "LegacyDedicatedWorker Specific Setup",
+                                  TRACE_ID_LOCAL(this));
   if (classic_script_loader_->Canceled()) {
     // Do nothing.
   } else if (classic_script_loader_->Failed()) {
@@ -412,6 +448,51 @@ void DedicatedWorker::ContinueStart(
     RejectCoepUnsafeNone reject_coep_unsafe_none,
     mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
         back_forward_cache_controller_host) {
+  UMA_HISTOGRAM_TIMES("Worker.TopLevelScript.LoadStartedTime",
+                      base::TimeTicks::Now() - start_time_);
+  TRACE_EVENT("blink.worker", "DedicatedWorker::ContinueStart");
+  if (base::FeatureList::IsEnabled(
+          features::kDedicatedWorkerAblationStudyEnabled)) {
+    CHECK(GetExecutionContext());
+    TRACE_EVENT("blink.worker", "DedicatedWorkerAblationStudyEnabled",
+                "DedicatedWorkerStartDelayInMs",
+                features::kDedicatedWorkerStartDelayInMs.Get());
+    GetExecutionContext()
+        ->GetTaskRunner(TaskType::kInternalDefault)
+        ->PostDelayedTask(
+            FROM_HERE,
+            WTF::BindOnce(&DedicatedWorker::ContinueStartInternal,
+                          WrapWeakPersistent(this), script_url,
+                          std::move(worker_main_script_load_params),
+                          std::move(referrer_policy),
+                          std::move(response_content_security_policies),
+                          source_code, reject_coep_unsafe_none,
+                          std::move(back_forward_cache_controller_host)),
+            base::Milliseconds(features::kDedicatedWorkerStartDelayInMs.Get()));
+    return;
+  }
+  ContinueStartInternal(script_url, std::move(worker_main_script_load_params),
+                        std::move(referrer_policy),
+                        std::move(response_content_security_policies),
+                        source_code, reject_coep_unsafe_none,
+                        std::move(back_forward_cache_controller_host));
+}
+
+void DedicatedWorker::ContinueStartInternal(
+    const KURL& script_url,
+    std::unique_ptr<WorkerMainScriptLoadParameters>
+        worker_main_script_load_params,
+    network::mojom::ReferrerPolicy referrer_policy,
+    Vector<network::mojom::blink::ContentSecurityPolicyPtr>
+        response_content_security_policies,
+    const String& source_code,
+    RejectCoepUnsafeNone reject_coep_unsafe_none,
+    mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
+        back_forward_cache_controller_host) {
+  TRACE_EVENT("blink.worker", "DedicatedWorker::ContinueStartInternal");
+  if (!GetExecutionContext()) {
+    return;
+  }
   context_proxy_->StartWorkerGlobalScope(
       CreateGlobalScopeCreationParams(
           script_url, referrer_policy,
@@ -492,7 +573,7 @@ DedicatedWorker::CreateGlobalScopeCreationParams(
           ? mojom::blink::ScriptType::kClassic
           : mojom::blink::ScriptType::kModule;
 
-  return std::make_unique<GlobalScopeCreationParams>(
+  auto params = std::make_unique<GlobalScopeCreationParams>(
       script_url, script_type, options_->name(), execution_context->UserAgent(),
       execution_context->GetUserAgentMetadata(), CreateWebWorkerFetchContext(),
       mojo::Clone(
@@ -516,7 +597,10 @@ DedicatedWorker::CreateGlobalScopeCreationParams(
       execution_context->IsIsolatedContext(),
       /*interface_registry=*/nullptr,
       std::move(agent_group_scheduler_compositor_task_runner),
-      top_level_frame_security_origin, execution_context->HasStorageAccess());
+      top_level_frame_security_origin,
+      execution_context->GetStorageAccessApiStatus());
+  params->dedicated_worker_start_time = start_time_;
+  return params;
 }
 
 scoped_refptr<WebWorkerFetchContext>

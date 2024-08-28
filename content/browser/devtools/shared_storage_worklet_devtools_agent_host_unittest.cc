@@ -86,7 +86,8 @@ class MockContentBrowserClient : public ContentBrowserClient {
       content::RenderFrameHost* rfh,
       const url::Origin& top_frame_origin,
       const url::Origin& accessing_origin,
-      std::string* out_debug_message = nullptr) override {
+      std::string* out_debug_message,
+      bool* out_block_is_site_setting_specific) override {
     return true;
   }
 };
@@ -103,7 +104,7 @@ class SharedStorageWorkletDevToolsAgentHostTest
         SetBrowserClientForTesting(mock_content_browser_client_.get());
     DevToolsManager::ShutdownForTests();
 
-    contents()->NavigateAndCommit(GURL("http://www.google.com"));
+    contents()->NavigateAndCommit(GURL("https://www.google.com"));
     RenderFrameHost* main_rfh = web_contents()->GetPrimaryMainFrame();
 
     mojo::PendingAssociatedReceiver<blink::mojom::SharedStorageWorkletHost>
@@ -113,9 +114,9 @@ class SharedStorageWorkletDevToolsAgentHostTest
         SharedStorageDocumentServiceImpl::GetOrCreateForCurrentDocument(
             main_rfh);
     document_service->CreateWorklet(
-        GURL("http://www.google.com/script.js"),
-        network::mojom::CredentialsMode::kSameOrigin,
-        {blink::mojom::OriginTrialFeature::kSharedStorageAPI},
+
+        GURL("https://www.google.com/script.js"),
+        network::mojom::CredentialsMode::kSameOrigin, {},
         std::move(worklet_host), base::DoNothing());
 
     SharedStorageWorkletHostManager* manager =
@@ -153,9 +154,9 @@ TEST_F(SharedStorageWorkletDevToolsAgentHostTest, BasicAttributes) {
             web_contents()->GetBrowserContext());
   EXPECT_EQ(devtools_agent_host_->GetType(), "shared_storage_worklet");
   EXPECT_EQ(devtools_agent_host_->GetTitle(),
-            "Shared storage worklet for http://www.google.com/script.js");
+            "Shared storage worklet for https://www.google.com/script.js");
   EXPECT_EQ(devtools_agent_host_->GetURL(),
-            GURL("http://www.google.com/script.js"));
+            GURL("https://www.google.com/script.js"));
   EXPECT_FALSE(devtools_agent_host_->Activate());
   EXPECT_FALSE(devtools_agent_host_->Close());
 
@@ -200,7 +201,7 @@ TEST_F(SharedStorageWorkletDevToolsAgentHostTest,
 
   // Navigate to a new page. The worklet will no longer be associated with a
   // document.
-  contents()->NavigateAndCommit(GURL("http://www.youtube.com"));
+  contents()->NavigateAndCommit(GURL("https://www.youtube.com"));
 
   EXPECT_FALSE(
       devtools_agent_host_->IsRelevantTo(static_cast<RenderFrameHostImpl*>(

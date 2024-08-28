@@ -29,7 +29,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -44,7 +43,6 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.FeatureList;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.JniMocker;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -87,7 +85,6 @@ import java.util.Set;
 public class PriceChangeModuleMediatorUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Rule public TestRule mProcessor = new Features.JUnitProcessor();
     @Rule public JniMocker mJniMocker = new JniMocker();
 
     @Mock private Profile mProfile;
@@ -123,6 +120,7 @@ public class PriceChangeModuleMediatorUnitTest {
         doReturn(mTabModel).when(mTabModelSelector).getModel(false);
         doReturn(1).when(mTabModel).getCount();
         doReturn(mTab).when(mTabModel).getTabAt(0);
+        doReturn(mTab).when(mTabModel).getTabById(mTab.getId());
         doReturn(true).when(mTabModelSelector).isTabStateInitialized();
         ShoppingPersistedTabDataService.setServiceForTesting(mService);
 
@@ -163,7 +161,9 @@ public class PriceChangeModuleMediatorUnitTest {
         MockTab tab2 = new MockTab(789, mProfile);
         doReturn(2).when(mTabModel).getCount();
         doReturn(tab1).when(mTabModel).getTabAt(0);
+        doReturn(tab1).when(mTabModel).getTabById(tab1.getId());
         doReturn(tab2).when(mTabModel).getTabAt(1);
+        doReturn(tab2).when(mTabModel).getTabById(tab2.getId());
         mSharedPreferenceManager.writeStringSet(
                 PRICE_TRACKING_IDS_FOR_TABS_WITH_PRICE_DROP,
                 new HashSet<>(
@@ -346,6 +346,7 @@ public class PriceChangeModuleMediatorUnitTest {
         PriceChangeItem item = new PriceChangeItem(mTab, data);
         // Mock that tab is not in the current tab model.
         doReturn(0).when(mTabModel).getCount();
+        doReturn(null).when(mTabModel).getTabById(mTab.getId());
         ArgumentCaptor<Callback<List<PriceChangeItem>>> dataCallbackCaptor =
                 ArgumentCaptor.forClass(Callback.class);
         verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(dataCallbackCaptor.capture());
@@ -361,7 +362,9 @@ public class PriceChangeModuleMediatorUnitTest {
         MockTab tab2 = new MockTab(789, mProfile);
         doReturn(2).when(mTabModel).getCount();
         doReturn(tab1).when(mTabModel).getTabAt(0);
+        doReturn(tab1).when(mTabModel).getTabById(tab1.getId());
         doReturn(tab2).when(mTabModel).getTabAt(1);
+        doReturn(tab2).when(mTabModel).getTabById(tab2.getId());
         mSharedPreferenceManager.writeStringSet(
                 PRICE_TRACKING_IDS_FOR_TABS_WITH_PRICE_DROP,
                 new HashSet<>(

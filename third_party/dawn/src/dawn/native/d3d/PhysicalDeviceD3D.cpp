@@ -36,20 +36,46 @@
 namespace dawn::native::d3d {
 
 PhysicalDevice::PhysicalDevice(Backend* backend,
-                               ComPtr<IDXGIAdapter3> hardwareAdapter,
+                               ComPtr<IDXGIAdapter4> hardwareAdapter,
                                wgpu::BackendType backendType)
-    : PhysicalDeviceBase(backend->GetInstance(), backendType),
+    : PhysicalDeviceBase(backendType),
       mHardwareAdapter(std::move(hardwareAdapter)),
       mBackend(backend) {}
 
 PhysicalDevice::~PhysicalDevice() = default;
 
-IDXGIAdapter3* PhysicalDevice::GetHardwareAdapter() const {
+IDXGIAdapter4* PhysicalDevice::GetHardwareAdapter() const {
     return mHardwareAdapter.Get();
 }
 
 Backend* PhysicalDevice::GetBackend() const {
     return mBackend;
+}
+
+ResultOrError<PhysicalDeviceSurfaceCapabilities> PhysicalDevice::GetSurfaceCapabilities(
+    InstanceBase*,
+    const Surface*) const {
+    PhysicalDeviceSurfaceCapabilities capabilities;
+
+    capabilities.usages = wgpu::TextureUsage::RenderAttachment |
+                          wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc |
+                          wgpu::TextureUsage::CopyDst;
+
+    // This is the only supported format in native mode (see crbug.com/dawn/160).
+    capabilities.formats.push_back(wgpu::TextureFormat::BGRA8Unorm);
+
+    capabilities.presentModes = {
+        wgpu::PresentMode::Fifo,
+        wgpu::PresentMode::Immediate,
+        wgpu::PresentMode::Mailbox,
+    };
+
+    capabilities.alphaModes = {
+        wgpu::CompositeAlphaMode::Opaque,
+        wgpu::CompositeAlphaMode::Premultiplied,
+    };
+
+    return capabilities;
 }
 
 MaybeError PhysicalDevice::InitializeImpl() {

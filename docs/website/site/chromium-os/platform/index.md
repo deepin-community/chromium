@@ -48,16 +48,17 @@ party projects, you should follow the style that project has decided on.
 
 *   [C++](http://www.chromium.org/developers/coding-style) - Chromium
             C++ Style Guide
-*   [Python](/chromium-os/python-style-guidelines) - Chromium OS Python
-            Style Guide (a superset of the Google Python Style Guide)
-*   [Shell](/chromium-os/shell-style-guidelines) - Chromium OS
-            shell-script Style Guide
+*   [Python](/chromium-os/developer-library/reference/style-guides/python)
+             - Chromium OS Python Style Guide (a superset of the Google Python
+             Style Guide)
+*   [Shell](/chromium-os/developer-library/reference/style-guides/shell) -
+            Chromium OS shell-script Style Guide
 
 ### Inter-Process Communication (IPC)
 
 Most communication between processes is done via D-Bus. See the ["D-Bus best
 practices"
-doc](https://chromium.googlesource.com/chromiumos/docs/+/HEAD/dbus_best_practices.md)
+doc](/chromium-os/developer-library/guides/ipc/dbus-best-practices/)
 for more information.
 
 #### Data Serialization

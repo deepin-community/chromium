@@ -10,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
@@ -19,12 +20,12 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/app_service/file_utils.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "components/services/app_service/public/cpp/file_handler_info.h"
 #include "components/services/app_service/public/cpp/intent_filter_util.h"
@@ -142,7 +143,7 @@ const char* ConvertAppServiceToArcIntentAction(const std::string& action) {
 // Returns true if |pattern| is a Glob (as in PatternMatchType::kGlob) which
 // behaves like a Prefix pattern. That is, the only special characters are a
 // ".*" at the end of the string.
-bool IsPrefixOnlyGlob(base::StringPiece pattern) {
+bool IsPrefixOnlyGlob(std::string_view pattern) {
   if (!base::EndsWith(pattern, ".*")) {
     return false;
   }
@@ -190,7 +191,7 @@ apps::ConditionValuePtr ConvertArcPatternMatcherToConditionValue(
             apps::PatternMatchType::kPrefix);
       }
       break;
-    // TODO(crbug.com/1463908): support the new pattern types.
+    // TODO(crbug.com/40275407): support the new pattern types.
     case arc::mojom::PatternType::PATTERN_ADVANCED_GLOB:
     case arc::mojom::PatternType::PATTERN_SUFFIX:
     case arc::mojom::PatternType::kUnknown:
@@ -661,7 +662,7 @@ arc::IntentFilter ConvertAppServiceToArcIntentFilter(
             case apps::PatternMatchType::kFileExtension:
             case apps::PatternMatchType::kIsDirectory:
             case apps::PatternMatchType::kSuffix:
-              NOTREACHED();
+              NOTREACHED_IN_MIGRATION();
               return arc::IntentFilter();
           }
           paths.emplace_back(condition_value->value, match_type);
@@ -679,7 +680,7 @@ arc::IntentFilter ConvertAppServiceToArcIntentFilter(
         }
         break;
       case apps::ConditionType::kFile:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return arc::IntentFilter();
     }
   }

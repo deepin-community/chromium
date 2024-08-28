@@ -9,6 +9,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -51,7 +52,7 @@ using MockProcessedCaptureCallback =
 
 AudioProcessor::LogCallback LogCallbackForTesting() {
   return base::BindRepeating(
-      [](base::StringPiece message) { VLOG(1) << (message); });
+      [](std::string_view message) { VLOG(1) << (message); });
 }
 
 // The number of packets used for testing.
@@ -180,18 +181,11 @@ class AudioProcessorTest : public ::testing::Test {
     EXPECT_EQ(config.noise_suppression.level,
               webrtc::AudioProcessing::Config::NoiseSuppression::kHigh);
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
-    EXPECT_FALSE(config.echo_canceller.mobile_mode);
-    EXPECT_FALSE(config.transient_suppression.enabled);
-#elif BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-    // Android and iOS use echo cancellation optimized for mobiles, and does not
-    // support keytap suppression.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+    // Android and iOS use echo cancellation optimized for mobiles.
     EXPECT_TRUE(config.echo_canceller.mobile_mode);
-    EXPECT_FALSE(config.transient_suppression.enabled);
 #else
     EXPECT_FALSE(config.echo_canceller.mobile_mode);
-    EXPECT_TRUE(config.transient_suppression.enabled);
 #endif
   }
 
@@ -368,7 +362,7 @@ TEST_P(AudioProcessorTestMultichannelAndFormat, TestStereoAudio) {
   // Test without and with audio processing enabled.
   constexpr bool kUseApmValues[] =
 #if BUILDFLAG(IS_IOS)
-      // TODO(https://crbug.com/1417474): `false` fails on ios-blink platform
+      // TODO(crbug.com/40257333): `false` fails on ios-blink platform
       // due to a special case for iOS in settings.NeedWebrtcAudioProcessing()
       {true};
 #else
@@ -483,9 +477,9 @@ TEST_P(AudioProcessorDefaultOutputFormatTest, GetDefaultOutputFormat) {
   // https://crrev.com/c/3621456/comments/2e73cc96_0e9773cd for details.
   const int expected_sample_rate =
 #if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)
-      std::min(sample_rate, media::kAudioProcessingSampleRateHz);
+      std::min(sample_rate, media::WebRtcAudioProcessingSampleRateHz());
 #else
-      media::kAudioProcessingSampleRateHz;
+      media::WebRtcAudioProcessingSampleRateHz();
 #endif
   const int expected_output_channels =
       settings.multi_channel_capture_processing ? input_params.channels() : 1;

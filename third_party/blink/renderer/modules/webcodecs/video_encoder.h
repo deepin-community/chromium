@@ -14,6 +14,7 @@
 #include "media/base/video_color_space.h"
 #include "media/base/video_encoder.h"
 #include "media/base/video_frame_pool.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_encoded_video_chunk_output_callback.h"
 #include "third_party/blink/renderer/modules/webcodecs/encoder_base.h"
 #include "third_party/blink/renderer/modules/webcodecs/hardware_preference.h"
@@ -29,9 +30,11 @@ struct VideoEncoderOutput;
 
 namespace blink {
 
+class VideoEncoderBuffer;
 class VideoEncoderConfig;
 class VideoEncoderInit;
 class VideoEncoderEncodeOptions;
+class VideoEncoderSupport;
 class WebGraphicsContext3DVideoFramePool;
 class BackgroundReadback;
 
@@ -76,9 +79,11 @@ class MODULES_EXPORT VideoEncoder : public EncoderBase<VideoEncoderTraits> {
   VideoEncoder(ScriptState*, const VideoEncoderInit*, ExceptionState&);
   ~VideoEncoder() override;
 
-  static ScriptPromise isConfigSupported(ScriptState*,
-                                         const VideoEncoderConfig*,
-                                         ExceptionState&);
+  static ScriptPromise<VideoEncoderSupport>
+  isConfigSupported(ScriptState*, const VideoEncoderConfig*, ExceptionState&);
+
+  HeapVector<Member<VideoEncoderBuffer>> getAllFrameBuffers(ScriptState*,
+                                                            ExceptionState&);
 
   // EventTarget interface
   const AtomicString& InterfaceName() const override;
@@ -121,10 +126,10 @@ class MODULES_EXPORT VideoEncoder : public EncoderBase<VideoEncoderTraits> {
                       scoped_refptr<media::VideoFrame> txt_frame,
                       media::VideoEncoder::EncoderStatusCB done_callback,
                       scoped_refptr<media::VideoFrame> result_frame);
-  static std::unique_ptr<media::VideoEncoder> CreateSoftwareVideoEncoder(
-      VideoEncoder* self,
-      bool fallback,
-      media::VideoCodec codec);
+  static media::EncoderStatus::Or<std::unique_ptr<media::VideoEncoder>>
+  CreateSoftwareVideoEncoder(VideoEncoder* self,
+                             bool fallback,
+                             media::VideoCodec codec);
 
   ParsedConfig* ParseConfig(const VideoEncoderConfig*,
                             ExceptionState&) override;
@@ -132,17 +137,18 @@ class MODULES_EXPORT VideoEncoder : public EncoderBase<VideoEncoderTraits> {
 
   // Virtual for UTs.
   // Returns the VideoEncoder.
-  virtual std::unique_ptr<media::VideoEncoder> CreateMediaVideoEncoder(
-      const ParsedConfig& config,
-      media::GpuVideoAcceleratorFactories* gpu_factories,
-      bool& is_platform_encoder);
+  virtual media::EncoderStatus::Or<std::unique_ptr<media::VideoEncoder>>
+  CreateMediaVideoEncoder(const ParsedConfig& config,
+                          media::GpuVideoAcceleratorFactories* gpu_factories,
+                          bool& is_platform_encoder);
   virtual std::unique_ptr<media::VideoEncoderMetricsProvider>
   CreateVideoEncoderMetricsProvider() const;
 
   void ContinueConfigureWithGpuFactories(
       Request* request,
       media::GpuVideoAcceleratorFactories* gpu_factories);
-  std::unique_ptr<media::VideoEncoder> CreateAcceleratedVideoEncoder(
+  media::EncoderStatus::Or<std::unique_ptr<media::VideoEncoder>>
+  CreateAcceleratedVideoEncoder(
       media::VideoCodecProfile profile,
       const media::VideoEncoder::Options& options,
       media::GpuVideoAcceleratorFactories* gpu_factories,

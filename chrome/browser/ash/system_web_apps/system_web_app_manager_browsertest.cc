@@ -38,6 +38,7 @@
 #include "chrome/browser/ash/app_list/test/chrome_app_list_test_support.h"
 #include "chrome/browser/ash/extensions/default_app_order.h"
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
+#include "chrome/browser/ash/file_manager/volume.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_installation.h"
@@ -85,6 +86,7 @@
 #include "extensions/browser/browsertest_util.h"
 #include "extensions/common/constants.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
 #include "ui/base/idle/idle.h"
 #include "ui/base/idle/scoped_set_idle_state.h"
 #include "ui/display/display.h"
@@ -1031,7 +1033,7 @@ class SystemWebAppManagerInstallAllAppsBrowserTest
   base::test::ScopedFeatureList features_;
 };
 
-// TODO(https://crbug.com/1162992): At the moment, PRE_Test failures aren't
+// TODO(crbug.com/40162953): At the moment, PRE_Test failures aren't
 // reported in test summary, thus won't fail the CI build job. So we need a
 // ordinary test to fail the job and block CQ.
 //
@@ -1057,7 +1059,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerInstallAllAppsBrowserTest,
 
     // Check app's install_url and start_url are from the same origin.
     //
-    // TODO(https://crbug.com/1111171): Include OS Settings in this check.
+    // TODO(crbug.com/40709016): Include OS Settings in this check.
     //
     // OS Settings uses a different install_url origin (by mistake) which are
     // persisted to disk. We can't fix it until the above crbug is fixed.
@@ -1066,7 +1068,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerInstallAllAppsBrowserTest,
     if (type_and_info.first != SystemWebAppType::SETTINGS) {
       EXPECT_TRUE(url::IsSameOriginWith(
           type_and_info.second->GetInstallUrl(),
-          type_and_info.second->GetWebAppInfo()->start_url));
+          type_and_info.second->GetWebAppInfo()->start_url()));
     }
 
     // Check app's web app shortcuts fields is self-consistent.
@@ -1087,7 +1089,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerInstallAllAppsBrowserTest,
     install_url_origins.insert(install_url_origin);
 
     auto start_url_origin =
-        url::Origin::Create(type_and_info.second->GetWebAppInfo()->start_url);
+        url::Origin::Create(type_and_info.second->GetWebAppInfo()->start_url());
     EXPECT_EQ(0u, start_url_origins.count(start_url_origin))
         << "System web app's start_url origin should be unique.";
     start_url_origins.insert(start_url_origin);
@@ -1195,8 +1197,8 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppManagerChromeUntrustedTest, Install) {
   web_app::WebAppRegistrar& registrar =
       web_app::WebAppProvider::GetForTest(profile)->registrar_unsafe();
 
-  EXPECT_EQ("Test System App", registrar.GetAppShortName(app_id));
-  EXPECT_EQ(SkColorSetRGB(0, 0xFF, 0), registrar.GetAppThemeColor(app_id));
+  EXPECT_EQ("Test System App Untrusted", registrar.GetAppShortName(app_id));
+  EXPECT_EQ(SkColorSetRGB(0xFF, 0, 0), registrar.GetAppThemeColor(app_id));
   EXPECT_TRUE(registrar.HasExternalAppWithInstallSource(
       app_id, web_app::ExternalInstallSource::kSystemInstalled));
   EXPECT_EQ(registrar.FindAppWithUrlInScope(
@@ -1785,10 +1787,10 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppAccessibilityTest,
 
   // Launcher-B to find minimize button.
   speech_monitor_.Call([&]() {
-    // F6 to switch pane.
+    // Search+B to switch pane.
     ui::test::EventGenerator generator(app_window->GetRootWindow());
-    generator.PressAndReleaseKey(ui::VKEY_B,
-                                 ui::EF_COMMAND_DOWN | ui::EF_FINAL);
+    generator.PressAndReleaseKeyAndModifierKeys(
+        ui::VKEY_B, ui::EF_COMMAND_DOWN | ui::EF_FINAL);
   });
   speech_monitor_.ExpectSpeech("Minimize");
   speech_monitor_.ExpectSpeech("Button");
@@ -1885,7 +1887,7 @@ IN_PROC_BROWSER_TEST_P(SystemWebAppIconHealthMetricsTest,
 
   tester_.ExpectBucketCount(kIconsAreHealthyHistogramName, false, 1);
 
-  // TODO(https://crbug.com/1162992): Change CHECK_EQ to EXPECT_TRUE when
+  // TODO(crbug.com/40162953): Change CHECK_EQ to EXPECT_TRUE when
   // assertions report correctly as test failure in PRE_TESTs.
 
   // Icon check should update pref to report broken icons.

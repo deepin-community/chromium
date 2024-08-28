@@ -258,10 +258,10 @@ void WebrtcVideoEncoderGpu::Core::Encode(
 
   // H264 encoder on Windows uses NV12 so convert here.
   libyuv::ARGBToNV12(frame->data(), frame->stride(),
-                     video_frame->writable_data(VideoFrame::kYPlane),
-                     video_frame->stride(VideoFrame::kYPlane),
-                     video_frame->writable_data(VideoFrame::kUVPlane),
-                     video_frame->stride(VideoFrame::kUVPlane),
+                     video_frame->writable_data(VideoFrame::Plane::kY),
+                     video_frame->stride(VideoFrame::Plane::kY),
+                     video_frame->writable_data(VideoFrame::Plane::kUV),
+                     video_frame->stride(VideoFrame::Plane::kUV),
                      video_frame->visible_rect().width(),
                      video_frame->visible_rect().height());
 
@@ -275,8 +275,7 @@ void WebrtcVideoEncoderGpu::Core::Encode(
     uint32_t bitrate_bps =
         checked_bitrate.ValueOrDefault(std::numeric_limits<uint32_t>::max());
     video_encode_accelerator_->RequestEncodingParametersChange(
-        media::Bitrate::ConstantBitrate(bitrate_bps), params.fps,
-        absl::nullopt);
+        media::Bitrate::ConstantBitrate(bitrate_bps), params.fps, std::nullopt);
   }
   video_encode_accelerator_->Encode(video_frame, params.key_frame);
 }
@@ -369,7 +368,10 @@ void WebrtcVideoEncoderGpu::Core::BeginInitialization() {
       static_cast<uint32_t>(kTargetFrameRate * 1024 * 1024 * 8));
 
   const media::VideoEncodeAccelerator::Config config(
-      input_format, input_visible_size_, codec_profile_, initial_bitrate);
+      input_format, input_visible_size_, codec_profile_, initial_bitrate,
+      kTargetFrameRate,
+      media::VideoEncodeAccelerator::Config::StorageType::kShmem,
+      media::VideoEncodeAccelerator::Config::ContentType::kDisplay);
   video_encode_accelerator_ =
       media::GpuVideoEncodeAcceleratorFactory::CreateVEA(
           config, this, gpu::GpuPreferences(), CreateGpuWorkarounds(),

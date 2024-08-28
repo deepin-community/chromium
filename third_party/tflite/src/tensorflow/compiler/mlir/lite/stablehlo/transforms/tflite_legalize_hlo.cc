@@ -15,21 +15,28 @@ limitations under the License.
 
 // The kept headers are provided for the included file `passes.h.inc`.
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "mlir/Transforms/DialectConversion.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"  // IWYU pragma: keep
+#include "tensorflow/compiler/mlir/lite/stablehlo/transforms/legalize_hlo_conversions/conv.h"  // IWYU pragma: keep
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/legalize_hlo_conversions/custom_call.h"
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/legalize_hlo_conversions/dot_general.h"  // IWYU pragma: keep
+#include "tensorflow/compiler/mlir/lite/stablehlo/transforms/legalize_hlo_conversions/reduce.h"
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/legalize_hlo_conversions/util.h"  // IWYU pragma: keep
+#include "tensorflow/compiler/mlir/lite/stablehlo/transforms/passes.h"
 #include "tensorflow/compiler/mlir/lite/transforms/passes.h"  // IWYU pragma: keep
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"  // IWYU pragma: keep
 #include "xla/mlir_hlo/mhlo/IR/hlo_ops.h"
@@ -38,8 +45,6 @@ namespace mlir {
 namespace odml {
 namespace {
 
-// This file is generated from `passes.td` and provides the implementation base
-// class.
 #define GEN_PASS_DEF_LEGALIZEHLOTOTFLITEPASS
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/passes.h.inc"
 
@@ -51,21 +56,31 @@ class LegalizeHloToTfLitePass
   void runOnOperation() override;
 };
 
+
+
+std::optional<bool> IsCbrtLegal(mhlo::CbrtOp op) {
+  return !op.getType().getElementType().isF32();
+}
+
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/generated_tflite_legalize_hlo.inc"
 void LegalizeHloToTfLitePass::runOnOperation() {
-  MLIRContext& context = getContext();
-  RewritePatternSet patterns(&getContext());
-  // Add new conversion patterns here.
-  patterns.add<odml::ConvertCustomCallOp>(&context);
+  MLIRContext* context = &getContext();
+
+  RewritePatternSet patterns(context);
+  patterns.add<odml::ConvertCustomCallOp, odml::LowerDotGeneralOp,
+               ConvertReduceOpToTFLiteArgmin, ConvertReduceOpToTFLiteArgmax,
+               LegalizeConv>(context);
   populateWithGenerated(patterns);
 
-  ConversionTarget target(context);
+  ConversionTarget target(*context);
   target.addLegalDialect<TFL::TensorFlowLiteDialect, mhlo::MhloDialect>();
   target.addLegalOp<func::CallOp, func::ConstantOp, arith::ConstantOp>();
   target.addDynamicallyLegalOp<mhlo::CustomCallOp>(IsCustomCallLegal);
-  // Converted MHLO ops should be marked illegal here.
-  // TODO: b/304003568 - Add TF_TransposeOp folding logic to tflite.
+  target.addDynamicallyLegalOp<mhlo::ReduceOp>(IsReduceOpLegal);
+  target.addDynamicallyLegalOp<mhlo::ConvolutionOp>(IsConvLegal);
+  target.addDynamicallyLegalOp<mhlo::CbrtOp>(IsCbrtLegal);
   target.addIllegalOp<mhlo::DotGeneralOp, mhlo::DotOp, mhlo::TransposeOp>();
+
   if (failed(applyPartialConversion(getOperation(), target,
                                     std::move(patterns)))) {
     getOperation().emitError("mhlo to TFLite legalization failed.");
@@ -73,6 +88,7 @@ void LegalizeHloToTfLitePass::runOnOperation() {
   }
 }
 }  // namespace
+
 
 // Creates an instance of the pass.
 std::unique_ptr<OperationPass<ModuleOp>> CreateLegalizeHloToTfLitePass() {

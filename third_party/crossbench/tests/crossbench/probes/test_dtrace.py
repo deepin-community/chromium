@@ -3,22 +3,24 @@
 # found in the LICENSE file.
 
 import pathlib
-from crossbench.cli.config.probe import ProbeListConfig
+import unittest
 
+import hjson
+
+from crossbench.cli.config.probe import ProbeListConfig
 from crossbench.probes.dtrace import DTraceProbe
 from tests import test_helper
 from tests.crossbench.mock_helper import CrossbenchFakeFsTestCase
 
 
-class TestProbe(CrossbenchFakeFsTestCase):
+class DTraceProbeTestCase(CrossbenchFakeFsTestCase):
 
+  @unittest.skipIf(hjson.__name__ != "hjson", "hjson not available")
   def test_parse_example_config(self):
-    config_file = (
-        test_helper.config_dir() / "probe" /
-        "dtrace.probe.config.example.hjson")
+    config_file = (test_helper.config_dir() / "doc/probe/dtrace.config.hjson")
     self.fs.add_real_file(config_file)
     self.assertTrue(config_file.is_file())
-    example_script_file = pathlib.Path("~/dtrace_script.d").expanduser()
+    example_script_file = pathlib.Path("/dtrace.config.example.d")
     self.fs.create_file(example_script_file, st_size=100)
     self.assertTrue(example_script_file.is_file())
     probes = ProbeListConfig.load_path(config_file).probes

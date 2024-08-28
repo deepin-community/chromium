@@ -12,6 +12,7 @@
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/render_frame_host_manager.h"
 #include "content/browser/speech/speech_recognition_manager_impl.h"
+#include "content/browser/speech/speech_recognition_session.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -41,7 +42,7 @@ SpeechRecognitionDispatcherHost::SpeechRecognitionDispatcherHost(
 void SpeechRecognitionDispatcherHost::Create(
     int render_process_id,
     int render_frame_id,
-    mojo::PendingReceiver<blink::mojom::SpeechRecognizer> receiver) {
+    mojo::PendingReceiver<media::mojom::SpeechRecognizer> receiver) {
   mojo::MakeSelfOwnedReceiver(std::make_unique<SpeechRecognitionDispatcherHost>(
                                   render_process_id, render_frame_id),
                               std::move(receiver));
@@ -54,10 +55,10 @@ SpeechRecognitionDispatcherHost::AsWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
 
-// -------- blink::mojom::SpeechRecognizer interface implementation ------------
+// -------- media::mojom::SpeechRecognizer interface implementation ------------
 
 void SpeechRecognitionDispatcherHost::Start(
-    blink::mojom::StartSpeechRecognitionRequestParamsPtr params) {
+    media::mojom::StartSpeechRecognitionRequestParamsPtr params) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   GetUIThreadTaskRunner({})->PostTask(
@@ -73,7 +74,7 @@ void SpeechRecognitionDispatcherHost::StartRequestOnUI(
         speech_recognition_dispatcher_host,
     int render_process_id,
     int render_frame_id,
-    blink::mojom::StartSpeechRecognitionRequestParamsPtr params) {
+    media::mojom::StartSpeechRecognitionRequestParamsPtr params) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   int embedder_render_process_id = 0;
   int embedder_render_frame_id = MSG_ROUTING_NONE;
@@ -121,13 +122,6 @@ void SpeechRecognitionDispatcherHost::StartRequestOnUI(
     DCHECK_NE(embedder_render_frame_id, MSG_ROUTING_NONE);
   }
 
-  bool filter_profanities =
-      SpeechRecognitionManagerImpl::GetInstance() &&
-      SpeechRecognitionManagerImpl::GetInstance()->delegate() &&
-      SpeechRecognitionManagerImpl::GetInstance()
-          ->delegate()
-          ->FilterProfanities(embedder_render_process_id);
-
   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
   StoragePartition* storage_partition =
       browser_context->GetStoragePartition(web_contents->GetSiteInstance());
@@ -138,17 +132,16 @@ void SpeechRecognitionDispatcherHost::StartRequestOnUI(
           &SpeechRecognitionDispatcherHost::StartSessionOnIO,
           speech_recognition_dispatcher_host, std::move(params),
           embedder_render_process_id, embedder_render_frame_id,
-          rfh->GetLastCommittedOrigin(), filter_profanities,
+          rfh->GetLastCommittedOrigin(),
           storage_partition->GetURLLoaderFactoryForBrowserProcessIOThread(),
           GetContentClient()->browser()->GetAcceptLangs(browser_context)));
 }
 
 void SpeechRecognitionDispatcherHost::StartSessionOnIO(
-    blink::mojom::StartSpeechRecognitionRequestParamsPtr params,
+    media::mojom::StartSpeechRecognitionRequestParamsPtr params,
     int embedder_render_process_id,
     int embedder_render_frame_id,
     const url::Origin& origin,
-    bool filter_profanities,
     std::unique_ptr<network::PendingSharedURLLoaderFactory>
         pending_shared_url_loader_factory,
     const std::string& accept_language) {
@@ -172,12 +165,12 @@ void SpeechRecognitionDispatcherHost::StartSessionOnIO(
   config.initial_context = context;
   config.shared_url_loader_factory = network::SharedURLLoaderFactory::Create(
       std::move(pending_shared_url_loader_factory));
-  config.filter_profanities = filter_profanities;
+  config.filter_profanities = false;
   config.continuous = params->continuous;
   config.interim_results = params->interim_results;
   config.event_listener = session->AsWeakPtr();
 
-  for (blink::mojom::SpeechRecognitionGrammarPtr& grammar_ptr :
+  for (media::mojom::SpeechRecognitionGrammarPtr& grammar_ptr :
        params->grammars) {
     config.grammars.push_back(*grammar_ptr);
   }
@@ -190,95 +183,6 @@ void SpeechRecognitionDispatcherHost::StartSessionOnIO(
                               std::move(params->session_receiver));
 
   SpeechRecognitionManager::GetInstance()->StartSession(session_id);
-}
-
-// ---------------------- SpeechRecognizerSession -----------------------------
-
-SpeechRecognitionSession::SpeechRecognitionSession(
-    mojo::PendingRemote<blink::mojom::SpeechRecognitionSessionClient> client)
-    : session_id_(SpeechRecognitionManager::kSessionIDInvalid),
-      client_(std::move(client)),
-      stopped_(false) {
-  client_.set_disconnect_handler(
-      base::BindOnce(&SpeechRecognitionSession::ConnectionErrorHandler,
-                     base::Unretained(this)));
-}
-
-SpeechRecognitionSession::~SpeechRecognitionSession() {
-  // If a connection error happens and the session hasn't been stopped yet,
-  // abort it.
-  if (!stopped_)
-    Abort();
-}
-
-base::WeakPtr<SpeechRecognitionSession> SpeechRecognitionSession::AsWeakPtr() {
-  return weak_factory_.GetWeakPtr();
-}
-
-void SpeechRecognitionSession::Abort() {
-  SpeechRecognitionManager::GetInstance()->AbortSession(session_id_);
-  stopped_ = true;
-}
-
-void SpeechRecognitionSession::StopCapture() {
-  SpeechRecognitionManager::GetInstance()->StopAudioCaptureForSession(
-      session_id_);
-  stopped_ = true;
-}
-
-// -------- SpeechRecognitionEventListener interface implementation -----------
-
-void SpeechRecognitionSession::OnRecognitionStart(int session_id) {
-  client_->Started();
-}
-
-void SpeechRecognitionSession::OnAudioStart(int session_id) {
-  client_->AudioStarted();
-}
-
-void SpeechRecognitionSession::OnSoundStart(int session_id) {
-  client_->SoundStarted();
-}
-
-void SpeechRecognitionSession::OnSoundEnd(int session_id) {
-  client_->SoundEnded();
-}
-
-void SpeechRecognitionSession::OnAudioEnd(int session_id) {
-  client_->AudioEnded();
-}
-
-void SpeechRecognitionSession::OnRecognitionEnd(int session_id) {
-  client_->Ended();
-  stopped_ = true;
-  client_.reset();
-}
-
-void SpeechRecognitionSession::OnRecognitionResults(
-    int session_id,
-    const std::vector<blink::mojom::SpeechRecognitionResultPtr>& results) {
-  client_->ResultRetrieved(mojo::Clone(results));
-}
-
-void SpeechRecognitionSession::OnRecognitionError(
-    int session_id,
-    const blink::mojom::SpeechRecognitionError& error) {
-  if (!client_.is_bound())
-    return;
-  client_->ErrorOccurred(blink::mojom::SpeechRecognitionError::New(error));
-}
-
-// The events below are currently not used by speech JS APIs implementation.
-void SpeechRecognitionSession::OnAudioLevelsChange(int session_id,
-                                                   float volume,
-                                                   float noise_volume) {}
-
-void SpeechRecognitionSession::OnEnvironmentEstimationComplete(int session_id) {
-}
-
-void SpeechRecognitionSession::ConnectionErrorHandler() {
-  if (!stopped_)
-    Abort();
 }
 
 }  // namespace content

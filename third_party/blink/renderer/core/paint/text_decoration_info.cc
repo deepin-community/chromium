@@ -8,11 +8,14 @@
 
 #include "build/build_config.h"
 #include "third_party/blink/renderer/core/layout/text_decoration_offset.h"
+#include "third_party/blink/renderer/core/paint/decoration_line_painter.h"
 #include "third_party/blink/renderer/core/paint/inline_paint_context.h"
 #include "third_party/blink/renderer/core/paint/text_paint_style.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/geometry/length_functions.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
+#include "third_party/blink/renderer/platform/graphics/stroke_data.h"
+#include "third_party/blink/renderer/platform/graphics/styled_stroke_data.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
@@ -137,12 +140,6 @@ struct WavyParams {
   DISALLOW_NEW();
 };
 
-float WavyDecorationSizing(const WavyParams& params) {
-  // Minimum unit we use to compute control point distance and step to define
-  // the path of the Bezier curve.
-  return std::max<float>(2, params.resolved_thickness);
-}
-
 float WavyControlPointDistance(const WavyParams& params) {
   // Distance between decoration's axis and Bezier curve's control points. The
   // height of the curve is based on this distance. Increases the curve's height
@@ -150,7 +147,9 @@ float WavyControlPointDistance(const WavyParams& params) {
   if (params.spelling_grammar)
     return 5 * params.effective_zoom;
 
-  return 3.5 * WavyDecorationSizing(params);
+  // Setting the distance to half-pixel values gives better antialiasing
+  // results, particularly for small values.
+  return 0.5 + roundf(3 * std::max<float>(1, params.resolved_thickness) + 0.5);
 }
 
 float WavyStep(const WavyParams& params) {
@@ -160,7 +159,9 @@ float WavyStep(const WavyParams& params) {
   if (params.spelling_grammar)
     return 3 * params.effective_zoom;
 
-  return 2.5 * WavyDecorationSizing(params);
+  // Setting the step to half-pixel values gives better antialiasing
+  // results, particularly for small values.
+  return 0.5 + roundf(2 * std::max<float>(1, params.resolved_thickness) + 0.5);
 }
 
 // Computes the wavy pattern rect, which is where the desired wavy pattern would
@@ -214,7 +215,7 @@ Path PrepareWavyStrokePath(const WavyParams& params) {
   // We paint the wave before and after the text line (to cover the whole length
   // of the line) and then we clip it at
   // AppliedDecorationPainter::StrokeWavyTextDecoration().
-  // Offset the start point, so the beizer curve starts before the current line,
+  // Offset the start point, so the bezier curve starts before the current line,
   // that way we can clip it exactly the same way in both ends.
   // For spelling and grammar errors we offset by half a step less, to get a
   // result closer to Microsoft Word circa 2021.
@@ -222,7 +223,7 @@ Path PrepareWavyStrokePath(const WavyParams& params) {
 
   // Midpoints at y=0.5, to reduce vertical antialiasing.
   gfx::PointF start{phase_shift, 0.5f};
-  gfx::PointF end{start + gfx::Vector2dF(2.f * step, 0.f)};
+  gfx::PointF end{start + gfx::Vector2dF(2.f * step, 0.0f)};
   gfx::PointF cp1{start + gfx::Vector2dF(step, +control_point_distance)};
   gfx::PointF cp2{start + gfx::Vector2dF(step, -control_point_distance)};
 
@@ -268,14 +269,16 @@ TextDecorationInfo::TextDecorationInfo(
     LayoutUnit width,
     const ComputedStyle& target_style,
     const InlinePaintContext* inline_context,
-    const std::optional<AppliedTextDecoration> selection_text_decoration,
+    const TextDecorationLine selection_decoration_line,
+    const Color selection_decoration_color,
     const AppliedTextDecoration* decoration_override,
     const Font* font_override,
     MinimumThickness1 minimum_thickness1,
     float scaling_factor)
     : target_style_(target_style),
       inline_context_(inline_context),
-      selection_text_decoration_(selection_text_decoration),
+      selection_decoration_line_(selection_decoration_line),
+      selection_decoration_color_(selection_decoration_color),
       decoration_override_(decoration_override),
       font_override_(font_override && font_override != &target_style.GetFont()
                          ? font_override
@@ -418,7 +421,7 @@ void TextDecorationInfo::SetLineData(TextDecorationLine line,
     default:
       double_offset = 0.0f;
       wavy_offset_factor = 0;
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   line_data_.line = line;
@@ -553,10 +556,8 @@ Color TextDecorationInfo::LineColor() const {
   // Find the matched normal and selection |AppliedTextDecoration|
   // and use the text-decoration-color from selection when it is.
   DCHECK(applied_text_decoration_);
-  if (selection_text_decoration_ &&
-      applied_text_decoration_->Lines() ==
-          selection_text_decoration_.value().Lines()) {
-    return selection_text_decoration_.value().GetColor();
+  if (applied_text_decoration_->Lines() == selection_decoration_line_) {
+    return selection_decoration_color_;
   }
 
   return applied_text_decoration_->GetColor();
@@ -670,15 +671,16 @@ gfx::RectF TextDecorationInfo::Bounds() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return gfx::RectF();
 }
 
 gfx::RectF TextDecorationInfo::BoundsForDottedOrDashed() const {
-  StrokeData stroke_data;
-  stroke_data.SetThickness(roundf(ResolvedThickness()));
-  stroke_data.SetStyle(TextDecorationStyleToStrokeStyle(DecorationStyle()));
-  return line_data_.stroke_path.value().StrokeBoundingRect(stroke_data);
+  StyledStrokeData styled_stroke;
+  styled_stroke.SetThickness(roundf(ResolvedThickness()));
+  styled_stroke.SetStyle(TextDecorationStyleToStrokeStyle(DecorationStyle()));
+  return line_data_.stroke_path.value().StrokeBoundingRect(
+      styled_stroke.ConvertToStrokeData({}));
 }
 
 // Returns the wavy bounds, which is the same size as the wavy paint rect but
@@ -728,7 +730,7 @@ Path TextDecorationInfo::PrepareDottedOrDashedStrokePath() const {
   // These coordinate transforms need to match what's happening in
   // GraphicsContext's drawLineForText and drawLine.
   gfx::PointF start_point = StartPoint();
-  return GraphicsContext::GetPathForTextLine(
+  return DecorationLinePainter::GetPathForTextLine(
       start_point, width_, ResolvedThickness(),
       TextDecorationStyleToStrokeStyle(DecorationStyle()));
 }

@@ -9,7 +9,6 @@
 #include <optional>
 
 #include "base/auto_reset.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
@@ -35,7 +34,6 @@
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/cascading_property.h"
 #include "ui/views/layout/box_layout.h"
-#include "ui/views/views_features.h"
 #include "ui/views/widget/widget.h"
 
 class OmniboxPopupViewViews::AutocompletePopupWidget final
@@ -52,7 +50,9 @@ class OmniboxPopupViewViews::AutocompletePopupWidget final
   ~AutocompletePopupWidget() override {}
 
   void InitOmniboxPopup(views::Widget* parent_widget) {
-    views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+    views::Widget::InitParams params(
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_POPUP);
 #if BUILDFLAG(IS_WIN)
     // On Windows use the software compositor to ensure that we don't block
     // the UI thread during command buffer creation. We can revert this change
@@ -170,11 +170,18 @@ OmniboxPopupViewViews::OmniboxPopupViewViews(OmniboxViewViews* omnibox_view,
       location_bar_view_(location_bar_view) {
   model()->set_popup_view(this);
 
+  if (omnibox_view_) {
+    GetViewAccessibility().SetPopupForId(
+        omnibox_view_->GetViewAccessibility().GetUniqueId());
+  }
+
   // The contents is owned by the LocationBarView.
   set_owned_by_client();
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical));
+
+  UpdateExpandedCollapsedAccessibleState();
 }
 
 OmniboxPopupViewViews::~OmniboxPopupViewViews() {
@@ -196,8 +203,7 @@ gfx::Image OmniboxPopupViewViews::GetMatchIcon(
 void OmniboxPopupViewViews::SetSelectedIndex(size_t index) {
   DCHECK(HasMatchAt(index));
 
-  if (!OmniboxFieldTrial::IsKeywordModeRefreshEnabled() ||
-      index != model()->GetPopupSelection().line) {
+  if (index != model()->GetPopupSelection().line) {
     OmniboxPopupSelection::LineState line_state = OmniboxPopupSelection::NORMAL;
     model()->SetPopupSelection(OmniboxPopupSelection(index, line_state));
     OnPropertyChanged(model(), views::kPropertyEffectsNone);
@@ -255,7 +261,7 @@ void OmniboxPopupViewViews::UpdatePopupAppearance() {
       }
       popup_->CloseAnimated();  // This will eventually delete the popup.
       popup_.reset();
-      NotifyAccessibilityEvent(ax::mojom::Event::kExpandedChanged, true);
+      UpdateExpandedCollapsedAccessibleState();
       // The active descendant should be cleared when the popup closes.
       FireAXEventsForNewActiveDescendant(nullptr);
     }
@@ -284,16 +290,6 @@ void OmniboxPopupViewViews::UpdatePopupAppearance() {
     popup_->SetVisibilityAnimationTransition(views::Widget::ANIMATE_NONE);
     popup_->SetPopupContentsView(this);
     popup_->AddObserver(this);
-
-    if (!base::FeatureList::IsEnabled(views::features::kWidgetLayering)) {
-      popup_->StackAbove(omnibox_view_->GetRelativeWindowForPopup());
-      // For some IMEs GetRelativeWindowForPopup triggers the omnibox to lose
-      // focus, thereby closing (and destroying) the popup. TODO(sky): this
-      // won't be needed once we close the omnibox on input window showing.
-      if (!popup_) {
-        return;
-      }
-    }
 
     popup_created = true;
   }
@@ -356,23 +352,13 @@ void OmniboxPopupViewViews::UpdatePopupAppearance() {
     popup_->ShowAnimated();
 
     // Popup is now expanded and first item will be selected.
-    NotifyAccessibilityEvent(ax::mojom::Event::kExpandedChanged, true);
+    UpdateExpandedCollapsedAccessibleState();
     OmniboxResultView* result_view = result_view_at(0);
     if (result_view) {
       FireAXEventsForNewActiveDescendant(result_view);
     }
 
-#if BUILDFLAG(IS_MAC)
-    // It's not great for promos to overlap the omnibox if the user opens the
-    // drop-down after showing the promo. This especially causes issues on Mac
-    // due to z-order/rendering issues, see crbug.com/1225046 for examples.
-    auto* const promo_controller =
-        BrowserFeaturePromoController::GetForView(omnibox_view_);
-    if (promo_controller) {
-      promo_controller->DismissNonCriticalBubbleInRegion(
-          omnibox_view_->GetBoundsInScreen());
-    }
-#endif
+    NotifyOpenListeners();
   }
   InvalidateLayout();
 }
@@ -401,7 +387,7 @@ void OmniboxPopupViewViews::OnDragCanceled() {
 
 void OmniboxPopupViewViews::GetPopupAccessibleNodeData(
     ui::AXNodeData* node_data) {
-  return GetAccessibleNodeData(node_data);
+  return GetViewAccessibility().GetAccessibleNodeData(node_data);
 }
 
 void OmniboxPopupViewViews::AddPopupAccessibleNodeData(
@@ -411,7 +397,7 @@ void OmniboxPopupViewViews::AddPopupAccessibleNodeData(
   // between the omnibox and the list of suggestions, and determine which
   // suggestion is currently selected, even though focus remains here on
   // the omnibox.
-  int32_t popup_view_id = GetViewAccessibility().GetUniqueId().Get();
+  int32_t popup_view_id = GetViewAccessibility().GetUniqueId();
   node_data->AddIntListAttribute(ax::mojom::IntListAttribute::kControlsIds,
                                  {popup_view_id});
   size_t selected_line = GetSelection().line;
@@ -419,7 +405,7 @@ void OmniboxPopupViewViews::AddPopupAccessibleNodeData(
     if (OmniboxResultView* result_view = result_view_at(selected_line)) {
       node_data->AddIntAttribute(
           ax::mojom::IntAttribute::kActivedescendantId,
-          result_view->GetViewAccessibility().GetUniqueId().Get());
+          result_view->GetViewAccessibility().GetUniqueId());
     }
   }
 }
@@ -459,13 +445,13 @@ void OmniboxPopupViewViews::OnGestureEvent(ui::GestureEvent* event) {
   }
 
   switch (event->type()) {
-    case ui::ET_GESTURE_TAP_DOWN:
-    case ui::ET_GESTURE_SCROLL_BEGIN:
-    case ui::ET_GESTURE_SCROLL_UPDATE:
+    case ui::EventType::kGestureTapDown:
+    case ui::EventType::kGestureScrollBegin:
+    case ui::EventType::kGestureScrollUpdate:
       SetSelectedIndex(index);
       break;
-    case ui::ET_GESTURE_TAP:
-    case ui::ET_GESTURE_SCROLL_END: {
+    case ui::EventType::kGestureTap:
+    case ui::EventType::kGestureScrollEnd: {
       DCHECK(HasMatchAt(index));
       model()->OpenSelection(OmniboxPopupSelection(index), event->time_stamp());
       break;
@@ -521,7 +507,9 @@ void OmniboxPopupViewViews::OnWidgetVisibilityChanged(views::Widget* widget,
     popup_->GetCompositor()->RequestSuccessfulPresentationTimeForNextFrame(
         base::BindOnce(
             [](base::TimeTicks popup_create_start_time,
-               base::TimeTicks presentation_timestamp) {
+               const viz::FrameTimingDetails& frame_timing_details) {
+              base::TimeTicks presentation_timestamp =
+                  frame_timing_details.presentation_feedback.timestamp;
               base::UmaHistogramTimes(
                   "Omnibox.Views.PopupFirstPaint",
                   presentation_timestamp - popup_create_start_time);
@@ -542,15 +530,19 @@ gfx::Rect OmniboxPopupViewViews::GetTargetBounds() const {
         return height + v->GetPreferredSize().height();
       });
 
+  // Add 8dp at the bottom for aesthetic reasons. https://crbug.com/1076646
+  // It's expected that this space is dead unclickable/unhighlightable space.
+  // This extra padding is not added if the results section has no height
+  // (result set is empty or all results are hidden).
+  if (popup_height != 0) {
+    constexpr int kExtraBottomPadding = 8;
+    popup_height += kExtraBottomPadding;
+  }
+
   // Add enough space on the top and bottom so it looks like there is the same
   // amount of space between the text and the popup border as there is in the
   // interior between each row of text.
   popup_height += RoundedOmniboxResultsFrame::GetNonResultSectionHeight();
-
-  // Add 8dp at the bottom for aesthetic reasons. https://crbug.com/1076646
-  // It's expected that this space is dead unclickable/unhighlightable space.
-  constexpr int kExtraBottomPadding = 8;
-  popup_height += kExtraBottomPadding;
 
   // The rounded popup is always offset the same amount from the omnibox.
   gfx::Rect content_rect = location_bar_view_->GetBoundsInScreen();
@@ -627,16 +619,16 @@ void OmniboxPopupViewViews::SetSuggestionGroupVisibility(
 
 void OmniboxPopupViewViews::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   node_data->role = ax::mojom::Role::kListBox;
-  if (IsOpen()) {
-    node_data->AddState(ax::mojom::State::kExpanded);
-  } else {
-    node_data->AddState(ax::mojom::State::kCollapsed);
+  if (!IsOpen()) {
     node_data->AddState(ax::mojom::State::kInvisible);
   }
+}
 
-  if (omnibox_view_) {
-    int32_t view_id = omnibox_view_->GetViewAccessibility().GetUniqueId().Get();
-    node_data->AddIntAttribute(ax::mojom::IntAttribute::kPopupForId, view_id);
+void OmniboxPopupViewViews::UpdateExpandedCollapsedAccessibleState() const {
+  if (IsOpen()) {
+    GetViewAccessibility().SetIsExpanded();
+  } else {
+    GetViewAccessibility().SetIsCollapsed();
   }
 }
 

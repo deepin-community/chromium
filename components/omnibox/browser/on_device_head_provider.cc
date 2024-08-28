@@ -269,14 +269,11 @@ void OnDeviceHeadProvider::HeadModelSearchDone(
       net::GetValueForKeyInQuery(current_url, "q", &query_str)) {
     previous_query = query_str;
   }
-  float probability_threshold = base::GetFieldTrialParamByFeatureAsDouble(
-      omnibox::kOnDeviceTailModel, "ProbabilityThreshold", 0.01);
 
   OnDeviceTailModelExecutor::ModelInput input(
       /*prefix=*/SanitizeInput(params->input.text()),
       /*previous_query=*/previous_query,
-      /*max_num_suggestions=*/provider_max_matches_, /*max_rnn_steps=*/20,
-      /*probability_threshold=*/probability_threshold);
+      /*max_num_suggestions=*/provider_max_matches_);
 
   client()->GetOnDeviceTailModelService()->GetPredictionsForInput(
       input, base::BindOnce(&OnDeviceHeadProvider::TailModelSearchDone,
@@ -362,7 +359,7 @@ void OnDeviceHeadProvider::AllSearchDone(
   NotifyListeners(true);
 }
 
-// TODO(crbug.com/1372112): update head model class to take file path instead
+// TODO(crbug.com/40241602): update head model class to take file path instead
 // of the std::string file name.
 // static
 std::string OnDeviceHeadProvider::GetOnDeviceHeadModelFilename() const {

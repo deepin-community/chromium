@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/time/time.h"
@@ -18,6 +19,7 @@
 #include "components/viz/service/display/display_client.h"
 #include "components/viz/service/display/frame_rate_decider.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
+#include "components/viz/service/frame_sinks/eviction_handler.h"
 #include "components/viz/service/viz_service_export.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
@@ -129,10 +131,14 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
   void SetThreadIds(const std::vector<int32_t>& thread_ids) override;
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
   base::ScopedClosureRunner GetCacheBackBufferCb();
+#endif
   ExternalBeginFrameSource* external_begin_frame_source() {
     return external_begin_frame_source_.get();
   }
+
+  void SetHwSupportForMultipleRefreshRates(bool support);
 
  private:
   class StandaloneBeginFrameObserver;
@@ -168,7 +174,7 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
   void UpdateVSyncParameters();
   BeginFrameSource* begin_frame_source();
 
-  std::vector<base::TimeDelta> GetSupportedFrameIntervals(
+  base::flat_set<base::TimeDelta> GetSupportedFrameIntervals(
       base::TimeDelta interval);
 
   mojo::Remote<mojom::CompositorFrameSinkClient> compositor_frame_sink_client_;
@@ -205,10 +211,8 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
   base::TimeDelta preferred_frame_interval_ =
       FrameRateDecider::UnspecifiedFrameInterval();
 
-  // If we evict the root surface, we want to push an empty compositor frame to
-  // it first to unref its resources. This requires a draw and swap to complete
-  // to actually unref.
-  LocalSurfaceId to_evict_on_next_draw_and_swap_ = LocalSurfaceId();
+  // See comments on `EvictionHandler`.
+  EvictionHandler eviction_handler_;
 
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
   gfx::Size last_swap_pixel_size_;
@@ -224,7 +228,7 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
 
 #if BUILDFLAG(IS_ANDROID)
   // Let client control whether it wants `DidCompleteSwapWithSize`.
-  bool enable_swap_competion_callback_ = false;
+  bool enable_swap_completion_callback_ = false;
 #endif
 };
 

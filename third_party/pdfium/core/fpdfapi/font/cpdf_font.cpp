@@ -7,6 +7,7 @@
 #include "core/fpdfapi/font/cpdf_font.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -26,23 +27,23 @@
 #include "core/fpdfapi/parser/cpdf_name.h"
 #include "core/fpdfapi/parser/cpdf_stream.h"
 #include "core/fpdfapi/parser/cpdf_stream_acc.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_safe_types.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxge/cfx_fontmapper.h"
 #include "core/fxge/cfx_substfont.h"
 #include "core/fxge/fx_font.h"
-#include "third_party/base/check.h"
 
 namespace {
 
-constexpr size_t kChineseFontNameSize = 4;
-const uint8_t kChineseFontNames[][kChineseFontNameSize] = {
-    {0xCB, 0xCE, 0xCC, 0xE5},
-    {0xBF, 0xAC, 0xCC, 0xE5},
-    {0xBA, 0xDA, 0xCC, 0xE5},
-    {0xB7, 0xC2, 0xCB, 0xCE},
-    {0xD0, 0xC2, 0xCB, 0xCE}};
+constexpr std::array<const char*, 5> kChineseFontNames = {{
+    "\xCB\xCE\xCC\xE5",
+    "\xBF\xAC\xCC\xE5",
+    "\xBA\xDA\xCC\xE5",
+    "\xB7\xC2\xCB\xCE",
+    "\xD0\xC2\xCB\xCE",
+}};
 
 }  // namespace
 
@@ -53,8 +54,9 @@ CPDF_Font::CPDF_Font(CPDF_Document* pDocument,
       m_BaseFontName(m_pFontDict->GetByteStringFor("BaseFont")) {}
 
 CPDF_Font::~CPDF_Font() {
-  if (m_pFontFile)
+  if (!m_bWillBeDestroyed && m_pFontFile) {
     m_pDocument->MaybePurgeFontFileStreamAcc(std::move(m_pFontFile));
+  }
 }
 
 bool CPDF_Font::IsType1Font() const {
@@ -115,22 +117,17 @@ int CPDF_Font::GlyphFromCharCodeExt(uint32_t charcode) {
 }
 #endif
 
-void CPDF_Font::WillBeDestroyed() {}
+void CPDF_Font::WillBeDestroyed() {
+  m_bWillBeDestroyed = true;
+}
 
 bool CPDF_Font::IsVertWriting() const {
   const CPDF_CIDFont* pCIDFont = AsCIDFont();
   return pCIDFont ? pCIDFont->IsVertWriting() : m_Font.IsVertical();
 }
 
-int CPDF_Font::AppendChar(char* buf, uint32_t charcode) const {
-  *buf = static_cast<char>(charcode);
-  return 1;
-}
-
 void CPDF_Font::AppendChar(ByteString* str, uint32_t charcode) const {
-  char buf[4];
-  int len = AppendChar(buf, charcode);
-  *str += ByteStringView(buf, len);
+  *str += static_cast<char>(charcode);
 }
 
 WideString CPDF_Font::UnicodeFromCharCode(uint32_t charcode) const {
@@ -303,8 +300,8 @@ RetainPtr<CPDF_Font> CPDF_Font::Create(CPDF_Document* pDoc,
   RetainPtr<CPDF_Font> pFont;
   if (type == "TrueType") {
     ByteString tag = pFontDict->GetByteStringFor("BaseFont").First(4);
-    for (size_t i = 0; i < std::size(kChineseFontNames); ++i) {
-      if (tag == ByteString(kChineseFontNames[i], kChineseFontNameSize)) {
+    for (const char* chinese_font_name : kChineseFontNames) {
+      if (tag == chinese_font_name) {
         RetainPtr<const CPDF_Dictionary> pFontDesc =
             pFontDict->GetDictFor("FontDescriptor");
         if (!pFontDesc || !pFontDesc->KeyExist("FontFile2"))

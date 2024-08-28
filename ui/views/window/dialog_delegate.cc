@@ -17,9 +17,11 @@
 #include "ui/accessibility/ax_role_properties.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/bubble/bubble_border.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/buildflags.h"
 #include "ui/views/layout/layout_provider.h"
@@ -34,6 +36,29 @@
 namespace views {
 
 namespace {
+
+// Class that ensures that dialogs are logically "parented" to their parent for
+// various purposes, including testing, theming, and Tutorials.
+class DialogWidget : public Widget {
+ public:
+  DialogWidget() = default;
+  ~DialogWidget() override = default;
+
+  // Widget:
+  Widget* GetPrimaryWindowWidget() override {
+    // Dialogs are usually parented to another window, so that window should be
+    // the primary window. Only fall back to default Widget behavior if there is
+    // no parent.
+    return parent() ? parent()->GetPrimaryWindowWidget()
+                    : Widget::GetPrimaryWindowWidget();
+  }
+
+  // TODO(dfried): Possibly also fix the following (possibly in Widget) so they
+  // don't have to be overridden in bubble_dialog_delegate_view.cc:
+  //  - GetCustomTheme()
+  //  - GetNativeTheme()
+  //  - GetColorProvider()
+};
 
 bool HasCallback(
     const absl::variant<base::OnceClosure, base::RepeatingCallback<bool()>>&
@@ -61,7 +86,7 @@ DialogDelegate::DialogDelegate() {
 Widget* DialogDelegate::CreateDialogWidget(WidgetDelegate* delegate,
                                            gfx::NativeWindow context,
                                            gfx::NativeView parent) {
-  views::Widget* widget = new views::Widget;
+  views::Widget* widget = new DialogWidget;
   views::Widget::InitParams params =
       GetDialogWidgetInitParams(delegate, context, parent, gfx::Rect());
   widget->Init(std::move(params));
@@ -73,7 +98,6 @@ Widget* DialogDelegate::CreateDialogWidget(
     std::unique_ptr<WidgetDelegate> delegate,
     gfx::NativeWindow context,
     gfx::NativeView parent) {
-  DCHECK(delegate->owned_by_widget());
   return CreateDialogWidget(delegate.release(), context, parent);
 }
 
@@ -94,10 +118,13 @@ Widget::InitParams DialogDelegate::GetDialogWidgetInitParams(
     gfx::NativeWindow context,
     gfx::NativeView parent,
     const gfx::Rect& bounds) {
-  views::Widget::InitParams params;
+  DialogDelegate* dialog = delegate->AsDialogDelegate();
+
+  views::Widget::InitParams params(
+      dialog ? dialog->ownership_of_new_widget_
+             : Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   params.delegate = delegate;
   params.bounds = bounds;
-  DialogDelegate* dialog = delegate->AsDialogDelegate();
 
   if (dialog)
     dialog->params_.custom_frame &= CanSupportCustomFrame(parent);
@@ -122,19 +149,26 @@ Widget::InitParams DialogDelegate::GetDialogWidgetInitParams(
   params.child = parent && (delegate->GetModalType() == ui::MODAL_TYPE_CHILD);
 #endif
 
-  if (dialog && dialog->widget_owns_native_widget_) {
-    params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  if (BubbleDialogDelegate* bubble = delegate->AsBubbleDialogDelegate()) {
+    // TODO(crbug.com/41493925): Remove this CHECK once native frame dialogs
+    // support autosize.
+    CHECK(!bubble->is_autosized() || bubble->use_custom_frame())
+        << "Autosizing native frame dialogs is not supported.";
+    params.autosize = bubble->is_autosized();
   }
+
   return params;
 }
 
 int DialogDelegate::GetDefaultDialogButton() const {
   if (GetParams().default_button.has_value())
     return *GetParams().default_button;
-  if (GetDialogButtons() & ui::DIALOG_BUTTON_OK)
+  if (buttons() & ui::DIALOG_BUTTON_OK) {
     return ui::DIALOG_BUTTON_OK;
-  if (GetDialogButtons() & ui::DIALOG_BUTTON_CANCEL)
+  }
+  if (buttons() & ui::DIALOG_BUTTON_CANCEL) {
     return ui::DIALOG_BUTTON_CANCEL;
+  }
   return ui::DIALOG_BUTTON_NONE;
 }
 
@@ -146,7 +180,7 @@ std::u16string DialogDelegate::GetDialogButtonLabel(
   if (button == ui::DIALOG_BUTTON_OK)
     return l10n_util::GetStringUTF16(IDS_APP_OK);
   CHECK_EQ(button, ui::DIALOG_BUTTON_CANCEL);
-  return GetDialogButtons() & ui::DIALOG_BUTTON_OK
+  return buttons() & ui::DIALOG_BUTTON_OK
              ? l10n_util::GetStringUTF16(IDS_APP_CANCEL)
              : l10n_util::GetStringUTF16(IDS_APP_CLOSE);
 }
@@ -222,7 +256,7 @@ View* DialogDelegate::GetInitiallyFocusedView() {
     return nullptr;
 
   // The default button should be a button we have.
-  CHECK(default_button & GetDialogButtons());
+  CHECK(default_button & buttons());
 
   if (default_button & ui::DIALOG_BUTTON_OK)
     return dcv->ok_button();
@@ -346,7 +380,7 @@ views::View* DialogDelegate::GetFootnoteViewForTesting() const {
   // CreateDialogFrameView above always uses BubbleFrameView. There are
   // subclasses that override CreateDialogFrameView, but none of them override
   // it to create anything other than a BubbleFrameView.
-  // TODO(https://crbug.com/1011446): Make CreateDialogFrameView final, then
+  // TODO(crbug.com/40101916): Make CreateDialogFrameView final, then
   // remove this DCHECK.
   DCHECK(IsViewClass<BubbleFrameView>(frame));
   return static_cast<BubbleFrameView*>(frame)->GetFootnoteView();
@@ -432,13 +466,14 @@ void DialogDelegate::SetCloseCallback(base::OnceClosure callback) {
   close_callback_ = std::move(callback);
 }
 
-void DialogDelegate::SetWidgetOwnsNativeWidget() {
+void DialogDelegate::SetOwnershipOfNewWidget(
+    Widget::InitParams::Ownership ownership) {
   CHECK(!GetWidget());
-  widget_owns_native_widget_ = true;
+  ownership_of_new_widget_ = ownership;
 }
 
-std::unique_ptr<View> DialogDelegate::DisownExtraView() {
-  return std::move(extra_view_);
+std::optional<std::unique_ptr<View>> DialogDelegate::DisownExtraView() {
+  return std::exchange(extra_view_, std::nullopt);
 }
 
 bool DialogDelegate::Close() {
@@ -490,7 +525,7 @@ ax::mojom::Role DialogDelegate::GetAccessibleWindowRole() {
 
 int DialogDelegate::GetCornerRadius() const {
 #if BUILDFLAG(IS_MAC)
-  // TODO(crbug.com/1116680): On Mac MODAL_TYPE_WINDOW is implemented using
+  // TODO(crbug.com/40144839): On Mac MODAL_TYPE_WINDOW is implemented using
   // sheets which causes visual artifacts when corner radius is increased for
   // modal types. Remove this after this issue has been addressed.
   if (GetModalType() == ui::MODAL_TYPE_WINDOW)
@@ -509,9 +544,7 @@ std::unique_ptr<View> DialogDelegate::DisownFootnoteView() {
 ////////////////////////////////////////////////////////////////////////////////
 // DialogDelegateView:
 
-DialogDelegateView::DialogDelegateView() {
-  SetOwnedByWidget(true);
-}
+DialogDelegateView::DialogDelegateView() = default;
 
 DialogDelegateView::~DialogDelegateView() = default;
 

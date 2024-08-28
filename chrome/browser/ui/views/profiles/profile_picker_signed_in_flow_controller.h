@@ -64,7 +64,7 @@ class ProfilePickerSignedInFlowController
   // Finishes the creation flow for `profile_`: marks it fully created,
   // transitions from `host_` to a new browser window and calls `callback` if
   // the browser window was successfully opened.
-  // TODO(crbug.com/1374315): Tighten this contract by notifying the caller if
+  // TODO(crbug.com/40242414): Tighten this contract by notifying the caller if
   // the browser open was not possible.
   virtual void FinishAndOpenBrowser(PostHostClearedCallback callback) = 0;
 
@@ -115,15 +115,14 @@ class ProfilePickerSignedInFlowController
   // content::WebContentsDelegate:
   bool HandleContextMenu(content::RenderFrameHost& render_frame_host,
                          const content::ContextMenuParams& params) override;
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
 
   // Callbacks that finalize initialization of WebUI pages.
   void SwitchToSyncConfirmationFinished();
   void SwitchToManagedUserProfileNoticeFinished(
       ManagedUserProfileNoticeUI::ScreenType type,
-      signin::SigninChoiceCallback proceed_callback);
+      signin::SigninChoiceCallback process_user_choice_callback);
 
   // Returns whether the flow is initialized (i.e. whether `Init()` has been
   // called).

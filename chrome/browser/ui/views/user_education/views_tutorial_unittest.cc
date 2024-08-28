@@ -70,8 +70,8 @@ class ViewsTutorialTest : public views::ViewsTestBase {
     widget_ = std::make_unique<views::Widget>();
 
     views::Widget::InitParams params =
-        CreateParams(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+        CreateParams(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+                     views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     widget_->Init(std::move(params));
     widget_->SetContentsView(
         views::Builder<views::FlexLayoutView>()
@@ -134,6 +134,8 @@ TEST_F(ViewsTutorialTest, BubbleDismissOnViewHiddenDoesNotEndTutorial) {
                          completed);
   UNCALLED_MOCK_CALLBACK(user_education::TutorialService::AbortedCallback,
                          aborted);
+  UNCALLED_MOCK_CALLBACK(user_education::TutorialService::RestartedCallback,
+                         restarted);
 
   static const user_education::TutorialIdentifier kTutorialId = "Tutorial";
   constexpr user_education::HelpBubbleArrow kArrow =
@@ -155,7 +157,7 @@ TEST_F(ViewsTutorialTest, BubbleDismissOnViewHiddenDoesNotEndTutorial) {
   tutorial_service_.StartTutorial(
       kTutorialId,
       views::ElementTrackerViews::GetContextForWidget(widget_.get()),
-      completed.Get(), aborted.Get());
+      completed.Get(), aborted.Get(), restarted.Get());
   ASSERT_TRUE(tutorial_service_.IsRunningTutorial());
 
   hide_button_on_press_ = true;
@@ -187,6 +189,8 @@ TEST_F(ViewsTutorialTest, FinalBubbleDismissOnViewHiddenDoesEndTutorial) {
                          completed);
   UNCALLED_MOCK_CALLBACK(user_education::TutorialService::AbortedCallback,
                          aborted);
+  UNCALLED_MOCK_CALLBACK(user_education::TutorialService::RestartedCallback,
+                         restarted);
 
   static const user_education::TutorialIdentifier kTutorialId = "Tutorial";
   constexpr user_education::HelpBubbleArrow kArrow =
@@ -208,7 +212,7 @@ TEST_F(ViewsTutorialTest, FinalBubbleDismissOnViewHiddenDoesEndTutorial) {
   tutorial_service_.StartTutorial(
       kTutorialId,
       views::ElementTrackerViews::GetContextForWidget(widget_.get()),
-      completed.Get(), aborted.Get());
+      completed.Get(), aborted.Get(), restarted.Get());
   ASSERT_TRUE(tutorial_service_.IsRunningTutorial());
 
   views::test::InteractionTestUtilSimulatorViews::PressButton(

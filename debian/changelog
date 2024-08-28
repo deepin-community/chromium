@@ -1,9 +1,669 @@
-chromium (123.0.6312.58-1deepin1) unstable; urgency=medium
+chromium (128.0.6613.84-1) unstable; urgency=high
 
-  * Remove PowerPC support
-  * Add loong64 support
+  [ Andres Salomon ]
+  * New upstream stable release.
+    - CVE-2024-7964: Use after free in Passwords. Reported by Anonymous.
+    - CVE-2024-7965: Inappropriate implementation in V8. Reported by TheDog.
+    - CVE-2024-7966: Out of bounds memory access in Skia.
+      Reported by Renan Rios (@HyHy100).
+    - CVE-2024-7967: Heap buffer overflow in Fonts.
+      Reported by Tashita Software Security.
+    - CVE-2024-7968: Use after free in Autofill.
+      Reported by Han Zheng (HexHive).
+    - CVE-2024-7969: Type Confusion in V8.
+      Reported by CFF of Topsec Alpha Team.
+    - CVE-2024-7971: Type confusion in V8. Reported by Microsoft Threat
+      Intelligence Center (MSTIC), Microsoft Security Response Center (MSRC).
+    - CVE-2024-7972: Inappropriate implementation in V8.
+      Reported by Simon Gerst (intrigus-lgtm).
+    - CVE-2024-7973: Heap buffer overflow in PDFium. Reported by soiax.
+    - CVE-2024-7974: Insufficient data validation in V8 API.
+      Reported by bowu(@gocrashed).
+    - CVE-2024-7975: Inappropriate implementation in Permissions.
+      Reported by Thomas Orlita.
+    - CVE-2024-7976: Inappropriate implementation in FedCM.
+      Reported by Alesandro Ortiz.
+    - CVE-2024-7977: Insufficient data validation in Installer.
+      Reported by Kim Dong-uk (@justlikebono).
+    - CVE-2024-7978: Insufficient policy enforcement in Data Transfer.
+      Reported by NDevTK.
+    - CVE-2024-7979: Insufficient data validation in Installer.
+      Reported by VulnNoob.
+    - CVE-2024-7980: Insufficient data validation in Installer.
+      Reported by VulnNoob.
+    - CVE-2024-7981: Inappropriate implementation in Views.
+      Reported by Thomas Orlita.
+    - CVE-2024-8033: Inappropriate implementation in WebApp Installs.
+      Reported by Lijo A.T.
+    - CVE-2024-8034: Inappropriate implementation in Custom Tabs.
+      Reported by Bharat (mrnoob).
+    - CVE-2024-8035: Inappropriate implementation in Extensions.
+      Reported by Microsoft.
+  * d/copyright: delete third_party/siso/ which contains binaries.
+  * d/rules: set safe_browsing_use_unrar=false to disable unrar.
+  * d/patches:
+    - fixes/blink-frags.patch: drop, merged upstream.
+    - fixes/stats-collector.patch: drop, upstream deleted broken code.
+    - fixes/chromium-browser-ui-missing-deps.patch: drop, fixed upstream.
+    - upstream/armhf-ftbfs.patch: drop, merged upstream.
+    - upstream/containers-header.patch: drop, merged upstream.
+    - upstream/crabbyav1f.patch: drop, merged upstream.
+    - upstream/lock-impl.patch: drop, merged upstream.
+    - upstream/paint-layer-header.patch: drop, merged upstream.
+    - disable/unrar.patch: drop, merged upstream w/ build arg.
+    - bookworm/nvt.patch: drop, no longer needed.
+    - fixes/ps-print.patch: refresh.
+    - system/openjpeg.patch: refresh.
+    - bookworm/clang16.patch: refresh & remove another unsupported option.
+    - bookworm/constexpr.patch: refresh & add more fixes.
+    - bookworm/lex-3way.patch: pull in another STL function from clang-17.
+    - bookworm/blink-attrib.patch: add build fix to reorder __attribute__.
+    - fixes/highway-include-path.patch: upstream fixed the original issue
+      in a broken way, making this worse. Add more to this patch to work
+      around that.
 
- -- xiangzelong <xiangzelong@deepin.org>  Wed, 27 Mar 2024 15:02:47 +0800
+  [ Daniel Richard G. ]
+  * d/rules: Parameterize Rust sysroot to simplify using a different one.
+
+  [ Timothy Pearson ]
+  * d/patches/ppc64le:
+    - third_party/dawn-fix-typos.patch: Refresh for upstream changes
+    - third_party/use-sysconf-page-size-on-ppc64.patch: Refresh for upstream
+      changes
+    - third_party/0002-Add-PPC64-generated-files-for-boringssl.patch:
+      Refresh for upstream changes
+    - workarounds/HACK-debian-clang-disable-base-musttail.patch: Disable
+      musttail on ppc64el platforms
+
+ -- Andres Salomon <dilinger@debian.org>  Thu, 22 Aug 2024 14:06:28 -0400
+
+chromium (127.0.6533.119-1) unstable; urgency=high
+
+  [ Andres Salomon ]
+  * New upstream stable release.
+  * d/patches/upstream/armhf-ftbfs.patch: armhf FTBFS fix from upstream.
+
+  [ Daniel Richard G. ]
+  * d/patches:
+    - ppc64le/crashpad/0002-Include-cstddef-to-fix-build.patch: Drop, as
+      the original FTBFS that this fixed is no longer reproducible.
+    - ppc64le/fixes/fix-different-data-layouts.patch: Fix ppc64el FTBFS due
+      to minor LLVM data-layout clash between older clang and newer rustc.
+  * d/rules: Add to ppc64el CXXFLAGS to quash copious AltiVec warnings.
+
+ -- Andres Salomon <dilinger@debian.org>  Wed, 14 Aug 2024 13:11:25 -0400
+
+chromium (127.0.6533.99-1) unstable; urgency=high
+
+  [ Andres Salomon ]
+  * New upstream security release.
+    - CVE-2024-7532: Out of bounds memory access in ANGLE.
+      Reported by wgslfuzz.
+    - CVE-2024-7533: Use after free in Sharing. Reported by
+      lime(@limeSec_) from TIANGONG Team of Legendsec at QI-ANXIN Group.
+    - CVE-2024-7550: Type Confusion in V8.
+      Reported by Zhenghang Xiao (@Kipreyyy).
+    - CVE-2024-7534: Heap buffer overflow in Layout.
+      Reported by Tashita Software Security.
+    - CVE-2024-7535: Inappropriate implementation in V8.
+      Reported by Tashita Software Security.
+    - CVE-2024-7536: Use after free in WebAudio.
+      Reported by Cassidy Kim(@cassidy6564).
+
+  [ Timothy Pearson ]
+  * d/patches/ppc64le:
+    - core/add-ppc64-architecture-to-extensions.diff: Fix runtime assertion
+      trap on ppc64el systems
+
+  [ Daniel Richard G. ]
+  * Enable ThinLTO (slower linking, faster runtime) on archs that can
+    support it (closes: #1033305).
+  * Avoid some hard-coded Debian references to simplify package builds for
+    other distributions, e.g. Ubuntu.
+  * d/patches:
+    - bookworm/constexpr.patch: Add no_destroy attributes to quash many
+      "declaration requires an exit-time destructor" warnings.
+    - fixes/highway-include-path.patch: New patch to fix highway.h path.
+
+  [ Grzegorz Szymaszek ]
+  * Use https instead of http in initial_bookmarks.html.
+
+ -- Andres Salomon <dilinger@debian.org>  Wed, 07 Aug 2024 00:18:54 -0400
+
+chromium (127.0.6533.88-1) unstable; urgency=high
+
+  [ Andres Salomon ]
+  * New upstream stable release.
+    - CVE-2024-6988: Use after free in Downloads. Reported by
+      lime(@limeSec_) from TIANGONG Team of Legendsec at QI-ANXIN Group.
+    - CVE-2024-6989: Use after free in Loader. Reported by Anonymous.
+    - CVE-2024-6991: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-6992: Out of bounds memory access in ANGLE.
+      Reported by Xiantong Hou of Wuheng Lab and Pisanbao.
+    - CVE-2024-6993: Inappropriate implementation in Canvas.
+      Reported by Anonymous.
+    - CVE-2024-6994: Heap buffer overflow in Layout.
+      Reported by Huang Xilin of Ant Group Light-Year Security Lab.
+    - CVE-2024-6995: Inappropriate implementation in Fullscreen.
+      Reported by Alesandro Ortiz.
+    - CVE-2024-6996: Race in Frames.
+      Reported by Louis Jannett (Ruhr University Bochum).
+    - CVE-2024-6997: Use after free in Tabs.
+      Reported by Sven Dysthe (@svn-dys).
+    - CVE-2024-6998: Use after free in User Education.
+      Reported by Sven Dysthe (@svn-dys).
+    - CVE-2024-6999: Inappropriate implementation in FedCM.
+      Reported by Alesandro Ortiz.
+    - CVE-2024-7000: Use after free in CSS. Reported by Anonymous.
+    - CVE-2024-7001: Inappropriate implementation in HTML.
+      Reported by Jake Archibald.
+    - CVE-2024-7003: Inappropriate implementation in FedCM.
+      Reported by Alesandro Ortiz.
+    - CVE-2024-7004: Insufficient validation of untrusted input in Safe
+      Browsing. Reported by Anonymous.
+    - CVE-2024-7005: Insufficient validation of untrusted input in Safe
+      Browsing. Reported by Umar Farooq.
+    - CVE-2024-6990: Uninitialized Use in Dawn. Reported by gelatin dessert.
+    - CVE-2024-7255: Out of bounds read in WebTransport.
+      Reported by Marten Richter.
+    - CVE-2024-7256: Insufficient data validation in Dawn.
+      Reported by gelatin dessert.
+  * Switch from building against (gcc's) libstdc++ to (clang's) libc++.
+    Upstream is playing fast and loose with memory in ways that results
+    in crashes with gcc's stricter libstdc++, but not with clang's libc++
+    (which allows accessing deleting memory apparently). We can't maintain
+    workarounds any more, and upstream really doesn't care (see, for
+    example, https://crbug.com/346174906 , where they add workarounds only
+    for their ASAN memory checker).
+  * d/copyright:
+    - delete new rust, cargo, llvm, and node binaries.
+    - delete third_party/zstd so we can link against system zstd.
+    - stop deleting the bundled woff, snappy, and jsoncpp; those can't be
+      dynamically linked against with clang's libc++.
+  * d/control:
+    - build-dep against libzstd-dev and bindgen.
+    - drop build-dep on libwoff-dev, libsnappy-dev, libjsoncpp-dev, and
+      add build-deps on libc++-16-dev / libc++abi-16-dev.
+  * d/rules:
+    - drop use_goma=false (upstream switched to rbe).
+    - set rust_bindgen_root.
+    - rework get-orig-source to not use mk-origtargz, which is
+    incredibly slow (total run 45 mins for the current 6.2G upstream
+    release). Instead, use d/scripts/get-exludes.pl and tar's
+    --exclude-from to drastically speed things up (total run now takes
+    8 mins).
+  * d/patches:
+    - upstream/tabstrip-include.patch: drop, merged upstream.
+    - upstream/quiche-deque.patch: drop, merged upstream.
+    - upstream/gpu-header.patch: drop, merged upstream.
+    - upstream/blink-header.patch: drop, merged upstream.
+    - upstream/blink-header2.patch: drop, merged upstream.
+    - upstream/blink-header3.patch: drop, merged upstream.
+    - upstream/realtime-reporting.patch: drop, merged upstream.
+    - upstream/urlvisit-header.patch: drop, merged upstream.
+    - upstream/accessibility-format.patch: drop, merged upstream.
+    - upstream/observer.patch: drop, merged upstream.
+    - bookworm/clang16.patch: refresh.
+    - bookworm/rust-downgrade-osstr-users.patch: refresh w/ minor changes.
+    - ungoogled/disable-privacy-sandbox.patch: refresh.
+    - disable/signin.patch: upstream dropped prefs::kAutologinEnabled.
+    - upstream/crabbyav1f.patch: add build fix pulled from upstream.
+    - upstream/lock-impl.patch: add build fix pulled from upstream.
+    - upstream/containers-header.patch: add build fix pulled from upstream.
+    - upstream/paint-layer-header.patch: add build fix pulled from upstream
+    - fixes/bindgen.patch: work around bindgen-related things (hopefully
+      correctly?)
+    - bookworm/lex-3way.patch: add patch to support
+      std::lexicographical_compare_three_way, which was added in clang-17.
+    - bookworm/traitors.patch: another clang-16 hack; backport
+      pointer_traits.h from libc++-18-dev to work around clang
+      std::to_address() issue.
+    - bookworm/constexpr.patch: add more of the usual constexpr
+      workarounds; only needed for clang-16.
+    - fixes/absl-optional.patch: drop, only needed for libstdc++-dev.
+    - fixes/bad-font-gc*: drop, only needed for libstdc++-dev.
+    - fixes/chromium-browser-ui-missing-deps.patch: add a bunch of
+      mojo-related dependency build fixes.
+
+  [ Timothy Pearson ]
+  * d/patches:
+    - fixes/fixes/memory-allocator-dcheck-assert-fix.patch: Fix assert on
+      64k page systems such as aarch64 and ppc64el
+  * d/patches/ppc64le:
+    - ffmpeg/0001-Add-support-for-ppc64.patch: Drop, no longer needed
+    - third_party/use-sysconf-page-size-on-ppc64.patch: Refresh for upstream
+      changes
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 30 Jul 2024 23:50:29 -0400
+
+chromium (126.0.6478.182-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-6772: Inappropriate implementation in V8.
+      Reported by 5fceb6172bbf7e2c5a948183b53565b9.
+    - CVE-2024-6773: Type Confusion in V8. Reported by 2ourc3 | Salim Largo.
+    - CVE-2024-6774: Use after free in Screen Capture. Reported by
+      lime(@limeSec_) and fmyy(@binary_fmyy) from TIANGONG Team of Legendsec
+      at QI-ANXIN Group.
+    - CVE-2024-6775: Use after free in Media Stream. Reported by Anonymous.
+    - CVE-2024-6776: Use after free in Audio. Reported by
+      lime(@limeSec_) and fmyy(@binary_fmyy) from TIANGONG Team of Legendsec
+      at QI-ANXIN Group.
+    - CVE-2024-6777: Use after free in Navigation.
+      Reported by Sven Dysthe (@svn-dys).
+    - CVE-2024-6778: Race in DevTools. Reported by Allen Ding.
+    - CVE-2024-6779: Out of bounds memory access in V8.
+      Reported by Seunghyun Lee (@0x10n).
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 16 Jul 2024 16:50:59 -0400
+
+chromium (126.0.6478.126-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-6290: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-6291: Use after free in Swiftshader.
+      Reported by Cassidy Kim(@cassidy6564).
+    - CVE-2024-6292: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-6293: Use after free in Dawn. Reported by wgslfuzz.
+  * d/patches/upstream/observer.patch: add crash-on-exit fix from
+    upstream (closes: #1073378).
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 25 Jun 2024 03:28:40 -0400
+
+chromium (126.0.6478.114-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-6100: Type Confusion in V8. Reported by Seunghyun Lee
+      (@0x10n) participating in SSD Secure Disclosure's TyphoonPWN 2024.
+    - CVE-2024-6101: Inappropriate implementation in WebAssembly.
+      Reported by @ginggilBesel.
+    - CVE-2024-6102: Out of bounds memory access in Dawn.
+      Reported by wgslfuzz.
+    - CVE-2024-6103: Use after free in Dawn. Reported by wgslfuzz.
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 18 Jun 2024 15:55:14 -0400
+
+chromium (126.0.6478.56-1) unstable; urgency=high
+
+  * New upstream stable release.
+    - CVE-2024-5830: Type Confusion in V8.
+      Reported by Man Yue Mo of GitHub Security Lab.
+    - CVE-2024-5831: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-5832: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-5833: Type Confusion in V8. Reported by @ginggilBesel.
+    - CVE-2024-5834: Inappropriate implementation in Dawn.
+      Reported by gelatin dessert.
+    - CVE-2024-5835: Heap buffer overflow in Tab Groups.
+      Reported by Weipeng Jiang (@Krace) of VRI.
+    - CVE-2024-5836: Inappropriate Implementation in DevTools.
+      Reported by Allen Ding.
+    - CVE-2024-5837: Type Confusion in V8. Reported by Anonymous.
+    - CVE-2024-5838: Type Confusion in V8.
+      Reported by Zhenghang Xiao (@Kipreyyy).
+    - CVE-2024-5839: Inappropriate Implementation in Memory Allocator.
+      Reported by Mickey.
+    - CVE-2024-5840: Policy Bypass in CORS. Reported by Matt Howard.
+    - CVE-2024-5841: Use after free in V8.
+      Reported by Cassidy Kim(@cassidy6564).
+    - CVE-2024-5842: Use after free in Browser UI.
+      Reported by Sven Dysthe (@svn_dy).
+    - CVE-2024-5843: Inappropriate implementation in Downloads.
+      Reported by hjy79425575.
+    - CVE-2024-5844: Heap buffer overflow in Tab Strip. Reported by Sri.
+    - CVE-2024-5845: Use after free in Audio. Reported by anonymous.
+    - CVE-2024-5846: Use after free in PDFium.
+      Reported by Han Zheng (HexHive).
+    - CVE-2024-5847: Use after free in PDFium.
+      Reported by Han Zheng (HexHive).
+  * d/copyright: delete bullseye environment that upstream ships (??).
+  * d/patches:
+    - upstream/appservice-include.patch: drop, merged upstream.
+    - upstream/lens-include.patch: drop, merged upstream.
+    - upstream/mojo-bindings-include.patch: drop, merged upstream.
+    - upstream/ninja.patch: drop, merged upstream.
+    - upstream/no-vector-consts.patch: drop, merged upstream.
+    - upstream/vulkan-include.patch: drop, merged upstream.
+    - system/clang-format.patch: drop it; we broke it some time ago, and
+      didn't notice. Guess we don't need it?
+    - bookworm/clang16.patch: refresh.
+    - fixes/bad-font-gc00000.patch: refresh
+    - fixes/bad-font-gc11.patch: refresh
+    - fixes/bad-font-gc2.patch: refresh
+    - disable/signin.patch: refresh
+    - upstream/quiche-deque.patch: gcc build fix pulled from upstream.
+    - upstream/gpu-header.patch: add header build fix from upstream.
+    - upstream/blink-header.patch: add header build fix from upstream.
+    - upstream/blink-header2.patch: add header build fix from upstream.
+    - upstream/blink-header3.patch: add header build fix from upstream.
+    - upstream/realtime-reporting.patch: gcc build fix from upstream.
+    - upstream/urlvisit-header.patch: add header build fix from upstream.
+    - upstream/accessibility-format.patch: gcc build fix from upstream.
+    - bookworm/urlhelper-ctor.patch: work around a clang-16 bug; add an
+      explicit constructor.
+
+  [ Timothy Pearson ]
+  * d/patches/ppc64le:
+    - sandbox/0008-sandbox-fix-ppc64le-glibc234.patch: Modify for upstream
+      changes
+    - third_party/0002-Add-PPC64-generated-files-for-boringssl.patch: Modify
+      for upstream changes
+    - libaom/0001-Add-pregenerated-config-for-libaom-on-ppc64.patch: Refresh
+      for upstream changes
+
+ -- Andres Salomon <dilinger@debian.org>  Thu, 13 Jun 2024 21:31:56 -0400
+
+chromium (125.0.6422.141-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-5493: Heap buffer overflow in WebRTC.
+      Reported by Cassidy Kim(@cassidy6564).
+    - CVE-2024-5494: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-5495: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-5496: Use after free in Media Session.
+      Reported by Cassidy Kim(@cassidy6564).
+    - CVE-2024-5497: Out of bounds memory access in Keyboard Inputs.
+      Reported by zh1x1an1221 of Ant Group Tianqiong Security Lab.
+    - CVE-2024-5498: Use after free in Presentation API.
+    - CVE-2024-5499: Out of bounds write in Streams API.
+  * d/patches/fixes/libxml-parseerr.patch: delete, now that we have a
+    newer libxml2.
+  * d/control: add versioned build-dep on libxml2-dev >= 2.12.
+
+ -- Andres Salomon <dilinger@debian.org>  Thu, 30 May 2024 22:11:26 -0400
+
+chromium (125.0.6422.112-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-5274: Type Confusion in V8. Reported by Clément Lecigne of
+      Google's Threat Analysis Group and Brendon Tiszka of Chrome Security.
+  * Fix handling of quoted arguments (closes: #1071662).
+
+ -- Andres Salomon <dilinger@debian.org>  Thu, 23 May 2024 20:51:14 -0400
+
+chromium (125.0.6422.76-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-5157: Use after free in Scheduling. Reported by Looben Yang.
+    - CVE-2024-5158: Type Confusion in V8.
+      Reported by Zhenghang Xiao (@Kipreyyy).
+    - CVE-2024-5159: Heap buffer overflow in ANGLE.
+      Reported by David Sievers (@loknop).
+    - CVE-2024-5160: Heap buffer overflow in Dawn. Reported by wgslfuzz.
+  * Don't silently ignore arguments meant for the wrapper script if chromium
+    args happen to come first (closes: #1068096).
+  * d/patches:
+    - upstream/tabstrip-include.patch: add header build fix.
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 21 May 2024 16:12:47 -0400
+
+chromium (125.0.6422.60-1) unstable; urgency=high
+
+  * New upstream stable release.
+    - CVE-2024-4947: Type Confusion in V8. Reported by Vasily
+      Berdnikov (@vaber_b) and Boris Larin (@oct0xor) of Kaspersky.
+    - CVE-2024-4948: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-4949: Use after free in V8.
+      Reported by Ganjiang Zhou(@refrain_areu) of ChaMd5-H1 team.
+    - CVE-2024-4950: Inappropriate implementation in Downloads.
+      Reported by Shaheen Fazim.
+  * d/copyright: fix instrumented_libs deletion; upstream renamed it.
+  * d/scripts/unbundle: bundle new requirement absl_crc (which is
+    unavailable in bookworm).
+  * d/patches:
+    - upstream/uint-includes.patch: drop,merged upstream.
+    - upstream/fps-optional.patch: drop, merged upstream.
+    - upstream/span-optional.patch: drop, merged upstream.
+    - upstream/extractor-bitset.patch: drop, merged upstream.
+    - upstream/atomic.patch: drop, merged upstream.
+    - upstream/webgpu-optional.patch: drop, merged upstream.
+    - disable/catapult.patch: refresh.
+    - i386/angle-lockfree.patch: drop, I _think_ it's no longer needed.
+    - upstream/ruy-include.patch: add header build fix.
+    - upstream/vulkan-include.patch: add header build fix.
+    - upstream/mojo-bindings-include.patch: add header build fix.
+    - upstream/appservice-include.patch: add header build fix.
+    - upstream/no-vector-consts.patch: add build fix; gnu libstdc++
+      doesn't allow const types inside vectors.
+    - upstream/lens-include.patch: add header build fix.
+    - bookworm/nvt2.patch: drop (replace with a better non-revert patch).
+    - bookworm/v8-wrappable.patch: add nvt2.patch build fix replacement
+      that just defines a single struct member.
+    - upstream/ninja.patch: add build fix for failure triggered by
+      ninja-1.12 (closes: #1071197).
+    - fixes/bad-font-gc00000.patch: add formatting patch revert to make
+      other patches easier to apply.
+    - fixes/bad-font-gc2.patch: add a build failure fix & refresh.
+    - fixes/bad-font-gc11.patch: add a build failure fix & refresh.
+
+  [ Timothy Pearson ]
+  * d/patches/ppc64le:
+    - third_party/0001-Add-PPC64-support-for-boringssl.patch: Modify for
+      upstream changes
+    - third_party/0002-Add-PPC64-generated-files-for-boringssl.patch: Add
+      pregenerated configuration for ppc64el support in BoringSSL
+    - third_party/0002-third-party-boringssl-add-generated-files.patch:
+      Rename to third_party/0002-Add-PPC64-generated-files-for-boringssl.patch
+    - workarounds/HACK-debian-clang-disable-skia-musttail.patch: Refresh
+      for upstream changes
+    - third_party/skia-vsx-instructions.patch: Refresh for upstream changes
+    - ffmpeg/0001-Add-support-for-ppc64.patch: Refresh for upstream changes
+
+ -- Andres Salomon <dilinger@debian.org>  Thu, 16 May 2024 18:55:41 -0400
+
+chromium (124.0.6367.207-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-4761: Out of bounds write in V8. Reported by Anonymous.
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 14 May 2024 22:17:42 -0400
+
+chromium (124.0.6367.201-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-4671: Use after free in Visuals. Reported by Anonymous.
+
+ -- Andres Salomon <dilinger@debian.org>  Thu, 09 May 2024 20:37:07 -0400
+
+chromium (124.0.6367.155-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-4558: Use after free in ANGLE. Reported by gelatin dessert.
+    - CVE-2024-4559: Heap buffer overflow in WebAudio.
+      Reported by Cassidy Kim(@cassidy6564).
+  * d/control: replace libu2f-udev recommends with udev (closes: #1070283).
+
+  [ Timothy Pearson ]
+  * d/patches/ppc64le:
+    - third_party/skia-vsx-instructions.patch: fix various issues.
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 07 May 2024 14:47:32 -0400
+
+chromium (124.0.6367.118-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-4331: Use after free in Picture In Picture.
+      Reported by Zhenghang Xiao (@Kipreyyy).
+    - CVE-2024-4368: Use after free in Dawn. Reported by wgslfuzz.
+  * Build-dep on libhwy-dev and delete the bundled third_party/highway.
+  * Build-dep on libharfbuzz-dev and delete the bundled harfbuzz-ng.
+  * Build-dep on libdav1d-dev and delete the bundled third_party/dav1d.
+  * d/patches:
+    - ppc64le/third_party/0001-Add-PPC64-support-for-libdav1d.patch,
+      ppc64le/third_party/0001-Fix-libdav1d-compilation-on-clang-ppc.patch,
+      ppc64le/third_party/0003-thirdparty-fix-dav1d-gn.patch,
+      fixes/arm64-ftbfs.patch: drop these 4 patches that are only needed
+      for bundled libdav1d.
+    - ppc64le/third_party/0001-Fix-highway-ppc-hwcap.patch,
+      ppc64le/third_party/0002-Highway-disable-128-bit-vsx.patch: drop
+      these two patches that were needed for bundled highway.
+    - upstream/ozone1.patch: drop, merged upstream.
+    - upstream/ozone2.patch: drop, merged upstream.
+    - fixes/bad-font-gc2.patch: refresh.
+
+  [ Timothy Pearson ]
+  * d/patches/ppc64le:
+    - third_party/0001-Add-PPC64-support-for-boringssl.patch: Fix inadvertent
+      breakage of i386 build
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 30 Apr 2024 17:53:52 -0400
+
+chromium (124.0.6367.78-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-4058: Type Confusion in ANGLE.
+      Reported by Toan (suto) Pham and Bao (zx) Pham of Qrious Secure.
+    - CVE-2024-4059: Out of bounds read in V8 API. Reported by Eirik.
+    - CVE-2024-4060: Use after free in Dawn. Reported by wgslfuzz.
+
+ -- Andres Salomon <dilinger@debian.org>  Thu, 25 Apr 2024 19:07:35 -0400
+
+chromium (124.0.6367.60-2) unstable; urgency=high
+
+  * d/patches/ppc64le:
+     - third_party/0001-Add-PPC64-support-for-boringssl.patch: update for
+       upstream boringssl changes and reenable
+     - third_party/0003-third_party-ffmpeg-Add-ppc64-generated-config.patch:
+       regenerate from new ffmpeg source tree
+     - third_party/skia-vsx-instructions.patch: update for upstream changes
+
+  [ Andres Salomon ]
+  * d/patches:
+    - fixes/arm64-ftbfs.patch: add arm64-specific ftbfs fix for libdav1d.
+    - upstream/ozone1.patch, upstream/ozone2.patch: backport fixes for
+      broken wayland support (closes: #1069586).
+
+ -- Timothy Pearson <tpearson@debian.org>  Thu, 25 Apr 2024 15:21:00 -0500
+
+chromium (124.0.6367.60-1) unstable; urgency=high
+
+  * New upstream stable release.
+    - CVE-2024-3832: Object corruption in V8.
+      Reported by Man Yue Mo of GitHub Security Lab.
+    - CVE-2024-3833: Object corruption in WebAssembly.
+      Reported by Man Yue Mo of GitHub Security Lab.
+    - CVE-2024-3914: Use after free in V8. Reported by Seunghyun Lee
+      (@0x10n) of KAIST Hacking Lab, via Pwn2Own 2024.
+    - CVE-2024-3834: Use after free in Downloads. Reported by ChaobinZhang
+    - CVE-2024-3837: Use after free in QUIC.
+      Reported by {rotiple, dch3ck} of CW Research Inc.
+    - CVE-2024-3838: Inappropriate implementation in Autofill.
+      Reported by Ardyan Vicky Ramadhan.
+    - CVE-2024-3839: Out of bounds read in Fonts.
+      Reported by Ronald Crane (Zippenhop LLC).
+    - CVE-2024-3840: Insufficient policy enforcement in Site Isolation.
+      Reported by Ahmed ElMasry.
+    - CVE-2024-3841: Insufficient data validation in Browser Switcher.
+      Reported by Oleg.
+    - CVE-2024-3843: Insufficient data validation in Downloads.
+      Reported by Azur.
+    - CVE-2024-3844: Inappropriate implementation in Extensions.
+      Reported by Alesandro Ortiz.
+    - CVE-2024-3845: Inappropriate implementation in Network.
+      Reported by Daniel Baulig.
+    - CVE-2024-3846: Inappropriate implementation in Prompts.
+      Reported by Ahmed ElMasry.
+    - CVE-2024-3847: Insufficient policy enforcement in WebUI.
+      Reported by Yan Zhu.
+  * d/copyright:
+    - delete __pycache__ directories to shut up dpkg warnings.
+    - stop deleting bundled libwebp directory.
+  * Drop build-dep on libwebp-dev and start building against the bundled
+    libwebp. We need to do this because chromium uses features of libavif
+    that require libsharpyuv-dev; but that's only available in sid/trixie.
+  * d/patches:
+    - upstream/std-to-address.patch: drop, merged upstream.
+    - fixes/optional2.patch: drop, merged upstream.
+    - fixes/blink-fonts-shape-result.patch: drop, merged upstream.
+    - bookworm/constexpr-equality.patch: drop, merged upstream.
+    - disable/catapult.patch: refresh.
+    - disable/google-api-warning.patch: rework to be a smaller patch.
+    - bookworm/clang16.patch: refresh.
+    - ungoogled/disable-privacy-sandbox.patch: drop hunk related to deprecated
+      preference.
+    - upstream/mojo-null.patch: pull a (typescript) build fix from upstream.
+    - upstream/uint-includes.patch: simple header build fix from upstream.
+    - upstream/fps-optional.patch: add header build fix.
+    - upstream/span-optional.patch: add header build fix.
+    - upstream/extractor-bitset.patch: add header build fix.
+    - upstream/atomic.patch: add header build fix.
+    - upstream/webgpu-optional.patch: add header build fix.
+    - fixes/absl-optional.patch: comment out assert() that caused crash.
+      This could be another clang16/libstdc++ miscompilation issue, but
+      needs further investigation.
+    - fixes/bad-font-gc2.patch: drop a bunch of test-related pieces.
+    - fixes/bad-font-gc0000.patch, fixes/bad-font-gc000.patch,
+      fixes/bad-font-gc00.patch, fixes/bad-font-gc0.patch,
+      fixes/bad-font-gc11.patch, fixes/bad-font-gc3.patch: revert a bunch
+      more (new) upstream commits related to bad-font-gc2.patch. When the
+      use-after-free bug gets fixed, all this can be dropped.
+  * d/patches/ppc64le:
+    - third_party/0002-third_party-libvpx-Remove-bad-ppc64-config.patch,
+      third_party/0003-third_party-ffmpeg-Add-ppc64-generated-config.patch,
+      workarounds/HACK-third_party-libvpx-use-generic-gnu.patch,
+      breakpad/0001-Implement-support-for-ppc64-on-Linux.patch,
+      ffmpeg/0001-Add-support-for-ppc64.patch,
+      third_party/dawn-fix-typos.patch,
+      third_party/use-sysconf-page-size-on-ppc64.patch: refresh.
+    - third_party/skia-vsx-instructions.patch: refresh & update for header
+      renaming.
+    - third_party/0001-Add-PPC64-support-for-boringssl.patch,
+      third_party/0002-third-party-boringssl-add-generated-files.patch:
+      disable these two until Tim has a chance to look at them.
+
+ -- Andres Salomon <dilinger@debian.org>  Fri, 19 Apr 2024 12:33:38 -0400
+
+chromium (123.0.6312.122-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-3157: Out of bounds write in Compositing.
+      Reported by DarkNavy.
+    - CVE-2024-3516: Heap buffer overflow in ANGLE.
+      Reported by Bao (zx) Pham and Toan (suto) Pham of Qrious Secure.
+    - CVE-2024-3515: Use after free in Dawn. Reported by wgslfuzz.
+
+ -- Andres Salomon <dilinger@debian.org>  Wed, 10 Apr 2024 21:21:05 -0400
+
+chromium (123.0.6312.105-2) unstable; urgency=high
+
+  * Depend on libgtk-3-0t64 instead of libgtk-3-0 for time_t transition
+    (closes: #1068540).
+
+ -- Andres Salomon <dilinger@debian.org>  Sun, 07 Apr 2024 12:43:26 -0400
+
+chromium (123.0.6312.105-1) unstable; urgency=high
+
+  * New upstream security release.
+    - CVE-2024-3156: Inappropriate implementation in V8.
+      Reported by Zhenghang Xiao (@Kipreyyy).
+    - CVE-2024-3158: Use after free in Bookmarks. Reported by undoingfish.
+    - CVE-2024-3159: Out of bounds memory access in V8. Reported by
+      Edouard Bochin (@le_douds) and Tao Yan (@Ga1ois) of Palo Alto
+      Networks, via Pwn2Own 2024.
+
+ -- Andres Salomon <dilinger@debian.org>  Tue, 02 Apr 2024 18:28:18 -0400
+
+chromium (123.0.6312.86-1) unstable; urgency=high
+
+  * New upstream stable release.
+    - CVE-2024-2883: Use after free in ANGLE.
+      Reported by Cassidy Kim(@cassidy6564).
+    - CVE-2024-2885: Use after free in Dawn. Reported by wgslfuzz.
+    - CVE-2024-2886: Use after free in WebCodecs. Reported by
+      Seunghyun Lee (@0x10n) of KAIST Hacking Lab, via Pwn2Own 2024.
+    - CVE-2024-2887: Type Confusion in WebAssembly.
+      Reported by Manfred Paul, via Pwn2Own 2024.
+  * d/patches/ppc64le:
+    - fixes/fix-clang-selection.patch: select clang on ppc64 platforms
+    - ppc64le/third_party/0001-Add-PPC64-support-for-boringssl.patch: fix
+      ARM builds.
+
+  [ Andres Salomon ]
+  * d/patches:
+    - fixes/bad-font-gc1.patch, fixes/bad-font-gc2.patch: revert a pair of
+      upstream commits that result in blink's garbage collector frequently
+      deadlocking and crashing (closes: #1067886).
+
+ -- Timothy Pearson <tpearson@debian.org>  Wed, 28 Mar 2024 16:58:00 -0500
 
 chromium (123.0.6312.58-1) unstable; urgency=high
 

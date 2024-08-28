@@ -79,6 +79,7 @@ class CORE_EXPORT TextControlElement : public HTMLFormControlElementWithState {
   String StrippedPlaceholder() const;
   HTMLElement* PlaceholderElement() const;
   void UpdatePlaceholderVisibility();
+  void UpdatePlaceholderShadowPseudoId(HTMLElement& placeholder);
 
   VisiblePosition VisiblePositionForIndex(int) const;
   unsigned selectionStart() const;
@@ -162,6 +163,13 @@ class CORE_EXPORT TextControlElement : public HTMLFormControlElementWithState {
   virtual void SetSuggestedValue(const String& value);
   const String& SuggestedValue() const;
 
+  void ScheduleSelectionchangeEvent();
+
+  void ResetEventQueueStatus(const AtomicString& event_type) override {
+    if (event_type == event_type_names::kSelectionchange)
+      has_scheduled_selectionchange_event_ = false;
+  }
+
   void Trace(Visitor*) const override;
 
   ETextOverflow ValueForTextOverflow() const;
@@ -189,6 +197,18 @@ class CORE_EXPORT TextControlElement : public HTMLFormControlElementWithState {
   void CloneNonAttributePropertiesFrom(const Element&,
                                        NodeCloningData&) override;
 
+  // Returns true if the inner-editor value is empty. This may be cheaper
+  // than calling InnerEditorValue(), and InnerEditorValue() returns
+  // the wrong thing if the editor hasn't been created yet.
+  virtual bool IsInnerEditorValueEmpty() const = 0;
+
+  TextControlInnerEditorElement* EnsureInnerEditorElement() const {
+    if (!inner_editor_) {
+      CreateInnerEditorElementIfNecessary();
+    }
+    return inner_editor_.Get();
+  }
+
  private:
   // Used by ComputeSelection() to specify which values are needed.
   enum ComputeSelectionFlags {
@@ -202,14 +222,6 @@ class CORE_EXPORT TextControlElement : public HTMLFormControlElementWithState {
     unsigned end = 0;
     TextFieldSelectionDirection direction = kSelectionHasNoDirection;
   };
-
-  TextControlInnerEditorElement* EnsureInnerEditorElement() const {
-    if (inner_editor_) {
-      return inner_editor_.Get();
-    }
-    CreateInnerEditorElementIfNecessary();
-    return inner_editor_.Get();
-  }
 
   bool ShouldApplySelectionCache() const;
   // Computes the selection. `flags` is a bitmask of ComputeSelectionFlags that
@@ -229,6 +241,7 @@ class CORE_EXPORT TextControlElement : public HTMLFormControlElementWithState {
                          mojom::blink::FocusType,
                          InputDeviceCapabilities* source_capabilities) final;
   void ScheduleSelectEvent();
+  void ScheduleSelectionchangeEventOnThisOrDocument();
   void DisabledOrReadonlyAttributeChanged(const QualifiedName&);
 
   // Called in dispatchFocusEvent(), after placeholder process, before calling
@@ -261,6 +274,9 @@ class CORE_EXPORT TextControlElement : public HTMLFormControlElementWithState {
 
   String suggested_value_;
   String value_before_set_suggested_value_;
+
+  // Indicate whether there is one scheduled selectionchange event.
+  bool has_scheduled_selectionchange_event_ = false;
 
   FRIEND_TEST_ALL_PREFIXES(TextControlElementTest, IndexForPosition);
   FRIEND_TEST_ALL_PREFIXES(HTMLTextAreaElementTest, ValueWithHardLineBreaks);

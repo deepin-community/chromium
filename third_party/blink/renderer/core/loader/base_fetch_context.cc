@@ -386,10 +386,10 @@ void BaseFetchContext::AddClientHintsIfNecessary(
 
     if (ShouldSendClientHint(
             policy, resource_origin, is_1p_origin,
-            network::mojom::blink::WebClientHintsType::kUAFormFactor,
+            network::mojom::blink::WebClientHintsType::kUAFormFactors,
             hints_preferences)) {
-      SetHttpHeader(WebClientHintsType::kUAFormFactor,
-                    AtomicString(ua->SerializeFormFactor().c_str()), request);
+      SetHttpHeader(WebClientHintsType::kUAFormFactors,
+                    AtomicString(ua->SerializeFormFactors().c_str()), request);
     }
   }
 
@@ -463,6 +463,21 @@ BaseFetchContext::CheckCSPForRequest(
 }
 
 std::optional<ResourceRequestBlockedReason>
+BaseFetchContext::CheckAndEnforceCSPForRequest(
+    mojom::blink::RequestContextType request_context,
+    network::mojom::RequestDestination request_destination,
+    const KURL& url,
+    const ResourceLoaderOptions& options,
+    ReportingDisposition reporting_disposition,
+    const KURL& url_before_redirects,
+    ResourceRequest::RedirectStatus redirect_status) const {
+  return CheckCSPForRequestInternal(
+      request_context, request_destination, url, options, reporting_disposition,
+      url_before_redirects, redirect_status,
+      ContentSecurityPolicy::CheckHeaderType::kCheckAll);
+}
+
+std::optional<ResourceRequestBlockedReason>
 BaseFetchContext::CheckCSPForRequestInternal(
     mojom::blink::RequestContextType request_context,
     network::mojom::RequestDestination request_destination,
@@ -478,7 +493,7 @@ BaseFetchContext::CheckCSPForRequestInternal(
   }
 
   ContentSecurityPolicy* csp =
-      GetContentSecurityPolicyForWorld(options.world_for_csp.get());
+      GetContentSecurityPolicyForWorld(options.world_for_csp.Get());
   if (csp &&
       !csp->AllowRequest(request_context, request_destination, url,
                          options.content_security_policy_nonce,
@@ -529,12 +544,17 @@ BaseFetchContext::CanRequestInternal(
     return ResourceRequestBlockedReason::kOther;
   }
 
-  if (request_mode == network::mojom::RequestMode::kSameOrigin &&
-      cors::CalculateCorsFlag(url, origin.get(),
-                              resource_request.IsolatedWorldOrigin().get(),
-                              request_mode)) {
-    PrintAccessDeniedMessage(url);
-    return ResourceRequestBlockedReason::kOrigin;
+  if (!(base::FeatureList::IsEnabled(features::kOptimizeLoadingDataUrls) &&
+        url.ProtocolIsData())) {
+    // CORS is defined only for HTTP(S) requests. See
+    // https://fetch.spec.whatwg.org/#http-extensions.
+    if (request_mode == network::mojom::RequestMode::kSameOrigin &&
+        cors::CalculateCorsFlag(url, origin.get(),
+                                resource_request.IsolatedWorldOrigin().get(),
+                                request_mode)) {
+      PrintAccessDeniedMessage(url);
+      return ResourceRequestBlockedReason::kOrigin;
+    }
   }
 
   // User Agent CSS stylesheets should only support loading images and should be
@@ -569,16 +589,16 @@ BaseFetchContext::CanRequestInternal(
   }
 
   if (type == ResourceType::kScript) {
-    if (!AllowScriptFromSource(url)) {
+    if (!AllowScript()) {
       // TODO(estark): Use a different ResourceRequestBlockedReason here, since
       // this check has nothing to do with CSP. https://crbug.com/600795
       return ResourceRequestBlockedReason::kCSP;
     }
   }
 
-  // SVG Images have unique security rules that prevent all subresource requests
-  // except for data urls.
-  if (IsSVGImageChromeClient() && !url.ProtocolIsData())
+  // SVG images/resource documents have unique security rules that prevent all
+  // subresource requests except for data urls.
+  if (IsIsolatedSVGChromeClient() && !url.ProtocolIsData())
     return ResourceRequestBlockedReason::kOrigin;
 
   // data: URL is deprecated in SVGUseElement.
@@ -589,6 +609,12 @@ BaseFetchContext::CanRequestInternal(
           blink::switches::kDataUrlInSvgUseEnabled)) {
     PrintAccessDeniedMessage(url);
     return ResourceRequestBlockedReason::kOrigin;
+  }
+
+  // Nothing below this point applies to data: URL images.
+  if (base::FeatureList::IsEnabled(features::kOptimizeLoadingDataUrls) &&
+      type == ResourceType::kImage && url.ProtocolIsData()) {
+    return std::nullopt;
   }
 
   // Measure the number of embedded-credential ('http://user:password@...')
@@ -629,9 +655,13 @@ BaseFetchContext::CanRequestInternal(
   // Only warn if the resource URL's origin is different than its requestor
   // (we don't want to warn for <img src="faß.de/image.img"> on faß.de).
   // TODO(crbug.com/1396475): Remove once Non-Transitional mode is shipped.
-  if (!resource_request.RequestorOrigin()->IsSameOriginWith(
-          SecurityOrigin::Create(url).get()) &&
-      url.HasIDNA2008DeviationCharacter()) {
+  if (base::FeatureList::IsEnabled(kAvoidWastefulHostCopies)
+          ? (url.HasIDNA2008DeviationCharacter() &&
+             !resource_request.RequestorOrigin()->IsSameOriginWith(
+                 SecurityOrigin::Create(url).get()))
+          : (!resource_request.RequestorOrigin()->IsSameOriginWith(
+                 SecurityOrigin::Create(url).get()) &&
+             url.HasIDNA2008DeviationCharacter())) {
     String message = GetConsoleWarningForIDNADeviationCharacters(url);
     if (!message.empty()) {
       console_logger_->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(

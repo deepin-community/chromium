@@ -6,6 +6,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/not_fatal_until.h"
 #include "base/win/win_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/media_keys_listener_manager.h"
@@ -72,7 +73,7 @@ bool GlobalShortcutListenerWin::RegisterAcceleratorImpl(
     const ui::Accelerator& accelerator) {
   DCHECK(hotkeys_.find(accelerator) == hotkeys_.end());
 
-  // TODO(https://crbug.com/950704): We should be using
+  // TODO(crbug.com/40622191): We should be using
   // |media_keys_listener_manager->StartWatchingMediaKey(...)| here, but that
   // currently breaks the GlobalCommandsApiTest.GlobalDuplicatedMediaKey test.
   // Instead, we'll just disable the MediaKeysListenerManager handling here, and
@@ -112,9 +113,9 @@ bool GlobalShortcutListenerWin::RegisterAcceleratorImpl(
 void GlobalShortcutListenerWin::UnregisterAcceleratorImpl(
     const ui::Accelerator& accelerator) {
   HotKeyMap::iterator it = hotkeys_.find(accelerator);
-  DCHECK(it != hotkeys_.end());
+  CHECK(it != hotkeys_.end(), base::NotFatalUntil::M130);
 
-  // TODO(https://crbug.com/950704): We should be using
+  // TODO(crbug.com/40622191): We should be using
   // |media_keys_listener_manager->StopWatchingMediaKey(...)| here.
   if (content::MediaKeysListenerManager::IsMediaKeysListenerManagerEnabled() &&
       Command::IsMediaKey(accelerator)) {

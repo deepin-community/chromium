@@ -14,6 +14,7 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
 #include "components/content_settings/core/browser/content_settings_origin_value_map.h"
@@ -38,6 +39,10 @@ struct PrefsForManagedContentSettingsMapEntry {
 
 constexpr PrefsForManagedContentSettingsMapEntry
     kPrefsForManagedContentSettingsMap[] = {
+        {prefs::kManagedAutomaticFullscreenAllowedForUrls,
+         ContentSettingsType::AUTOMATIC_FULLSCREEN, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedAutomaticFullscreenBlockedForUrls,
+         ContentSettingsType::AUTOMATIC_FULLSCREEN, CONTENT_SETTING_BLOCK},
         {prefs::kManagedCookiesAllowedForUrls, ContentSettingsType::COOKIES,
          CONTENT_SETTING_ALLOW},
         {prefs::kManagedCookiesBlockedForUrls, ContentSettingsType::COOKIES,
@@ -98,6 +103,10 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::JAVASCRIPT_JIT, CONTENT_SETTING_ALLOW},
         {prefs::kManagedJavaScriptJitBlockedForSites,
          ContentSettingsType::JAVASCRIPT_JIT, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedJavaScriptOptimizerAllowedForSites,
+         ContentSettingsType::JAVASCRIPT_OPTIMIZER, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedJavaScriptOptimizerBlockedForSites,
+         ContentSettingsType::JAVASCRIPT_OPTIMIZER, CONTENT_SETTING_BLOCK},
         {prefs::kManagedWebHidAskForUrls, ContentSettingsType::HID_GUARD,
          CONTENT_SETTING_ASK},
         {prefs::kManagedWebHidBlockedForUrls, ContentSettingsType::HID_GUARD,
@@ -117,9 +126,15 @@ constexpr PrefsForManagedContentSettingsMapEntry
          ContentSettingsType::WEB_PRINTING, CONTENT_SETTING_ALLOW},
         {prefs::kManagedWebPrintingBlockedForUrls,
          ContentSettingsType::WEB_PRINTING, CONTENT_SETTING_BLOCK},
+        {prefs::kManagedDirectSocketsAllowedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_ALLOW},
+        {prefs::kManagedDirectSocketsBlockedForUrls,
+         ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_BLOCK},
 };
 
 constexpr const char* kManagedPrefs[] = {
+    prefs::kManagedAutomaticFullscreenAllowedForUrls,
+    prefs::kManagedAutomaticFullscreenBlockedForUrls,
     prefs::kManagedAutoSelectCertificateForUrls,
     prefs::kManagedClipboardAllowedForUrls,
     prefs::kManagedClipboardBlockedForUrls,
@@ -140,6 +155,8 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedJavaScriptBlockedForUrls,
     prefs::kManagedJavaScriptJitAllowedForSites,
     prefs::kManagedJavaScriptJitBlockedForSites,
+    prefs::kManagedJavaScriptOptimizerAllowedForSites,
+    prefs::kManagedJavaScriptOptimizerBlockedForSites,
     prefs::kManagedLegacyCookieAccessAllowedForDomains,
     prefs::kManagedNotificationsAllowedForUrls,
     prefs::kManagedNotificationsBlockedForUrls,
@@ -161,6 +178,8 @@ constexpr const char* kManagedPrefs[] = {
     prefs::kManagedThirdPartyStoragePartitioningBlockedForOrigins,
     prefs::kManagedWebPrintingAllowedForUrls,
     prefs::kManagedWebPrintingBlockedForUrls,
+    prefs::kManagedDirectSocketsAllowedForUrls,
+    prefs::kManagedDirectSocketsBlockedForUrls,
 };
 
 // The following preferences are only used to indicate if a default content
@@ -188,11 +207,13 @@ constexpr const char* kManagedDefaultPrefs[] = {
     prefs::kManagedDefaultWebBluetoothGuardSetting,
     prefs::kManagedDefaultWebUsbGuardSetting,
     prefs::kManagedDefaultJavaScriptJitSetting,
+    prefs::kManagedDefaultJavaScriptOptimizerSetting,
     prefs::kManagedDefaultWebHidGuardSetting,
     prefs::kManagedDefaultWindowManagementSetting,
     prefs::kManagedDefaultLocalFontsSetting,
     prefs::kManagedDefaultThirdPartyStoragePartitioningSetting,
     prefs::kManagedDefaultWebPrintingSetting,
+    prefs::kManagedDefaultDirectSocketsSetting,
 };
 
 void ReportCookiesAllowedForUrlsUsage(
@@ -300,6 +321,8 @@ const PolicyProvider::PrefsForManagedDefaultMapEntry
          prefs::kManagedDefaultThirdPartyStoragePartitioningSetting},
         {ContentSettingsType::WEB_PRINTING,
          prefs::kManagedDefaultWebPrintingSetting},
+        {ContentSettingsType::DIRECT_SOCKETS,
+         prefs::kManagedDefaultDirectSocketsSetting},
 };
 
 // static
@@ -315,6 +338,7 @@ void PolicyProvider::RegisterProfilePrefs(
 }
 
 PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
+  TRACE_EVENT_BEGIN("startup", "PolicyProvider::PolicyProvider");
   ReadManagedDefaultSettings();
   ReadManagedContentSettings(false);
 
@@ -328,6 +352,7 @@ PolicyProvider::PolicyProvider(PrefService* prefs) : prefs_(prefs) {
     pref_change_registrar_.Add(pref, callback);
 
   ReportCookiesAllowedForUrlsUsage(value_map_);
+  TRACE_EVENT_END("startup");
 }
 
 PolicyProvider::~PolicyProvider() {
@@ -372,15 +397,16 @@ void PolicyProvider::GetContentSettingsFromPreferences() {
     DCHECK(!pref->HasExtensionSetting());
 
     if (!pref->GetValue()->is_list()) {
-      NOTREACHED() << "Could not read patterns from " << entry.pref_name;
+      NOTREACHED_IN_MIGRATION()
+          << "Could not read patterns from " << entry.pref_name;
       return;
     }
 
     const base::Value::List& pattern_str_list = pref->GetValue()->GetList();
     for (size_t i = 0; i < pattern_str_list.size(); ++i) {
       if (!pattern_str_list[i].is_string()) {
-        NOTREACHED() << "Could not read content settings pattern #" << i
-                     << " from " << entry.pref_name;
+        NOTREACHED_IN_MIGRATION() << "Could not read content settings pattern #"
+                                  << i << " from " << entry.pref_name;
         continue;
       }
 
@@ -435,7 +461,7 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
   DCHECK(!pref->HasExtensionSetting());
 
   if (!pref->GetValue()->is_list()) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 
@@ -459,7 +485,7 @@ void PolicyProvider::GetAutoSelectCertificateSettingsFromPreferences() {
   std::unordered_map<std::string, base::Value::Dict> filters_map;
   for (const auto& pattern_filter_str : pref->GetValue()->GetList()) {
     if (!pattern_filter_str.is_string()) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       continue;
     }
 

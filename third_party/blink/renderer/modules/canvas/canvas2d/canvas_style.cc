@@ -28,14 +28,31 @@
 
 #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h"
 
+#include "base/notreached.h"
+#include "cc/paint/paint_flags.h"
+#include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink.h"
+#include "third_party/blink/renderer/core/css/css_color_mix_value.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
-#include "third_party/blink/renderer/core/css/css_property_value_set.h"
-#include "third_party/blink/renderer/core/css/cssom/css_color_value.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
+#include "third_party/blink/renderer/core/css/resolver/style_builder_converter.h"
+#include "third_party/blink/renderer/core/css/style_color.h"
+#include "third_party/blink/renderer/core/dom/text_link_colors.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
+#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_gradient.h"
+#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_pattern.h"
+#include "third_party/blink/renderer/platform/graphics/gradient.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_context.h"
+#include "third_party/blink/renderer/platform/graphics/pattern.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
-#include "third_party/skia/include/core/SkShader.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_uchar.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkMatrix.h"
 
 namespace blink {
 
@@ -56,6 +73,10 @@ static ColorParseResult ParseColor(Color& parsed_color,
           DynamicTo<cssvalue::CSSColorMixValue>(CSSParser::ParseSingleValue(
               CSSPropertyID::kColor, color_string,
               StrictCSSParserContext(SecureContextMode::kInsecureContext)))) {
+    static const TextLinkColors kDefaultTextLinkColors{};
+    const StyleColor style_color = ResolveColorValue(
+        *color_mix_value, kDefaultTextLinkColors, color_scheme, color_provider);
+    parsed_color = style_color.Resolve(Color::kBlack, color_scheme);
     return ColorParseResult::kColorMix;
   }
   return ColorParseResult::kParseFailed;
@@ -104,7 +125,7 @@ void CanvasStyle::ApplyToFlags(cc::PaintFlags& flags,
       flags.setColor(SkColor4f(0.0f, 0.0f, 0.0f, global_alpha));
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 

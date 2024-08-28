@@ -65,9 +65,11 @@ class PageNodeSortProxy {
         last_visible_(last_visible) {}
 
   const PageNode* page_node() const { return page_node_; }
+  bool is_marked() const { return is_marked_; }
   bool is_protected() const { return is_protected_; }
   bool is_visible() const { return is_visible_; }
   bool is_focused() const { return is_focused_; }
+  base::TimeDelta last_visible() const { return last_visible_; }
 
   // Returns true if the rhs is more important.
   bool operator<(const PageNodeSortProxy& rhs) const {
@@ -97,9 +99,9 @@ class PageNodeSortProxy {
 //
 // This is a GraphRegistered object and should be accessed via
 // PageDiscardingHelper::GetFromGraph(graph()).
-class PageDiscardingHelper : public GraphOwned,
-                             public GraphRegisteredImpl<PageDiscardingHelper>,
-                             public NodeDataDescriberDefaultImpl {
+class PageDiscardingHelper
+    : public GraphOwnedAndRegistered<PageDiscardingHelper>,
+      public NodeDataDescriberDefaultImpl {
  public:
   enum class CanDiscardResult {
     // Discarding eligible nodes is hard to notice for user.
@@ -143,8 +145,8 @@ class PageDiscardingHelper : public GraphOwned,
       base::TimeDelta minimum_time_in_background =
           kNonVisiblePagesUrgentProtectionTime);
 
-  void ImmediatelyDiscardSpecificPage(
-      const PageNode* page_node,
+  void ImmediatelyDiscardMultiplePages(
+      const std::vector<const PageNode*>& page_nodes,
       DiscardReason discard_reason,
       base::OnceCallback<void(bool)> post_discard_cb = base::DoNothing());
 
@@ -164,7 +166,6 @@ class PageDiscardingHelper : public GraphOwned,
                               base::TimeDelta minimum_time_in_background =
                                   kNonVisiblePagesUrgentProtectionTime) const;
 
-  void SetGraphForTesting(Graph* graph) { graph_ = graph; }
   static void AddDiscardAttemptMarkerForTesting(PageNode* page_node);
   static void RemovesDiscardAttemptMarkerForTesting(PageNode* page_node);
 
@@ -204,8 +205,6 @@ class PageDiscardingHelper : public GraphOwned,
       profiles_no_discard_patterns_;
 
   memory_pressure::UnnecessaryDiscardMonitor unnecessary_discard_monitor_;
-
-  raw_ptr<Graph> graph_ = nullptr;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

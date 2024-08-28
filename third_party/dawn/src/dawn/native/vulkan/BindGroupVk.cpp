@@ -29,6 +29,7 @@
 
 #include "dawn/common/BitSetIterator.h"
 #include "dawn/common/MatchVariant.h"
+#include "dawn/common/Range.h"
 #include "dawn/common/ityp_stack_vec.h"
 #include "dawn/native/ExternalTexture.h"
 #include "dawn/native/vulkan/BindGroupLayoutVk.h"
@@ -64,10 +65,7 @@ BindGroup::BindGroup(Device* device,
         bindingCount);
 
     uint32_t numWrites = 0;
-    for (const auto& bindingItem : GetLayout()->GetBindingMap()) {
-        // We cannot use structured binding here because lambda expressions can only capture
-        // variables, while structured binding doesn't introduce variables.
-        BindingIndex bindingIndex = bindingItem.second;
+    for (BindingIndex bindingIndex : Range(GetLayout()->GetBindingCount())) {
         const BindingInfo& bindingInfo = GetLayout()->GetBindingInfo(bindingIndex);
 
         auto& write = writes[numWrites];
@@ -79,9 +77,9 @@ BindGroup::BindGroup(Device* device,
         write.descriptorCount = 1;
         write.descriptorType = VulkanDescriptorType(bindingInfo);
 
-        bool isValidDescriptorSet = MatchVariant(
+        bool shouldWriteDescriptor = MatchVariant(
             bindingInfo.bindingLayout,
-            [&](const BufferBindingLayout&) -> bool {
+            [&](const BufferBindingInfo&) -> bool {
                 BufferBinding binding = GetBindingAsBufferBinding(bindingIndex);
 
                 VkBuffer handle = ToBackend(binding.buffer)->GetHandle();
@@ -98,13 +96,19 @@ BindGroup::BindGroup(Device* device,
                 write.pBufferInfo = &writeBufferInfo[numWrites];
                 return true;
             },
-            [&](const SamplerBindingLayout&) -> bool {
+            [&](const SamplerBindingInfo&) -> bool {
                 Sampler* sampler = ToBackend(GetBindingAsSampler(bindingIndex));
                 writeImageInfo[numWrites].sampler = sampler->GetHandle();
                 write.pImageInfo = &writeImageInfo[numWrites];
                 return true;
             },
-            [&](const TextureBindingLayout&) -> bool {
+            [&](const StaticSamplerBindingInfo& layout) -> bool {
+                // Static samplers are bound into the Vulkan layout as immutable
+                // samplers at BindGroupLayout creation time. There is no work
+                // to be done at BindGroup creation time.
+                return false;
+            },
+            [&](const TextureBindingInfo&) -> bool {
                 TextureView* view = ToBackend(GetBindingAsTextureView(bindingIndex));
 
                 VkImageView handle = view->GetHandle();
@@ -123,7 +127,7 @@ BindGroup::BindGroup(Device* device,
                 write.pImageInfo = &writeImageInfo[numWrites];
                 return true;
             },
-            [&](const StorageTextureBindingLayout&) -> bool {
+            [&](const StorageTextureBindingInfo&) -> bool {
                 TextureView* view = ToBackend(GetBindingAsTextureView(bindingIndex));
 
                 VkImageView handle = VK_NULL_HANDLE;
@@ -145,9 +149,27 @@ BindGroup::BindGroup(Device* device,
 
                 write.pImageInfo = &writeImageInfo[numWrites];
                 return true;
+            },
+            [&](const InputAttachmentBindingInfo&) -> bool {
+                TextureView* view = ToBackend(GetBindingAsTextureView(bindingIndex));
+
+                VkImageView handle = view->GetHandle();
+                if (handle == VK_NULL_HANDLE) {
+                    // The Texture was destroyed before the TextureView was created.
+                    // Skip this descriptor write since it would be
+                    // a Vulkan Validation Layers error. This bind group won't be used as it
+                    // is an error to submit a command buffer that references destroyed
+                    // resources.
+                    return false;
+                }
+                writeImageInfo[numWrites].imageView = handle;
+                writeImageInfo[numWrites].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                write.pImageInfo = &writeImageInfo[numWrites];
+                return true;
             });
 
-        if (isValidDescriptorSet) {
+        if (shouldWriteDescriptor) {
             numWrites++;
         }
     }

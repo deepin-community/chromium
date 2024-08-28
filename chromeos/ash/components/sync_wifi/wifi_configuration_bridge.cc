@@ -26,10 +26,11 @@
 #include "chromeos/ash/components/sync_wifi/network_type_conversions.h"
 #include "chromeos/ash/components/sync_wifi/synced_network_metrics_logger.h"
 #include "chromeos/ash/components/sync_wifi/synced_network_updater.h"
-#include "components/cross_device/timer_factory/timer_factory.h"
+#include "chromeos/ash/components/timer_factory/timer_factory.h"
 #include "components/device_event_log/device_event_log.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/sync/base/deletion_origin.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/metadata_change_list.h"
@@ -63,7 +64,7 @@ WifiConfigurationBridge::WifiConfigurationBridge(
     LocalNetworkCollector* local_network_collector,
     NetworkConfigurationHandler* network_configuration_handler,
     SyncedNetworkMetricsLogger* metrics_recorder,
-    cross_device::TimerFactory* timer_factory,
+    ash::timer_factory::TimerFactory* timer_factory,
     PrefService* pref_service,
     std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor,
     syncer::OnceModelTypeStoreFactory create_store_callback)
@@ -261,8 +262,8 @@ WifiConfigurationBridge::ApplyIncrementalSyncChanges(
   return std::nullopt;
 }
 
-void WifiConfigurationBridge::GetData(StorageKeyList storage_keys,
-                                      DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> WifiConfigurationBridge::GetDataForCommit(
+    StorageKeyList storage_keys) {
   auto batch = std::make_unique<syncer::MutableDataBatch>();
 
   for (const std::string& id : storage_keys) {
@@ -272,15 +273,16 @@ void WifiConfigurationBridge::GetData(StorageKeyList storage_keys,
     }
     batch->Put(id, GenerateWifiEntityData(it->second));
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
-void WifiConfigurationBridge::GetAllDataForDebugging(DataCallback callback) {
+std::unique_ptr<syncer::DataBatch>
+WifiConfigurationBridge::GetAllDataForDebugging() {
   auto batch = std::make_unique<syncer::MutableDataBatch>();
   for (const auto& [storage_key, specifics] : entries_) {
     batch->Put(storage_key, GenerateWifiEntityData(specifics));
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
 std::string WifiConfigurationBridge::GetClientTag(
@@ -605,7 +607,8 @@ void WifiConfigurationBridge::RemoveNetworkFromSync(
   std::unique_ptr<syncer::ModelTypeStore::WriteBatch> batch =
       store_->CreateWriteBatch();
   batch->DeleteData(storage_key);
-  change_processor()->Delete(storage_key, batch->GetMetadataChangeList());
+  change_processor()->Delete(storage_key, syncer::DeletionOrigin::Unspecified(),
+                             batch->GetMetadataChangeList());
   entries_.erase(storage_key);
   Commit(std::move(batch));
   NET_LOG(EVENT) << "Removed network from sync.";

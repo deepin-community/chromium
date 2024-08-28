@@ -19,6 +19,7 @@
 #include "chromeos/ash/components/drivefs/drivefs_http_client.h"
 #include "chromeos/ash/components/drivefs/drivefs_search.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
+#include "chromeos/ash/components/drivefs/mojom/notifications.mojom.h"
 #include "chromeos/components/drivefs/mojom/drivefs_native_messaging.mojom.h"
 #include "components/account_id/account_id.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
@@ -250,6 +251,20 @@ class DriveFsHost::MountState : public DriveFsSession {
     host_->delegate_->PersistMachineRootID(std::move(id));
   }
 
+  void OnNotificationReceived(
+      mojom::DriveFsNotificationPtr notification) override {
+    if (!ash::features::IsDriveFsMirroringEnabled()) {
+      return;
+    }
+    host_->delegate_->PersistNotification(std::move(notification));
+  }
+
+  void OnMirrorSyncError(mojom::MirrorSyncErrorListPtr error_list) override {
+    if (ash::features::IsDriveFsMirroringEnabled()) {
+      host_->delegate_->PersistSyncErrors(std::move(error_list));
+    }
+  }
+
   // Owns |this|.
   const raw_ptr<DriveFsHost> host_;
 
@@ -297,10 +312,16 @@ DriveFsHost::~DriveFsHost() {
     observer.OnHostDestroyed();
     observer.Reset();
   }
+
+  // Reset `mount_state_` manually to avoid accessing a partially-destructed
+  // `this` in ~MountState().
+  mount_state_.reset();
 }
 
 bool DriveFsHost::Mount() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // TODO(b/336831215): Remove these logs once bug has been fixed.
+  LOG(ERROR) << "DriveFs mounted";
   const AccountId& account_id = delegate_->GetAccountId();
   if (mount_state_ || !account_id.HasAccountIdKey() ||
       account_id.GetUserEmail().empty()) {
@@ -311,6 +332,8 @@ bool DriveFsHost::Mount() {
 }
 
 void DriveFsHost::Unmount() {
+  // TODO(b/336831215): Remove these logs once bug has been fixed.
+  LOG(ERROR) << "DriveFs unmounted";
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   mount_state_.reset();
 }

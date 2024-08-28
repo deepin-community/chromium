@@ -5,6 +5,7 @@
 #include "extensions/shell/browser/shell_native_app_window.h"
 
 #include "extensions/shell/browser/desktop_controller.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
@@ -122,8 +123,8 @@ void ShellNativeAppWindow::UpdateWindowTitle() {
   // No window title to update.
 }
 
-void ShellNativeAppWindow::UpdateDraggableRegions(
-    const std::vector<mojom::DraggableRegionPtr>& regions) {
+void ShellNativeAppWindow::DraggableRegionsChanged(
+    const std::vector<blink::mojom::DraggableRegionPtr>& regions) {
   NOTIMPLEMENTED();
 }
 
@@ -137,7 +138,7 @@ void ShellNativeAppWindow::UpdateShape(std::unique_ptr<ShapeRects> rects) {
 }
 
 bool ShellNativeAppWindow::HandleKeyboardEvent(
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   // No special handling. The WebContents will handle it.
   return false;
 }

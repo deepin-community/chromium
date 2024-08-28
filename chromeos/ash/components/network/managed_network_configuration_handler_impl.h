@@ -152,6 +152,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ManagedNetworkConfigurationHandlerImpl
   void OnCellularPoliciesApplied(const NetworkProfile& profile) override;
 
   PolicyTextMessageSuppressionState GetAllowTextMessages() const override;
+  bool AllowApnModification() const override;
   bool AllowCellularSimLock() const override;
   bool AllowCellularHotspot() const override;
   bool AllowOnlyPolicyCellularNetworks() const override;
@@ -333,6 +334,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ManagedNetworkConfigurationHandlerImpl
                             base::flat_set<std::string> modified_policies,
                             bool can_affect_other_networks,
                             PolicyApplicator::Options options);
+
+  // Called in SetPolicy, sets shill DisconnectWiFiOnEthernet Manager property
+  // base on value of DisconnectWiFiOnEthernet GlobalNetworkConfiguration.
+  void ApplyDisconnectWiFiOnEthernetPolicy();
 
   void SchedulePolicyApplication(const std::string& userhash);
   void StartPolicyApplication(const std::string& userhash);

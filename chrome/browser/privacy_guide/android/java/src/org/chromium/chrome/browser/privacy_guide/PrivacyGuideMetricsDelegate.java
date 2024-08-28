@@ -26,6 +26,7 @@ class PrivacyGuideMetricsDelegate {
     private static final String INITIAL_COOKIES_CONTROL_MODE = "INITIAL_COOKIES_CONTROL_MODE";
     private static final String INITIAL_SEARCH_SUGGESTIONS_STATE =
             "INITIAL_SEARCH_SUGGESTIONS_STATE";
+    private static final String INITIAL_AD_TOPICS_STATE = "INITIAL_AD_TOPICS_STATE";
 
     private final Profile mProfile;
 
@@ -45,6 +46,9 @@ class PrivacyGuideMetricsDelegate {
      * Initial state of the Search Suggestions when {@link SearchSuggestionsFragment} is created.
      */
     private @Nullable Boolean mInitialSearchSuggestionsState;
+
+    /** Initial state of Ad topics when {@link AdTopicsFragment} is created. */
+    private @Nullable Boolean mInitialAdTopicsState;
 
     PrivacyGuideMetricsDelegate(Profile profile) {
         mProfile = profile;
@@ -67,6 +71,9 @@ class PrivacyGuideMetricsDelegate {
         if (mInitialSearchSuggestionsState != null) {
             bundle.putBoolean(INITIAL_SEARCH_SUGGESTIONS_STATE, mInitialSearchSuggestionsState);
         }
+        if (mInitialAdTopicsState != null) {
+            bundle.putBoolean(INITIAL_AD_TOPICS_STATE, mInitialAdTopicsState);
+        }
     }
 
     /** A method to restore the initial state of all Fragments on Activity recreation. */
@@ -85,6 +92,9 @@ class PrivacyGuideMetricsDelegate {
         }
         if (bundle.containsKey(INITIAL_SEARCH_SUGGESTIONS_STATE)) {
             mInitialSearchSuggestionsState = bundle.getBoolean(INITIAL_SEARCH_SUGGESTIONS_STATE);
+        }
+        if (bundle.containsKey(INITIAL_AD_TOPICS_STATE)) {
+            mInitialAdTopicsState = bundle.getBoolean(INITIAL_AD_TOPICS_STATE);
         }
     }
 
@@ -151,10 +161,10 @@ class PrivacyGuideMetricsDelegate {
     }
 
     /** A method to record metrics on the next click of {@link SafeBrowsingFragment} */
-    private void recordMetricsOnNextForSafeBrowsingCard() {
+    private void recordMetricsOnNextForSafeBrowsingCard(Profile profile) {
         assert mInitialSafeBrowsingState != null : "Initial state of Safe Browsing not set.";
 
-        @SafeBrowsingState int currentValue = PrivacyGuideUtils.getSafeBrowsingState();
+        @SafeBrowsingState int currentValue = PrivacyGuideUtils.getSafeBrowsingState(profile);
 
         boolean isStartStateEnhance =
                 mInitialSafeBrowsingState == SafeBrowsingState.ENHANCED_PROTECTION;
@@ -274,7 +284,7 @@ class PrivacyGuideMetricsDelegate {
                 }
             case PrivacyGuideFragment.FragmentType.SAFE_BROWSING:
                 {
-                    mInitialSafeBrowsingState = PrivacyGuideUtils.getSafeBrowsingState();
+                    mInitialSafeBrowsingState = PrivacyGuideUtils.getSafeBrowsingState(mProfile);
                     break;
                 }
             case PrivacyGuideFragment.FragmentType.COOKIES:
@@ -290,8 +300,13 @@ class PrivacyGuideMetricsDelegate {
                 }
             case PrivacyGuideFragment.FragmentType.PRELOAD:
                 {
-                    // TODO(crbug.com/1482753): Initial state for the preload card should be added
+                    // TODO(crbug.com/40281867): Initial state for the preload card should be added
                     // here.
+                    break;
+                }
+            case PrivacyGuideFragment.FragmentType.AD_TOPICS:
+                {
+                    mInitialAdTopicsState = PrivacyGuideUtils.isAdTopicsEnabled(mProfile);
                     break;
                 }
             case PrivacyGuideFragment.FragmentType.WELCOME:
@@ -326,7 +341,7 @@ class PrivacyGuideMetricsDelegate {
                 }
             case PrivacyGuideFragment.FragmentType.SAFE_BROWSING:
                 {
-                    recordMetricsOnNextForSafeBrowsingCard();
+                    recordMetricsOnNextForSafeBrowsingCard(mProfile);
                     break;
                 }
             case PrivacyGuideFragment.FragmentType.COOKIES:
@@ -341,8 +356,13 @@ class PrivacyGuideMetricsDelegate {
                 }
             case PrivacyGuideFragment.FragmentType.PRELOAD:
                 {
-                    // TODO(crbug.com/1482753): Metrics on next for preload card should be recorded
+                    // TODO(crbug.com/40281867): Metrics on next for preload card should be recorded
                     // here.
+                    break;
+                }
+            case PrivacyGuideFragment.FragmentType.AD_TOPICS:
+                {
+                    // TODO(b/353975503): Record metrics for Ad Topics API.
                     break;
                 }
             default:
@@ -493,8 +513,13 @@ class PrivacyGuideMetricsDelegate {
                 }
             case PrivacyGuideFragment.FragmentType.PRELOAD:
                 {
-                    // TODO(crbug.com/1482753): Metrics for preload card back click should be
+                    // TODO(crbug.com/40281867): Metrics for preload card back click should be
                     // recorded here.
+                    break;
+                }
+            case PrivacyGuideFragment.FragmentType.AD_TOPICS:
+                {
+                    // TODO(b/353975503): Record metrics for Ad Topics API.
                     break;
                 }
             case PrivacyGuideFragment.FragmentType.DONE:

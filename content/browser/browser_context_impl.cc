@@ -71,7 +71,7 @@ BrowserContextImpl::~BrowserContextImpl() {
       << "StoragePartitionMap is not shut down properly";
 
   if (!will_be_destroyed_soon_) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   // Verify that there are no outstanding RenderProcessHosts that reference
@@ -93,7 +93,7 @@ BrowserContextImpl::~BrowserContextImpl() {
   if (!rph_crash_key_value.empty()) {
     SCOPED_CRASH_KEY_STRING256("BrowserContext", "dangling_rph",
                                rph_crash_key_value);
-    DUMP_WILL_BE_NOTREACHED_NORETURN()
+    DUMP_WILL_BE_NOTREACHED()
         << "rph_with_bc_reference : " << rph_crash_key_value;
   }
 
@@ -196,7 +196,7 @@ media::VideoDecodePerfHistory* BrowserContextImpl::GetVideoDecodePerfHistory() {
 
 std::unique_ptr<media::WebrtcVideoPerfHistory>
 BrowserContextImpl::CreateWebrtcVideoPerfHistory() {
-  // TODO(https://crbug.com/1187565): Implement in memory path in
+  // TODO(crbug.com/40172952): Implement in memory path in
   // off_the_record_profile_impl.cc and web_engine_browser_context.cc
 
   DCHECK_CURRENTLY_ON(BrowserThread::UI);

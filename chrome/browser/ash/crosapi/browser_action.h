@@ -11,7 +11,7 @@
 
 #include "base/containers/queue.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
-#include "chromeos/crosapi/mojom/crosapi.mojom.h"
+#include "chromeos/crosapi/mojom/browser_service.mojom.h"
 #include "components/tab_groups/tab_group_info.h"
 #include "ui/base/ui_base_types.h"
 
@@ -60,6 +60,8 @@ class BrowserAction {
       crosapi::mojom::OpenUrlParams::WindowOpenDisposition disposition,
       crosapi::mojom::OpenUrlFrom from,
       NavigateParams::PathBehavior path_behavior);
+  static std::unique_ptr<BrowserAction> OpenCaptivePortalSignin(
+      const GURL& url);
   static std::unique_ptr<BrowserAction> OpenForFullRestore(
       bool skip_crash_restore);
   static std::unique_ptr<BrowserAction> RestoreTab();
@@ -110,25 +112,6 @@ class BrowserAction {
 
  private:
   const bool is_queueable_;
-};
-
-// A queue of queueable actions.
-class BrowserActionQueue {
- public:
-  BrowserActionQueue();
-  ~BrowserActionQueue();
-
-  // Enqueues |action| if it is queueable. Cancels it otherwise.
-  void PushOrCancel(std::unique_ptr<BrowserAction> action,
-                    mojom::CreationResult cancel_reason);
-
-  void Push(std::unique_ptr<BrowserAction> action);
-  std::unique_ptr<BrowserAction> Pop();
-  bool IsEmpty() const;
-  void Clear();
-
- private:
-  base::queue<std::unique_ptr<BrowserAction>> actions_;
 };
 
 }  // namespace crosapi

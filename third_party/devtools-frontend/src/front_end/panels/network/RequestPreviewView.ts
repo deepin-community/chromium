@@ -36,7 +36,7 @@ import * as SourceFrame from '../../ui/legacy/components/source_frame/source_fra
 import * as UI from '../../ui/legacy/legacy.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
-import {WebBundleInfoView} from './components/WebBundleInfoView.js';
+import * as NetworkComponents from './components/components.js';
 import {RequestHTMLView} from './RequestHTMLView.js';
 import {RequestResponseView} from './RequestResponseView.js';
 import {SignedExchangeInfoView} from './SignedExchangeInfoView.js';
@@ -56,7 +56,7 @@ const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 export class RequestPreviewView extends RequestResponseView {
   constructor(request: SDK.NetworkRequest.NetworkRequest) {
     super(request);
-    this.element.setAttribute('jslog', `${VisualLogging.pane('preview')}`);
+    this.element.setAttribute('jslog', `${VisualLogging.pane('preview').track({resize: true})}`);
   }
 
   override async showPreview(): Promise<UI.Widget.Widget> {
@@ -72,7 +72,7 @@ export class RequestPreviewView extends RequestResponseView {
   }
 
   private async htmlPreview(): Promise<UI.Widget.Widget|null> {
-    const contentData = await this.request.contentData();
+    const contentData = await this.request.requestContentData();
     if (TextUtils.ContentData.ContentData.isError(contentData)) {
       return new UI.EmptyWidget.EmptyWidget(i18nString(UIStrings.failedToLoadResponseData) + ': ' + contentData.error);
     }
@@ -88,8 +88,7 @@ export class RequestPreviewView extends RequestResponseView {
       return jsonView;
     }
 
-    const dataURL = contentData.asDataUrl();
-    return dataURL ? new RequestHTMLView(dataURL) : null;
+    return RequestHTMLView.create(contentData);
   }
 
   override async createPreview(): Promise<UI.Widget.Widget> {
@@ -98,7 +97,8 @@ export class RequestPreviewView extends RequestResponseView {
     }
 
     if (this.request.webBundleInfo()) {
-      return LegacyWrapper.LegacyWrapper.legacyWrapper(UI.Widget.VBox, new WebBundleInfoView(this.request));
+      return LegacyWrapper.LegacyWrapper.legacyWrapper(
+          UI.Widget.VBox, new NetworkComponents.WebBundleInfoView.WebBundleInfoView(this.request));
     }
 
     const htmlErrorPreview = await this.htmlPreview();

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ash/ash_element_identifiers.h"
+#include "ash/constants/ash_features.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/public/cpp/saved_desk_delegate.h"
 #include "ash/public/cpp/shelf_types.h"
@@ -21,6 +22,7 @@
 #include "ash/style/ash_color_id.h"
 #include "ash/style/typography.h"
 #include "ash/wm/desks/desk.h"
+#include "ash/wm/desks/desk_action_button.h"
 #include "ash/wm/desks/desk_action_view.h"
 #include "ash/wm/desks/desk_mini_view_animations.h"
 #include "ash/wm/desks/desk_name_view.h"
@@ -32,7 +34,8 @@
 #include "ash/wm/desks/templates/saved_desk_presenter.h"
 #include "ash/wm/desks/templates/saved_desk_util.h"
 #include "ash/wm/overview/overview_controller.h"
-#include "ash/wm/overview/overview_focus_cycler.h"
+#include "ash/wm/overview/overview_focus_cycler_old.h"
+#include "ash/wm/overview/overview_grid.h"
 #include "ash/wm/overview/overview_metrics.h"
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/overview/overview_utils.h"
@@ -45,6 +48,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "base/uuid.h"
 #include "chromeos/utils/haptics_util.h"
@@ -74,12 +78,12 @@ namespace {
 // Duration of delay when Bento Bar Desk Button is clicked.
 constexpr base::TimeDelta kAnimationDelayDuration = base::Milliseconds(100);
 
-OverviewFocusCycler* GetFocusCycler() {
+OverviewFocusCyclerOld* GetFocusCycler() {
   auto* overview_controller = Shell::Get()->overview_controller();
   if (!overview_controller || !overview_controller->InOverviewSession()) {
     return nullptr;
   }
-  return overview_controller->overview_session()->focus_cycler();
+  return overview_controller->overview_session()->focus_cycler_old();
 }
 
 // Check whether there are any external keyboards.
@@ -105,16 +109,32 @@ gfx::Rect GetGestureEventScreenRect(const ui::Event& event) {
   return event.AsGestureEvent()->details().bounding_box();
 }
 
-void SetupBackgroundView(DeskBarViewBase* bar_view) {
+// Sets up background for the desk bar. There could be 3 cases:
+//   1) desk button bar
+//      A separate view will be used as background for animation purpose.
+//   2) overview bar with forest
+//      No background.
+//   3) overview bar without forest
+//      The bar itself serves as the background.
+void MaybeSetupBackgroundView(DeskBarViewBase* bar_view) {
   const bool type_is_desk_button =
       bar_view->type() == DeskBarViewBase::Type::kDeskButton;
+
   auto* view = type_is_desk_button ? bar_view->background_view() : bar_view;
   view->SetPaintToLayer();
-  view->layer()->SetFillsBoundsOpaquely(false);
+
+  auto* layer = view->layer();
+  layer->SetFillsBoundsOpaquely(false);
+
+  if (features::IsForestFeatureEnabled() && !type_is_desk_button) {
+    // Forest feature needs a transparent desks bar background. Still needs the
+    // view layer to perform animations.
+    return;
+  }
+
   if (features::IsBackgroundBlurEnabled()) {
-    view->layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    view->layer()->SetBackdropFilterQuality(
-        ColorProvider::kBackgroundBlurQuality);
+    layer->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
+    layer->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
   }
 
   const int corner_radius = type_is_desk_button
@@ -122,7 +142,7 @@ void SetupBackgroundView(DeskBarViewBase* bar_view) {
                                 : kDeskBarCornerRadiusOverview;
   view->SetBorder(std::make_unique<views::HighlightBorder>(
       corner_radius, views::HighlightBorder::Type::kHighlightBorderNoShadow));
-  view->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(corner_radius));
+  layer->SetRoundedCornerRadius(gfx::RoundedCornersF(corner_radius));
   view->SetBackground(
       views::CreateThemedSolidBackground(kColorAshShieldAndBase80));
 }
@@ -174,16 +194,16 @@ class DeskBarScrollViewLayout : public views::LayoutManager {
 
     const ShelfAlignment shelf_alignment =
         Shelf::ForWindow(bar_view_->root_)->alignment();
-    const gfx::Rect perferred_bounds =
-        gfx::Rect(bar_view_->CalculatePreferredSize());
+    const gfx::Rect preferred_bounds =
+        gfx::Rect(bar_view_->CalculatePreferredSize({}));
     const gfx::Rect current_bounds = gfx::Rect(bar_view_->size());
-    gfx::Rect new_bounds = perferred_bounds;
+    gfx::Rect new_bounds = preferred_bounds;
     if (shelf_alignment == ShelfAlignment::kBottom) {
       new_bounds = current_bounds;
-      new_bounds.ClampToCenteredSize(perferred_bounds.size());
+      new_bounds.ClampToCenteredSize(preferred_bounds.size());
     } else if ((shelf_alignment == ShelfAlignment::kLeft) ==
                base::i18n::IsRTL()) {
-      new_bounds.Offset(current_bounds.width() - perferred_bounds.width(), 0);
+      new_bounds.Offset(current_bounds.width() - preferred_bounds.width(), 0);
     }
     bar_view_->background_view_->SetBoundsRect(new_bounds);
   }
@@ -199,7 +219,8 @@ class DeskBarScrollViewLayout : public views::LayoutManager {
         icon_button_bounds.width() - desk_name_view->GetInsets().width(),
         gfx::ELIDE_TAIL));
 
-    const gfx::Size button_label_size = label->GetPreferredSize();
+    const gfx::Size button_label_size =
+        label->GetPreferredSize(views::SizeBounds(label->width(), {}));
 
     label->SetBoundsRect(gfx::Rect(
         gfx::Point(
@@ -299,7 +320,7 @@ class DeskBarScrollViewLayout : public views::LayoutManager {
     // Update the size of the `host`, which is `scroll_view_contents_` here.
     // This is done to make sure its size can be updated on mini views' adding
     // or removing, then `scroll_view_` will know whether the contents need to
-    // be scolled or not.
+    // be scrolled or not.
     host->SetSize(gfx::Size(width_, contents_size.height()));
 
     const int increment = is_rtl ? -1 : 1;
@@ -378,6 +399,12 @@ class DeskBarScrollViewLayout : public views::LayoutManager {
 
   // views::LayoutManager:
   gfx::Size GetPreferredSize(const views::View* host) const override {
+    return GetPreferredSize(host, {});
+  }
+
+  gfx::Size GetPreferredSize(
+      const views::View* host,
+      const views::SizeBounds& available_size) const override {
     int width = 0;
     std::vector<views::View*> child_views;
 
@@ -427,10 +454,11 @@ class DeskBarHoverObserver : public ui::EventObserver {
         event_monitor_(views::EventMonitor::CreateWindowMonitor(
             this,
             widget_window,
-            {ui::ET_MOUSE_PRESSED, ui::ET_MOUSE_DRAGGED, ui::ET_MOUSE_RELEASED,
-             ui::ET_MOUSE_MOVED, ui::ET_MOUSE_ENTERED, ui::ET_MOUSE_EXITED,
-             ui::ET_GESTURE_LONG_PRESS, ui::ET_GESTURE_LONG_TAP,
-             ui::ET_GESTURE_TAP, ui::ET_GESTURE_TAP_DOWN})) {}
+            {ui::EventType::kMousePressed, ui::EventType::kMouseDragged,
+             ui::EventType::kMouseReleased, ui::EventType::kMouseMoved,
+             ui::EventType::kMouseEntered, ui::EventType::kMouseExited,
+             ui::EventType::kGestureLongPress, ui::EventType::kGestureLongTap,
+             ui::EventType::kGestureTap, ui::EventType::kGestureTapDown})) {}
 
   DeskBarHoverObserver(const DeskBarHoverObserver&) = delete;
   DeskBarHoverObserver& operator=(const DeskBarHoverObserver&) = delete;
@@ -440,29 +468,29 @@ class DeskBarHoverObserver : public ui::EventObserver {
   // ui::EventObserver:
   void OnEvent(const ui::Event& event) override {
     switch (event.type()) {
-      case ui::ET_MOUSE_PRESSED:
-      case ui::ET_MOUSE_DRAGGED:
-      case ui::ET_MOUSE_RELEASED:
-      case ui::ET_MOUSE_MOVED:
-      case ui::ET_MOUSE_ENTERED:
-      case ui::ET_MOUSE_EXITED:
+      case ui::EventType::kMousePressed:
+      case ui::EventType::kMouseDragged:
+      case ui::EventType::kMouseReleased:
+      case ui::EventType::kMouseMoved:
+      case ui::EventType::kMouseEntered:
+      case ui::EventType::kMouseExited:
         owner_->OnHoverStateMayHaveChanged();
         break;
 
-      case ui::ET_GESTURE_LONG_PRESS:
-      case ui::ET_GESTURE_LONG_TAP:
+      case ui::EventType::kGestureLongPress:
+      case ui::EventType::kGestureLongTap:
         owner_->OnGestureTap(GetGestureEventScreenRect(event),
                              /*is_long_gesture=*/true);
         break;
 
-      case ui::ET_GESTURE_TAP:
-      case ui::ET_GESTURE_TAP_DOWN:
+      case ui::EventType::kGestureTap:
+      case ui::EventType::kGestureTapDown:
         owner_->OnGestureTap(GetGestureEventScreenRect(event),
                              /*is_long_gesture=*/false);
         break;
 
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }
@@ -473,15 +501,22 @@ class DeskBarHoverObserver : public ui::EventObserver {
   std::unique_ptr<views::EventMonitor> event_monitor_;
 };
 
-DeskBarViewBase::DeskBarViewBase(aura::Window* root, Type type)
-    : type_(type), state_(GetPerferredState(type)), root_(root) {
+DeskBarViewBase::DeskBarViewBase(
+    aura::Window* root,
+    Type type,
+    base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator)
+    : type_(type),
+      state_(GetPreferredState(type)),
+      root_(root),
+      window_occlusion_calculator_(window_occlusion_calculator) {
   CHECK(root && root->IsRootWindow());
 
   // Background layer is needed for desk bar animation.
   if (type_ == Type::kDeskButton) {
     background_view_ = AddChildView(std::make_unique<views::View>());
   }
-  SetupBackgroundView(this);
+
+  MaybeSetupBackgroundView(this);
 
   // Use layer scrolling so that the contents will paint on top of the parent,
   // which uses `SetPaintToLayer()`.
@@ -494,6 +529,7 @@ DeskBarViewBase::DeskBarViewBase(aura::Window* root, Type type)
   scroll_view_->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kHiddenButEnabled);
   scroll_view_->SetTreatAllScrollEventsAsHorizontal(true);
+  scroll_view_->SetAllowKeyboardScrolling(false);
 
   left_scroll_button_ = AddChildView(std::make_unique<ScrollArrowButton>(
       base::BindRepeating(&DeskBarViewBase::ScrollToPreviousPage,
@@ -540,7 +576,7 @@ DeskBarViewBase::DeskBarViewBase(aura::Window* root, Type type)
   new_desk_button_label_->SetPaintToLayer();
   new_desk_button_label_->layer()->SetFillsBoundsOpaquely(false);
 
-  if (saved_desk_util::ShouldShowSavedDesksButtons()) {
+  if (saved_desk_util::ShouldShowSavedDesksOptions()) {
     int button_text_id = IDS_ASH_DESKS_TEMPLATES_DESKS_BAR_BUTTON_LIBRARY;
     if (!saved_desk_util::AreDesksTemplatesEnabled()) {
       button_text_id = IDS_ASH_DESKS_TEMPLATES_DESKS_BAR_BUTTON_SAVED_FOR_LATER;
@@ -602,7 +638,9 @@ int DeskBarViewBase::GetPreferredBarHeight(aura::Window* root,
         height = kDeskBarZeroStateHeight;
       } else {
         height = DeskPreviewView::GetHeight(root) +
-                 kDeskBarNonPreviewAllocatedHeight;
+                 (features::IsForestFeatureEnabled()
+                      ? kExpandedDeskBarHeight
+                      : kDeskBarNonPreviewAllocatedHeight);
       }
       break;
   }
@@ -611,11 +649,11 @@ int DeskBarViewBase::GetPreferredBarHeight(aura::Window* root,
 }
 
 // static
-DeskBarViewBase::State DeskBarViewBase::GetPerferredState(Type type) {
+DeskBarViewBase::State DeskBarViewBase::GetPreferredState(Type type) {
   State state = State::kZero;
   switch (type) {
     case Type::kDeskButton:
-      // Desk button desk bar is always expaneded.
+      // Desk button desk bar is always expanded.
       state = State::kExpanded;
       break;
     case Type::kOverview: {
@@ -649,8 +687,8 @@ std::unique_ptr<views::Widget> DeskBarViewBase::CreateDeskWidget(
 
   std::unique_ptr<views::Widget> widget = std::make_unique<views::Widget>();
   views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.activatable = views::Widget::InitParams::Activatable::kYes;
   params.accept_events = true;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
@@ -679,11 +717,8 @@ std::unique_ptr<views::Widget> DeskBarViewBase::CreateDeskWidget(
   }
 
   widget->Init(std::move(params));
-
-  auto* window = widget->GetNativeWindow();
-  window->SetId(kShellWindowId_DesksBarWindow);
-  wm::SetWindowVisibilityAnimationTransition(window, wm::ANIMATE_NONE);
-
+  wm::SetWindowVisibilityAnimationTransition(widget->GetNativeWindow(),
+                                             wm::ANIMATE_NONE);
   return widget;
 }
 
@@ -746,10 +781,10 @@ void DeskBarViewBase::OnGestureEvent(ui::GestureEvent* event) {
     return;
   }
   switch (event->type()) {
-    case ui::ET_GESTURE_LONG_PRESS:
-    case ui::ET_GESTURE_LONG_TAP:
-    case ui::ET_GESTURE_TAP:
-    case ui::ET_GESTURE_TAP_DOWN:
+    case ui::EventType::kGestureLongPress:
+    case ui::EventType::kGestureLongTap:
+    case ui::EventType::kGestureTap:
+    case ui::EventType::kGestureTapDown:
       DeskNameView::CommitChanges(GetWidget());
       break;
 
@@ -880,7 +915,7 @@ void DeskBarViewBase::NudgeDeskName(int desk_index) {
 }
 
 void DeskBarViewBase::UpdateButtonsForSavedDeskGrid() {
-  if (IsZeroState() || !saved_desk_util::ShouldShowSavedDesksButtons()) {
+  if (IsZeroState() || !saved_desk_util::ShouldShowSavedDesksOptions()) {
     return;
   }
 
@@ -904,7 +939,7 @@ void DeskBarViewBase::UpdateDeskButtonsVisibility() {
 }
 
 void DeskBarViewBase::UpdateLibraryButtonVisibility() {
-  if (!saved_desk_util::ShouldShowSavedDesksButtons()) {
+  if (!saved_desk_util::ShouldShowSavedDesksOptions()) {
     return;
   }
 
@@ -922,6 +957,8 @@ void DeskBarViewBase::UpdateLibraryButtonVisibility() {
     if (type_ == Type::kOverview &&
         overview_grid_->IsShowingSavedDeskLibrary()) {
       library_button_->UpdateState(DeskIconButton::State::kActive);
+    } else if (state_ == State::kZero) {
+      library_button_->UpdateState(DeskIconButton::State::kZero);
     } else {
       library_button_->UpdateState(DeskIconButton::State::kExpanded);
     }
@@ -956,7 +993,7 @@ void DeskBarViewBase::UpdateDeskIconButtonState(
   button->UpdateState(target_state);
   DeprecatedLayoutImmediately();
 
-  gfx::RectF target_bounds = gfx::RectF(new_desk_button_->GetBoundsInScreen());
+  gfx::RectF target_bounds = gfx::RectF(button->GetBoundsInScreen());
   gfx::Transform scale_transform;
   const int shift_x = begin_x - GetFirstMiniViewXOffset();
   scale_transform.Translate(shift_x, 0);
@@ -964,6 +1001,8 @@ void DeskBarViewBase::UpdateDeskIconButtonState(
                         current_bounds.height() / target_bounds.height());
 
   PerformDeskIconButtonScaleAnimation(button, this, scale_transform, shift_x);
+
+  MaybeRefreshOverviewGridBounds();
 }
 
 void DeskBarViewBase::OnHoverStateMayHaveChanged() {
@@ -985,7 +1024,7 @@ void DeskBarViewBase::OnGestureTap(const gfx::Rect& screen_rect,
 bool DeskBarViewBase::ShouldShowLibraryUi() {
   // Only update visibility when needed. This will save a lot of repeated work.
   if (library_ui_visibility_ == LibraryUiVisibility::kToBeChecked) {
-    if (!saved_desk_util::ShouldShowSavedDesksButtons() ||
+    if (!saved_desk_util::ShouldShowSavedDesksOptions() ||
         display::Screen::GetScreen()->InTabletMode()) {
       library_ui_visibility_ = LibraryUiVisibility::kHidden;
     } else {
@@ -1072,7 +1111,7 @@ void DeskBarViewBase::HandleDragEvent(DeskMiniView* mini_view,
       ContinueDragDesk(mini_view, location);
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -1092,13 +1131,13 @@ bool DeskBarViewBase::HandleReleaseEvent(DeskMiniView* mini_view,
       return false;
     case DeskDragProxy::State::kStarted:
       // During a mouse drag, if we touch any other mini view, since the other
-      // mini view receives `ET_GESTURE_END` event, hence `mini_view` here might
-      // be different than `drag_view_`. Thus, we use `drag_view_`. Please refer
-      // to b/296106746.
+      // mini view receives `EventType::kGestureEnd` event, hence `mini_view`
+      // here might be different than `drag_view_`. Thus, we use `drag_view_`.
+      // Please refer to b/296106746.
       EndDragDesk(drag_view_, /*end_by_user=*/true);
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return true;
 }
@@ -1146,8 +1185,8 @@ void DeskBarViewBase::InitDragDesk(DeskMiniView* mini_view,
       location_in_screen.x() - preview_origin_in_screen.x();
 
   // Create a drag proxy for the dragged desk.
-  drag_proxy_ =
-      std::make_unique<DeskDragProxy>(this, drag_view_, init_offset_x);
+  drag_proxy_ = std::make_unique<DeskDragProxy>(this, drag_view_, init_offset_x,
+                                                window_occlusion_calculator_);
 }
 
 void DeskBarViewBase::StartDragDesk(DeskMiniView* mini_view,
@@ -1221,9 +1260,8 @@ void DeskBarViewBase::EndDragDesk(DeskMiniView* mini_view, bool end_by_user) {
   Shell::Get()->desks_controller()->UpdateDesksDefaultNames();
   Shell::Get()->cursor_manager()->SetCursor(ui::mojom::CursorType::kPointer);
 
-  // We update combine desks tooltips here to reflect the updated desk default
-  // names.
-  MaybeUpdateCombineDesksTooltips();
+  // The desk action button tooltips may need an update.
+  MaybeUpdateDeskActionButtonTooltips();
 
   // Stop scroll even if the desk is on the scroll arrow buttons.
   left_scroll_button_->OnDeskHoverEnd();
@@ -1255,7 +1293,7 @@ void DeskBarViewBase::OnDeskAdded(const Desk* desk, bool from_undo) {
   const bool is_expanding_bar_view =
       new_desk_button_->state() == DeskIconButton::State::kZero;
   UpdateNewMiniViews(/*initializing_bar_view=*/false, is_expanding_bar_view);
-  MaybeUpdateCombineDesksTooltips();
+  MaybeUpdateDeskActionButtonTooltips();
   if (!DesksController::Get()->CanCreateDesks()) {
     new_desk_button_->SetEnabled(/*enabled=*/false);
   }
@@ -1286,6 +1324,12 @@ void DeskBarViewBase::OnDeskRemoved(const Desk* desk) {
       // comes later in the focus order (See documentation of
       // `OnViewDestroyingOrDisabling()`).
       focus_cycler->OnViewDestroyingOrDisabling((*iter)->desk_name_view());
+      focus_cycler->OnViewDestroyingOrDisabling(
+          (*iter)->desk_action_view()->close_all_button());
+      if (auto* combine_desks_button =
+              (*iter)->desk_action_view()->combine_desks_button()) {
+        focus_cycler->OnViewDestroyingOrDisabling(combine_desks_button);
+      }
       if (auto* desk_profiles_button = (*iter)->desk_profiles_button()) {
         focus_cycler->OnViewDestroyingOrDisabling(desk_profiles_button);
       }
@@ -1329,7 +1373,7 @@ void DeskBarViewBase::OnDeskRemoved(const Desk* desk) {
     PerformDeskBarRemoveDeskAnimation(this, old_background_bounds);
   }
   PerformDeskBarChildViewShiftAnimation(this, views_previous_x_map);
-  MaybeUpdateCombineDesksTooltips();
+  MaybeUpdateDeskActionButtonTooltips();
 }
 
 void DeskBarViewBase::OnDeskReordered(int old_index, int new_index) {
@@ -1349,7 +1393,7 @@ void DeskBarViewBase::OnDeskReordered(int old_index, int new_index) {
 
   // Call the animation function after reorder the mini views.
   PerformReorderDeskMiniViewAnimation(old_index, new_index, mini_views_);
-  MaybeUpdateCombineDesksTooltips();
+  MaybeUpdateDeskActionButtonTooltips();
 }
 
 void DeskBarViewBase::OnDeskActivationChanged(const Desk* activated,
@@ -1364,7 +1408,7 @@ void DeskBarViewBase::OnDeskActivationChanged(const Desk* activated,
 
 void DeskBarViewBase::OnDeskNameChanged(const Desk* desk,
                                         const std::u16string& new_name) {
-  MaybeUpdateCombineDesksTooltips();
+  MaybeUpdateDeskActionButtonTooltips();
 }
 
 void DeskBarViewBase::UpdateNewMiniViews(bool initializing_bar_view,
@@ -1382,7 +1426,6 @@ void DeskBarViewBase::UpdateNewMiniViews(bool initializing_bar_view,
   // This should not be called when a desk is removed.
   DCHECK_LE(mini_views_.size(), desks.size());
 
-  const int begin_x = GetFirstMiniViewXOffset();
   aura::Window* root_window = GetWidget()->GetNativeWindow()->GetRootWindow();
   DCHECK(root_window);
   // Document all the current X coordinates of the views before we perform a
@@ -1397,7 +1440,8 @@ void DeskBarViewBase::UpdateNewMiniViews(bool initializing_bar_view,
   for (const auto& desk : desks) {
     if (!FindMiniViewForDesk(desk.get())) {
       DeskMiniView* mini_view = scroll_view_contents_->AddChildViewAt(
-          std::make_unique<DeskMiniView>(this, root_window, desk.get()),
+          std::make_unique<DeskMiniView>(this, root_window, desk.get(),
+                                         window_occlusion_calculator_),
           mini_view_index);
       mini_views_.insert(mini_views_.begin() + mini_view_index, mini_view);
       new_mini_views.push_back(mini_view);
@@ -1434,8 +1478,7 @@ void DeskBarViewBase::UpdateNewMiniViews(bool initializing_bar_view,
   if (type_ == Type::kDeskButton) {
     PerformDeskBarAddDeskAnimation(this, old_bar_bounds);
   }
-  PerformAddDeskMiniViewAnimation(new_mini_views,
-                                  begin_x - GetFirstMiniViewXOffset());
+  PerformAddDeskMiniViewAnimation(new_mini_views);
   PerformDeskBarChildViewShiftAnimation(this, views_previous_x_map);
 }
 
@@ -1444,6 +1487,8 @@ void DeskBarViewBase::SwitchToExpandedState() {
 
   UpdateDeskButtonsVisibility();
   PerformZeroStateToExpandedStateMiniViewAnimation(this);
+
+  MaybeRefreshOverviewGridBounds();
 }
 
 void DeskBarViewBase::OnUiUpdateDone() {
@@ -1661,14 +1706,30 @@ void DeskBarViewBase::OnLibraryButtonPressed() {
                                          root);
 }
 
-void DeskBarViewBase::MaybeUpdateCombineDesksTooltips() {
+void DeskBarViewBase::MaybeUpdateDeskActionButtonTooltips() {
+  auto* desk_controller = DesksController::Get();
   for (ash::DeskMiniView* mini_view : mini_views_) {
-    // If desk is being removed, do not update the tooltip.
-    if (mini_view->desk()->is_desk_being_removed()) {
+    auto* desk = mini_view->desk();
+    if (desk->is_desk_being_removed()) {
       continue;
     }
-    mini_view->desk_action_view()->UpdateCombineDesksTooltip(
-        DesksController::Get()->GetCombineDesksTargetName(mini_view->desk()));
+
+    int desk_index = desk_controller->GetDeskIndex(desk);
+    auto* desk_action_view = mini_view->desk_action_view();
+    const std::u16string combine_desk_tooltip =
+        desk_controller->GetCombineDesksTargetName(desk);
+    const std::u16string close_desk_tooltip =
+        desk->name().empty() && desk_index != -1
+            ? desk_controller->GetDeskDefaultName(desk_index)
+            : desk->name();
+    // The combine desks button only exists if the forest feature is disabled.
+    // The context menu button that would appear in its place does not need to
+    // update its tooltip as it doesn't use a formatted string.
+    if (!features::IsForestFeatureEnabled()) {
+      desk_action_view->combine_desks_button()->UpdateTooltip(
+          combine_desk_tooltip);
+    }
+    desk_action_view->close_all_button()->UpdateTooltip(close_desk_tooltip);
   }
 }
 
@@ -1709,6 +1770,14 @@ bool DeskBarViewBase::MaybeScrollByDraggedDesk() {
   }
 
   return false;
+}
+
+void DeskBarViewBase::MaybeRefreshOverviewGridBounds() {
+  if (type_ == DeskBarViewBase::Type::kOverview &&
+      overview_grid_->scoped_overview_wallpaper_clipper()) {
+    CHECK(overview_grid_);
+    overview_grid_->RefreshGridBounds(/*animate=*/true);
+  }
 }
 
 void DeskBarViewBase::RecordDeskProfileAdoption() {

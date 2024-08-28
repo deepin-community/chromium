@@ -44,6 +44,7 @@
 #include "./centipede/centipede.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +57,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "absl/base/attributes.h"
@@ -77,6 +79,7 @@
 #include "./centipede/centipede_callbacks.h"
 #include "./centipede/command.h"
 #include "./centipede/control_flow.h"
+#include "./centipede/corpus_io.h"
 #include "./centipede/coverage.h"
 #include "./centipede/defs.h"
 #include "./centipede/early_exit.h"
@@ -89,7 +92,6 @@
 #include "./centipede/runner_result.h"
 #include "./centipede/rusage_profiler.h"
 #include "./centipede/rusage_stats.h"
-#include "./centipede/shard_reader.h"
 #include "./centipede/stats.h"
 #include "./centipede/util.h"
 #include "./centipede/workdir.h"
@@ -100,7 +102,7 @@ using perf::RUsageProfiler;
 
 Centipede::Centipede(const Environment &env, CentipedeCallbacks &user_callbacks,
                      const BinaryInfo &binary_info,
-                     CoverageLogger &coverage_logger, Stats &stats)
+                     CoverageLogger &coverage_logger, std::atomic<Stats> &stats)
     : env_(env),
       user_callbacks_(user_callbacks),
       rng_(env_.seed),
@@ -131,19 +133,10 @@ Centipede::Centipede(const Environment &env, CentipedeCallbacks &user_callbacks,
 }
 
 void Centipede::CorpusToFiles(const Environment &env, std::string_view dir) {
-  const auto corpus_files = WorkDir{env}.CorpusFiles();
-  for (size_t shard = 0; shard < env.total_shards; shard++) {
-    auto reader = DefaultBlobFileReaderFactory();
-    auto corpus_path = corpus_files.ShardPath(shard);
-    reader->Open(corpus_path).IgnoreError();  // may not exist.
-    ByteSpan blob;
-    size_t num_read = 0;
-    while (reader->Read(blob).ok()) {
-      ++num_read;
-      WriteToRemoteHashedFileInDir(dir, blob);
-    }
-    LOG(INFO) << "Read " << num_read << " from " << corpus_path;
-  }
+  std::vector<std::string> sharded_corpus_files;
+  RemoteGlobMatch(WorkDir{env}.CorpusFiles().AllShardsGlob(),
+                  sharded_corpus_files);
+  ExportCorpus(sharded_corpus_files, dir);
 }
 
 void Centipede::CorpusFromFiles(const Environment &env, std::string_view dir) {
@@ -153,7 +146,7 @@ void Centipede::CorpusFromFiles(const Environment &env, std::string_view dir) {
   std::vector<std::vector<std::string>> sharded_paths(env.total_shards);
   std::vector<std::string> paths;
   size_t total_paths = 0;
-  for (const std::string &path : RemoteListFilesRecursively(dir)) {
+  for (const std::string &path : RemoteListFiles(dir, /*recursively=*/true)) {
     size_t filename_hash = std::hash<std::string>{}(path);
     sharded_paths[filename_hash % env.total_shards].push_back(path);
     ++total_paths;
@@ -215,43 +208,63 @@ void Centipede::UpdateAndMaybeLogStats(std::string_view log_type,
   const auto rusage_timing = perf::RUsageTiming::Snapshot(rusage_scope);
   const auto rusage_memory = perf::RUsageMemory::Snapshot(rusage_scope);
 
-  stats_.timestamp_unix_micros = absl::ToUnixMicros(absl::Now());
-  stats_.fuzz_time_sec = fuzz_time_secs;
-
-  stats_.num_executions = num_runs_;
-  stats_.num_target_crashes = num_crashes_;
-
-  stats_.active_corpus_size = corpus_.NumActive();
-  stats_.total_corpus_size = corpus_.NumTotal();
-  stats_.num_covered_pcs = fs_.CountFeatures(feature_domains::kPCs);
-  stats_.max_corpus_element_size = max_corpus_size;
-  stats_.avg_corpus_element_size = avg_corpus_size;
-
   namespace fd = feature_domains;
-  stats_.num_covered_pcs = fs_.CountFeatures(fd::kPCs);
-  stats_.num_8bit_counter_features = fs_.CountFeatures(fd::k8bitCounters);
-  stats_.num_data_flow_features = fs_.CountFeatures(fd::kDataFlow);
-  stats_.num_cmp_features =                 //
-      fs_.CountFeatures(fd::kCMP) +         //
-      fs_.CountFeatures(fd::kCMPEq) +       //
-      fs_.CountFeatures(fd::kCMPModDiff) +  //
-      fs_.CountFeatures(fd::kCMPHamming) +  //
-      fs_.CountFeatures(fd::kCMPDiffLog);
-  stats_.num_call_stack_features = fs_.CountFeatures(fd::kCallStack);
-  stats_.num_bounded_path_features = fs_.CountFeatures(fd::kBoundedPath);
-  stats_.num_pc_pair_features = fs_.CountFeatures(fd::kPCPair);
-  uint64_t num_user_fts = 0;
-  for (size_t i = 0; i < std::size(fd::kUserDomains); ++i) {
-    num_user_fts += fs_.CountFeatures(fd::kUserDomains[i]);
-  }
-  stats_.num_user_features = num_user_fts;
-  stats_.num_unknown_features = fs_.CountFeatures(fd::kUnknown);
-  stats_.num_funcs_in_frontier = coverage_frontier_.NumFunctionsInFrontier();
 
-  stats_.engine_rusage_avg_millicores = rusage_timing.cpu_hyper_cores * 1000;
-  stats_.engine_rusage_cpu_percent = rusage_timing.cpu_utilization * 100;
-  stats_.engine_rusage_rss_mb = rusage_memory.mem_rss >> 20;
-  stats_.engine_rusage_vsize_mb = rusage_memory.mem_vsize >> 20;
+  stats_.store(Stats{
+      StatsMeta{
+          .timestamp_unix_micros =
+              static_cast<uint64_t>(absl::ToUnixMicros(absl::Now())),
+      },
+      ExecStats{
+          .fuzz_time_sec = static_cast<uint64_t>(std::ceil(fuzz_time_secs)),
+          .num_executions = num_runs_,
+          .num_target_crashes = static_cast<uint64_t>(num_crashes_),
+      },
+      CovStats{
+          .num_covered_pcs = fs_.CountFeatures(fd::kPCs),
+          .num_8bit_counter_features = fs_.CountFeatures(fd::k8bitCounters),
+          .num_data_flow_features = fs_.CountFeatures(fd::kDataFlow),
+          .num_cmp_features = fs_.CountFeatures(fd::kCMPDomains),
+          .num_call_stack_features = fs_.CountFeatures(fd::kCallStack),
+          .num_bounded_path_features = fs_.CountFeatures(fd::kBoundedPath),
+          .num_pc_pair_features = fs_.CountFeatures(fd::kPCPair),
+          .num_user_features = fs_.CountFeatures(fd::kUserDomains),
+          .num_user0_features = fs_.CountFeatures(fd::kUserDomains[0]),
+          .num_user1_features = fs_.CountFeatures(fd::kUserDomains[1]),
+          .num_user2_features = fs_.CountFeatures(fd::kUserDomains[2]),
+          .num_user3_features = fs_.CountFeatures(fd::kUserDomains[3]),
+          .num_user4_features = fs_.CountFeatures(fd::kUserDomains[4]),
+          .num_user5_features = fs_.CountFeatures(fd::kUserDomains[5]),
+          .num_user6_features = fs_.CountFeatures(fd::kUserDomains[6]),
+          .num_user7_features = fs_.CountFeatures(fd::kUserDomains[7]),
+          .num_user8_features = fs_.CountFeatures(fd::kUserDomains[8]),
+          .num_user9_features = fs_.CountFeatures(fd::kUserDomains[9]),
+          .num_user10_features = fs_.CountFeatures(fd::kUserDomains[10]),
+          .num_user11_features = fs_.CountFeatures(fd::kUserDomains[11]),
+          .num_user12_features = fs_.CountFeatures(fd::kUserDomains[12]),
+          .num_user13_features = fs_.CountFeatures(fd::kUserDomains[13]),
+          .num_user14_features = fs_.CountFeatures(fd::kUserDomains[14]),
+          .num_user15_features = fs_.CountFeatures(fd::kUserDomains[15]),
+          .num_unknown_features = fs_.CountFeatures(fd::kUnknown),
+          .num_funcs_in_frontier = coverage_frontier_.NumFunctionsInFrontier(),
+      },
+      CorpusStats{
+          .active_corpus_size = corpus_.NumActive(),
+          .total_corpus_size = corpus_.NumTotal(),
+          .max_corpus_element_size = max_corpus_size,
+          .avg_corpus_element_size = avg_corpus_size,
+      },
+      RusageStats{
+          .engine_rusage_avg_millicores = static_cast<uint64_t>(
+              std::lround(rusage_timing.cpu_hyper_cores * 1000)),
+          .engine_rusage_cpu_percent = static_cast<uint64_t>(
+              std::lround(rusage_timing.cpu_utilization * 100)),
+          .engine_rusage_rss_mb =
+              static_cast<uint64_t>(rusage_memory.mem_rss >> 20),
+          .engine_rusage_vsize_mb =
+              static_cast<uint64_t>(rusage_memory.mem_vsize >> 20),
+      },
+  });
 
   if (env_.log_level < min_log_level) return;
 
@@ -410,12 +423,12 @@ void Centipede::LoadShard(const Environment &load_env, size_t shard_index,
   size_t num_added_inputs = 0;
   size_t num_skipped_inputs = 0;
   std::vector<ByteArray> inputs_to_rerun;
-  auto input_features_callback = [&](const ByteArray &input,
-                                     FeatureVec &input_features) {
+  auto input_features_callback = [&](ByteArray input,
+                                     FeatureVec input_features) {
     if (EarlyExitRequested()) return;
     if (input_features.empty()) {
       if (rerun) {
-        inputs_to_rerun.push_back(input);
+        inputs_to_rerun.emplace_back(std::move(input));
       }
     } else {
       LogFeaturesAsSymbols(input_features);
@@ -496,25 +509,19 @@ void Centipede::GenerateCoverageReport(std::string_view filename_annotation,
   if (pc_table_.empty()) return;
 
   auto coverage_path = wd_.CoverageReportPath(filename_annotation);
-  LOG(INFO) << "Generate coverage report: " << description << " "
+  LOG(INFO) << "Generate coverage report [" << description << "]; "
             << VV(coverage_path);
   auto pci_vec = fs_.ToCoveragePCs();
   Coverage coverage(pc_table_, pci_vec);
-  std::stringstream out;
-  out << "# " << description << ":\n\n";
-  coverage.Print(symbols_, out);
-  RemoteFileSetContents(coverage_path, out.str());
+  coverage.DumpReportToFile(symbols_, coverage_path, description);
 }
 
 void Centipede::GenerateCorpusStats(std::string_view filename_annotation,
                                     std::string_view description) {
   auto stats_path = wd_.CorpusStatsPath(filename_annotation);
-  LOG(INFO) << "Generate corpus stats: " << description << " "
+  LOG(INFO) << "Generate corpus stats [" << description << "]; "
             << VV(stats_path);
-  std::ostringstream os;
-  os << "# " << description << ":\n\n";
-  corpus_.PrintStats(os, fs_);
-  RemoteFileSetContents(stats_path, os.str());
+  corpus_.DumpStatsToFile(fs_, stats_path, description);
 }
 
 // TODO(nedwill): add integration test once tests are refactored per b/255660879
@@ -523,7 +530,7 @@ void Centipede::GenerateSourceBasedCoverageReport(
   if (env_.clang_coverage_binary.empty()) return;
 
   auto report_path = wd_.SourceBasedCoverageReportPath(filename_annotation);
-  LOG(INFO) << "Generate source based coverage report: " << description << " "
+  LOG(INFO) << "Generate source based coverage report [" << description << "]; "
             << VV(report_path);
   RemoteMkdir(report_path);
 
@@ -568,6 +575,7 @@ void Centipede::GenerateRUsageReport(std::string_view filename_annotation,
     explicit ReportDumper(std::string_view path)
         : file_{RemoteFileOpen(path, "w")} {
       CHECK(file_ != nullptr) << VV(path);
+      RemoteFileSetWriteBufferSize(file_, 10UL * 1024 * 1024);
     }
 
     ~ReportDumper() override { RemoteFileClose(file_); }
@@ -714,11 +722,6 @@ void Centipede::FuzzingLoop() {
 
   UpdateAndMaybeLogStats("init-done", 0);
 
-  // Clear fuzz_start_time_ and num_runs_, so that the pre-init work doesn't
-  // affect them.
-  fuzz_start_time_ = absl::Now();
-  num_runs_ = 0;
-
   // If we're going to fuzz, dump the initial telemetry files. For a brand-new
   // run, these will be functionally empty, e.g. the coverage report will list
   // all target functions as not covered (NONE). For a bootstrapped run (the
@@ -726,6 +729,11 @@ void Centipede::FuzzingLoop() {
   // "latest" report of the previous run, depending on how the runs are
   // configured (the same number of shards, for example).
   if (env_.num_runs != 0) MaybeGenerateTelemetry("initial", "Before fuzzing");
+
+  // Reset fuzz_start_time_ and num_runs_, so that the pre-init work doesn't
+  // affect them.
+  fuzz_start_time_ = absl::Now();
+  num_runs_ = 0;
 
   // num_runs / batch_size, rounded up.
   size_t number_of_batches = env_.num_runs / env_.batch_size;
@@ -827,11 +835,11 @@ void Centipede::ReportCrash(std::string_view binary,
   // TODO(b/274705740): When the bug is fixed, set `input_idxs_to_try`'s size to
   //  `suspect_input_idx + 1`.
   std::vector<size_t> input_idxs_to_try(input_vec.size() + 1);
-  input_idxs_to_try.front() = suspect_input_idx;
-  std::iota(input_idxs_to_try.begin() + 1, input_idxs_to_try.end(), 0);
   // Prioritize the presumed crasher by inserting it in front of everything
   // else. However, do keep it at the old location, too, in case the target was
   // primed for a crash by the sequence of inputs that preceded the crasher.
+  input_idxs_to_try.front() = suspect_input_idx;
+  std::iota(input_idxs_to_try.begin() + 1, input_idxs_to_try.end(), 0);
 
   if (batch_result.failure_description() == kExecutionFailurePerBatchTimeout) {
     LOG(INFO) << log_prefix
@@ -853,16 +861,13 @@ void Centipede::ReportCrash(std::string_view binary,
       RemoteMkdir(crash_dir);
       std::string file_path = std::filesystem::path(crash_dir).append(hash);
       LOG(INFO) << log_prefix << "Detected crash-reproducing input:"
-                << "\nInput index    : " << input_idx
-                << "\nInput bytes    : " << AsString(one_input, /*max_len=*/32)
+                << "\nInput index    : " << input_idx << "\nInput bytes    : "
+                << AsPrintableString(one_input, /*max_len=*/32)
                 << "\nExit code      : " << one_input_batch_result.exit_code()
                 << "\nFailure        : "
                 << one_input_batch_result.failure_description()
                 << "\nSaving input to: " << file_path;
-      auto *file = RemoteFileOpen(file_path, "w");  // overwrites existing file.
-      CHECK(file != nullptr) << log_prefix << "Failed to open " << file_path;
-      RemoteFileAppend(file, one_input);
-      RemoteFileClose(file);
+      RemoteFileSetContents(file_path, one_input);
       return;
     }
   }
@@ -871,13 +876,14 @@ void Centipede::ReportCrash(std::string_view binary,
             << "Crash was not observed when running inputs one-by-one";
 
   // There will be cases when several inputs collectively cause a crash, but no
-  // single input does. Handle this by writing out all inputs from the batch.
-
+  // single input does. Handle this by writing out the inputs from the batch
+  // between 0 and `suspect_input_idx` (inclusive) as individual files under the
+  // <--workdir>/crash/unreliable_batch-<HASH_OF_SUSPECT_INPUT> directory.
   // TODO(bookholt): Check for repro by re-running the whole batch.
-  // TODO(ussuri): Consolidate logic for test case reproduction.
-
+  // TODO(ussuri): Consolidate the crash reproduction logic here and above.
+  // TODO(ussuri): This can create a lot of tiny files. Write to a single
+  //  shard-like corpus file instead.
   const auto &suspect_input = input_vec[suspect_input_idx];
-  // Save inputs to <--workdir>/crash/unreliable_batch-<HASH_OF_SUSPECT_INPUT>.
   auto suspect_hash = Hash(suspect_input);
   auto crash_dir = wd_.CrashReproducerDirPath();
   RemoteMkdir(crash_dir);
@@ -891,10 +897,7 @@ void Centipede::ReportCrash(std::string_view binary,
     auto hash = Hash(one_input);
     std::string file_path = std::filesystem::path(save_dir).append(
         absl::StrFormat("input-%010d-%s", i, hash));
-    auto *file = RemoteFileOpen(file_path, "w");
-    CHECK(file != nullptr) << log_prefix << "Failed to open " << file_path;
-    RemoteFileAppend(file, one_input);
-    RemoteFileClose(file);
+    RemoteFileSetContents(file_path, one_input);
   }
 }
 

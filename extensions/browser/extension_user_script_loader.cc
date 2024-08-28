@@ -30,8 +30,6 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
-#include "extensions/browser/api/scripting/scripting_constants.h"
-#include "extensions/browser/api/scripting/scripting_utils.h"
 #include "extensions/browser/component_extension_resource_manager.h"
 #include "extensions/browser/content_verifier/content_verifier.h"
 #include "extensions/browser/extension_file_task_runner.h"
@@ -39,6 +37,8 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/l10n_file_util.h"
+#include "extensions/browser/scripting_constants.h"
+#include "extensions/browser/scripting_utils.h"
 #include "extensions/browser/state_store.h"
 #include "extensions/browser/user_script_loader.h"
 #include "extensions/common/api/content_scripts.h"
@@ -74,6 +74,9 @@ enum class ReadScriptContentSource {
   // ResourceBundle.
   kResouceBundle,
 };
+
+// The key for storing a dynamic content script's id.
+inline constexpr char kId[] = "id";
 
 struct VerifyContentInfo {
   VerifyContentInfo(const scoped_refptr<ContentVerifier>& verifier,
@@ -152,11 +155,13 @@ void VerifyContent(VerifyContentInfo info) {
   scoped_refptr<ContentVerifyJob> job(info.verifier->CreateAndStartJobFor(
       info.extension_id, info.extension_root, info.relative_path));
   if (job.get()) {
-    if (info.content)
-      job->Read(info.content->data(), info.content->size(), MOJO_RESULT_OK);
-    else
-      job->Read("", 0u, MOJO_RESULT_NOT_FOUND);
-    job->Done();
+    if (info.content) {
+      job->BytesRead(info.content->data(), info.content->size(),
+                     MOJO_RESULT_OK);
+    } else {
+      job->BytesRead("", 0u, MOJO_RESULT_NOT_FOUND);
+    }
+    job->DoneReading();
   }
 }
 
@@ -356,7 +361,7 @@ void LoadUserScripts(
         dynamic_script_length += script_files_length;
         break;
       case UserScript::Source::kWebUIScript:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
 
@@ -386,7 +391,7 @@ void LoadScriptsOnFileTaskRunner(
 // Attempts to coerce a `dict` from an `api::content_scripts::ContentScript` to
 // an `api::scripts_internal::SerializedUserScript`, returning std::nullopt on
 // failure.
-// TODO(https://crbug.com/1494155): Remove this when migration is complete.
+// TODO(crbug.com/40286091): Remove this when migration is complete.
 std::optional<api::scripts_internal::SerializedUserScript>
 ContentScriptDictToSerializedUserScript(const base::Value::Dict& dict) {
   auto content_script = api::content_scripts::ContentScript::FromValue(dict);
@@ -394,7 +399,7 @@ ContentScriptDictToSerializedUserScript(const base::Value::Dict& dict) {
     return std::nullopt;  // Bad entry.
   }
 
-  auto* id = dict.FindString(scripting::kId);
+  auto* id = dict.FindString(kId);
   if (!id || id->empty()) {
     return std::nullopt;  // Bad entry.
   }
@@ -485,7 +490,7 @@ UserScriptList ConvertValueToScripts(const Extension& extension,
     if (!value.GetDict().Find("source")) {
       // It's the old type, or could be a bad entry.
 
-      // TODO(https://crbug.com/1494155): Add UMA and forced-migration so we
+      // TODO(crbug.com/40286091): Add UMA and forced-migration so we
       // can remove this code.
       serialized_script =
           ContentScriptDictToSerializedUserScript(value.GetDict());
@@ -651,7 +656,7 @@ void ExtensionUserScriptLoader::AddDynamicScripts(
     // Additionally, only add scripts to the set of active scripts in renderers
     // (through `AddScripts()`) if the `source` for that script is enabled.
     if (!base::Contains(disabled_sources_, script->GetSource())) {
-      // TODO(crbug.com/1496555): This results in an additional copy being
+      // TODO(crbug.com/40938420): This results in an additional copy being
       // stored in the browser for each of these scripts. Optimize the usage of
       // inline code.
       scripts_to_add.push_back(CopyDynamicScriptInfo(*script));
@@ -851,7 +856,7 @@ void ExtensionUserScriptLoader::DynamicScriptsStorageHelper::SetDynamicScripts(
 
     base::Value::Dict value =
         script_serialization::SerializeUserScript(*script).ToValue();
-    value.Set(scripting::kId, script->id());
+    value.Set(kId, script->id());
 
     scripts_value.Append(std::move(value));
     persistent_patterns.AddPatterns(script->url_patterns());
@@ -879,8 +884,8 @@ void ExtensionUserScriptLoader::DynamicScriptsStorageHelper::
         *extension, util::IsIncognitoEnabled(extension->id(), browser_context_),
         value->GetList());
 
-    // TODO(crbug.com/1385165): Write back `dynamic_scripts` into the StateStore
-    // if scripts in the StateStore do not have prefixed IDs.
+    // TODO(crbug.com/40061759): Write back `dynamic_scripts` into the
+    // StateStore if scripts in the StateStore do not have prefixed IDs.
 
     scripts.insert(scripts.end(),
                    std::make_move_iterator(dynamic_scripts.begin()),

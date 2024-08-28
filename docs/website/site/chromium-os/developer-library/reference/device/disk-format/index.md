@@ -1,7 +1,7 @@
 ---
 breadcrumbs:
 - - /chromium-os/developer-library/reference
-  - Chromium OS > Developer Library > Reference
+  - ChromiumOS > Reference
 page_name: disk-format
 title: Disk format
 ---
@@ -68,7 +68,7 @@ Legacy boot for x86 Linux has three steps:
 
 Legacy BIOSes will continue to boot ChromiumOS from the MBR. The ChromiumOS
 build process places GPT-aware boot sector code from syslinux in the MBR. That
-code can specify one GPT partition to boot, indentified by a matching
+code can specify one GPT partition to boot, identified by a matching
 UniquePartitionGUID field in the Partition Entry Array.  We use partition 12 for
 this purpose. The second-stage syslinux bootloader is installed on that
 partition, along with its corresponding config file (/syslinux/syslinux.cfg). We
@@ -200,9 +200,9 @@ growth. Here’s the current layout:
 |  6        | kernel C                             | Minimal-size partition for future third kernel. There are rare cases where a third partition could help us avoid recovery mode (AU in progress + random corruption on boot partition + system crash). We decided it's not worth the space in V1, but that may change. |
 |  7        | rootfs C                             | Minimal-size partition for future third rootfs. Same reasons as above.                                                                                                                                                                                                |
 |  8        | OEM customization                    | Web pages, links, themes, etc. from OEM.                                                                                                                                                                                                                              |
-|  9        | minios A                             | MiniOS recovery partition A (Only supported on disk layout v3 and newer).                                                                                                                                                                                                             |
-| 10        | minios B                             | MiniOS recovery partition B (Only supported on disk layout v3 and newer).                                                                                                                                                                                                                       |
-| 11        | Powerwash data                       | Powerwash data, including enterprise rollback data (Only supported on disk layout v3 and newer).                                                                                                                                                                                                                       |
+|  9        | minios A                             | MiniOS recovery partition A (Only supported on disk layout v3 and newer).                                                                                                                                                                                             |
+| 10        | minios B                             | MiniOS recovery partition B (Only supported on disk layout v3 and newer).                                                                                                                                                                                             |
+| 11        | Powerwash data                       | Powerwash data, including enterprise rollback data (Only supported on disk layout v3 and newer).                                                                                                                                                                      |
 | 12        | EFI System Partition                 | Contains 64-bit grub2 bootloader for EFI BIOSes, and second-stage syslinux bootloader for legacy BIOSes.                                                                                                                                                              |
 
 Note that the reserved partitions will actually be present on the image, so that
@@ -296,7 +296,7 @@ Resizing] document for details.
 
 Here’s the current fixed-disk layout:
 
-![Current fixed-disk layout](images/disk_layout.png)
+![Current fixed-disk layout](/chromium-os/developer-library/reference/device/disk-format/disk_layout.png)
 
 ## Secure boot
 
@@ -383,7 +383,7 @@ partition.
 
 Here’s the flow in graphical form:
 
-![Boot flow](images/boot_flow.png)
+![Boot flow](/chromium-os/developer-library/reference/device/disk-format/boot_flow.png)
 
 ## Kernel partition format
 
@@ -391,7 +391,7 @@ The same library that sanity-checks the GPT and selects the kernel partition
 also checks the kernel’s cryptographic signature. The kernel partition consists
 of the following structure:
 
-![Kernel partition layout](images/kernel_partition_layout.png)
+![Kernel partition layout](/chromium-os/developer-library/reference/device/disk-format/kernel_partition_layout.png)
 
 The first 64K bytes are the cryptographic signature header blob, which contains
 the keys and signatures needed to verify the rest of the kernel blob (plus a few
@@ -467,7 +467,7 @@ futility sign \
   --outfile /tmp/kernel.new
 ```
 
-For the recovery kernel on a removeable device, `<private_key>` above is
+For the recovery kernel on a removable device, `<private_key>` above is
 `recovery_kernel_data_key.vbprivk` and for the main kernel on the hard drive,
 the `<private_key>` is `kernel_data_key.vbprivk`. The full path to the key file
 is required, of course.
@@ -485,6 +485,6 @@ sudo dd if=/tmp/kernel.new of=/dev/<src_part>
 ```
 
 
-[Disk Layout Format]: https://sites.google.com/a/chromium.org/dev/chromium-os/developer-guide/disk-layout-format
+[Disk Layout Format]: /chromium-os/developer-guide/disk-layout-format
 [SQL Server Partition Alignment]: http://msdn.microsoft.com/en-us/library/dd758814%28v=sql.100%29.aspx
-[Partition Resizing]: https://sites.google.com/a/chromium.org/dev/chromium-os/chromiumos-design-docs/partition-resizing
+[Partition Resizing]: /chromium-os/chromiumos-design-docs/partition-resizing

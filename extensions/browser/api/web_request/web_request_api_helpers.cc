@@ -20,6 +20,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/ranges/algorithm.h"
 #include "base/stl_util.h"
 #include "base/strings/strcat.h"
@@ -212,7 +213,7 @@ static_assert(ValidateHeaderEntries(kRequestHeaderEntries),
 void RecordRequestHeader(const std::string& header,
                          void (*record_func)(RequestHeaderType)) {
   DCHECK(IsStringLowerCaseASCII(header));
-  const auto* it = kRequestHeaderEntries.find(header);
+  const auto it = kRequestHeaderEntries.find(header);
   record_func(it != kRequestHeaderEntries.end() ? it->second
                                                 : RequestHeaderType::kOther);
 }
@@ -320,7 +321,7 @@ constexpr auto kResponseHeaderEntries =
 void RecordResponseHeader(std::string_view header,
                           void (*record_func)(ResponseHeaderType)) {
   DCHECK(IsStringLowerCaseASCII(header));
-  const auto* it = kResponseHeaderEntries.find(header);
+  const auto it = kResponseHeaderEntries.find(header);
   record_func(it != kResponseHeaderEntries.end() ? it->second
                                                  : ResponseHeaderType::kOther);
 }
@@ -347,8 +348,9 @@ std::string GetDNRNewRequestHeaderValue(net::HttpRequestHeaders* headers,
   bool has_header = headers->GetHeader(header_name, &existing_value);
 
   if (has_header && operation == dnr_api::HeaderOperation::kAppend) {
-    const auto* it = dnr::kDNRRequestHeaderAppendAllowList.find(header_name);
-    DCHECK(it != dnr::kDNRRequestHeaderAppendAllowList.end());
+    const auto it = dnr::kDNRRequestHeaderAppendAllowList.find(header_name);
+    CHECK(it != dnr::kDNRRequestHeaderAppendAllowList.end(),
+          base::NotFatalUntil::M130);
     return base::StrCat({existing_value, it->second, header_value});
   }
 
@@ -377,7 +379,7 @@ struct DNRHeaderAction {
       case dnr_api::HeaderOperation::kRemove:
         return true;
       case dnr_api::HeaderOperation::kNone:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return true;
     }
   }
@@ -459,7 +461,7 @@ bool ModifyRequestHeadersForAction(
         break;
       }
       case dnr_api::HeaderOperation::kNone:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
 
     request_headers_modified |= header_modified;
@@ -493,7 +495,7 @@ bool ModifyResponseHeadersForAction(
   auto create_override_headers_if_needed =
       [&original_response_headers](
           scoped_refptr<net::HttpResponseHeaders>* override_response_headers) {
-        if (override_response_headers->get() == nullptr) {
+        if (!override_response_headers->get()) {
           *override_response_headers =
               base::MakeRefCounted<net::HttpResponseHeaders>(
                   original_response_headers->raw_headers());
@@ -556,7 +558,7 @@ bool ModifyResponseHeadersForAction(
         break;
       }
       case dnr_api::HeaderOperation::kNone:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
 
     response_headers_modified |= header_modified;
@@ -1164,7 +1166,7 @@ void MergeOnBeforeSendHeadersResponses(
 
   // A strict subset of |removed_headers| consisting of headers removed by the
   // web request API. Used for metrics.
-  // TODO(crbug.com/1098945): Use std::string_view to avoid copying header
+  // TODO(crbug.com/40702193): Use std::string_view to avoid copying header
   // names.
   std::set<std::string> web_request_removed_headers;
 
@@ -1655,10 +1657,9 @@ void MergeOnHeadersReceivedResponses(
           base::MakeRefCounted<net::HttpResponseHeaders>(
               original_response_headers->raw_headers());
     }
-    (*override_response_headers)->ReplaceStatusLine("HTTP/1.1 302 Found");
-    (*override_response_headers)->SetHeader("Location", new_url.spec());
-    // Prevent the original URL's fragment from being added to the new URL.
-    *preserve_fragment_on_redirect_url = new_url;
+
+    RedirectRequestAfterHeadersReceived(new_url, **override_response_headers,
+                                        preserve_fragment_on_redirect_url);
   }
 
   // Record metrics.
@@ -1769,6 +1770,16 @@ bool ShouldHideRequestHeader(content::BrowserContext* browser_context,
 bool ShouldHideResponseHeader(int extra_info_spec, const std::string& name) {
   return !(extra_info_spec & ExtraInfoSpec::EXTRA_HEADERS) &&
          base::EqualsCaseInsensitiveASCII(name, "set-cookie");
+}
+
+void RedirectRequestAfterHeadersReceived(
+    const GURL& new_url,
+    net::HttpResponseHeaders& override_response_headers,
+    GURL* preserve_fragment_on_redirect_url) {
+  override_response_headers.ReplaceStatusLine("HTTP/1.1 302 Found");
+  override_response_headers.SetHeader("Location", new_url.spec());
+  // Prevent the original URL's fragment from being added to the new URL.
+  *preserve_fragment_on_redirect_url = new_url;
 }
 
 }  // namespace extension_web_request_api_helpers

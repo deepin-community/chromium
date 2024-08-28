@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
+
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
@@ -23,22 +25,18 @@ void CreateSidePanelManagerForWebContents(Profile* profile,
 // Defined in extension_side_panel_utils.h
 void ToggleExtensionSidePanel(Browser* browser,
                               const ExtensionId& extension_id) {
-  SidePanelUI* side_panel_ui = SidePanelUI::GetSidePanelUIForBrowser(browser);
+  SidePanelUI* side_panel_ui = browser->GetFeatures().side_panel_ui();
 
   SidePanelEntry::Key extension_key =
       SidePanelEntry::Key(SidePanelEntry::Id::kExtension, extension_id);
-  if (side_panel_ui->IsSidePanelEntryShowing(extension_key)) {
-    side_panel_ui->Close();
-  } else {
-    side_panel_ui->Show(extension_key);
-  }
+  side_panel_ui->Toggle(extension_key, SidePanelOpenTrigger::kExtension);
 }
 
 // Declared in extension_side_panel_utils.h
 void OpenGlobalExtensionSidePanel(Browser& browser,
                                   content::WebContents* web_contents,
                                   const ExtensionId& extension_id) {
-  SidePanelUI* side_panel_ui = SidePanelUI::GetSidePanelUIForBrowser(&browser);
+  SidePanelUI* side_panel_ui = browser.GetFeatures().side_panel_ui();
 
   SidePanelEntry::Key extension_key =
       SidePanelEntry::Key(SidePanelEntry::Id::kExtension, extension_id);
@@ -110,7 +108,7 @@ void OpenContextualExtensionSidePanel(Browser& browser,
       SidePanelEntry::Key(SidePanelEntry::Id::kExtension, extension_id);
 
   if (browser.tab_strip_model()->GetActiveWebContents() == &web_contents) {
-    SidePanelUI::GetSidePanelUIForBrowser(&browser)->Show(extension_key);
+    browser.GetFeatures().side_panel_ui()->Show(extension_key);
     return;
   }
 

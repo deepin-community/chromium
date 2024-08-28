@@ -107,6 +107,12 @@ BASE_DECLARE_FEATURE(kImprovedSemanticsActivityIndicators);
 COMPONENT_EXPORT(CONTENT_SETTINGS_FEATURES)
 BASE_DECLARE_FEATURE(kLeftHandSideActivityIndicators);
 
+#if BUILDFLAG(IS_CHROMEOS)
+// Shows warnings if camera, microphone or geolocation is blocked in the OS.
+COMPONENT_EXPORT(CONTENT_SETTINGS_FEATURES)
+BASE_DECLARE_FEATURE(kCrosSystemLevelPermissionBlockedWarnings);
+#endif
+
 // Feature to enable redesigned tracking protection UX + prefs for 3PCD.
 COMPONENT_EXPORT(CONTENT_SETTINGS_FEATURES)
 BASE_DECLARE_FEATURE(kTrackingProtection3pcd);
@@ -131,17 +137,6 @@ BASE_DECLARE_FEATURE(kContentSettingsPartitioning);
 
 COMPONENT_EXPORT(CONTENT_SETTINGS_FEATURES)
 extern const char kUseTestMetadataName[];
-
-// Enables writing and reading metadata grants as a host-indexed data structure.
-// This is meant to optimize lookups when the list is large.
-COMPONENT_EXPORT(CONTENT_SETTINGS_FEATURES)
-BASE_DECLARE_FEATURE(kHostIndexedMetadataGrants);
-
-// Enables generating and using test metadata. Used to test performance at
-// large list sizes. Set to a value greater than 0 to use that many generated
-// entries for testing.
-COMPONENT_EXPORT(CONTENT_SETTINGS_FEATURES)
-extern const base::FeatureParam<int> kUseTestMetadata;
 
 // Enable indexing HostContentSettings to allow for faster lookups of content
 // setting rules.

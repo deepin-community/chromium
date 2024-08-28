@@ -5,7 +5,6 @@
 #include "ui/views/bubble/bubble_frame_view.h"
 
 #include <algorithm>
-#include <utility>
 
 #include "build/build_config.h"
 #include "components/vector_icons/vector_icons.h"
@@ -103,9 +102,7 @@ BubbleFrameView::BubbleFrameView(const gfx::Insets& title_margins,
   main_image_->SetVisible(false);
   subtitle_->SetVisible(false);
 
-  if (features::IsChromeRefresh2023()) {
-    default_title_->SetTextStyle(style::STYLE_HEADLINE_4);
-  }
+  default_title_->SetTextStyle(style::STYLE_HEADLINE_4);
 
   auto minimize = CreateMinimizeButton(base::BindRepeating(
       [](BubbleFrameView* view, const ui::Event& event) {
@@ -135,10 +132,11 @@ BubbleFrameView::BubbleFrameView(const gfx::Insets& title_margins,
   progress_indicator->SetPreferredCornerRadii(std::nullopt);
   progress_indicator->SetBackgroundColor(SK_ColorTRANSPARENT);
   progress_indicator->SetVisible(false);
-  progress_indicator->GetViewAccessibility().OverrideIsIgnored(true);
+  progress_indicator->GetViewAccessibility().SetIsIgnored(true);
   progress_indicator->SetProperty(views::kElementIdentifierKey,
                                   kProgressIndicatorElementId);
   progress_indicator_ = AddChildView(std::move(progress_indicator));
+  SetLayoutManager(std::make_unique<DelegatingLayoutManager>(this));
 }
 
 BubbleFrameView::~BubbleFrameView() = default;
@@ -146,19 +144,23 @@ BubbleFrameView::~BubbleFrameView() = default;
 // static
 std::unique_ptr<Label> BubbleFrameView::CreateDefaultTitleLabel(
     const std::u16string& title_text) {
-  return CreateLabelWithContextAndStyle(title_text, style::CONTEXT_DIALOG_TITLE,
-                                        style::STYLE_PRIMARY);
+  std::unique_ptr<Label> label = CreateLabelWithContextAndStyle(
+      title_text, style::CONTEXT_DIALOG_TITLE, style::STYLE_PRIMARY);
+  if (base::FeatureList::IsEnabled(features::kBubbleFrameViewTitleIsHeading)) {
+    label->GetViewAccessibility().SetRole(ax::mojom::Role::kHeading);
+    label->GetViewAccessibility().SetHierarchicalLevel(1);
+  }
+  return label;
 }
 
 // static
 std::unique_ptr<Button> BubbleFrameView::CreateCloseButton(
     Button::PressedCallback callback) {
   auto close_button = CreateVectorImageButtonWithNativeTheme(
-      std::move(callback), features::IsChromeRefresh2023()
-                               ? vector_icons::kCloseChromeRefreshIcon
-                               : vector_icons::kCloseRoundedIcon);
+      std::move(callback), vector_icons::kCloseChromeRefreshIcon);
   close_button->SetTooltipText(l10n_util::GetStringUTF16(IDS_APP_CLOSE));
-  close_button->SetAccessibleName(l10n_util::GetStringUTF16(IDS_APP_CLOSE));
+  close_button->GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_APP_CLOSE));
   close_button->SizeToPreferredSize();
 
   InstallCircleHighlightPathGenerator(close_button.get());
@@ -173,7 +175,7 @@ std::unique_ptr<Button> BubbleFrameView::CreateMinimizeButton(
       std::move(callback), kWindowControlMinimizeIcon);
   minimize_button->SetTooltipText(
       l10n_util::GetStringUTF16(IDS_APP_ACCNAME_MINIMIZE));
-  minimize_button->SetAccessibleName(
+  minimize_button->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_APP_ACCNAME_MINIMIZE));
   minimize_button->SizeToPreferredSize();
 
@@ -267,6 +269,13 @@ int BubbleFrameView::NonClientHitTest(const gfx::Point& point) {
     }
   }
 
+  if (!non_client_hit_test_cb_.is_null()) {
+    const int result = non_client_hit_test_cb_.Run(point);
+    if (result != HTNOWHERE) {
+      return result;
+    }
+  }
+
   return GetWidget()->client_view()->NonClientHitTest(point);
 }
 
@@ -309,14 +318,23 @@ void BubbleFrameView::ResetWindowControls() {
   // to be removed from the accessibility tree.
   bool close_is_visible =
       GetWidget()->widget_delegate()->ShouldShowCloseButton();
+  bool close_visible_changed = close_->GetVisible() != close_is_visible;
+
   close_->SetVisible(close_is_visible);
-  close_->GetViewAccessibility().OverrideIsIgnored(!close_is_visible);
+  close_->GetViewAccessibility().SetIsIgnored(!close_is_visible);
 
   // If the minimize button is not visible, marking it as "ignored" will cause
   // it to be removed from the accessibility tree.
   bool minimize_is_visible = GetWidget()->widget_delegate()->CanMinimize();
+  bool minimize_visible_changed =
+      minimize_->GetVisible() != minimize_is_visible;
+
   minimize_->SetVisible(minimize_is_visible);
-  minimize_->GetViewAccessibility().OverrideIsIgnored(!minimize_is_visible);
+  minimize_->GetViewAccessibility().SetIsIgnored(!minimize_is_visible);
+
+  if (minimize_visible_changed || close_visible_changed) {
+    InvalidateLayout();
+  }
 }
 
 void BubbleFrameView::UpdateWindowIcon() {
@@ -356,6 +374,14 @@ void BubbleFrameView::UpdateWindowRoundedCorners() {
   // implementations of the client view may need to do additional work to have a
   // rounded window.
   GetWidget()->client_view()->UpdateWindowRoundedCorners(GetCornerRadius());
+}
+
+bool BubbleFrameView::HasWindowTitle() const {
+  return title();
+}
+
+bool BubbleFrameView::IsWindowTitleVisible() const {
+  return title()->GetVisible();
 }
 
 void BubbleFrameView::SetTitleView(std::unique_ptr<View> title_view) {
@@ -406,31 +432,21 @@ void BubbleFrameView::UpdateMainImage() {
     // consider moving that functionality into ImageView or ImageModel without
     // having to specify an external size before painting.
     constexpr int kMainImageDialogWidthIncrease = 128;
-    constexpr int kBorderMargin = 16;
     constexpr int kBorderStrokeThickness = 1;
 
-    // Under CR2023, use the `title_margins_` for the outer margins between the
-    // content and the visible frame border. `border_insets` is the space
-    // outside the visible border mask that incorporates the rounded corners.
-    // This will ensure that the *perceived* margin will be what is expected
-    // since the origin for the view is outside the visible border.
-    // For pre-CR2023, there should be no visual change.
-    const int border_margin_left =
-        features::IsChromeRefresh2023() ? title_margins_.left() : kBorderMargin;
-    const int border_margin_top =
-        features::IsChromeRefresh2023() ? title_margins_.top() : kBorderMargin;
+    // Use the `title_margins_` for the outer margins between the content and
+    // the visible frame border. `border_insets` is the space outside the
+    // visible border mask that incorporates the rounded corners. This will
+    // ensure that the *perceived* margin will be what is expected since the
+    // origin for the view is outside the visible border.
+    const int border_margin_left = title_margins_.left();
+    const int border_margin_top = title_margins_.top();
     const gfx::Insets border_insets = GetBorder()->GetInsets();
     const int main_image_dimension = kMainImageDialogWidthIncrease -
                                      border_insets.left() - border_margin_left -
                                      kBorderStrokeThickness;
-    const int image_inset_left =
-        features::IsChromeRefresh2023()
-            ? border_insets.left() + border_margin_left
-            : border_margin_left - kBorderStrokeThickness;
-    const int image_inset_top =
-        features::IsChromeRefresh2023()
-            ? border_insets.top() + border_margin_top
-            : border_margin_top - kBorderStrokeThickness;
+    const int image_inset_left = border_insets.left() + border_margin_left;
+    const int image_inset_top = border_insets.top() + border_margin_top;
     const gfx::Insets image_insets =
         gfx::Insets::TLBR(image_inset_top, image_inset_left, border_margin_top,
                           border_margin_left);
@@ -455,7 +471,7 @@ void BubbleFrameView::UpdateMainImage() {
 void BubbleFrameView::SetProgress(std::optional<double> progress) {
   bool visible = progress.has_value();
   progress_indicator_->SetVisible(visible);
-  progress_indicator_->GetViewAccessibility().OverrideIsIgnored(!visible);
+  progress_indicator_->GetViewAccessibility().SetIsIgnored(!visible);
   if (progress) {
     progress_indicator_->SetValue(progress.value());
   }
@@ -468,9 +484,11 @@ std::optional<double> BubbleFrameView::GetProgress() const {
   return std::nullopt;
 }
 
-gfx::Size BubbleFrameView::CalculatePreferredSize() const {
+gfx::Size BubbleFrameView::CalculatePreferredSize(
+    const SizeBounds& available_size) const {
   // Get the preferred size of the client area.
-  gfx::Size client_size = GetWidget()->client_view()->GetPreferredSize();
+  gfx::Size client_size =
+      GetWidget()->client_view()->GetPreferredSize(available_size);
   // Expand it to include the bubble border and space for the arrow.
   return GetWindowBoundsForClientBounds(gfx::Rect(client_size)).size();
 }
@@ -502,11 +520,17 @@ gfx::Size BubbleFrameView::GetMaximumSize() const {
 #endif  // BUILDFLAG(IS_MAC)
   // Non-dialog bubbles should be non-resizable, so its max size is its
   // preferred size.
-  return GetPreferredSize();
+  return GetPreferredSize({});
 #endif
 }
 
-void BubbleFrameView::Layout(PassKey) {
+ProposedLayout BubbleFrameView::CalculateProposedLayout(
+    const SizeBounds& size_bounds) const {
+  ProposedLayout layout;
+  DCHECK(size_bounds.is_fully_bounded());
+  layout.host_size =
+      gfx::Size(size_bounds.width().value(), size_bounds.height().value());
+
   // The title margins may not be set, but make sure that's only the case when
   // there's no title.
   DCHECK(!title_margins_.IsEmpty() ||
@@ -515,9 +539,10 @@ void BubbleFrameView::Layout(PassKey) {
   const gfx::Rect contents_bounds = GetContentsBounds();
 
   // Lay out the progress bar.
-  progress_indicator_->SetBounds(contents_bounds.x(), contents_bounds.y(),
-                                 contents_bounds.width(),
-                                 kProgressIndicatorHeight);
+  layout.child_layouts.emplace_back(
+      progress_indicator_.get(), progress_indicator_->GetVisible(),
+      gfx::Rect(contents_bounds.x(), contents_bounds.y(),
+                contents_bounds.width(), kProgressIndicatorHeight));
 
   gfx::Rect bounds = contents_bounds;
   bounds.Inset(title_margins_);
@@ -536,9 +561,12 @@ void BubbleFrameView::Layout(PassKey) {
                                  DISTANCE_RELATED_BUTTON_HORIZONTAL),
                              0, 0));
     }
-    button->SetPosition(gfx::Point(button_area_rect.x() - button->width(),
-                                   button_area_rect.y()));
-    button_area_rect.Union(button->bounds());
+    const gfx::Rect button_bounds(button_area_rect.x() - button->width(),
+                                  button_area_rect.y(), button->width(),
+                                  button->height());
+    layout.child_layouts.emplace_back(button, button->GetVisible(),
+                                      button_bounds);
+    button_area_rect.Union(button_bounds);
   }
 
   // Add spacing between the title and buttons.
@@ -556,12 +584,13 @@ void BubbleFrameView::Layout(PassKey) {
   gfx::Rect header_rect = contents_bounds;
   header_rect.set_height(GetHeaderHeightForFrameWidth(contents_bounds.width()));
   if (header_rect.height() > 0) {
-    header_view_->SetBoundsRect(header_rect);
+    layout.child_layouts.emplace_back(header_view_.get(),
+                                      header_view_->GetVisible(), header_rect);
     bounds.Inset(gfx::Insets::TLBR(header_rect.height(), 0, 0, 0));
   }
 
   // Lay out the title.
-  gfx::Size title_icon_pref_size(title_icon_->GetPreferredSize());
+  gfx::Size title_icon_pref_size(title_icon_->GetPreferredSize({}));
   const int title_icon_padding =
       title_icon_pref_size.width() > 0 ? title_margins_.left() : 0;
   const int title_label_x = bounds.x() + title_icon_pref_size.width() +
@@ -580,7 +609,8 @@ void BubbleFrameView::Layout(PassKey) {
     const gfx::Insets title_insets =
         GetTitleLabelInsetsFromFrame() + GetInsets();
     DCHECK_EQ(title_insets.left(), title_label_x);
-    DCHECK_EQ(title_insets.right(), width() - title_label_right);
+    DCHECK_EQ(title_insets.right(),
+              layout.host_size.width() - title_label_right);
   }
 
   const int title_available_width =
@@ -590,15 +620,21 @@ void BubbleFrameView::Layout(PassKey) {
   const int title_height =
       std::max(title_icon_pref_size.height(), title_preferred_height);
 
-  title_container_->SetBounds(
-      title_label_x, bounds.y() + (title_height - title_preferred_height) / 2,
-      title_available_width, title_preferred_height);
+  layout.child_layouts.emplace_back(
+      title_container_.get(), title_container_->GetVisible(),
+      gfx::Rect(title_label_x,
+                bounds.y() + (title_height - title_preferred_height) / 2,
+                title_available_width, title_preferred_height));
 
-  title_icon_->SetBounds(bounds.x(), bounds.y(), title_icon_pref_size.width(),
-                         title_height);
+  layout.child_layouts.emplace_back(
+      title_icon_.get(), title_icon_->GetVisible(),
+      gfx::Rect(bounds.x(), bounds.y(), title_icon_pref_size.width(),
+                title_height));
 
-  main_image_->SetBounds(0, 0, main_image_->GetPreferredSize().width(),
-                         main_image_->GetPreferredSize().height());
+  const gfx::Size preferred_size = main_image_->GetPreferredSize({});
+  layout.child_layouts.emplace_back(
+      main_image_.get(), main_image_->GetVisible(),
+      gfx::Rect(0, 0, preferred_size.width(), preferred_size.height()));
 
   // Lay out the footnote.
   // Only account for footnote_container_'s height if it's visible, because
@@ -606,12 +642,13 @@ void BubbleFrameView::Layout(PassKey) {
   if (footnote_container_ && footnote_container_->GetVisible()) {
     const int width = contents_bounds.width();
     const int height = footnote_container_->GetHeightForWidth(width);
-    footnote_container_->SetBounds(
-        contents_bounds.x(), contents_bounds.bottom() - height, width, height);
+    layout.child_layouts.emplace_back(
+        footnote_container_.get(), footnote_container_->GetVisible(),
+        gfx::Rect(contents_bounds.x(), contents_bounds.bottom() - height, width,
+                  height));
   }
 
-  // Lay out the client view.
-  LayoutSuperclass<NonClientFrameView>(this);
+  return layout;
 }
 
 void BubbleFrameView::OnThemeChanged() {
@@ -737,10 +774,13 @@ gfx::Insets BubbleFrameView::GetFootnoteMargins() const {
 
 void BubbleFrameView::SetPreferredArrowAdjustment(
     BubbleFrameView::PreferredArrowAdjustment adjustment) {
+  if (preferred_arrow_adjustment_ == adjustment) {
+    return;
+  }
+
   preferred_arrow_adjustment_ = adjustment;
-  // Changing |preferred_arrow_adjustment| will affect window bounds. Therefore
-  // this effect is handled during window resizing.
-  OnPropertyChanged(&preferred_arrow_adjustment_, kPropertyEffectsNone);
+  // Changing |preferred_arrow_adjustment| will affect window bounds.
+  OnPropertyChanged(&preferred_arrow_adjustment_, kPropertyEffectsLayout);
 }
 
 BubbleFrameView::PreferredArrowAdjustment
@@ -1011,16 +1051,17 @@ void BubbleFrameView::OffsetArrowIfOutOfBounds(
 
 int BubbleFrameView::GetFrameWidthForClientWidth(int client_width) const {
   // Note that GetMinimumSize() for multiline Labels is typically 0.
-  const int title_bar_width = title()->GetMinimumSize().width() +
-                              GetTitleLabelInsetsFromFrame().width();
+  const int title_bar_width =
+      GetTitleLabelInsetsFromFrame().width() +
+      (HasWindowTitle() ? title()->GetMinimumSize().width() : 0);
   const int client_area_width = client_width + content_margins_.width();
   const int frame_width =
       std::max(title_bar_width, client_area_width) + GetMainImageLeftInsets();
 
   DialogDelegate* const dialog_delegate =
       GetWidget()->widget_delegate()->AsDialogDelegate();
-  bool snapping = dialog_delegate &&
-                  dialog_delegate->GetDialogButtons() != ui::DIALOG_BUTTON_NONE;
+  bool snapping =
+      dialog_delegate && dialog_delegate->buttons() != ui::DIALOG_BUTTON_NONE;
   return snapping ? LayoutProvider::Get()->GetSnappedDialogWidth(frame_width)
                   : frame_width;
 }
@@ -1039,7 +1080,7 @@ gfx::Size BubbleFrameView::GetFrameSizeForClientSize(
 
   if (main_image_->GetVisible()) {
     size.set_height(
-        std::max(size.height(), main_image_->GetPreferredSize().height()));
+        std::max(size.height(), main_image_->GetPreferredSize({}).height()));
   }
 
   return size;
@@ -1049,16 +1090,12 @@ bool BubbleFrameView::HasTitle() const {
   return (custom_title_ != nullptr &&
           GetWidget()->widget_delegate()->ShouldShowWindowTitle()) ||
          (default_title_ != nullptr &&
-          default_title_->GetPreferredSize().height() > 0) ||
-         title_icon_->GetPreferredSize().height() > 0;
+          default_title_->GetHeightForWidth(default_title_->width()) > 0) ||
+         title_icon_->GetPreferredSize({}).height() > 0;
 }
 
 BubbleFrameView::ButtonsPositioning BubbleFrameView::GetButtonsPositioning()
     const {
-  if (!features::IsChromeRefresh2023()) {
-    return ButtonsPositioning::kOnFrameEdge;
-  }
-
   // Positions the buttons in the title row when there's no header row.
   return HasTitle() && !(header_view_ && header_view_->GetVisible())
              ? ButtonsPositioning::kInTitleRow
@@ -1089,7 +1126,7 @@ gfx::Insets BubbleFrameView::GetTitleLabelInsetsFromFrame() const {
   }
 
   insets_right = std::max(insets_right, title_margins_.right());
-  const gfx::Size title_icon_pref_size = title_icon_->GetPreferredSize();
+  const gfx::Size title_icon_pref_size = title_icon_->GetPreferredSize({});
   const int title_icon_padding =
       title_icon_pref_size.width() > 0 ? title_margins_.left() : 0;
   const int insets_left = GetMainImageLeftInsets() + title_margins_.left() +
@@ -1117,7 +1154,7 @@ gfx::Insets BubbleFrameView::GetClientInsetsForFrameWidth(
                              GetMainImageLeftInsets(), 0, 0);
   }
 
-  const int icon_height = title_icon_->GetPreferredSize().height();
+  const int icon_height = title_icon_->GetPreferredSize({}).height();
   const int label_height = title_container_->GetHeightForWidth(
       frame_width - GetTitleLabelInsetsFromFrame().width());
   const int title_height =
@@ -1148,7 +1185,7 @@ int BubbleFrameView::GetMainImageLeftInsets() const {
   if (!main_image_->GetVisible()) {
     return 0;
   }
-  return main_image_->GetPreferredSize().width() -
+  return main_image_->GetPreferredSize({}).width() -
          main_image_->GetBorder()->GetInsets().right();
 }
 

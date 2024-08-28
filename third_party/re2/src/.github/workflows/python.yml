@@ -5,6 +5,10 @@ on:
       build:
         required: true
         type: number
+      force-sdist:
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -21,8 +25,9 @@ jobs:
       fail-fast: false
       matrix:
         arch:
-          - { name: X64,   python-name: x86_64,  runs-on: [ubuntu-latest]             }
-          - { name: ARM64, python-name: aarch64, runs-on: [self-hosted, linux, arm64] }
+          - { name: X64,   python-name: x86_64,  runs-on: [ubuntu-latest]              }
+          # TODO(junyer): Update the label after ARM64 graduates from beta.
+          - { name: ARM64, python-name: aarch64, runs-on: [arm-ubuntu-arm-22.04-4core] }
         os: [manylinux_2_28]
         ver: ['3.8', '3.9', '3.10', '3.11', '3.12']
     env:
@@ -31,18 +36,19 @@ jobs:
       # Bazel fails if the username is unknown.
       USER: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.1.7
       # Stash the timestamp for the commit SHA that triggered the workflow.
       - run: echo "timestamp=$(git log -1 --pretty=%ct)" >> "${GITHUB_ENV}"
         shell: bash
-      - uses: p0deje/setup-bazel@0.6.0
+      - uses: bazel-contrib/setup-bazel@0.8.5
         with:
           bazelisk-version: '1.x'
       - name: Prepare Python ${{ matrix.ver }} environment
         run: |
           "${PYTHON}" -m pip install --upgrade pip
-          "${PYTHON}" -m pip install --upgrade build wheel auditwheel
-          "${PYTHON}" -m pip install --upgrade absl-py
+          "${PYTHON}" -m pip install --upgrade setuptools build wheel auditwheel
+          "${PYTHON}" -m pip install --upgrade absl-py mypy
+          "${PYTHON}" python/toolchains/generate.py
         shell: bash
       - name: Build wheel
         env:
@@ -55,10 +61,14 @@ jobs:
       - name: Test wheel
         run: |
           "${PYTHON}" -m pip install google_re2-*.whl
+          # Pivot out of the repository so that we test the wheel.
+          DIR=$(mktemp -d)
+          cp re2_test.py "${DIR}"
+          cd "${DIR}"
           "${PYTHON}" re2_test.py
         shell: bash
         working-directory: python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.3.3
         with:
           name: ${{ hashFiles('python/google_re2-*.whl') }}
           path: python/google_re2-*.whl
@@ -80,25 +90,29 @@ jobs:
       BAZELISK_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BAZEL_CPU: darwin_${{ matrix.arch.bazel-name }}
       PLAT_NAME: macosx-${{ matrix.os }}.0-${{ matrix.arch.python-name }}
+      # Force a specific target version of macOS.
+      # Otherwise, `delocate` renames the wheels!
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os }}.0
       # Stop macOS from reporting the system version as 10.x.
       # Otherwise, Python refuses to install the built wheel!
       SYSTEM_VERSION_COMPAT: 0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.1.7
       # Stash the timestamp for the commit SHA that triggered the workflow.
       - run: echo "timestamp=$(git log -1 --pretty=%ct)" >> "${GITHUB_ENV}"
         shell: bash
-      - uses: p0deje/setup-bazel@0.6.0
+      - uses: bazel-contrib/setup-bazel@0.8.5
         with:
           bazelisk-version: '1.x'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5.1.0
         with:
           python-version: ${{ matrix.ver }}
       - name: Prepare Python ${{ matrix.ver }} environment
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade build wheel delocate
-          python -m pip install --upgrade absl-py
+          python -m pip install --upgrade setuptools build wheel delocate
+          python -m pip install --upgrade absl-py mypy
+          python python/toolchains/generate.py
         shell: bash
       - name: Build wheel
         env:
@@ -112,10 +126,14 @@ jobs:
         name: Test wheel
         run: |
           python -m pip install google_re2-*.whl
+          # Pivot out of the repository so that we test the wheel.
+          DIR=$(mktemp -d)
+          cp re2_test.py "${DIR}"
+          cd "${DIR}"
           python re2_test.py
         shell: bash
         working-directory: python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.3.3
         with:
           name: ${{ hashFiles('python/google_re2-*.whl') }}
           path: python/google_re2-*.whl
@@ -135,11 +153,11 @@ jobs:
       BAZEL_CPU: ${{ matrix.arch.bazel-name }}_windows
       PLAT_NAME: ${{ matrix.arch.python-name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.1.7
       # Stash the timestamp for the commit SHA that triggered the workflow.
       - run: echo "timestamp=$(git log -1 --pretty=%ct)" >> "${GITHUB_ENV}"
         shell: bash
-      - uses: p0deje/setup-bazel@0.6.0
+      - uses: bazel-contrib/setup-bazel@0.8.5
         with:
           bazelisk-version: '1.x'
       # Lowercase the architecture name for `actions/setup-python`.
@@ -147,15 +165,16 @@ jobs:
           ARCHITECTURE=${{ matrix.arch.name }}
           echo "architecture=${ARCHITECTURE,,}" >> "${GITHUB_ENV}"
         shell: bash
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5.1.0
         with:
           python-version: ${{ matrix.ver }}
           architecture: ${{ env.architecture }}
       - name: Prepare Python ${{ matrix.ver }} environment
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade build wheel delvewheel
-          python -m pip install --upgrade absl-py
+          python -m pip install --upgrade setuptools build wheel delvewheel
+          python -m pip install --upgrade absl-py mypy
+          python python/toolchains/generate.py
         shell: bash
       - name: Build wheel
         env:
@@ -168,10 +187,14 @@ jobs:
       - name: Test wheel
         run: |
           python -m pip install google_re2-*.whl
+          # Pivot out of the repository so that we test the wheel.
+          DIR=$(mktemp -d)
+          cp re2_test.py "${DIR}"
+          cd "${DIR}"
           python re2_test.py
         shell: bash
         working-directory: python
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.3.3
         with:
           name: ${{ hashFiles('python/google_re2-*.whl') }}
           path: python/google_re2-*.whl
@@ -181,29 +204,33 @@ jobs:
       - wheel-linux
       - wheel-macos
       - wheel-windows
+    permissions:
+      contents: read
+      # Required for PyPI publishing.
+      id-token: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.1.7
       # Stash the timestamp for the commit SHA that triggered the workflow.
       - run: echo "timestamp=$(git log -1 --pretty=%ct)" >> "${GITHUB_ENV}"
         shell: bash
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5.1.0
         with:
           python-version: '3.x'
       - name: Prepare Python 3.x environment
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --upgrade build wheel
+          python -m pip install --upgrade setuptools build wheel
         shell: bash
-      - if: inputs.build == 1
-        name: Build source
+      - if: inputs.build <= 1 || inputs.force-sdist == true
+        name: Build sdist
         env:
           SOURCE_DATE_EPOCH: ${{ env.timestamp }}
         run: |
           python -m build --sdist
         shell: bash
         working-directory: python
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4.1.7
         with:
           path: python
       - name: Set build number to ${{ inputs.build }}
@@ -219,7 +246,6 @@ jobs:
         shell: bash
         working-directory: python
       - if: inputs.build >= 1
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@v1.9.0
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: python/dist

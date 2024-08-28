@@ -35,14 +35,13 @@
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/template_content_document_fragment.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 class DocumentFragment;
 class TemplateContentDocumentFragment;
 
-enum class DeclarativeShadowRootType {
+enum class DeclarativeShadowRootMode {
   kNone,
   kOpen,
   kClosed,

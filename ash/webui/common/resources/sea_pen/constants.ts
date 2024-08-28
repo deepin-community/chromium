@@ -5,17 +5,18 @@
 import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
 import {getVcBackgroundTemplates, getWallpaperTemplates} from './constants_generated.js';
-import {isSeaPenTextInputEnabled} from './load_time_booleans.js';
 import {SeaPenTemplateChip, SeaPenTemplateId, SeaPenTemplateOption} from './sea_pen_generated.mojom-webui.js';
 
 export type Query = 'Query';
+export const QUERY: Query = 'Query';
 
-/**
- * An interface for the data of a recent sea pen image.
- */
-export interface RecentSeaPenData {
-  url: Url;
-  queryInfo: string;
+// SeaPen images are identified by a positive integer. For a newly generated
+// thumbnail, this is `SeaPenThumbnail.id`.
+export type SeaPenImageId = number;
+
+export interface SeaPenSamplePrompt {
+  prompt: string;
+  preview: Url;
 }
 
 export interface SeaPenOption {
@@ -23,6 +24,8 @@ export interface SeaPenOption {
   value: SeaPenTemplateOption;
   // `translation` is the translated value to be displayed in the UI.
   translation: string;
+  // The preview image url of the option.
+  previewUrl?: string;
 }
 
 export interface SeaPenTemplate {
@@ -40,19 +43,6 @@ export function getSeaPenTemplates(): SeaPenTemplate[] {
   const templates = window.location.origin === 'chrome://personalization' ?
       getWallpaperTemplates() :
       getVcBackgroundTemplates();
-
-  if (isSeaPenTextInputEnabled()) {
-    templates.push({
-      preview: [{
-        url:
-            'chrome://resources/ash/common/sea_pen/sea_pen_images/sea_pen_tile.jpg',
-      }],
-      title: 'Freeform',
-      text: 'Freeform',
-      id: 'Query',
-      options: new Map(),
-    });
-  }
   return templates;
 }
 
@@ -60,9 +50,74 @@ export function getSeaPenTemplates(): SeaPenTemplate[] {
  * Split the template string into an array of strings, where each string is
  * either a literal string or a placeholder for a chip.
  * @example
- * // returns ['A park in ', '<city>', ' in the style of ', '<style>']
+ * // returns ['A park in', '<city>', 'in the style of', '<style>']
  * parseTemplateText('A park in <city> in the style of <style>');
  */
 export function parseTemplateText(template: string): string[] {
-  return template.split(/(<\w+>)/g);
+  return template.split(/(<\w+>)/g)
+      .filter(function(entry) {
+        return entry.trim() != '';
+      })
+      .map(entry => entry.trim());
 }
+
+export const SEA_PEN_SUGGESTIONS: string[] = [
+  'blue',
+  'black',
+  'green',
+  'purple',
+  'red',
+  'yellow',
+  'gray',
+  'brown',
+  'white',
+  'teal',
+  'olive',
+  'cerulean',
+  'beige',
+];
+
+export const SEA_PEN_SAMPLES: SeaPenSamplePrompt[] = [
+  {
+    prompt: 'A fluffy golden retreiver puppy with floppy ears',
+    preview: {
+      url:
+          'chrome://resources/ash/common/sea_pen/sea_pen_images/sea_pen_glowscapes.jpg',
+    },
+  },
+  {
+    prompt: 'A time lapse photo of a bioluminescent beach',
+    preview: {
+      url:
+          'chrome://resources/ash/common/sea_pen/sea_pen_images/sea_pen_dreamscapes.jpg',
+    },
+  },
+  {
+    prompt: 'Sand dunes with abstract shadows at dawn',
+    preview: {
+      url:
+          'chrome://resources/ash/common/sea_pen/sea_pen_images/sea_pen_terrain.jpg',
+    },
+  },
+  {
+    prompt: 'A misty green forest of flowering cactus',
+    preview: {
+      url:
+          'chrome://resources/ash/common/sea_pen/sea_pen_images/sea_pen_surreal.jpg',
+    },
+  },
+  {
+    prompt: 'A beige feathergrass stem on a pink background',
+    preview: {
+      url:
+          'chrome://resources/ash/common/sea_pen/sea_pen_images/sea_pen_art.jpg',
+    },
+  },
+  {
+    prompt: 'A cat riding a unicorn off into the sunset',
+    preview: {
+      url:
+          'chrome://resources/ash/common/sea_pen/sea_pen_images/sea_pen_characters.jpg',
+    },
+  },
+];

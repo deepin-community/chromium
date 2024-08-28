@@ -28,6 +28,8 @@
 #include "ui/accessibility/ax_range.h"
 #include "ui/accessibility/ax_text_attributes.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
+#include "ui/accessibility/platform/ax_platform_node_id.h"
+#include "ui/accessibility/platform/ax_unique_id.h"
 #include "ui/accessibility/platform/child_iterator.h"
 #include "ui/base/buildflags.h"
 
@@ -37,7 +39,7 @@
 
 namespace content {
 class BrowserAccessibilityManager;
-
+class DumpAccessibilityTestBase;
 // A `BrowserAccessibility` object represents one node in the accessibility tree
 // on the browser side. It wraps an `AXNode` and assists in exposing
 // web-specific information from the node. It's owned by a
@@ -456,11 +458,12 @@ class CONTENT_EXPORT BrowserAccessibility : public ui::AXPlatformNodeDelegate {
   // The manager of this tree of accessibility objects. Weak, owns us.
   const raw_ptr<BrowserAccessibilityManager> manager_;
 
+  // A unique ID, needed by some platform APIs, since node IDs are frame-local.
   // Protected so that it can't be called directly on a BrowserAccessibility
   // where it could be confused with an id that comes from the node data,
   // which is only unique to the Blink process.
   // Does need to be called by subclasses such as BrowserAccessibilityAndroid.
-  const ui::AXUniqueId& GetUniqueId() const override;
+  ui::AXPlatformNodeId GetUniqueId() const override;
 
   // Returns a text attribute map indicating the offsets in the text of a leaf
   // object, such as a text field or static text, where spelling and grammar
@@ -474,6 +477,10 @@ class CONTENT_EXPORT BrowserAccessibility : public ui::AXPlatformNodeDelegate {
   // The UIA tree formatter needs access to GetUniqueId() to identify the
   // starting point for tree dumps.
   friend class AccessibilityTreeFormatterUia;
+
+  // DumpAccessibilityTestBase needs to be able to set
+  // ignore_hovered_state_for_testing_ to avoid flaky tests.
+  friend class DumpAccessibilityTestBase;
 
  private:
   // Return the bounds after converting from this node's coordinate system
@@ -531,8 +538,19 @@ class CONTENT_EXPORT BrowserAccessibility : public ui::AXPlatformNodeDelegate {
   // attribute originating from ARIA.
   static bool HasInvalidAttribute(const ui::TextAttributeList& attributes);
 
+  // Disable hover state - needed just to avoid flaky tests.
+  // Accessibility objects can have the "hot tracked" state set when
+  // the mouse is hovering over them, but this makes tests flaky because
+  // the test behaves differently when the mouse happens to be over an
+  // element.  This is a global switch to not use the "hot tracked" state
+  // in a test.
+  static bool ignore_hovered_state_for_testing_;
+
   // A unique ID, since node IDs are frame-local.
-  ui::AXUniqueId unique_id_;
+  // TODO(accessibility) We should be able to get rid of this, because node IDs
+  // are actually local to the renderer process, and each renderer process has
+  // its own OS-level window, which is all the uniqueness we need.
+  const ui::AXUniqueId unique_id_{ui::AXUniqueId::Create()};
 };
 
 }  // namespace content

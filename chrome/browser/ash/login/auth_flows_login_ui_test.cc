@@ -152,6 +152,8 @@ class AuthFlowsLoginRecoverUserTest : public AuthFlowsLoginTestBase {
   base::test::ScopedFeatureList feature_list_;
 };
 
+// ----------------------------------------------------------
+
 IN_PROC_BROWSER_TEST_F(AuthFlowsLoginReauthTest, GaiaPasswordNotChanged) {
   const auto& user = with_gaia_pw_;
 
@@ -288,6 +290,8 @@ IN_PROC_BROWSER_TEST_F(AuthFlowsLoginAddExistingUserTest,
   login_mixin_.WaitForActiveSession();
 }
 
+// ----------------------------------------------------------
+
 IN_PROC_BROWSER_TEST_F(AuthFlowsLoginReauthTest,
                        GaiaPasswordChangedWithRecoveryLocalPassword) {
   const auto& user = with_local_pw_recovery_;
@@ -351,6 +355,8 @@ IN_PROC_BROWSER_TEST_F(AuthFlowsLoginReauthTest, AuthenticateWithRecovery) {
   login_mixin_.WaitForActiveSession();
 }
 
+// ----------------------------------------------------------
+
 IN_PROC_BROWSER_TEST_F(AuthFlowsLoginRecoverUserTest,
                        LocalPasswordWithRecovery) {
   const auto& user = with_local_pw_recovery_;
@@ -370,10 +376,75 @@ IN_PROC_BROWSER_TEST_F(AuthFlowsLoginRecoverUserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(AuthFlowsLoginRecoverUserTest,
-                       LocalPasswordWithRecoveryCancelLAD) {
+                       LocalPasswordWithoutRecoveryCancelLAD) {
   const auto& user = with_local_pw_;
   // Start recovery flow without recovery auth factor.
   TriggerUserOnlineAuth(user, FakeGaiaMixin::kFakeUserPassword);
+
+  // Wait for local data loss warning.
+  test::LocalDataLossWarningPageWaiter()->Wait();
+}
+
+IN_PROC_BROWSER_TEST_F(AuthFlowsLoginRecoverUserTest,
+                       GaiaPasswordWithRecovery) {
+  const auto& user = with_gaia_pw_recovery_;
+
+  // Start recovery flow with recovery auth factor.
+  TriggerUserOnlineAuth(user, test::kNewPassword);
+
+  // Wait for password update dialog.
+  auto pw_updated = test::AwaitPasswordUpdatedUI();
+  pw_updated->ExpectPasswordUpdateState();
+  pw_updated->ConfirmPasswordUpdate();
+
+  login_mixin_.WaitForActiveSession();
+}
+
+IN_PROC_BROWSER_TEST_F(AuthFlowsLoginRecoverUserTest,
+                       GaiaPasswordWithoutRecovery) {
+  const auto& user = with_gaia_pw_;
+
+  // Start recovery flow without recovery auth factor.
+  TriggerUserOnlineAuth(user, test::kWrongPassword);
+
+  auto pw_changed = test::AwaitPasswordChangedUI();
+  pw_changed->TypePreviousPassword(test::kGaiaPassword);
+  pw_changed->SubmitPreviousPassword();
+
+  // Wait for password update dialog.
+  auto pw_updated = test::AwaitPasswordUpdatedUI();
+  pw_updated->ExpectPasswordUpdateState();
+  pw_updated->ConfirmPasswordUpdate();
+
+  login_mixin_.WaitForActiveSession();
+}
+
+IN_PROC_BROWSER_TEST_F(AuthFlowsLoginRecoverUserTest,
+                       GaiaPasswordWithoutRecoveryInvalidPassword) {
+  const auto& user = with_gaia_pw_;
+
+  // Start recovery flow without recovery auth factor.
+  TriggerUserOnlineAuth(user, test::kWrongPassword);
+
+  auto pw_changed = test::AwaitPasswordChangedUI();
+  pw_changed->TypePreviousPassword(test::kWrongPassword);
+  pw_changed->SubmitPreviousPassword();
+
+  // Keep user on passwordChanged screen after incorrect password, display error
+  // message.
+  pw_changed->InvalidPasswordFeedback()->Wait();
+}
+
+IN_PROC_BROWSER_TEST_F(AuthFlowsLoginRecoverUserTest,
+                       GaiaPasswordWithoutRecoveryForgotPasswordClick) {
+  const auto& user = with_gaia_pw_;
+
+  // Start recovery flow without recovery auth factor.
+  TriggerUserOnlineAuth(user, test::kWrongPassword);
+
+  auto pw_changed = test::AwaitPasswordChangedUI();
+  // Clicks on forgot password button.
+  pw_changed->ForgotPreviousPassword();
 
   // Wait for local data loss warning.
   test::LocalDataLossWarningPageWaiter()->Wait();

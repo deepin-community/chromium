@@ -5,15 +5,15 @@
 #ifndef V8_WASM_BASELINE_ARM_LIFTOFF_ASSEMBLER_ARM_INL_H_
 #define V8_WASM_BASELINE_ARM_LIFTOFF_ASSEMBLER_ARM_INL_H_
 
-#include "src/base/v8-fallthrough.h"
 #include "src/codegen/arm/assembler-arm-inl.h"
 #include "src/codegen/arm/register-arm.h"
 #include "src/common/globals.h"
-#include "src/heap/memory-chunk.h"
+#include "src/heap/mutable-page-metadata.h"
 #include "src/wasm/baseline/liftoff-assembler.h"
 #include "src/wasm/baseline/liftoff-register.h"
 #include "src/wasm/baseline/parallel-move-inl.h"
 #include "src/wasm/object-access.h"
+#include "src/wasm/wasm-linkage.h"
 #include "src/wasm/wasm-objects.h"
 
 namespace v8::internal::wasm {
@@ -46,8 +46,6 @@ namespace liftoff {
 //
 static_assert(2 * kSystemPointerSize == LiftoffAssembler::kStackSlotSize,
               "Slot size should be twice the size of the 32 bit pointer.");
-constexpr int kInstanceDataOffset = 2 * kSystemPointerSize;
-constexpr int kFeedbackVectorOffset = 3 * kSystemPointerSize;
 // kPatchInstructionsRequired sets a maximum limit of how many instructions that
 // PatchPrepareStackFrame will use in order to increase the stack appropriately.
 // Three instructions are required to sub a large constant, movw + movt + sub.
@@ -63,7 +61,7 @@ inline MemOperand GetHalfStackSlot(int offset, RegPairHalf half) {
 }
 
 inline MemOperand GetInstanceDataOperand() {
-  return GetStackSlot(kInstanceDataOffset);
+  return GetStackSlot(WasmLiftoffFrameConstants::kInstanceDataOffset);
 }
 
 inline MemOperand GetMemOp(LiftoffAssembler* assm,
@@ -284,6 +282,9 @@ inline void Store(LiftoffAssembler* assm, LiftoffRegister src, MemOperand dst,
   DCHECK(UseScratchRegisterScope{assm}.CanAcquire());
 #endif
   switch (kind) {
+    case kI16:
+      assm->strh(src.gp(), dst);
+      break;
     case kI32:
     case kRefNull:
     case kRef:
@@ -318,6 +319,9 @@ inline void Store(LiftoffAssembler* assm, LiftoffRegister src, MemOperand dst,
 inline void Load(LiftoffAssembler* assm, LiftoffRegister dst, MemOperand src,
                  ValueKind kind) {
   switch (kind) {
+    case kI16:
+      assm->ldrh(dst.gp(), src);
+      break;
     case kI32:
     case kRefNull:
     case kRef:
@@ -471,11 +475,14 @@ int LiftoffAssembler::PrepareStackFrame() {
 }
 
 void LiftoffAssembler::CallFrameSetupStub(int declared_function_index) {
-  // TODO(jkummerow): Enable this check when we have C++20.
-  // static_assert(std::find(std::begin(wasm::kGpParamRegisters),
-  //                         std::end(wasm::kGpParamRegisters),
-  //                         kLiftoffFrameSetupFunctionReg) ==
-  //                         std::end(wasm::kGpParamRegisters));
+// The standard library used by gcc tryjobs does not consider `std::find` to be
+// `constexpr`, so wrap it in a `#ifdef __clang__` block.
+#ifdef __clang__
+  static_assert(std::find(std::begin(wasm::kGpParamRegisters),
+                          std::end(wasm::kGpParamRegisters),
+                          kLiftoffFrameSetupFunctionReg) ==
+                std::end(wasm::kGpParamRegisters));
+#endif
 
   // On ARM, we must push at least {lr} before calling the stub, otherwise
   // it would get clobbered with no possibility to recover it.
@@ -594,7 +601,7 @@ void LiftoffAssembler::AbortCompilation() { AbortedCodeGeneration(); }
 
 // static
 constexpr int LiftoffAssembler::StaticStackFrameSize() {
-  return liftoff::kFeedbackVectorOffset;
+  return WasmLiftoffFrameConstants::kFeedbackVectorOffset;
 }
 
 int LiftoffAssembler::SlotSizeForType(ValueKind kind) {
@@ -674,11 +681,11 @@ void LiftoffAssembler::LoadInstanceDataFromFrame(Register dst) {
   ldr(dst, liftoff::GetInstanceDataOperand());
 }
 
-void LiftoffAssembler::LoadTrustedDataFromInstanceObject(
-    Register dst, Register instance_object) {
-  LoadTaggedPointerFromInstance(
-      dst, instance_object,
-      wasm::ObjectAccess::ToTagged(WasmInstanceObject::kTrustedDataOffset));
+void LiftoffAssembler::LoadTrustedPointer(Register dst, Register src_addr,
+                                          int offset, IndirectPointerTag tag) {
+  static_assert(!V8_ENABLE_SANDBOX_BOOL);
+  static_assert(!COMPRESS_POINTERS_BOOL);
+  ldr(dst, MemOperand{src_addr, offset});
 }
 
 void LiftoffAssembler::LoadFromInstance(Register dst, Register instance,
@@ -702,22 +709,6 @@ void LiftoffAssembler::LoadTaggedPointerFromInstance(Register dst,
                                                      int offset) {
   static_assert(kTaggedSize == kSystemPointerSize);
   ldr(dst, MemOperand{instance, offset});
-}
-
-void LiftoffAssembler::LoadExternalPointer(Register dst, Register src_addr,
-                                           int offset, ExternalPointerTag tag,
-                                           Register scratch) {
-  LoadFullPointer(dst, src_addr, offset);
-}
-
-void LiftoffAssembler::LoadExternalPointer(Register dst, Register src_addr,
-                                           int offset, Register index,
-                                           ExternalPointerTag tag,
-                                           Register scratch) {
-  UseScratchRegisterScope temps(this);
-  MemOperand src_op = liftoff::GetMemOp(this, &temps, src_addr, index, offset,
-                                        kSystemPointerSizeLog2);
-  ldr(dst, src_op);
 }
 
 void LiftoffAssembler::SpillInstanceData(Register instance) {
@@ -945,19 +936,19 @@ void LiftoffAssembler::Store(Register dst_addr, Register offset_reg,
     switch (type.value()) {
       case StoreType::kI64Store8:
         src = src.low();
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       case StoreType::kI32Store8:
         strb(src.gp(), dst_op);
         break;
       case StoreType::kI64Store16:
         src = src.low();
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       case StoreType::kI32Store16:
         strh(src.gp(), dst_op);
         break;
       case StoreType::kI64Store32:
         src = src.low();
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       case StoreType::kI32Store:
         str(src.gp(), dst_op);
         break;
@@ -1059,7 +1050,7 @@ inline void AtomicBinop32(LiftoffAssembler* lasm, Register dst_addr,
       __ LoadConstant(result.high(), WasmValue(0));
       result = result.low();
       value = value.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store8:
       liftoff::AtomicOp32(lasm, dst_addr, offset_reg, offset_imm, value, result,
                           pinned, &Assembler::ldrexb, &Assembler::strexb, op);
@@ -1068,7 +1059,7 @@ inline void AtomicBinop32(LiftoffAssembler* lasm, Register dst_addr,
       __ LoadConstant(result.high(), WasmValue(0));
       result = result.low();
       value = value.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store16:
       liftoff::AtomicOp32(lasm, dst_addr, offset_reg, offset_imm, value, result,
                           pinned, &Assembler::ldrexh, &Assembler::strexh, op);
@@ -1077,7 +1068,7 @@ inline void AtomicBinop32(LiftoffAssembler* lasm, Register dst_addr,
       __ LoadConstant(result.high(), WasmValue(0));
       result = result.low();
       value = value.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store:
       liftoff::AtomicOp32(lasm, dst_addr, offset_reg, offset_imm, value, result,
                           pinned, &Assembler::ldrex, &Assembler::strex, op);
@@ -1397,7 +1388,7 @@ void LiftoffAssembler::AtomicCompareExchange(
       result = result.low();
       new_value = new_value.low();
       expected = expected.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store8:
       load = &Assembler::ldrexb;
       store = &Assembler::strexb;
@@ -1414,7 +1405,7 @@ void LiftoffAssembler::AtomicCompareExchange(
       result = result.low();
       new_value = new_value.low();
       expected = expected.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store16:
       load = &Assembler::ldrexh;
       store = &Assembler::strexh;
@@ -1431,7 +1422,7 @@ void LiftoffAssembler::AtomicCompareExchange(
       result = result.low();
       new_value = new_value.low();
       expected = expected.low();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case StoreType::kI32Store:
       load = &Assembler::ldrex;
       store = &Assembler::strex;
@@ -3747,6 +3738,7 @@ void LiftoffAssembler::emit_i32x4_dot_i8x16_i7x16_add_s(LiftoffRegister dst,
                                                         LiftoffRegister lhs,
                                                         LiftoffRegister rhs,
                                                         LiftoffRegister acc) {
+  DCHECK_NE(dst, acc);
   QwNeonRegister dest = liftoff::GetSimd128Register(dst);
   QwNeonRegister left = liftoff::GetSimd128Register(lhs);
   QwNeonRegister right = liftoff::GetSimd128Register(rhs);
@@ -4434,8 +4426,26 @@ void LiftoffAssembler::emit_f64x2_qfms(LiftoffRegister dst,
   vsub(dst.high_fp(), src3.high_fp(), scratch.high());
 }
 
-void LiftoffAssembler::set_trap_on_oob_mem64(Register index, int oob_shift,
-                                             MemOperand oob_offset) {
+bool LiftoffAssembler::emit_f16x8_splat(LiftoffRegister dst,
+                                        LiftoffRegister src) {
+  return false;
+}
+
+bool LiftoffAssembler::emit_f16x8_extract_lane(LiftoffRegister dst,
+                                               LiftoffRegister lhs,
+                                               uint8_t imm_lane_idx) {
+  return false;
+}
+
+bool LiftoffAssembler::emit_f16x8_replace_lane(LiftoffRegister dst,
+                                               LiftoffRegister src1,
+                                               LiftoffRegister src2,
+                                               uint8_t imm_lane_idx) {
+  return false;
+}
+
+void LiftoffAssembler::set_trap_on_oob_mem64(Register index, uint64_t oob_size,
+                                             uint64_t oob_index) {
   UNREACHABLE();
 }
 
@@ -4764,10 +4774,12 @@ void LiftoffStackSlots::Construct(int param_slots) {
             LiftoffRegister reg =
                 slot.half_ == kLowWord ? src.reg().low() : src.reg().high();
             asm_->push(reg.gp());
-          } break;
+            break;
+          }
           case kI32:
           case kRef:
           case kRefNull:
+          case kRtt:
             asm_->push(src.reg().gp());
             break;
           case kF32:

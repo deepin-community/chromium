@@ -10,12 +10,12 @@ $assert DATATYPE in ["QC8", "QS8", "QD8"]
 
 #include <immintrin.h>
 
-#include <xnnpack/gemm.h>
-#include <xnnpack/intrinsics-polyfill.h>
-#include <xnnpack/math.h>
-#include <xnnpack/unaligned.h>
+#include "xnnpack/gemm.h"
+#include "xnnpack/intrinsics-polyfill.h"
+#include "xnnpack/math.h"
+#include "xnnpack/unaligned.h"
 $if PREFETCH:
-  #include <xnnpack/prefetch.h>
+  #include "xnnpack/prefetch.h"
 
 
 $GFNI = 0
@@ -243,7 +243,7 @@ void xnn_${DATATYPE_SPEC}_igemm_minmax${REQUANTIZATION_SPEC}_ukernel_${MR}x16c8_
       $for M in range(MR):
         vscaled${M}x0123456789ABCDEF = _mm512_min_ps(vscaled${M}x0123456789ABCDEF, voutput_max);
 
-      if(nc >= 16) {
+      if XNN_LIKELY(nc >= 16) {
         $for M in reversed(range(MR)):
           _mm512_storeu_ps(c${M}, vscaled${M}x0123456789ABCDEF);
           c${M} = (float*) ((uintptr_t) c${M} + cn_stride);

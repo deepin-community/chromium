@@ -11,10 +11,8 @@
 #include <cstdint>
 
 #include <gtest/gtest.h>
-
+#include "xnnpack/config.h"
 #include "global-sum-pooling-operator-tester.h"
-
-#include <xnnpack/params.h>
 
 TEST(GLOBAL_SUM_POOLING_NWC_F16, unit_batch_small_width) {
   const struct xnn_gavgpool_config* gavgpool_config = xnn_init_f16_gavgpool_config();

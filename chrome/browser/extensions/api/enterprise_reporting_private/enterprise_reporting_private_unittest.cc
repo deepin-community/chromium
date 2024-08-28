@@ -49,9 +49,10 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 #include <netfw.h>
 #include <shlobj.h>
-#include <windows.h>
 #include <wrl/client.h>
 
 #include "base/test/test_reg_util_win.h"
@@ -654,7 +655,7 @@ class EnterpriseReportingPrivateGetContextPasswordProtectionWarningTrigger
           kPhishingReuse:
         return safe_browsing::PHISHING_REUSE;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return safe_browsing::PASSWORD_PROTECTION_TRIGGER_MAX;
     }
   }
@@ -782,7 +783,7 @@ TEST_P(EnterpriseReportingPrivateGetContextOSFirewallLinuxTest, Test) {
                       "#ENABLED=yes\nLOGLEVEL=yes\nENABLED=yesno\n");
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   enterprise_signals::ScopedUfwConfigPathForTesting scoped_path(
@@ -949,7 +950,7 @@ class EnterpriseReportingPrivateGetContextInfoOSFirewallTest
         return extensions::api::enterprise_reporting_private::SettingValue::
             kEnabled;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         return extensions::api::enterprise_reporting_private::SettingValue::
             kUnknown;
     }

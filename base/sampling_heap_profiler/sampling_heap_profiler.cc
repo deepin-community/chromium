@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/sampling_heap_profiler/sampling_heap_profiler.h"
 
 #include <algorithm>
@@ -9,8 +14,6 @@
 #include <utility>
 
 #include "base/allocator/dispatcher/tls.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim.h"
 #include "base/compiler_specific.h"
 #include "base/debug/stack_trace.h"
 #include "base/feature_list.h"
@@ -24,6 +27,8 @@
 #include "base/threading/thread_local_storage.h"
 #include "base/trace_event/heap_profiler_allocation_context_tracker.h"  // no-presubmit-check
 #include "build/build_config.h"
+#include "partition_alloc/partition_alloc.h"
+#include "partition_alloc/shim/allocator_shim.h"
 
 #if BUILDFLAG(IS_APPLE)
 #include <pthread.h>
@@ -161,18 +166,9 @@ uint32_t SamplingHeapProfiler::Start() {
   }
   unwinder_.store(unwinder);
 
-  auto* poisson_allocation_sampler = PoissonAllocationSampler::Get();
-
-  // Sampling interval is in bytes. Record it in KB since the extra precision
-  // isn't needed for metrics and HeapProfilerController can set the interval to
-  // center around 10M bytes, which would overflow the buckets.
-  base::UmaHistogramCounts10M(
-      "HeapProfiling.SamplingIntervalKB",
-      static_cast<int>(poisson_allocation_sampler->SamplingInterval() / 1024));
-
   AutoLock lock(start_stop_mutex_);
   if (!running_sessions_++)
-    poisson_allocation_sampler->AddSamplesObserver(this);
+    PoissonAllocationSampler::Get()->AddSamplesObserver(this);
   return last_sample_ordinal_;
 }
 
@@ -225,7 +221,7 @@ const void** SamplingHeapProfiler::CaptureStackTrace(const void** frames,
     default:
       // Profiler should not be started if ChooseStackUnwinder() returns
       // anything else.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
@@ -253,7 +249,7 @@ void SamplingHeapProfiler::SampleAdded(void* address,
     // Throw away any non-test samples that were being collected before
     // ScopedMuteHookedSamplesForTesting was enabled. This is done inside the
     // lock to catch any samples that were being collected while
-    // ClearSamplesForTesting is running.
+    // MuteHookedSamplesForTesting is running.
     return;
   }
   RecordString(sample.context);
@@ -336,14 +332,20 @@ void SamplingHeapProfiler::OnThreadNameChanged(const char* name) {
   UpdateAndGetThreadName(name);
 }
 
-void SamplingHeapProfiler::ClearSamplesForTesting() {
-  DCHECK(PoissonAllocationSampler::AreHookedSamplesMuted());
+PoissonAllocationSampler::ScopedMuteHookedSamplesForTesting
+SamplingHeapProfiler::MuteHookedSamplesForTesting() {
+  // Only one ScopedMuteHookedSamplesForTesting can exist at a time.
+  CHECK(!PoissonAllocationSampler::AreHookedSamplesMuted());
+  PoissonAllocationSampler::ScopedMuteHookedSamplesForTesting
+      mute_hooked_samples;
+
   base::AutoLock lock(mutex_);
   samples_.clear();
   // Since hooked samples are muted, any samples that are waiting to take the
   // lock in SampleAdded will be discarded. Tests can now call
   // PoissonAllocationSampler::RecordAlloc with allocator type kManualForTesting
   // to add samples cleanly.
+  return mute_hooked_samples;
 }
 
 }  // namespace base

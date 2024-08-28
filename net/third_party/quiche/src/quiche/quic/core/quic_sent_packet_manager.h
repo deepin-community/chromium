@@ -85,9 +85,6 @@ class QUICHE_EXPORT QuicSentPacketManager {
                                            QuicByteCount /*old_cwnd*/,
                                            QuicByteCount /*new_cwnd*/) {}
 
-    virtual void OnAdjustBurstSize(int /*old_burst_size*/,
-                                   int /*new_burst_size*/) {}
-
     virtual void OnOvershootingDetected() {}
 
     virtual void OnConfigProcessed(const SendParameters& /*parameters*/) {}
@@ -357,10 +354,6 @@ class QUICHE_EXPORT QuicSentPacketManager {
   void EnableMultiplePacketNumberSpacesSupport();
 
   void SetDebugDelegate(DebugDelegate* debug_delegate);
-
-  void SetPacingAlarmGranularity(QuicTime::Delta alarm_granularity) {
-    pacing_sender_.set_alarm_granularity(alarm_granularity);
-  }
 
   QuicPacketNumber GetLargestObserved() const {
     return unacked_packets_.largest_acked();

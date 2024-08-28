@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
@@ -232,6 +234,15 @@ struct MockWriteResult {
   int result;
 };
 
+class SocketDataPrinter {
+ public:
+  ~SocketDataPrinter() = default;
+
+  // Prints the write in |data| using some sort of protocol-specific
+  // format.
+  virtual std::string PrintWrite(const std::string& data) = 0;
+};
+
 // The SocketDataProvider is an interface used by the MockClientSocket
 // for getting data about individual reads and writes on the socket.  Can be
 // used with at most one socket at a time.
@@ -367,7 +378,7 @@ class AsyncSocket {
   // is called to complete the asynchronous read operation.
   // data.async is ignored, and this read is completed synchronously as
   // part of this call.
-  // TODO(rch): this should take a StringPiece since most of the fields
+  // TODO(rch): this should take a std::string_view since most of the fields
   // are ignored.
   virtual void OnReadComplete(const MockRead& data) = 0;
   // If an async IO is pending because the SocketDataProvider returned
@@ -380,15 +391,6 @@ class AsyncSocket {
   // The socket may continue to be used after the data provider is destroyed,
   // so it should be sure not to dereference the provider after this is called.
   virtual void OnDataProviderDestroyed() = 0;
-};
-
-class SocketDataPrinter {
- public:
-  ~SocketDataPrinter() = default;
-
-  // Prints the write in |data| using some sort of protocol-specific
-  // format.
-  virtual std::string PrintWrite(const std::string& data) = 0;
 };
 
 // StaticSocketDataHelper manages a list of reads and writes.
@@ -427,14 +429,17 @@ class StaticSocketDataHelper {
   bool AllReadDataConsumed() const { return read_index() >= read_count(); }
   bool AllWriteDataConsumed() const { return write_index() >= write_count(); }
 
+  void ExpectAllReadDataConsumed(SocketDataPrinter* printer) const;
+  void ExpectAllWriteDataConsumed(SocketDataPrinter* printer) const;
+
  private:
   // Returns the next available read or write that is not a pause event. CHECK
   // fails if no data is available.
   const MockWrite& PeekRealWrite() const;
 
-  const base::span<const MockRead> reads_;
+  const base::raw_span<const MockRead, DanglingUntriaged> reads_;
   size_t read_index_ = 0;
-  const base::span<const MockWrite> writes_;
+  const base::raw_span<const MockWrite, DanglingUntriaged> writes_;
   size_t write_index_ = 0;
 };
 
@@ -532,7 +537,6 @@ struct SSLSocketDataProvider {
   std::optional<HostPortPair> expected_host_and_port;
   std::optional<bool> expected_ignore_certificate_errors;
   std::optional<NetworkAnonymizationKey> expected_network_anonymization_key;
-  std::optional<bool> expected_disable_sha1_server_signatures;
   std::optional<std::vector<uint8_t>> expected_ech_config_list;
 
   bool is_connect_data_consumed = false;
@@ -570,6 +574,10 @@ class SequencedSocketData : public SocketDataProvider {
   bool AllWriteDataConsumed() const override;
   bool IsIdle() const override;
   void CancelPendingRead() override;
+
+  // EXPECTs that all data has been consumed, printing any un-consumed data.
+  void ExpectAllReadDataConsumed() const;
+  void ExpectAllWriteDataConsumed() const;
 
   // An ASYNC read event with a return value of ERR_IO_PENDING will cause the
   // socket data to pause at that event, and advance no further, until Resume is
@@ -926,7 +934,7 @@ class MockSSLClientSocket : public AsyncSocket, public SSLClientSocket {
   int GetPeerAddress(IPEndPoint* address) const override;
   int GetLocalAddress(IPEndPoint* address) const override;
   NextProto GetNegotiatedProtocol() const override;
-  std::optional<base::StringPiece> GetPeerApplicationSettings() const override;
+  std::optional<std::string_view> GetPeerApplicationSettings() const override;
   bool GetSSLInfo(SSLInfo* ssl_info) override;
   void GetSSLCertRequestInfo(
       SSLCertRequestInfo* cert_request_info) const override;
@@ -937,9 +945,9 @@ class MockSSLClientSocket : public AsyncSocket, public SSLClientSocket {
   int SetSendBufferSize(int32_t size) override;
 
   // SSLSocket implementation.
-  int ExportKeyingMaterial(base::StringPiece label,
+  int ExportKeyingMaterial(std::string_view label,
                            bool has_context,
-                           base::StringPiece context,
+                           std::string_view context,
                            unsigned char* out,
                            unsigned int outlen) override;
 

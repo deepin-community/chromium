@@ -205,6 +205,9 @@ class ArcSessionManagerTest : public MixinBasedInProcessBrowserTest {
   }
 
   void EnableArc() {
+    session_manager::SessionManager::Get()
+        ->HandleUserSessionStartUpTaskCompleted();
+
     PrefService* const prefs = profile()->GetPrefs();
     prefs->SetBoolean(prefs::kArcEnabled, true);
     base::RunLoop().RunUntilIdle();
@@ -283,7 +286,7 @@ IN_PROC_BROWSER_TEST_F(ArcSessionManagerTest, ArcDisabledInLockedFullscreen) {
   scoped_refptr<const extensions::Extension> extension(
       extensions::ExtensionBuilder("Test")
           .SetID("pmgljoohajacndjcjlajcopidgnhphcl")
-          .AddPermission("lockWindowFullscreenPrivate")
+          .AddAPIPermission("lockWindowFullscreenPrivate")
           .Build());
   function->set_extension(extension.get());
 

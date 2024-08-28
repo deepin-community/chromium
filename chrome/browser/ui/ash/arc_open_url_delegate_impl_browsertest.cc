@@ -23,7 +23,6 @@
 #include "chrome/browser/ui/web_applications/test/web_app_navigation_browsertest.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -151,8 +150,8 @@ IN_PROC_BROWSER_TEST_F(ArcOpenUrlDelegateImplWebAppBrowserTest,
   const GURL app_url = https_server().GetURL(GetAppUrlHost(), GetAppUrlPath());
 
   // InstallTestWebApp() but with a ShareTarget definition added.
-  auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-  web_app_info->start_url = app_url;
+  auto web_app_info =
+      web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
   web_app_info->scope =
       https_server().GetURL(GetAppUrlHost(), GetAppScopePath());
   web_app_info->title = base::UTF8ToUTF16(GetAppName());
@@ -248,10 +247,11 @@ class TestSettingsWindowManager : public chrome::SettingsWindowManager {
  public:
   void ShowChromePageForProfile(Profile* profile,
                                 const GURL& gurl,
-                                int64_t display_id) override {
+                                int64_t display_id,
+                                apps::LaunchCallback callback) override {
     last_navigation_url_ = gurl;
-    chrome::SettingsWindowManager::ShowChromePageForProfile(profile, gurl,
-                                                            display_id);
+    chrome::SettingsWindowManager::ShowChromePageForProfile(
+        profile, gurl, display_id, std::move(callback));
   }
   const GURL& last_navigation_url() { return last_navigation_url_; }
 

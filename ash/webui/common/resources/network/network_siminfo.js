@@ -19,8 +19,8 @@ import './sim_lock_dialogs.js';
 import {I18nBehavior} from '//resources/ash/common/i18n_behavior.js';
 import {loadTimeData} from '//resources/ash/common/load_time_data.m.js';
 import {isActiveSim} from '//resources/ash/common/network/cellular_utils.js';
+import {GlobalPolicy} from '//resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 import {Polymer} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {GlobalPolicy} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 
 import {getTemplate} from './network_siminfo.html.js';
 import {OncMojo} from './onc_mojo.js';
@@ -124,14 +124,6 @@ Polymer({
       value: false,
       computed: 'computeIsSimPinLockRestricted_(globalPolicy,' +
           'globalPolicy.*, lockEnabled_)',
-    },
-
-    isCellularCarrierLockEnabled_: {
-      type: Boolean,
-      value() {
-        return loadTimeData.valueExists('isCellularCarrierLockEnabled') &&
-            loadTimeData.getBoolean('isCellularCarrierLockEnabled');
-      },
     },
   },
 
@@ -337,10 +329,6 @@ Polymer({
    * @private
    */
   isSimCarrierLocked_() {
-    if (!this.isCellularCarrierLockEnabled_) {
-      return false;
-    }
-
     const simLockStatus = this.deviceState && this.deviceState.simLockStatus;
 
     if (this.isActiveSim_ && simLockStatus &&

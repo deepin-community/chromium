@@ -21,7 +21,7 @@
 
 namespace autofill {
 class AddressAccessoryController;
-class CreditCardAccessoryController;
+class PaymentMethodAccessoryController;
 }  // namespace autofill
 
 class PasswordAccessoryController;
@@ -39,11 +39,10 @@ class ManualFillingControllerImpl
   ~ManualFillingControllerImpl() override;
 
   // ManualFillingController:
-  void RefreshSuggestions(
-      const autofill::AccessorySheetData& accessory_sheet_data) override;
   void NotifyFocusedInputChanged(
       autofill::FieldRendererId focused_field_id,
       autofill::mojom::FocusedFieldType focused_field_type) override;
+  autofill::FieldGlobalId GetLastFocusedFieldId() const override;
   void UpdateSourceAvailability(FillingSource source,
                                 bool has_suggestions) override;
   void Hide() override;
@@ -77,7 +76,8 @@ class ManualFillingControllerImpl
       content::WebContents* web_contents,
       base::WeakPtr<PasswordAccessoryController> pwd_controller,
       base::WeakPtr<autofill::AddressAccessoryController> address_controller,
-      base::WeakPtr<autofill::CreditCardAccessoryController> cc_controller,
+      base::WeakPtr<autofill::PaymentMethodAccessoryController>
+          payment_method_controller,
       std::unique_ptr<ManualFillingViewInterface> test_view);
 
 #if defined(UNIT_TEST)
@@ -105,7 +105,8 @@ class ManualFillingControllerImpl
       content::WebContents* web_contents,
       base::WeakPtr<PasswordAccessoryController> pwd_controller,
       base::WeakPtr<autofill::AddressAccessoryController> address_controller,
-      base::WeakPtr<autofill::CreditCardAccessoryController> cc_controller,
+      base::WeakPtr<autofill::PaymentMethodAccessoryController>
+          payment_method_controller,
       std::unique_ptr<ManualFillingViewInterface> view);
 
   // MemoryDumpProvider:
@@ -145,9 +146,6 @@ class ManualFillingControllerImpl
   // This set contains sources to be shown to the user.
   base::flat_set<FillingSource> available_sources_;
 
-  // This map contains sheets for each sources to be shown to the user.
-  base::flat_map<FillingSource, autofill::AccessorySheetData> available_sheets_;
-
   // The unique renderer ID of the last known selected field.
   autofill::FieldGlobalId last_focused_field_id_;
 
@@ -159,7 +157,8 @@ class ManualFillingControllerImpl
   // associated data.
   base::WeakPtr<PasswordAccessoryController> pwd_controller_;
   base::WeakPtr<autofill::AddressAccessoryController> address_controller_;
-  base::WeakPtr<autofill::CreditCardAccessoryController> cc_controller_;
+  base::WeakPtr<autofill::PaymentMethodAccessoryController>
+      payment_method_controller_;
 
   // Hold the native instance of the view. Must be last declared and initialized
   // member so the view can be created in the constructor with a fully set up

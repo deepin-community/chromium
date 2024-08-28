@@ -71,8 +71,6 @@ class ThreadedWorkletThreadForTest : public WorkerThread {
     return *worklet_thread_holder->GetThread();
   }
 
-  void ClearWorkerBackingThread() override {}
-
   static void EnsureSharedBackingThread() {
     DCHECK(IsMainThread());
     WorkletThreadHolder<ThreadedWorkletThreadForTest>::EnsureInstance(
@@ -252,8 +250,7 @@ class ThreadedWorkletTest : public testing::Test {
     page_ = std::make_unique<DummyPageHolder>();
     KURL url("https://example.com/");
     page_->GetFrame().Loader().CommitNavigation(
-        WebNavigationParams::CreateWithHTMLBufferForTesting(
-            SharedBuffer::Create(), url),
+        WebNavigationParams::CreateWithEmptyHTMLForTesting(url),
         nullptr /* extra_data */);
     blink::test::RunPendingTasks();
     ASSERT_EQ(url.GetString(), GetDocument().Url().GetString());

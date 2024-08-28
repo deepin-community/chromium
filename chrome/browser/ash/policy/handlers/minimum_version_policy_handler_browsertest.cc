@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler.h"
+
 #include <optional>
 #include <string>
 
@@ -21,7 +23,7 @@
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/app_mode/kiosk_launch_controller.h"
+#include "chrome/browser/ash/app_mode/kiosk_test_helper.h"
 #include "chrome/browser/ash/login/app_mode/test/kiosk_apps_mixin.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
@@ -37,7 +39,6 @@
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
-#include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler_delegate_impl.h"
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_test_helpers.h"
 #include "chrome/browser/browser_process.h"
@@ -888,7 +889,7 @@ class MinimumVersionKioskAutoLoginTest : public MinimumVersionExistingUserTest {
 
  private:
   base::AutoReset<bool> block_kiosk_launcher_exit_on_failure_ =
-      ash::KioskLaunchController::BlockExitOnFailureForTesting();
+      ash::KioskTestHelper::BlockExitOnFailure();
 };
 
 // Checks kiosk auto launch is not blocked even if immediate update is required

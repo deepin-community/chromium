@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/loader/fetch/response_body_loader.h"
 
 #include <algorithm>
@@ -234,7 +239,7 @@ class ResponseBodyLoader::DelegatingBytesConsumer final
     if (has_pending_state_change_signal_) {
       switch (state_) {
         case State::kLoading:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           break;
         case State::kDone:
           loader_->DidFinishLoadingBody();
@@ -589,7 +594,7 @@ void ResponseBodyLoader::OnStateChange() {
 
   size_t num_bytes_consumed = 0;
   while (!aborted_ && (!IsSuspended() || IsSuspendedForBackForwardCache())) {
-    const uint32_t chunk_size = network::features::GetLoaderChunkSize();
+    const size_t chunk_size = network::features::GetLoaderChunkSize();
     if (chunk_size == num_bytes_consumed) {
       // We've already consumed many bytes in this task. Defer the remaining
       // to the next task.

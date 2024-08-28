@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/inspector/node_content_visibility_state.h"
 #include "third_party/blink/renderer/core/inspector/protocol/overlay.h"
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
+#include "third_party/blink/renderer/core/layout/flex/devtools_flex_info.h"
 #include "third_party/blink/renderer/core/layout/flex/layout_flexible_box.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_offset.h"
 #include "third_party/blink/renderer/core/layout/grid/layout_grid.h"
@@ -73,50 +74,49 @@ class PathBuilder {
 
  private:
   static void AppendPathElement(void* path_builder,
-                                const PathElement* path_element) {
+                                const PathElement& path_element) {
     static_cast<PathBuilder*>(path_builder)->AppendPathElement(path_element);
   }
 
-  void AppendPathElement(const PathElement*);
+  void AppendPathElement(const PathElement&);
   void AppendPathCommandAndPoints(const char* command,
-                                  const gfx::PointF points[],
-                                  size_t length);
+                                  base::span<const gfx::PointF> points);
 
   std::unique_ptr<protocol::ListValue> path_;
 };
 
-void PathBuilder::AppendPathCommandAndPoints(const char* command,
-                                             const gfx::PointF points[],
-                                             size_t length) {
+void PathBuilder::AppendPathCommandAndPoints(
+    const char* command,
+    base::span<const gfx::PointF> points) {
   path_->pushValue(protocol::StringValue::create(command));
-  for (size_t i = 0; i < length; i++) {
-    gfx::PointF point = TranslatePoint(points[i]);
+  for (const auto& orig_point : points) {
+    gfx::PointF point = TranslatePoint(orig_point);
     path_->pushValue(protocol::FundamentalValue::create(point.x()));
     path_->pushValue(protocol::FundamentalValue::create(point.y()));
   }
 }
 
-void PathBuilder::AppendPathElement(const PathElement* path_element) {
-  switch (path_element->type) {
+void PathBuilder::AppendPathElement(const PathElement& path_element) {
+  switch (path_element.type) {
     // The points member will contain 1 value.
     case kPathElementMoveToPoint:
-      AppendPathCommandAndPoints("M", path_element->points, 1);
+      AppendPathCommandAndPoints("M", path_element.points);
       break;
     // The points member will contain 1 value.
     case kPathElementAddLineToPoint:
-      AppendPathCommandAndPoints("L", path_element->points, 1);
+      AppendPathCommandAndPoints("L", path_element.points);
       break;
     // The points member will contain 3 values.
     case kPathElementAddCurveToPoint:
-      AppendPathCommandAndPoints("C", path_element->points, 3);
+      AppendPathCommandAndPoints("C", path_element.points);
       break;
     // The points member will contain 2 values.
     case kPathElementAddQuadCurveToPoint:
-      AppendPathCommandAndPoints("Q", path_element->points, 2);
+      AppendPathCommandAndPoints("Q", path_element.points);
       break;
     // The points member will contain no values.
     case kPathElementCloseSubpath:
-      AppendPathCommandAndPoints("Z", nullptr, 0);
+      AppendPathCommandAndPoints("Z", path_element.points);
       break;
   }
 }
@@ -365,12 +365,18 @@ std::unique_ptr<protocol::DictionaryValue> BuildElementInfo(Element* element) {
     }
   }
   if (pseudo_element) {
-    if (pseudo_element->GetPseudoId() == kPseudoIdBefore)
+    if (pseudo_element->GetPseudoId() == kPseudoIdBefore) {
       class_names.Append("::before");
-    else if (pseudo_element->GetPseudoId() == kPseudoIdAfter)
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdAfter) {
       class_names.Append("::after");
-    else if (pseudo_element->GetPseudoId() == kPseudoIdMarker)
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdMarker) {
       class_names.Append("::marker");
+    } else if (pseudo_element->GetPseudoIdForStyling() ==
+               kPseudoIdScrollMarkerGroup) {
+      class_names.Append("::scroll-marker-group");
+    } else if (pseudo_element->GetPseudoId() == kPseudoIdScrollMarker) {
+      class_names.Append("::scroll-marker");
+    }
   }
   if (!class_names.empty())
     element_info->setString("className", class_names.ToString());
@@ -852,7 +858,7 @@ bool IsLayoutNGFlexibleBox(const LayoutObject& layout_object) {
 bool IsLayoutNGFlexItem(const LayoutObject& layout_object) {
   return !layout_object.GetNode()->IsDocumentNode() &&
          IsLayoutNGFlexibleBox(*layout_object.Parent()) &&
-         To<LayoutBox>(layout_object).IsFlexItemIncludingNG();
+         To<LayoutBox>(layout_object).IsFlexItem();
 }
 
 std::unique_ptr<protocol::DictionaryValue> BuildAreaNamePaths(
@@ -860,7 +866,7 @@ std::unique_ptr<protocol::DictionaryValue> BuildAreaNamePaths(
     float scale,
     const Vector<LayoutUnit>& rows,
     const Vector<LayoutUnit>& columns) {
-  auto* grid = To<LayoutGrid>(node->GetLayoutObject());
+  const auto* grid = To<LayoutGrid>(node->GetLayoutObject());
   LocalFrameView* containing_view = node->GetDocument().View();
   bool is_rtl = !grid->StyleRef().IsLeftToRightDirection();
 
@@ -874,9 +880,8 @@ std::unique_ptr<protocol::DictionaryValue> BuildAreaNamePaths(
   LayoutUnit row_gap = grid->GridGap(kForRows);
   LayoutUnit column_gap = grid->GridGap(kForColumns);
 
-  std::optional<NamedGridAreaMap> named_area_map =
-      grid->CachedPlacementData().line_resolver.NamedAreasMap();
-  if (named_area_map) {
+  if (const NamedGridAreaMap* named_area_map =
+          grid->CachedPlacementData().line_resolver.NamedAreasMap()) {
     for (const auto& item : *named_area_map) {
       const GridArea& area = item.value;
       const String& name = item.key;
@@ -1221,12 +1226,13 @@ std::unique_ptr<protocol::DictionaryValue> BuildFlexItemInfo(
   Length base_size = Length::Auto();
 
   const Length& flex_basis = layout_object->StyleRef().FlexBasis();
-  const Length& size = is_horizontal ? layout_object->StyleRef().UsedWidth()
-                                     : layout_object->StyleRef().UsedHeight();
+  const Length& size = is_horizontal ? layout_object->StyleRef().Width()
+                                     : layout_object->StyleRef().Height();
 
   if (flex_basis.IsFixed()) {
     base_size = flex_basis;
   } else if (flex_basis.IsAuto() && size.IsFixed()) {
+    // TODO(https://crbug.com/313072): 'flex-basis' should support calc-size()
     base_size = size;
   }
 
@@ -1808,7 +1814,9 @@ void InspectorHighlight::VisitAndCollectDistanceInfo(Node* node) {
         VisitAndCollectDistanceInfo(element->GetPseudoId(), layout_object);
     } else {
       for (PseudoId pseudo_id :
-           {kPseudoIdFirstLetter, kPseudoIdBefore, kPseudoIdAfter}) {
+           {kPseudoIdFirstLetter, kPseudoIdScrollMarkerGroupBefore,
+            kPseudoIdBefore, kPseudoIdAfter, kPseudoIdScrollMarkerGroupAfter,
+            kPseudoIdScrollMarker}) {
         if (Node* pseudo_node = element->GetPseudoElement(pseudo_id))
           VisitAndCollectDistanceInfo(pseudo_node);
       }

@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/dns/record_rdata.h"
 
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/big_endian.h"
@@ -24,9 +30,9 @@ using ::testing::IsNull;
 using ::testing::NotNull;
 using ::testing::SizeIs;
 
-base::StringPiece MakeStringPiece(const uint8_t* data, unsigned size) {
+std::string_view MakeStringPiece(const uint8_t* data, unsigned size) {
   const char* data_cc = reinterpret_cast<const char*>(data);
-  return base::StringPiece(data_cc, size);
+  return std::string_view(data_cc, size);
 }
 
 TEST(RecordRdataTest, ParseSrvRecord) {
@@ -45,9 +51,8 @@ TEST(RecordRdataTest, ParseSrvRecord) {
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
   const unsigned first_record_len = 22;
-  base::StringPiece record1_strpiece = MakeStringPiece(
-      record, first_record_len);
-  base::StringPiece record2_strpiece = MakeStringPiece(
+  std::string_view record1_strpiece = MakeStringPiece(record, first_record_len);
+  std::string_view record2_strpiece = MakeStringPiece(
       record + first_record_len, sizeof(record) - first_record_len);
 
   std::unique_ptr<SrvRecordRdata> record1_obj =
@@ -81,7 +86,7 @@ TEST(RecordRdataTest, ParseARecord) {
   };
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<ARecordRdata> record_obj =
       ARecordRdata::Create(record_strpiece, parser);
@@ -102,7 +107,7 @@ TEST(RecordRdataTest, ParseAAAARecord) {
   };
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<AAAARecordRdata> record_obj =
       AAAARecordRdata::Create(record_strpiece, parser);
@@ -121,7 +126,7 @@ TEST(RecordRdataTest, ParseCnameRecord) {
                             'g',  'l', 'e', 0x03, 'c',  'o', 'm', 0x00};
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<CnameRecordRdata> record_obj =
       CnameRecordRdata::Create(record_strpiece, parser);
@@ -140,7 +145,7 @@ TEST(RecordRdataTest, ParsePtrRecord) {
                             'g',  'l', 'e', 0x03, 'c',  'o', 'm', 0x00};
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<PtrRecordRdata> record_obj =
       PtrRecordRdata::Create(record_strpiece, parser);
@@ -159,7 +164,7 @@ TEST(RecordRdataTest, ParseTxtRecord) {
                             'g',  'l', 'e', 0x03, 'c',  'o', 'm'};
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<TxtRecordRdata> record_obj =
       TxtRecordRdata::Create(record_strpiece, parser);
@@ -184,7 +189,7 @@ TEST(RecordRdataTest, ParseNsecRecord) {
                             'm',  0x00, 0x00, 0x02, 0x40, 0x01};
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<NsecRecordRdata> record_obj =
       NsecRecordRdata::Create(record_strpiece, parser);
@@ -210,7 +215,7 @@ TEST(RecordRdataTest, CreateNsecRecordWithEmptyBitmapReturnsNull) {
                             'l',  'e', 0x03, 'c', 'o',  'm', 0x00, 0x00, 0x00};
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<NsecRecordRdata> record_obj =
       NsecRecordRdata::Create(record_strpiece, parser);
@@ -230,7 +235,7 @@ TEST(RecordRdataTest, CreateNsecRecordWithOversizedBitmapReturnsNull) {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
   DnsRecordParser parser(record, sizeof(record), 0, /*num_records=*/0);
-  base::StringPiece record_strpiece = MakeStringPiece(record, sizeof(record));
+  std::string_view record_strpiece = MakeStringPiece(record, sizeof(record));
 
   std::unique_ptr<NsecRecordRdata> record_obj =
       NsecRecordRdata::Create(record_strpiece, parser);

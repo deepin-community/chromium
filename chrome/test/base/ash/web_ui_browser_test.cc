@@ -23,6 +23,7 @@
 #include "base/test/test_switches.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
+#include "chrome/browser/ash/crosapi/browser_util.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -337,7 +338,7 @@ class MockWebUIDataSource : public content::URLDataSource {
   std::string GetContentSecurityPolicy(
       const network::mojom::CSPDirectiveName directive) override {
     if (directive == network::mojom::CSPDirectiveName::ScriptSrc) {
-      return "script-src chrome://resources 'self';";
+      return "script-src chrome://resources chrome://webui-test 'self';";
     } else if (directive ==
                    network::mojom::CSPDirectiveName::RequireTrustedTypesFor ||
                directive == network::mojom::CSPDirectiveName::TrustedTypes) {
@@ -394,7 +395,7 @@ void BaseWebUIBrowserTest::SetUpOnMainThread() {
   if (crosapi::browser_util::IsLacrosEnabled() && browser() == nullptr) {
     // Create a new Ash browser window so test code using browser() can work
     // even when Lacros is the only browser.
-    // TODO(crbug.com/1450158): Remove uses of browser() from such tests.
+    // TODO(crbug.com/40270051): Remove uses of browser() from such tests.
     chrome::NewEmptyWindow(ProfileManager::GetActiveUserProfile());
     SelectFirstBrowser();
   }

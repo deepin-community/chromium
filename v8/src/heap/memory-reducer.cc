@@ -61,7 +61,7 @@ void MemoryReducer::TimerTask::RunInternal() {
       false,
       low_allocation_rate || optimize_for_memory,
       heap->incremental_marking()->IsStopped() &&
-          heap->incremental_marking()->CanBeStarted(),
+          heap->incremental_marking()->CanAndShouldBeStarted(),
   };
   memory_reducer_->NotifyTimer(event);
 }
@@ -228,7 +228,6 @@ void MemoryReducer::TearDown() { state_ = State::CreateUninitialized(); }
 
 // static
 int MemoryReducer::MaxNumberOfGCs() {
-  if (v8_flags.memory_reducer_single_gc) return 1;
   DCHECK_GT(v8_flags.memory_reducer_gc_count, 0);
   return v8_flags.memory_reducer_gc_count;
 }

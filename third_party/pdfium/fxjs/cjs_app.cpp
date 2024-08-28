@@ -320,7 +320,7 @@ CJS_Result CJS_App::setInterval(CJS_Runtime* pRuntime,
     return CJS_Result::Failure(JSMessage::kBadObjectError);
 
   auto* pJS_TimerObj = static_cast<CJS_TimerObj*>(
-      CFXJS_Engine::GetObjectPrivate(pRuntime->GetIsolate(), pRetObj));
+      CFXJS_Engine::GetBinding(pRuntime->GetIsolate(), pRetObj));
 
   pJS_TimerObj->SetTimer(pTimerRef);
   return CJS_Result::Success(pRetObj);
@@ -348,7 +348,7 @@ CJS_Result CJS_App::setTimeOut(CJS_Runtime* pRuntime,
     return CJS_Result::Failure(JSMessage::kBadObjectError);
 
   auto* pJS_TimerObj = static_cast<CJS_TimerObj*>(
-      CFXJS_Engine::GetObjectPrivate(pRuntime->GetIsolate(), pRetObj));
+      CFXJS_Engine::GetBinding(pRuntime->GetIsolate(), pRetObj));
 
   pJS_TimerObj->SetTimer(pTimerRef);
   return CJS_Result::Success(pRetObj);
@@ -499,10 +499,11 @@ CJS_Result CJS_App::browseForDoc(CJS_Runtime* pRuntime,
 }
 
 WideString CJS_App::SysPathToPDFPath(const WideString& sOldPath) {
-  WideString sRet = L"/";
+  auto sRet = WideString::FromASCII("/");
   for (const wchar_t& c : sOldPath) {
-    if (c != L':')
+    if (c != L':') {
       sRet += (c == L'\\') ? L'/' : c;
+    }
   }
   return sRet;
 }
@@ -527,7 +528,7 @@ CJS_Result CJS_App::response(CJS_Runtime* pRuntime,
     return CJS_Result::Failure(JSMessage::kParamError);
 
   WideString swQuestion = pRuntime->ToWideString(newParams[0]);
-  WideString swTitle = L"PDF";
+  auto swTitle = WideString::FromASCII("PDF");
   if (IsExpandedParamKnown(newParams[1]))
     swTitle = pRuntime->ToWideString(newParams[1]);
 

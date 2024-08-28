@@ -3,10 +3,11 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
-#include "space-to-depth-operator-tester.h"
+#include <cstddef>
+#include <cstdint>
 
 #include <gtest/gtest.h>
-
+#include "space-to-depth-operator-tester.h"
 
 TEST(SPACE_TO_DEPTH_NHWC_X8, one_output_pixel) {
   size_t block_size = 3;

@@ -312,7 +312,7 @@ export class ProtocolMonitorDataGrid extends Common.ObjectWrapper.eventMixin<Eve
                   splitWidget.toggleSidebar();
                 }
                 this.dispatchEventToListeners(Events.CommandChange, {command, parameters, targetId});
-              });
+              }, {jslogContext: 'edit-and-resend', disabled: typeColumn.title !== 'sent'});
 
               /**
                * You can click the "Filter" item in the context menu to filter the
@@ -322,7 +322,7 @@ export class ProtocolMonitorDataGrid extends Common.ObjectWrapper.eventMixin<Eve
               menu.editSection().appendItem(i18nString(UIStrings.filter), () => {
                 const methodColumn = DataGrid.DataGridUtils.getRowEntryForColumnId(row, 'method');
                 this.textFilterUI.setValue(`method:${methodColumn.value}`, true);
-              });
+              }, {jslogContext: 'filter'});
 
               /**
                * You can click the "Documentation" item in the context menu to be
@@ -333,11 +333,11 @@ export class ProtocolMonitorDataGrid extends Common.ObjectWrapper.eventMixin<Eve
                   return;
                 }
                 const [domain, method] = String(methodColumn.value).split('.');
-                const type = typeColumn.value === 'sent' ? 'method' : 'event';
+                const type = typeColumn.title === 'sent' ? 'method' : 'event';
                 Host.InspectorFrontendHost.InspectorFrontendHostInstance.openInNewTab(
                     `https://chromedevtools.github.io/devtools-protocol/tot/${domain}#${type}-${method}` as
                     Platform.DevToolsPath.UrlString);
-              });
+              }, {jslogContext: 'documentation'});
             },
       },
     };
@@ -371,9 +371,8 @@ export class ProtocolMonitorDataGrid extends Common.ObjectWrapper.eventMixin<Eve
     this.filterParser = new TextUtils.TextUtils.FilterParser(keys);
     this.suggestionBuilder = new UI.FilterSuggestionBuilder.FilterSuggestionBuilder(keys);
 
-    this.textFilterUI = new UI.Toolbar.ToolbarInput(
-        i18nString(UIStrings.filter), '', 1, .2, '', this.suggestionBuilder.completions.bind(this.suggestionBuilder),
-        true, 'filter');
+    this.textFilterUI = new UI.Toolbar.ToolbarFilter(
+        undefined, 1, .2, '', this.suggestionBuilder.completions.bind(this.suggestionBuilder), true, 'filter');
     this.textFilterUI.addEventListener(UI.Toolbar.ToolbarInput.Event.TextChanged, event => {
       const query = event.data as string;
       const filters = this.filterParser.parse(query);
@@ -783,7 +782,7 @@ export class EditorWidget extends Common.ObjectWrapper.eventMixin<EventTypes, ty
   readonly jsonEditor: Components.JSONEditor.JSONEditor;
   constructor() {
     super();
-    this.element.setAttribute('jslog', `${VisualLogging.pane('command-editor')}`);
+    this.element.setAttribute('jslog', `${VisualLogging.pane('command-editor').track({resize: true})}`);
     this.jsonEditor = new Components.JSONEditor.JSONEditor();
     this.jsonEditor.metadataByCommand = metadataByCommand;
     this.jsonEditor.typesByName = typesByName as Map<string, Components.JSONEditor.Parameter[]>;

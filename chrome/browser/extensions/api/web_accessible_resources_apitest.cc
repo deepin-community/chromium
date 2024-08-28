@@ -7,6 +7,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/version_info/channel.h"
@@ -199,9 +201,11 @@ IN_PROC_BROWSER_TEST_F(WebAccessibleResourcesApiTest,
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
 }
 
-class WebAccessibleResourcesDynamicUrlApiTest : public ExtensionApiTest {
+// Useful for testing web accessible resources loaded from a content script.
+class WebAccessibleResourcesDynamicUrlScriptingApiTest
+    : public ExtensionApiTest {
  public:
-  WebAccessibleResourcesDynamicUrlApiTest() {
+  WebAccessibleResourcesDynamicUrlScriptingApiTest() {
     feature_list_.InitAndEnableFeature(
         extensions_features::kExtensionDynamicURLRedirection);
   }
@@ -299,7 +303,8 @@ class WebAccessibleResourcesDynamicUrlApiTest : public ExtensionApiTest {
 };
 
 // Load dynamic web accessible resource from a content script.
-IN_PROC_BROWSER_TEST_F(WebAccessibleResourcesDynamicUrlApiTest, ContentScript) {
+IN_PROC_BROWSER_TEST_F(WebAccessibleResourcesDynamicUrlScriptingApiTest,
+                       ContentScript) {
   static constexpr char kManifest[] = R"(
     "content_scripts": [
       {
@@ -319,7 +324,8 @@ IN_PROC_BROWSER_TEST_F(WebAccessibleResourcesDynamicUrlApiTest, ContentScript) {
 }
 
 // Load dynamic web accessible resources via chrome.scripting.executeScript().
-IN_PROC_BROWSER_TEST_F(WebAccessibleResourcesDynamicUrlApiTest, ExecuteScript) {
+IN_PROC_BROWSER_TEST_F(WebAccessibleResourcesDynamicUrlScriptingApiTest,
+                       ExecuteScript) {
   // Load extension.
   WriteFile(FILE_PATH_LITERAL("worker.js"), "// Intentionally blank.");
   static constexpr char kManifest[] = R"(

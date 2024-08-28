@@ -11,10 +11,12 @@
 #include "components/permissions/contexts/clipboard_read_write_permission_context.h"
 #include "components/permissions/contexts/clipboard_sanitized_write_permission_context.h"
 #include "components/permissions/contexts/geolocation_permission_context.h"
+#include "components/permissions/contexts/keyboard_lock_permission_context.h"
 #include "components/permissions/contexts/midi_permission_context.h"
 #include "components/permissions/contexts/midi_sysex_permission_context.h"
 #include "components/permissions/contexts/nfc_permission_context.h"
 #include "components/permissions/contexts/payment_handler_permission_context.h"
+#include "components/permissions/contexts/pointer_lock_permission_context.h"
 #include "components/permissions/contexts/sensor_permission_context.h"
 #include "components/permissions/contexts/wake_lock_permission_context.h"
 #include "components/permissions/contexts/webxr_permission_context.h"
@@ -24,9 +26,10 @@
 #include "components/permissions/contexts/nfc_permission_context_android.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 #include "components/permissions/contexts/geolocation_permission_context_system.h"
-#endif
+#include "services/device/public/cpp/device_features.h"
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
 namespace embedder_support {
 
@@ -76,17 +79,27 @@ CreateDefaultPermissionContexts(content::BrowserContext* browser_context,
           browser_context,
           std::move(delegates.geolocation_permission_context_delegate),
           is_regular_profile);
-#elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  permission_contexts[ContentSettingsType::GEOLOCATION] =
-      std::make_unique<permissions::GeolocationPermissionContextSystem>(
-          browser_context,
-          std::move(delegates.geolocation_permission_context_delegate));
+#elif BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  if (features::IsOsLevelGeolocationPermissionSupportEnabled()) {
+    permission_contexts[ContentSettingsType::GEOLOCATION] =
+        std::make_unique<permissions::GeolocationPermissionContextSystem>(
+            browser_context,
+            std::move(delegates.geolocation_permission_context_delegate));
+  } else {
+    permission_contexts[ContentSettingsType::GEOLOCATION] =
+        std::make_unique<permissions::GeolocationPermissionContext>(
+            browser_context,
+            std::move(delegates.geolocation_permission_context_delegate));
+  }
 #else
   permission_contexts[ContentSettingsType::GEOLOCATION] =
       std::make_unique<permissions::GeolocationPermissionContext>(
           browser_context,
           std::move(delegates.geolocation_permission_context_delegate));
-#endif
+#endif  // BUILDFLAG(IS_ANDROID)
+  permission_contexts[ContentSettingsType::KEYBOARD_LOCK] =
+      std::make_unique<permissions::KeyboardLockPermissionContext>(
+          browser_context);
   permission_contexts[ContentSettingsType::MIDI] =
       std::make_unique<permissions::MidiPermissionContext>(browser_context);
   permission_contexts[ContentSettingsType::MIDI_SYSEX] =
@@ -105,6 +118,9 @@ CreateDefaultPermissionContexts(content::BrowserContext* browser_context,
 #endif  // BUILDFLAG(IS_ANDROID)
   permission_contexts[ContentSettingsType::PAYMENT_HANDLER] =
       std::make_unique<payments::PaymentHandlerPermissionContext>(
+          browser_context);
+  permission_contexts[ContentSettingsType::POINTER_LOCK] =
+      std::make_unique<permissions::PointerLockPermissionContext>(
           browser_context);
   permission_contexts[ContentSettingsType::SENSORS] =
       std::make_unique<permissions::SensorPermissionContext>(browser_context);

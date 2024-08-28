@@ -288,7 +288,7 @@ export const expandSelectedNodeRecursively = async () => {
 
 export const forcePseudoState = async (pseudoState: string) => {
   // Open element & page state pane and wait for it to be loaded asynchronously
-  await click('[aria-label="Toggle element & page state"]');
+  await click('[aria-label="Toggle Element State"]');
 
   const stateEl = await waitForAria(pseudoState);
   // FIXME(crbug/1112692): Refactor test to remove the timeout.
@@ -697,7 +697,7 @@ export const navigateToElementsTab = async () => {
 
 export const clickOnFirstLinkInStylesPanel = async () => {
   const stylesPane = await waitFor('div.styles-pane');
-  await click('div.styles-section-subtitle span.devtools-link', {root: stylesPane});
+  await click('div.styles-section-subtitle button.devtools-link', {root: stylesPane});
 };
 
 export const toggleClassesPane = async () => {

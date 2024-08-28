@@ -21,7 +21,6 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/game_dashboard/game_dashboard_controller.h"
-#include "ash/public/cpp/capture_mode/recording_overlay_view.h"
 #include "ash/public/cpp/holding_space/holding_space_client.h"
 #include "ash/public/cpp/holding_space/holding_space_controller.h"
 #include "ash/public/cpp/new_window_delegate.h"
@@ -118,6 +117,10 @@ constexpr char kShareToYouTubeURL[] = "https://youtube.com/upload";
 constexpr char kCanShowDemoToolsNudge[] =
     "ash.capture_mode.can_show_demo_tools_nudge";
 
+// An invalid IDS value used as a placeholder to not show a message in a
+// notification.
+constexpr int kNoMessage = -1;
+
 // The screenshot notification button index.
 enum ScreenshotNotificationButtonIndex {
   kButtonEdit = 0,
@@ -169,6 +172,7 @@ bool IsVideoFileExtensionSupported(const base::FilePath& video_file_path) {
 base::FilePath SelectFilePathForCapturedFile(
     const base::FilePath& current_path,
     const base::FilePath& fallback_path) {
+  // TODO(b/323146997): Revisit the behavior if enforced by policy.
   if (base::PathExists(current_path.DirName()))
     return current_path;
   DCHECK(base::PathExists(fallback_path.DirName()));
@@ -251,10 +255,12 @@ void ShowNotification(
   const auto type = optional_fields.image.IsEmpty()
                         ? message_center::NOTIFICATION_TYPE_SIMPLE
                         : message_center::NOTIFICATION_TYPE_CUSTOM;
+  const std::u16string message = message_id == kNoMessage
+                                     ? std::u16string()
+                                     : l10n_util::GetStringUTF16(message_id);
   std::unique_ptr<message_center::Notification> notification =
       CreateSystemNotificationPtr(
-          type, notification_id, l10n_util::GetStringUTF16(title_id),
-          l10n_util::GetStringUTF16(message_id),
+          type, notification_id, l10n_util::GetStringUTF16(title_id), message,
           l10n_util::GetStringUTF16(IDS_ASH_SCREEN_CAPTURE_DISPLAY_SOURCE),
           GURL(),
           message_center::NotifierId(
@@ -310,7 +316,7 @@ int GetDisabledNotificationMessageId(CaptureAllowance allowance,
       return for_title ? IDS_ASH_SCREEN_CAPTURE_HDCP_STOPPED_TITLE
                        : IDS_ASH_SCREEN_CAPTURE_HDCP_BLOCKED_MESSAGE;
     case CaptureAllowance::kAllowed:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return IDS_ASH_SCREEN_CAPTURE_POLICY_DISABLED_MESSAGE;
   }
 }
@@ -561,6 +567,11 @@ bool CaptureModeController::IsAudioCaptureDisabledByPolicy() const {
   return delegate_->IsAudioCaptureDisabledByPolicy();
 }
 
+bool CaptureModeController::IsCustomFolderManagedByPolicy() const {
+  return delegate_->GetPolicyCapturePath().enforcement ==
+         CaptureModeDelegate::CapturePathEnforcement::kManaged;
+}
+
 bool CaptureModeController::IsAudioRecordingInProgress() const {
   return video_recording_watcher_ &&
          !video_recording_watcher_->is_shutting_down() &&
@@ -691,7 +702,6 @@ bool CaptureModeController::CanShowUserNudge() const {
     case user_manager::UserType::kGuest:
     case user_manager::UserType::kPublicAccount:
     case user_manager::UserType::kKioskApp:
-    case user_manager::UserType::kArcKioskApp:
     case user_manager::UserType::kWebKioskApp:
       return false;
   }
@@ -706,6 +716,7 @@ void CaptureModeController::DisableUserNudgeForever() {
 }
 
 void CaptureModeController::SetUsesDefaultCaptureFolder(bool value) {
+  DCHECK(!IsCustomFolderManagedByPolicy());
   GetActiveUserPrefService()->SetBoolean(kUsesDefaultCapturePathPrefName,
                                          value);
 
@@ -714,6 +725,7 @@ void CaptureModeController::SetUsesDefaultCaptureFolder(bool value) {
 }
 
 void CaptureModeController::SetCustomCaptureFolder(const base::FilePath& path) {
+  DCHECK(!IsCustomFolderManagedByPolicy());
   auto* pref_service = GetActiveUserPrefService();
   pref_service->SetFilePath(kCustomCapturePathPrefName, path);
 
@@ -727,8 +739,17 @@ void CaptureModeController::SetCustomCaptureFolder(const base::FilePath& path) {
 }
 
 base::FilePath CaptureModeController::GetCustomCaptureFolder() const {
-  const auto custom_path =
+  base::FilePath custom_path =
       GetActiveUserPrefService()->GetFilePath(kCustomCapturePathPrefName);
+  const auto policy_path = delegate_->GetPolicyCapturePath();
+  // If admin forced or recommended and there is no user chosen value - use it.
+  if (policy_path.enforcement ==
+          CaptureModeDelegate::CapturePathEnforcement::kManaged ||
+      (custom_path.empty() &&
+       policy_path.enforcement ==
+           CaptureModeDelegate::CapturePathEnforcement::kRecommended)) {
+    custom_path = policy_path.path;
+  }
   return custom_path != delegate_->GetUserDefaultDownloadsFolder()
              ? custom_path
              : base::FilePath();
@@ -743,6 +764,15 @@ CaptureModeController::GetCurrentCaptureFolder() const {
   auto* pref_service = session_controller->GetActivePrefService();
   const auto default_downloads_folder =
       delegate_->GetUserDefaultDownloadsFolder();
+  const auto policy_path = delegate_->GetPolicyCapturePath();
+  // If admin forced - use it.
+  if (policy_path.enforcement ==
+      CaptureModeDelegate::CapturePathEnforcement::kManaged) {
+    return {policy_path.path,
+            /*is_default_downloads_folder=*/policy_path.path ==
+                default_downloads_folder};
+  }
+  // Otherwise use user chosen custom one, if present.
   if (pref_service &&
       !pref_service->GetBoolean(kUsesDefaultCapturePathPrefName)) {
     const auto custom_path =
@@ -753,7 +783,15 @@ CaptureModeController::GetCurrentCaptureFolder() const {
                   default_downloads_folder};
     }
   }
+  // Otherwise use the recommended by admin.
+  if (policy_path.enforcement ==
+      CaptureModeDelegate::CapturePathEnforcement::kRecommended) {
+    return {policy_path.path,
+            /*is_default_downloads_folder=*/policy_path.path ==
+                default_downloads_folder};
+  }
 
+  // By default - downloads folder.
   return {default_downloads_folder,
           /*is_default_downloads_folder=*/true};
 }
@@ -842,20 +880,6 @@ void CaptureModeController::RefreshContentProtection() {
   }
 }
 
-void CaptureModeController::ToggleRecordingOverlayEnabled() {
-  CHECK(is_recording_in_progress());
-  CHECK(video_recording_watcher_);
-  CHECK(video_recording_watcher_->active_behavior()
-            ->ShouldCreateRecordingOverlayController());
-
-  video_recording_watcher_->ToggleRecordingOverlayEnabled();
-}
-
-std::unique_ptr<RecordingOverlayView>
-CaptureModeController::CreateRecordingOverlayView() {
-  return delegate_->CreateRecordingOverlayView();
-}
-
 bool CaptureModeController::IsRootDriveFsPath(
     const base::FilePath& path) const {
   base::FilePath mounted_path;
@@ -873,6 +897,11 @@ bool CaptureModeController::IsAndroidFilesPath(
 
 bool CaptureModeController::IsLinuxFilesPath(const base::FilePath& path) const {
   return path == delegate_->GetLinuxFilesPath();
+}
+
+bool CaptureModeController::IsRootOneDriveFilesPath(
+    const base::FilePath& path) const {
+  return path == delegate_->GetOneDriveMountPointPath();
 }
 
 aura::Window* CaptureModeController::GetOnCaptureSurfaceWidgetParentWindow()
@@ -941,13 +970,14 @@ void CaptureModeController::MaybeUpdateVcPanel() {
 
   const bool is_camera_used = IsShowingCameraPreview();
   const bool is_recording_audio = IsAudioRecordingInProgress();
+  const bool has_media_app = is_camera_used || is_recording_audio;
 
   delegate_->UpdateVideoConferenceManager(
       crosapi::mojom::VideoConferenceMediaUsageStatus::New(
           /*client_id=*/vc_client_id_,
-          /*has_media_app=*/is_recording_in_progress(),
-          /*has_camera_permission=*/is_camera_used,
-          /*has_microphone_permission=*/is_recording_audio,
+          /*has_media_app=*/has_media_app,
+          /*has_camera_permission=*/has_media_app,
+          /*has_microphone_permission=*/has_media_app,
           /*is_capturing_camera=*/is_camera_used,
           /*is_capturing_microphone=*/is_recording_audio,
           /*is_capturing_screen=*/false));
@@ -964,6 +994,21 @@ void CaptureModeController::MaybeUpdateVcPanel() {
     delegate_->NotifyDeviceUsedWhileDisabled(
         crosapi::mojom::VideoConferenceMediaDevice::kMicrophone);
   }
+}
+
+void CaptureModeController::CheckScreenCaptureDlpRestrictions(
+    OnCaptureModeDlpRestrictionChecked callback) {
+  delegate_->CheckCaptureModeInitRestrictionByDlp(std::move(callback));
+}
+
+bool CaptureModeController::ShouldAllowAnnotating() const {
+  return is_recording_in_progress() && IsAnnotatingSupported();
+}
+
+bool CaptureModeController::IsAnnotatingSupported() const {
+  return video_recording_watcher_ &&
+         video_recording_watcher_->active_behavior()
+             ->ShouldCreateAnnotationsOverlayController();
 }
 
 void CaptureModeController::OnRecordingEnded(
@@ -1280,7 +1325,7 @@ void CaptureModeController::LaunchRecordingServiceAndStartRecording(
   recording_service_remote_ = delegate_->LaunchRecordingService();
   recording_service_remote_.set_disconnect_handler(
       base::BindOnce(&CaptureModeController::OnRecordingServiceDisconnected,
-                     base::Unretained(this)));
+                     weak_ptr_factory_.GetWeakPtr()));
 
   // Prepare the pending remotes of the client, the video capturer, and the
   // audio stream factory.
@@ -1527,7 +1572,7 @@ void CaptureModeController::OnImageCaptured(
   }
   blocking_task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE,
-      base::BindOnce(&SaveFile, png_bytes, path,
+      base::BindOnce(&SaveFile, png_bytes, delegate_->RedirectFilePath(path),
                      GetFallbackFilePathFromFile(path)),
       base::BindOnce(&CaptureModeController::OnImageFileSaved,
                      weak_ptr_factory_.GetWeakPtr(), png_bytes, behavior));
@@ -1538,6 +1583,22 @@ void CaptureModeController::OnImageFileSaved(
     const CaptureModeBehavior* behavior,
     const base::FilePath& file_saved_path) {
   if (file_saved_path.empty()) {
+    OnImageFileFinalized(png_bytes, behavior, /*success=*/false,
+                         file_saved_path);
+    return;
+  }
+  delegate_->FinalizeSavedFile(
+      base::BindOnce(&CaptureModeController::OnImageFileFinalized,
+                     weak_ptr_factory_.GetWeakPtr(), png_bytes, behavior),
+      file_saved_path);
+}
+
+void CaptureModeController::OnImageFileFinalized(
+    scoped_refptr<base::RefCountedMemory> png_bytes,
+    const CaptureModeBehavior* behavior,
+    bool success,
+    const base::FilePath& file_saved_path) {
+  if (!success) {
     ShowFailureNotification();
     return;
   }
@@ -1561,10 +1622,10 @@ void CaptureModeController::OnImageFileSaved(
 }
 
 void CaptureModeController::OnVideoFileSaved(
-    const base::FilePath& saved_video_file_path,
     const gfx::ImageSkia& video_thumbnail,
+    const CaptureModeBehavior* behavior,
     bool success,
-    const CaptureModeBehavior* behavior) {
+    const base::FilePath& saved_video_file_path) {
   DCHECK(base::CurrentUIThread::IsSet());
 
   if (!success) {
@@ -1624,7 +1685,7 @@ void CaptureModeController::ShowPreviewNotification(
   const int title_id = GetNotificationTitleIdForFile(screen_capture_path);
   const int message_id = for_video && low_disk_space_threshold_reached_
                              ? IDS_ASH_SCREEN_CAPTURE_LOW_STORAGE_SPACE_MESSAGE
-                             : IDS_ASH_SCREEN_CAPTURE_MESSAGE;
+                             : kNoMessage;
 
   message_center::RichNotificationData optional_fields;
   optional_fields.buttons = behavior->GetNotificationButtonsInfo(for_video);
@@ -1649,9 +1710,9 @@ void CaptureModeController::HandleNotificationClicked(
     const BehaviorType behavior_type,
     std::optional<int> button_index) {
   if (!button_index.has_value()) {
-    // Show the item in the folder.
-    delegate_->ShowScreenCaptureItemInFolder(screen_capture_path);
-    RecordScreenshotNotificationQuickAction(CaptureQuickAction::kFiles);
+    // Open the item with the default handler.
+    delegate_->OpenScreenCaptureItem(screen_capture_path);
+    RecordScreenshotNotificationQuickAction(CaptureQuickAction::kOpenDefault);
   } else {
     const int button_index_value = button_index.value();
     if (type == CaptureModeType::kVideo) {
@@ -1667,7 +1728,7 @@ void CaptureModeController::HandleNotificationClicked(
                             std::move(on_file_deleted_callback_for_test_));
             break;
           default:
-            NOTREACHED();
+            NOTREACHED_IN_MIGRATION();
             break;
         }
       } else {
@@ -1690,7 +1751,7 @@ void CaptureModeController::HandleNotificationClicked(
           RecordScreenshotNotificationQuickAction(CaptureQuickAction::kDelete);
           break;
         default:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           break;
       }
     }
@@ -1898,6 +1959,10 @@ void CaptureModeController::BeginVideoRecording(
       capture_params.window, capture_params.bounds,
       base::BindOnce(&CaptureModeController::InterruptVideoRecording,
                      weak_ptr_factory_.GetWeakPtr()));
+
+  if (on_video_recording_started_callback_for_test_) {
+    std::move(on_video_recording_started_callback_for_test_).Run();
+  }
 }
 
 void CaptureModeController::InterruptVideoRecording() {
@@ -2028,7 +2093,8 @@ void CaptureModeController::OnDlpRestrictionCheckedAtCountDownFinished(
   if (!GetCurrentCaptureFolder().is_default_downloads_folder) {
     blocking_task_runner_->PostTaskAndReplyWithResult(
         FROM_HERE,
-        base::BindOnce(&SelectFilePathForCapturedFile, current_path,
+        base::BindOnce(&SelectFilePathForCapturedFile,
+                       delegate_->RedirectFilePath(current_path),
                        GetFallbackFilePathFromFile(current_path)),
         base::BindOnce(&CaptureModeController::BeginVideoRecording,
                        weak_ptr_factory_.GetWeakPtr(), *capture_params));
@@ -2115,10 +2181,28 @@ void CaptureModeController::OnDlpRestrictionCheckedAtVideoEnd(
 
     DeleteFileAsync(blocking_task_runner_, video_file_path,
                     std::move(on_file_deleted_callback_for_test_));
+    OnVideoFileFinalized(/*should_delete_file=*/true, video_thumbnail);
   } else {
-    OnVideoFileSaved(video_file_path, video_thumbnail, success, behavior);
+    if (!success) {
+      OnVideoFileSaved(video_thumbnail, behavior, success, video_file_path);
+      OnVideoFileFinalized(/*should_delete_file=*/false, video_thumbnail);
+      return;
+    }
+    delegate_->FinalizeSavedFile(
+        base::BindOnce(&CaptureModeController::OnVideoFileSaved,
+                       weak_ptr_factory_.GetWeakPtr(), video_thumbnail,
+                       behavior)
+            .Then(base::BindOnce(&CaptureModeController::OnVideoFileFinalized,
+                                 weak_ptr_factory_.GetWeakPtr(),
+                                 /*should_delete_file=*/false,
+                                 video_thumbnail)),
+        video_file_path);
   }
+}
 
+void CaptureModeController::OnVideoFileFinalized(
+    bool should_delete_file,
+    const gfx::ImageSkia& video_thumbnail) {
   low_disk_space_threshold_reached_ = false;
   recording_start_time_ = base::TimeTicks();
 
@@ -2225,6 +2309,15 @@ CaptureModeSaveToLocation CaptureModeController::GetSaveToOption(
 
     if (drive_root_path.IsParent(dir_path))
       return CaptureModeSaveToLocation::kDriveFolder;
+  }
+  base::FilePath one_drive_mount_path = delegate_->GetOneDriveMountPointPath();
+  if (!one_drive_mount_path.empty()) {
+    if (dir_path == one_drive_mount_path) {
+      return CaptureModeSaveToLocation::kOneDrive;
+    }
+    if (one_drive_mount_path.IsParent(dir_path)) {
+      return CaptureModeSaveToLocation::kOneDriveFolder;
+    }
   }
   return CaptureModeSaveToLocation::kCustomizedFolder;
 }

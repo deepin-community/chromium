@@ -14,12 +14,13 @@ int f() {
           if ((j > 4)) {
             return 2;
           }
-          j = (j + 1);
+          {
+            j = (j + 1);
+          }
           continue;
         }
       }
-      i = (i + 1);
-      continue;
+      /* unreachable */
     }
   }
   /* unreachable */

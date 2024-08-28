@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/loader/fetch/script_cached_metadata_handler.h"
 
 #include "base/metrics/histogram_macros.h"
@@ -10,15 +15,6 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 
 namespace blink {
-
-namespace {
-
-void RecordState(StateOnGet state) {
-  UMA_HISTOGRAM_ENUMERATION("Memory.Renderer.BlinkCachedMetadataGetResult",
-                            state);
-}
-
-}  // namespace
 
 ScriptCachedMetadataHandler::ScriptCachedMetadataHandler(
     const WTF::TextEncoding& encoding,
@@ -68,16 +64,9 @@ void ScriptCachedMetadataHandler::ClearCachedMetadata(
 scoped_refptr<CachedMetadata> ScriptCachedMetadataHandler::GetCachedMetadata(
     uint32_t data_type_id,
     GetCachedMetadataBehavior behavior) const {
-  if (!cached_metadata_) {
-    RecordState(cached_metadata_discarded_ ? StateOnGet::kWasDiscarded
-                                           : StateOnGet::kWasNeverPresent);
+  if (!cached_metadata_ || cached_metadata_->DataTypeID() != data_type_id) {
     return nullptr;
   }
-  if (cached_metadata_->DataTypeID() != data_type_id) {
-    RecordState(StateOnGet::kDataTypeMismatch);
-    return nullptr;
-  }
-  RecordState(StateOnGet::kPresent);
   return cached_metadata_;
 }
 
@@ -87,7 +76,7 @@ void ScriptCachedMetadataHandler::SetSerializedCachedMetadata(
   // triggers, it indicates an efficiency problem which is most likely
   // unexpected in code designed to improve performance.
   DCHECK(!cached_metadata_);
-  cached_metadata_ = CachedMetadata::CreateFromSerializedData(std::move(data));
+  cached_metadata_ = CachedMetadata::CreateFromSerializedData(data);
 }
 
 String ScriptCachedMetadataHandler::Encoding() const {

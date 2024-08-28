@@ -44,7 +44,8 @@ std::list<SystemWebDialogDelegate*>* GetInstances() {
 // shadow since the dialog frame's border has its own shadow.
 views::Widget::InitParams CreateWidgetParams(
     SystemWebDialogDelegate::FrameKind frame_kind) {
-  views::Widget::InitParams params;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   params.corner_radius = kSystemDialogCornerRadiusDp;
   // Set shadow type according to the frame kind.
   switch (frame_kind) {
@@ -101,7 +102,7 @@ gfx::Size SystemWebDialogDelegate::ComputeDialogSizeForInternalScreen(
     const gfx::Size& preferred_size) {
   // If the device has no internal display (e.g., for Chromeboxes), use the
   // preferred size.
-  // TODO(https://crbug.com/1035060): It could be possible that a Chromebox is
+  // TODO(crbug.com/40112040): It could be possible that a Chromebox is
   // hooked up to a low-resolution monitor. It might be a good idea to check
   // that display's resolution as well.
   if (!display::HasInternalDisplay())
@@ -112,7 +113,7 @@ gfx::Size SystemWebDialogDelegate::ComputeDialogSizeForInternalScreen(
           display::Display::InternalDisplayId(), &internal_display)) {
     // GetDisplayWithDisplayId() returns false if the laptop's lid is closed.
     // Return the preferred size instead.
-    // TODO(crbug/1158631): Test this edge case with displays
+    // TODO(crbug.com/40737061): Test this edge case with displays
     // (lid closed with external monitors).
     return preferred_size;
   }
@@ -164,12 +165,19 @@ std::string SystemWebDialogDelegate::Id() {
   return GetDialogContentURL().spec();
 }
 
+void SystemWebDialogDelegate::StackAtTop() {
+  views::Widget::GetWidgetForNativeWindow(dialog_window())->StackAtTop();
+}
+
 void SystemWebDialogDelegate::Focus() {
   // Focusing a modal dialog does not make it the topmost dialog and does not
   // enable interaction. It does however remove focus from the current dialog,
   // preventing interaction with any dialog. TODO(stevenjb): Investigate and
   // fix, https://crbug.com/914133.
   if (GetDialogModalType() == ui::MODAL_TYPE_NONE) {
+    if (!dialog_window()->IsVisible()) {
+      dialog_window()->Show();
+    }
     dialog_window()->Focus();
   }
 }
@@ -192,7 +200,7 @@ void SystemWebDialogDelegate::OnDialogShown(content::WebUI* webui) {
   auto* zoom_map = content::HostZoomMap::GetForWebContents(web_contents);
   // Temporary means the lifetime of the WebContents.
   zoom_map->SetTemporaryZoomLevel(rfh->GetGlobalId(),
-                                  blink::PageZoomFactorToZoomLevel(1.0));
+                                  blink::ZoomFactorToZoomLevel(1.0));
 }
 
 void SystemWebDialogDelegate::ShowSystemDialogForBrowserContext(

@@ -6,7 +6,6 @@ package org.chromium.components.privacy_sandbox;
 
 import static org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge.SITE_WILDCARD;
 
-import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -49,20 +48,15 @@ import java.util.Locale;
 /** Fragment to manage settings for tracking protection. */
 public class TrackingProtectionSettings extends PreferenceFragmentCompat
         implements CustomDividerFragment, OnPreferenceClickListener, SiteAddedCallback {
-
-    /**
-     * Functional interface to start a Chrome Custom Tab for the given intent, e.g. by using {@link
-     * org.chromium.chrome.browser.LaunchIntentDispatcher#createCustomTabActivityIntent}.
-     * TODO(crbug.com/1181700): Update when LaunchIntentDispatcher is (partially-)modularized.
-     */
-    public interface CustomTabIntentHelper {
-        /** @see org.chromium.chrome.browser.LaunchIntentDispatcher#createCustomTabActivityIntent */
-        Intent createCustomTabActivityIntent(Context context, Intent intent);
-    }
-
     // Must match keys in tracking_protection_preferences.xml.
     private static final String OFFBOARDING_NOTICE = "offboarding_notice";
     private static final String PREF_BLOCK_ALL_TOGGLE = "block_all_3pcd_toggle";
+    private static final String PREF_IP_PROTECTION_TOGGLE = "ip_protection_toggle";
+    private static final String PREF_IP_PROTECTION_LEARN_MORE = "ip_protection_learn_more";
+    private static final String PREF_FINGERPRINTING_PROTECTION_TOGGLE =
+            "fingerprinting_protection_toggle";
+    private static final String PREF_FINGERPRINTING_PROTECTION_LEARN_MORE =
+            "fingerprinting_protection_learn_more";
     private static final String PREF_DNT_TOGGLE = "dnt_toggle";
     private static final String PREF_BULLET_TWO = "bullet_point_two";
     private static final String ALLOWED_GROUP = "allowed_group";
@@ -102,6 +96,14 @@ public class TrackingProtectionSettings extends PreferenceFragmentCompat
 
         ChromeSwitchPreference blockAll3PCookiesSwitch =
                 (ChromeSwitchPreference) findPreference(PREF_BLOCK_ALL_TOGGLE);
+        ChromeSwitchPreference ipProtectionSwitch =
+                (ChromeSwitchPreference) findPreference(PREF_IP_PROTECTION_TOGGLE);
+        TextMessagePreference ipProtectionLearnMore =
+                (TextMessagePreference) findPreference(PREF_IP_PROTECTION_LEARN_MORE);
+        ChromeSwitchPreference fingerprintingProtectionSwitch =
+                (ChromeSwitchPreference) findPreference(PREF_FINGERPRINTING_PROTECTION_TOGGLE);
+        TextMessagePreference fingerprintingProtectionLearnMore =
+                (TextMessagePreference) findPreference(PREF_FINGERPRINTING_PROTECTION_LEARN_MORE);
         ChromeSwitchPreference doNotTrackSwitch =
                 (ChromeSwitchPreference) findPreference(PREF_DNT_TOGGLE);
 
@@ -112,6 +114,54 @@ public class TrackingProtectionSettings extends PreferenceFragmentCompat
                     mDelegate.setBlockAll3PCD((boolean) newValue);
                     return true;
                 });
+
+        // IP protection switch.
+        if (mDelegate.shouldDisplayIpProtection()) {
+            ipProtectionSwitch.setVisible(true);
+            ipProtectionSwitch.setChecked(mDelegate.isIpProtectionEnabled());
+            ipProtectionSwitch.setOnPreferenceChangeListener(
+                    (preference, newValue) -> {
+                        mDelegate.setIpProtection((boolean) newValue);
+                        return true;
+                    });
+            ipProtectionLearnMore.setVisible(true);
+            // TODO(b/330745124): Update the learn more action.
+            ipProtectionLearnMore.setSummary(
+                    SpanApplier.applySpans(
+                            getResources()
+                                    .getString(
+                                            R.string.tracking_protection_ip_protection_learn_more),
+                            new SpanApplier.SpanInfo(
+                                    "<link>",
+                                    "</link>",
+                                    new NoUnderlineClickableSpan(
+                                            getContext(), this::onLearnMoreClicked))));
+        }
+
+        // Fingerprinting protection switch.
+        if (mDelegate.shouldDisplayFingerprintingProtection()) {
+            fingerprintingProtectionSwitch.setVisible(true);
+            fingerprintingProtectionSwitch.setChecked(
+                    mDelegate.isFingerprintingProtectionEnabled());
+            fingerprintingProtectionSwitch.setOnPreferenceChangeListener(
+                    (preference, newValue) -> {
+                        mDelegate.setFingerprintingProtection((boolean) newValue);
+                        return true;
+                    });
+            fingerprintingProtectionLearnMore.setVisible(true);
+            // TODO(b/330745124): Update the learn more action.
+            fingerprintingProtectionLearnMore.setSummary(
+                    SpanApplier.applySpans(
+                            getResources()
+                                    .getString(
+                                            R.string
+                                                    .tracking_protection_fingerprinting_protection_learn_more),
+                            new SpanApplier.SpanInfo(
+                                    "<link>",
+                                    "</link>",
+                                    new NoUnderlineClickableSpan(
+                                            getContext(), this::onLearnMoreClicked))));
+        }
 
         // Do not track switch.
         doNotTrackSwitch.setChecked(mDelegate.isDoNotTrackEnabled());
@@ -190,7 +240,7 @@ public class TrackingProtectionSettings extends PreferenceFragmentCompat
                 SiteSettingsCategory.createFromType(
                         mDelegate.getBrowserContext(),
                         SiteSettingsCategory.Type.THIRD_PARTY_COOKIES);
-        new WebsitePermissionsFetcher(mDelegate.getBrowserContext())
+        new WebsitePermissionsFetcher(mDelegate.getSiteSettingsDelegate(getContext()))
                 .fetchPreferencesForCategory(cookiesCategory, this::onExceptionsFetched);
     }
 

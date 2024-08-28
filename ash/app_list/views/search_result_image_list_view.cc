@@ -93,8 +93,8 @@ SearchResultImageListView::SearchResultImageListView(
   title_label_->SetPaintToLayer();
   title_label_->layer()->SetFillsBoundsOpaquely(false);
 
-  SetAccessibleRole(ax::mojom::Role::kListBox);
-  SetAccessibleName(l10n_util::GetStringFUTF16(
+  GetViewAccessibility().SetRole(ax::mojom::Role::kListBox);
+  GetViewAccessibility().SetName(l10n_util::GetStringFUTF16(
       IDS_ASH_SEARCH_RESULT_CATEGORY_LABEL_ACCESSIBLE_NAME,
       title_label_->GetText()));
 
@@ -255,7 +255,8 @@ int SearchResultImageListView::DoUpdate() {
   if (notifier) {
     std::vector<AppListNotifier::Result> notifier_results;
     for (const auto* result : display_results) {
-      notifier_results.emplace_back(result->id(), result->metrics_type());
+      notifier_results.emplace_back(result->id(), result->metrics_type(),
+                                    result->continue_file_suggestion_type());
     }
     notifier->NotifyResultsUpdated(SearchResultDisplayType::kImage,
                                    notifier_results);

@@ -61,7 +61,7 @@ size_t AlphaBitsForBufferFormat(BufferFormat format) {
     case BufferFormat::P010:
       return 0;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -88,8 +88,12 @@ size_t NumberOfPlanesForLinearBufferFormat(BufferFormat format) {
     case BufferFormat::YUVA_420_TRIPLANAR:
       return 3;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
+}
+
+bool BufferFormatIsMultiplanar(BufferFormat format) {
+  return NumberOfPlanesForLinearBufferFormat(format) > 1;
 }
 
 size_t SubsamplingFactorForBufferFormat(BufferFormat format, size_t plane) {
@@ -125,7 +129,7 @@ size_t SubsamplingFactorForBufferFormat(BufferFormat format, size_t plane) {
       return factor[plane];
     }
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -174,7 +178,7 @@ size_t BytesPerPixelForBufferFormat(BufferFormat format, size_t plane) {
     case BufferFormat::P010:
       return 2 * SubsamplingFactorForBufferFormat(format, plane);
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -202,7 +206,7 @@ size_t RowByteAlignmentForBufferFormat(BufferFormat format, size_t plane) {
     case BufferFormat::P010:
       return BytesPerPixelForBufferFormat(format, plane);
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -314,7 +318,7 @@ size_t BufferOffsetForBufferFormat(const Size& size,
       return offset;
     }
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -355,7 +359,8 @@ const char* BufferFormatToString(BufferFormat format) {
     case BufferFormat::P010:
       return "P010";
   }
-  NOTREACHED() << "Invalid BufferFormat: " << base::to_underlying(format);
+  NOTREACHED_IN_MIGRATION()
+      << "Invalid BufferFormat: " << base::to_underlying(format);
   return "Invalid Format";
 }
 
@@ -374,7 +379,8 @@ const char* BufferPlaneToString(BufferPlane format) {
     case BufferPlane::A:
       return "A";
   }
-  NOTREACHED() << "Invalid BufferPlane: " << base::to_underlying(format);
+  NOTREACHED_IN_MIGRATION()
+      << "Invalid BufferPlane: " << base::to_underlying(format);
   return "Invalid Plane";
 }
 

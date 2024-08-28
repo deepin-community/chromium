@@ -46,8 +46,7 @@ class WebRtcMediaRecorderTest
 
     AppendUseFakeUIForMediaStreamFlag();
 
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kUseFakeDeviceForMediaStream);
+    command_line->AppendSwitch(switches::kUseFakeDeviceForMediaStream);
 
     if (GetParam().disable_accelerator) {
       command_line->AppendSwitch(switches::kDisableAcceleratedVideoEncode);
@@ -75,7 +74,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, MAYBE_StartAndDataAvailable) {
                   kMediaRecorderHtmlFile);
 }
 
-// TODO(crbug.com/805341): It seems to be flaky on Android. More details in
+// TODO(crbug.com/40559669): It seems to be flaky on Android. More details in
 // the bug.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_StartWithTimeSlice DISABLED_StartWithTimeSlice
@@ -96,7 +95,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, NoResumeWhenRecorderInactive) {
   MakeTypicalCall("testIllegalResumeThrowsDOMError();", kMediaRecorderHtmlFile);
 }
 
-// TODO(crbug.com/1432939): Seems the test is not working quite well on
+// TODO(crbug.com/40903193): Seems the test is not working quite well on
 // android-12l-x64-dbg-tests.
 #if (BUILDFLAG(IS_MAC) && defined(ARCH_CPU_ARM64)) || BUILDFLAG(IS_ANDROID)
 // https://crbug.com/1222675
@@ -114,7 +113,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcMediaRecorderTest, Pause) {
   MakeTypicalCall("testPauseAndRecorderState();", kMediaRecorderHtmlFile);
 }
 
-// TODO(crbug.com/571389): Flaky on TSAN bots.
+// TODO(crbug.com/40450139): Flaky on TSAN bots.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_PauseStop DISABLED_PauseStop
 #else

@@ -123,6 +123,8 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"changePasswordAriaDescription",
        IDS_PASSWORD_MANAGER_UI_CHANGE_PASSWORD_BUTTON_ARIA_DESCRIPTION},
       {"changePasswordInApp", IDS_PASSWORD_MANAGER_UI_CHANGE_PASSWORD_IN_APP},
+      {"changePasswordManagerPin",
+       IDS_PASSWORD_MANAGER_UI_CHANGE_PASSWORD_MANAGER_PIN},
       {"checkup", IDS_PASSWORD_MANAGER_UI_CHECKUP},
       {"checkupCanceled", IDS_PASSWORD_MANAGER_UI_CHECKUP_CANCELED},
       {"checkupErrorGeneric", IDS_PASSWORD_MANAGER_UI_CHECKUP_OTHER_ERROR},
@@ -134,18 +136,21 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"checkupResultRed", IDS_PASSWORD_MANAGER_UI_CHECKUP_RED_STATE_A11Y},
       {"checkupResultYellow",
        IDS_PASSWORD_MANAGER_UI_CHECKUP_YELLOW_STATE_A11Y},
-      {"compromisedRowWithError",
-       IDS_PASSWORD_MANAGER_UI_CHECKUP_COMPROMISED_SECTION},
       {"checkupProgress", IDS_PASSWORD_MANAGER_UI_CHECKUP_PROGRESS},
       {"checkupTitle", IDS_PASSWORD_MANAGER_UI_CHECKUP_TITLE},
       {"clearSearch", IDS_CLEAR_SEARCH},
       {"close", IDS_CLOSE},
+      {"closePromoCardButtonAriaLabel",
+       IDS_PASSWORD_MANAGER_UI_CLOSE_PROMO_CARD_BUTTON_ARIA_LABEL},
       {"compromisedPasswordsDescription",
        IDS_PASSWORD_MANAGER_UI_COMPROMISED_PASSWORDS_DESCRIPTION},
       {"compromisedPasswordsEmpty",
        IDS_PASSWORD_MANAGER_UI_NO_COMPROMISED_PASSWORDS},
       {"compromisedPasswordsTitle",
        IDS_PASSWORD_MANAGER_UI_HAS_COMPROMISED_PASSWORDS},
+      {"compromisedRowWithError",
+       IDS_PASSWORD_MANAGER_UI_CHECKUP_COMPROMISED_SECTION},
+      {"confirm", IDS_PASSWORD_MANAGER_UI_CONFIRM},
       {"controlledByExtension", IDS_SETTINGS_CONTROLLED_BY_EXTENSION},
       {"copyDisplayName", IDS_PASSWORD_MANAGER_UI_COPY_DISPLAY_NAME_LABEL},
       {"copyPassword", IDS_PASSWORD_MANAGER_UI_COPY_PASSWORD},
@@ -169,6 +174,18 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_UI_DELETE_DIALOG_TITLE},
       {"done", IDS_DONE},
       {"disable", IDS_DISABLE},
+      {"disconnectCloudAuthenticatorButton",
+       IDS_PASSKEYS_MANAGER_UI_UNENROLL_BUTTON},
+      {"disconnectCloudAuthenticatorToastMessage",
+       IDS_PASSKEYS_MANAGER_UI_UNENROLL_TOAST_MESSAGE},
+      {"disconnectCloudAuthenticatorTitle",
+       IDS_PASSKEYS_MANAGER_UI_UNENROLL_TITLE},
+      {"disconnectCloudAuthenticatorDescription",
+       IDS_PASSKEYS_MANAGER_UI_UNENROLL_DESCRIPTION},
+      {"disconnectCloudAuthenticatorConfirmationDialogTitle",
+       IDS_PASSWORD_MANAGER_UI_DISCONNECT_CLOUD_AUTHENTICATOR_DIALOG_TITLE},
+      {"disconnectCloudAuthenticatorConfirmationDialogDescription",
+       IDS_PASSWORD_MANAGER_UI_DISCONNECT_CLOUD_AUTHENTICATOR_DIALOG_DESCRIPTION},
       {"displayNameCopiedToClipboard",
        IDS_PASSWORD_MANAGER_UI_DISPLAY_NAME_COPIED_TO_CLIPBOARD},
       {"displayNameLabel", IDS_PASSWORD_MANAGER_UI_DISPLAY_NAME_LABEL},
@@ -204,6 +221,14 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"federatedCredentialProviderAriaLabel",
        IDS_PASSWORD_MANAGER_UI_FEDERATED_CREDENTIAL_ARIA_LABEL},
       {"federationLabel", IDS_PASSWORD_MANAGER_UI_FEDERATION_LABEL},
+      {"fullResetDeleteAll", IDS_PASSWORD_MANAGER_UI_FULL_RESET_DELETE_ALL},
+      {"fullResetConfirm", IDS_PASSWORD_MANAGER_UI_FULL_RESET_CONFIRM},
+      {"fullResetSuccessToast",
+       IDS_PASSWORD_MANAGER_UI_FULL_RESET_SUCCESS_TOAST},
+      {"fullResetDomainsDisplayOne",
+       IDS_PASSWORD_MANAGER_UI_FULL_RESET_DOMAINS_DISPLAY_ONE},
+      {"fullResetDomainsDisplayTwo",
+       IDS_PASSWORD_MANAGER_UI_FULL_RESET_DOMAINS_DISPLAY_TWO},
       {"gotIt", IDS_SETTINGS_GOT_IT},
       {"help", IDS_PASSWORD_MANAGER_UI_HELP},
       {"hidePassword", IDS_PASSWORD_MANAGER_UI_HIDE_PASSWORD},
@@ -258,10 +283,6 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
 #if BUILDFLAG(IS_WIN)
       {"managePasskeysLabel", IDS_PASSWORD_MANAGER_UI_MANAGE_PASSKEYS_LABEL},
 #elif BUILDFLAG(IS_MAC)
-      {"createPasskeysInICloudKeychainLabel",
-       IDS_PASSWORD_MANAGER_UI_CREATE_PASSKEYS_IN_ICLOUD_KEYCHAIN_LABEL},
-      {"createPasskeysInICloudKeychainSubLabel",
-       IDS_PASSWORD_MANAGER_UI_CREATE_PASSKEYS_IN_ICLOUD_KEYCHAIN_SUBLABEL},
       {"managePasskeysLabel",
        IDS_PASSWORD_MANAGER_UI_MANAGE_PASSKEYS_FROM_PROFILE_LABEL},
 #endif
@@ -324,13 +345,12 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"passwordManager",
        IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SYNCED_TO_ACCOUNT},
       // Header for the page, always "Password Manager".
+      {"passwordManagerPinChanged", IDS_PASSWORD_MANAGER_PIN_CHANGED},
       {"passwordManagerString", IDS_PASSWORD_MANAGER_UI_TITLE},
       // Page title, branded. "Google Password Manager" or "Password Manager"
       // depending on the build.
       {"passwordManagerTitle",
        IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SAVING_ON_DEVICE},
-      {"passwordMovedToastMessage",
-       IDS_PASSWORD_MANAGER_UI_PASSWORD_MOVED_TOAST_MESSAGE},
       {"passwordNoteCharacterCount",
        IDS_PASSWORD_MANAGER_UI_NOTE_CHARACTER_COUNT},
       {"passwordNoteCharacterCountWarning",
@@ -341,6 +361,7 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"phishedAndLeakedPassword",
        IDS_PASSWORD_MANAGER_UI_PASSWORD_PHISHED_AND_LEAKED},
       {"phishedPassword", IDS_PASSWORD_MANAGER_UI_PASSWORD_PHISHED},
+      {"promoCardAriaLabel", IDS_PASSWORD_MANAGER_UI_PROMO_CARD_ARIA_LABEL},
       {"removeBlockedAriaDescription",
        IDS_PASSWORD_MANAGER_UI_REMOVE_BLOCKED_SITE_ARIA_DESCRIPTION},
       {"reload", IDS_RELOAD},
@@ -353,6 +374,10 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"save", IDS_SAVE},
       {"savePasswordsLabel",
        IDS_PASSWORD_MANAGER_UI_SAVE_PASSWORDS_TOGGLE_LABEL},
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+      {"screenlockReauthPromoConfirmation",
+       IDS_PASSWORD_MANAGER_UI_SCREENLOCK_REAUTH_PROMO_CARD_CONFIRMATION},
+#endif
       {"share", IDS_PASSWORD_MANAGER_UI_SHARE},
       {"shareDialogTitle", IDS_PASSWORD_MANAGER_UI_SHARE_DIALOG_TITLE},
       {"shareDialogLoadingTitle",
@@ -469,19 +494,11 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
                          ShouldBiometricAuthenticationForFillingToggleBeVisible(
                              g_browser_process->local_state()));
 #endif
-#if BUILDFLAG(IS_MAC)
-  source->AddBoolean(
-      "createPasskeysInICloudKeychainToggleVisible",
-      base::FeatureList::IsEnabled(device::kWebAuthnICloudKeychain));
-#endif
 
   source->AddBoolean(
-      "enableSendPasswords",
-      base::FeatureList::IsEnabled(password_manager::features::kSendPasswords));
-
-  source->AddBoolean("enableButterOnDesktopFollowup",
-                     base::FeatureList::IsEnabled(
-                         password_manager::features::kButterOnDesktopFollowup));
+      "enableWebAuthnGpmPin",
+      base::FeatureList::IsEnabled(device::kWebAuthnEnclaveAuthenticator) &&
+          device::kWebAuthnGpmPin.Get());
 
   source->AddString("passwordSharingLearnMoreURL",
                     chrome::kPasswordSharingLearnMoreURL);
@@ -533,6 +550,24 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
                         IDS_PASSWORD_MANAGER_UI_AUTOSIGNIN_TOGGLE_DESC));
 
   source->AddString(
+      "fullResetTitle",
+      InsertBrandedPasswordManager(IDS_PASSWORD_MANAGER_UI_FULL_RESET_TITLE));
+  source->AddString("fullResetRowDescription",
+                    InsertBrandedPasswordManager(
+                        IDS_PASSWORD_MANAGER_UI_FULL_RESET_DESCRIPTION));
+  source->AddString("fullResetConfirmationTitle",
+                    InsertBrandedPasswordManager(
+                        IDS_PASSWORD_MANAGER_UI_FULL_RESET_CONFIRMATION_TITLE));
+  source->AddString(
+      "fullResetConfirmationTitleLocal",
+      InsertBrandedPasswordManager(
+          IDS_PASSWORD_MANAGER_UI_FULL_RESET_CONFIRMATION_TITLE_LOCAL));
+  source->AddString(
+      "fullResetConfirmationDescription",
+      InsertBrandedPasswordManager(
+          IDS_PASSWORD_MANAGER_UI_FULL_RESET_CONFIRMATION_DESCIPTION));
+
+  source->AddString(
       "emptyStateImportAccountStore",
       InsertBrandedPasswordManager(
           IDS_PASSWORD_MANAGER_UI_EMPTY_STATE_ACCOUNT_STORE_USERS));
@@ -571,7 +606,6 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       profile, std::make_unique<FaviconSource>(
                    profile, chrome::FaviconUrlFormat::kFavicon2));
 
-  webui::SetupChromeRefresh2023(source);
   return source;
 }
 
@@ -588,6 +622,13 @@ void AddPluralStrings(content::WebUI* web_ui) {
   plural_string_handler->AddLocalizedString(
       "deviceOnlyPasswordsIconTooltip",
       IDS_PASSWORD_MANAGER_UI_DEVICE_ONLY_PASSWORDS_ICON_TOOLTIP);
+  plural_string_handler->AddLocalizedString(
+      "fullResetDomainsDisplayTwoAndXMore",
+      IDS_PASSWORD_MANAGER_UI_FULL_RESET_DOMAINS_DISPLAY_TWO_AND_X_MORE);
+  plural_string_handler->AddLocalizedString(
+      "fullResetPasswordsCounter", IDS_PASSWORD_MANAGER_PASSWORDS_COUNTER);
+  plural_string_handler->AddLocalizedString(
+      "fullResetPasskeysCounter", IDS_PASSWORD_MANAGER_PASSKEYS_COUNTER);
   plural_string_handler->AddLocalizedString(
       "importPasswordsFailuresSummary",
       IDS_PASSWORD_MANAGER_UI_IMPORT_FAILURES_SUMMARY);
@@ -619,6 +660,9 @@ void AddPluralStrings(content::WebUI* web_ui) {
   plural_string_handler->AddLocalizedString(
       "deviceOnlyListItemAriaLabel",
       IDS_PASSWORD_MANAGER_UI_PASSWORD_LIST_ITEM_ARIA_LABEL);
+  plural_string_handler->AddLocalizedString(
+      "passwordsMovedToastMessage",
+      IDS_PASSWORD_MANAGER_UI_PASSWORD_MOVED_TOAST_MESSAGE);
   web_ui->AddMessageHandler(std::move(plural_string_handler));
 }
 
@@ -637,7 +681,7 @@ DEFINE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(PasswordManagerUI,
                                        kAddShortcutCustomEventId);
 
 PasswordManagerUI::PasswordManagerUI(content::WebUI* web_ui)
-    : ui::MojoBubbleWebUIController(web_ui, /*enable_chrome_send=*/true) {
+    : TopChromeWebUIController(web_ui, /*enable_chrome_send=*/true) {
   // Set up the chrome://password-manager/ source.
   Profile* profile = Profile::FromWebUI(web_ui);
   passwords_private_delegate_ =

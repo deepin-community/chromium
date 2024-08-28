@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.h"
+
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
-#include "chrome/browser/ui/views/profiles/signin_view_controller_delegate_views.h"
+#include "chrome/browser/ui/webui/signin/signin_url_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -30,7 +32,8 @@ class SigninViewControllerDelegateViewsBrowserTest : public DialogBrowserTest {
   SigninViewControllerDelegateViews* CreateDelegate(bool show_immediately) {
     return new SigninViewControllerDelegateViews(
         SigninViewControllerDelegateViews::CreateSyncConfirmationWebView(
-            browser()),
+            browser(), SyncConfirmationStyle::kDefaultModal,
+            /*is_sync_promo=*/false),
         browser(), ui::MODAL_TYPE_WINDOW, /*wait_for_size=*/!show_immediately,
         false);
   }
@@ -55,7 +58,8 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerDelegateViewsBrowserTest,
 IN_PROC_BROWSER_TEST_F(SigninViewControllerDelegateViewsBrowserTest,
                        CloseImmediately) {
   SigninViewController* controller = browser()->signin_view_controller();
-  controller->ShowModalSyncConfirmationDialog();
+  controller->ShowModalSyncConfirmationDialog(
+      /*is_signin_intercept=*/false, /*is_sync_promo=*/false);
   content::WebContentsDestroyedWatcher watcher(
       controller->GetModalDialogWebContentsForTesting());
   // Close the dialog before it was displayed, this should not crash.
@@ -90,7 +94,7 @@ IN_PROC_BROWSER_TEST_F(SigninViewControllerDelegateViewsBrowserTest,
 
 // Creates a dialog that is not shown until the size is set. Checks that the
 // dialog is initially shown with correct size.
-// TODO(crbug.com/1296260): Fix unexpected dialog height on mac10.12.
+// TODO(crbug.com/40214711): Fix unexpected dialog height on mac10.12.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_ResizeBeforeDisplay DISABLED_ResizeBeforeDisplay
 #else

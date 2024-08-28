@@ -24,7 +24,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -38,7 +37,6 @@ import org.chromium.base.TimeUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.JniMocker;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -66,8 +64,6 @@ import java.lang.ref.WeakReference;
 public class PasswordManagerErrorMessageHelperBridgeTest {
     private final FakeAccountManagerFacade mFakeAccountManagerFacade =
             spy(new FakeAccountManagerFacade());
-
-    @Rule public TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
 
     @Rule
     public AccountManagerTestRule mAccountManagerTestRule =
@@ -135,7 +131,7 @@ public class PasswordManagerErrorMessageHelperBridgeTest {
                 ChromePreferenceKeys.SYNC_ERROR_MESSAGE_SHOWN_AT_TIME, timeOfSyncPrompt);
         mFakeTimeTestRule.advanceMillis(
                 PasswordManagerErrorMessageHelperBridge.MINIMAL_INTERVAL_BETWEEN_PROMPTS_MS);
-        assertFalse(PasswordManagerErrorMessageHelperBridge.shouldShowErrorUi(mProfile));
+        assertFalse(PasswordManagerErrorMessageHelperBridge.shouldShowSignInErrorUI(mProfile));
     }
 
     @Test
@@ -150,7 +146,7 @@ public class PasswordManagerErrorMessageHelperBridgeTest {
                 .thenReturn(Long.toString(timeOfFirstUpmPrompt));
         mSharedPrefsManager.writeLong(
                 ChromePreferenceKeys.SYNC_ERROR_MESSAGE_SHOWN_AT_TIME, timeOfSyncPrompt);
-        assertFalse(PasswordManagerErrorMessageHelperBridge.shouldShowErrorUi(mProfile));
+        assertFalse(PasswordManagerErrorMessageHelperBridge.shouldShowSignInErrorUI(mProfile));
     }
 
     @Test
@@ -166,7 +162,27 @@ public class PasswordManagerErrorMessageHelperBridgeTest {
                 ChromePreferenceKeys.SYNC_ERROR_MESSAGE_SHOWN_AT_TIME, timeOfSyncPrompt);
         mFakeTimeTestRule.advanceMillis(
                 PasswordManagerErrorMessageHelperBridge.MINIMAL_INTERVAL_BETWEEN_PROMPTS_MS + 1);
-        assertTrue(PasswordManagerErrorMessageHelperBridge.shouldShowErrorUi(mProfile));
+        assertTrue(PasswordManagerErrorMessageHelperBridge.shouldShowSignInErrorUI(mProfile));
+    }
+
+    @Test
+    public void testEnoughTimeSinceLastUpmError() {
+        final long timeOfFirstUpmPrompt = TimeUtils.currentTimeMillis();
+        when(mPrefService.getString(Pref.UPM_ERROR_UI_SHOWN_TIMESTAMP))
+                .thenReturn(Long.toString(timeOfFirstUpmPrompt));
+        mFakeTimeTestRule.advanceMillis(
+                PasswordManagerErrorMessageHelperBridge.MINIMAL_INTERVAL_BETWEEN_PROMPTS_MS + 1);
+        assertTrue(
+                PasswordManagerErrorMessageHelperBridge.shouldShowUpdateGMSCoreErrorUI(mProfile));
+    }
+
+    @Test
+    public void testNotEnoughTimeSinceLastUpmError() {
+        final long timeOfFirstUpmPrompt = TimeUtils.currentTimeMillis();
+        when(mPrefService.getString(Pref.UPM_ERROR_UI_SHOWN_TIMESTAMP))
+                .thenReturn(Long.toString(timeOfFirstUpmPrompt));
+        assertFalse(
+                PasswordManagerErrorMessageHelperBridge.shouldShowUpdateGMSCoreErrorUI(mProfile));
     }
 
     @Test
@@ -238,9 +254,26 @@ public class PasswordManagerErrorMessageHelperBridgeTest {
     }
 
     @Test
+    public void testDontShowMessageOnIncognito() {
+        when(mIdentityServicesProviderMock.getIdentityManager(mProfile)).thenReturn(null);
+        final long timeOfFirstUpmPrompt = TimeUtils.currentTimeMillis();
+        final long timeOfSyncPrompt =
+                timeOfFirstUpmPrompt
+                        + PasswordManagerErrorMessageHelperBridge.MINIMAL_INTERVAL_TO_SYNC_ERROR_MS;
+        when(mPrefService.getString(Pref.UPM_ERROR_UI_SHOWN_TIMESTAMP))
+                .thenReturn(Long.toString(timeOfFirstUpmPrompt));
+        mSharedPrefsManager.writeLong(
+                ChromePreferenceKeys.SYNC_ERROR_MESSAGE_SHOWN_AT_TIME, timeOfSyncPrompt);
+        mFakeTimeTestRule.advanceMillis(
+                PasswordManagerErrorMessageHelperBridge.MINIMAL_INTERVAL_BETWEEN_PROMPTS_MS + 1);
+
+        assertFalse(PasswordManagerErrorMessageHelperBridge.shouldShowSignInErrorUI(mProfile));
+    }
+
+    @Test
     public void testDontShowMessageWithtoutAccount() {
         when(mIdentityManagerMock.getPrimaryAccountInfo(ConsentLevel.SIGNIN)).thenReturn(null);
-        assertFalse(PasswordManagerErrorMessageHelperBridge.shouldShowErrorUi(mProfile));
+        assertFalse(PasswordManagerErrorMessageHelperBridge.shouldShowSignInErrorUI(mProfile));
     }
 
     @Test

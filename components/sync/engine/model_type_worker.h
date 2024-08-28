@@ -41,6 +41,7 @@ class ModelTypeProcessor;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(SyncPasswordNotesStateInUpdate)
 enum class PasswordNotesStateForUMA {
   // No password note is set in the proto or the backup.
   kUnset = 0,
@@ -59,9 +60,11 @@ enum class PasswordNotesStateForUMA {
   kSetOnlyInBackupButCorrupted = 3,
   kMaxValue = kSetOnlyInBackupButCorrupted,
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncPasswordNotesStateInUpdate)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(PendingInvalidationStatus)
 enum class PendingInvalidationStatus {
   kAcknowledged = 0,
   kLost = 1,
@@ -73,25 +76,28 @@ enum class PendingInvalidationStatus {
   kDataTypeNotConnected = 6,
   kMaxValue = kDataTypeNotConnected,
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:PendingInvalidationStatus)
 
-// A smart cache for sync types to communicate with the sync thread.
+// A smart cache for sync types to communicate with the sync sequence.
 //
 // When the sync data type wants to talk to the sync server, it will
-// send a message from its thread to this object on the sync thread. This
+// send a message from its sequence to this object on the sync sequence. This
 // object ensures the appropriate sync server communication gets scheduled and
-// executed. The response, if any, will be returned to the data types's thread
+// executed. The response, if any, will be returned to the data types's sequence
 // eventually.
 //
 // This object also has a role to play in communications in the opposite
-// direction. Sometimes the sync thread will receive changes from the sync
+// direction. Sometimes the sync sequence will receive changes from the sync
 // server and deliver them here. This object will post this information back to
-// the appropriate component on the model type's thread.
+// the appropriate component on the model type's sequence.
 //
 // This object does more than just pass along messages. It understands the sync
 // protocol, and it can make decisions when it sees conflicting messages. For
 // example, if the sync server sends down an update for a sync entity that is
 // currently pending for commit, this object will detect this condition and
 // cancel the pending commit.
+//
+// Lives on the sync sequence.
 class ModelTypeWorker : public UpdateHandler,
                         public CommitContributor,
                         public CommitQueue {
@@ -198,10 +204,6 @@ class ModelTypeWorker : public UpdateHandler,
   size_t EstimateMemoryUsage() const;
 
   bool HasLocalChanges() const;
-
-  void SetMinGetUpdatesToIgnoreKeyForTest(int min_get_updates_to_ignore_key) {
-    min_get_updates_to_ignore_key_ = min_get_updates_to_ignore_key;
-  }
 
   bool IsEncryptionEnabledForTest() const { return encryption_enabled_; }
 
@@ -343,6 +345,8 @@ class ModelTypeWorker : public UpdateHandler,
 
   // Pointer to the ModelTypeProcessor associated with this worker. Initialized
   // with ConnectSync().
+  // Note that in practice, this is typically a proxy object to the actual
+  // processor (which lives on the model sequence).
   std::unique_ptr<ModelTypeProcessor> model_type_processor_;
 
   // State that applies to the entire model type.
@@ -357,7 +361,7 @@ class ModelTypeWorker : public UpdateHandler,
   // A map of sync entities, keyed by server_id. Holds updates encrypted with
   // pending keys. Entries are stored in a map for de-duplication (applying only
   // the latest).
-  // TODO(crbug.com/1109221): Use a name mentioning "updates" and "server id".
+  // TODO(crbug.com/40141634): Use a name mentioning "updates" and "server id".
   std::map<std::string, sync_pb::SyncEntity> entries_pending_decryption_;
 
   // A key is said to be unknown if one of these is true:
@@ -384,18 +388,13 @@ class ModelTypeWorker : public UpdateHandler,
   // and worker might not be ready to commit entities at the time.
   HasLocalChangesState has_local_changes_state_ = kNoNudgedLocalChanges;
 
-  // Remains constant in production code. Can be overridden in tests.
-  // |UnknownEncryptionKeyInfo::get_updates_while_should_have_been_known| must
-  // be above this value before updates encrypted with the key are ignored.
-  int min_get_updates_to_ignore_key_;
-
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<ModelTypeWorker> weak_ptr_factory_{this};
 };
 
 // GetLocalChangesRequest is a container for GetLocalChanges call response. It
-// allows sync thread to block waiting for model thread to call SetResponse.
+// allows sync sequence to block waiting for model sequence to call SetResponse.
 // This class supports canceling blocking call through CancelationSignal during
 // sync engine shutdown.
 //
@@ -421,7 +420,7 @@ class GetLocalChangesRequest
   // CancelationSignal::Observer implementation.
   void OnCancelationSignalReceived() override;
 
-  // Blocks current thread until either SetResponse is called or
+  // Blocks current sequence until either SetResponse is called or
   // cancelation_signal_ is signaled.
   void WaitForResponseOrCancelation(CancelationSignal* cancelation_signal);
 

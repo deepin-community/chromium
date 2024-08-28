@@ -6,6 +6,11 @@
 
 #include <stdint.h>
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/timer/mock_timer.h"
@@ -113,7 +118,7 @@ class TestTabSearchPageHandler : public TabSearchPageHandler {
  public:
   TestTabSearchPageHandler(mojo::PendingRemote<tab_search::mojom::Page> page,
                            content::WebUI* web_ui,
-                           ui::MojoBubbleWebUIController* webui_controller)
+                           TopChromeWebUIController* webui_controller)
       : TabSearchPageHandler(
             mojo::PendingReceiver<tab_search::mojom::PageHandler>(),
             std::move(page),
@@ -149,8 +154,7 @@ class TabSearchPageHandlerTest : public BrowserWithTestWindowTest {
     browser4_ = CreateTestBrowser(profile2(), false);
     browser5_ = CreateTestBrowser(profile1(), true);
     BrowserList::SetLastActive(browser1());
-    webui_controller_ =
-        std::make_unique<ui::MojoBubbleWebUIController>(web_ui());
+    webui_controller_ = std::make_unique<TopChromeWebUIController>(web_ui());
     handler_ = std::make_unique<TestTabSearchPageHandler>(
         page_.BindAndGetRemote(), web_ui(), webui_controller_.get());
   }
@@ -226,7 +230,8 @@ class TabSearchPageHandlerTest : public BrowserWithTestWindowTest {
     std::unique_ptr<Browser> browser =
         CreateBrowser(profile, type, false, window.get());
     BrowserList::SetLastActive(browser.get());
-    new TestBrowserWindowOwner(window.release());
+    // Self deleting.
+    new TestBrowserWindowOwner(std::move(window));
     return browser;
   }
 
@@ -238,7 +243,7 @@ class TabSearchPageHandlerTest : public BrowserWithTestWindowTest {
   std::unique_ptr<Browser> browser4_;
   std::unique_ptr<Browser> browser5_;
   std::unique_ptr<TestTabSearchPageHandler> handler_;
-  std::unique_ptr<ui::MojoBubbleWebUIController> webui_controller_;
+  std::unique_ptr<TopChromeWebUIController> webui_controller_;
 };
 
 TEST_F(TabSearchPageHandlerTest, GetTabs) {
@@ -397,7 +402,7 @@ TEST_F(TabSearchPageHandlerTest, MediaTabsTest) {
       ->SetIsCurrentlyAudible(true);
   AddTab(browser(), GURL(kTabUrl1));
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
-  tab_strip_model->ReplaceWebContentsAt(0, std::move(test_web_contents));
+  tab_strip_model->DiscardWebContentsAt(0, std::move(test_web_contents));
   NavigateAndCommitActiveTab(GURL(kTabUrl1));
   tab_search::mojom::PageHandler::GetProfileDataCallback callback =
       base::BindLambdaForTesting(

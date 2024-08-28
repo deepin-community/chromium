@@ -141,6 +141,17 @@ class CORE_EXPORT DedicatedWorker final
       RejectCoepUnsafeNone reject_coep_unsafe_none,
       mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
           back_forward_cache_controller_host);
+  void ContinueStartInternal(
+      const KURL& script_url,
+      std::unique_ptr<WorkerMainScriptLoadParameters>
+          worker_main_script_load_params,
+      network::mojom::ReferrerPolicy,
+      Vector<network::mojom::blink::ContentSecurityPolicyPtr>
+          response_content_security_policies,
+      const String& source_code,
+      RejectCoepUnsafeNone reject_coep_unsafe_none,
+      mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
+          back_forward_cache_controller_host);
   std::unique_ptr<GlobalScopeCreationParams> CreateGlobalScopeCreationParams(
       const KURL& script_url,
       network::mojom::ReferrerPolicy,
@@ -191,6 +202,9 @@ class CORE_EXPORT DedicatedWorker final
   // Passed to DedicatedWorkerMessagingProxy on worker thread start.
   mojo::PendingRemote<mojom::blink::DedicatedWorkerHost>
       pending_dedicated_worker_host_;
+
+  // The timestamp taken when Start() is called.
+  base::TimeTicks start_time_;
 
   // Whether the worker is frozen due to a call from this context.
   bool requested_frozen_ = false;

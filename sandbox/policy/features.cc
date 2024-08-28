@@ -59,6 +59,12 @@ BASE_FEATURE(kGpuLPAC,
              "GpuLPAC",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+// Enables Print Compositor Low Privilege AppContainer. Note, this might be
+// overridden and disabled by policy.
+BASE_FEATURE(kPrintCompositorLPAC,
+             "PrintCompositorLPAC",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // Enables Renderer AppContainer
 BASE_FEATURE(kRendererAppContainer,
              "RendererAppContainer",
@@ -98,6 +104,30 @@ BASE_FEATURE(kWinSboxZeroAppShim,
 // build. See https://blogs.windows.com/blog/tag/code-integrity-guard/.
 BASE_FEATURE(kNetworkServiceCodeIntegrity,
              "NetworkServiceCodeIntegrity",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Run win32k lockdown without applying the interceptions to fake out the
+// dllmain of gdi32 and user32. With this feature enabled, processes with
+// win32k lockdown policy will fail to load gdi32.dll and user32.dll.
+// TODO(crbug.com/326277735) this feature is under development and not
+// completely supported in every process type, may cause delayload failures.
+BASE_FEATURE(kWinSboxNoFakeGdiInit,
+             "WinSboxNoFakeGdiInit",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables Restrict Core Sharing mitigation for the renderer process, when
+// running Windows 11 Build 25922 and above. See param definition of
+// RestrictCoreSharing in
+// https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-
+// process_mitigation_side_channel_isolation_policy
+BASE_FEATURE(kWinSboxRestrictCoreSharingOnRenderer,
+             "WinSboxRestrictCoreSharingOnRenderer",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Creates an AppContainer policy without registering with the Windows firewall
+// service. See crbug.com/352720904 for details.
+BASE_FEATURE(kWinSboxACProfileWithoutFirewall,
+             "WinSboxACProfileWithoutFirewall",
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -169,10 +199,19 @@ BASE_FEATURE(kRestrictCloneParameters,
 
 #if BUILDFLAG(IS_WIN)
 bool IsNetworkSandboxSupported() {
+  // Temporary fix to avoid using network sandbox on ARM64 until root cause for
+  // https://crbug.com/40223285 is diagnosed.
+  if (base::win::OSInfo::GetInstance()->GetArchitecture() ==
+          base::win::OSInfo::ARM64_ARCHITECTURE ||
+      base::win::OSInfo::GetInstance()->IsWowX86OnARM64() ||
+      base::win::OSInfo::GetInstance()->IsWowAMD64OnARM64()) {
+    return false;
+  }
+
   // Network service sandbox uses GetNetworkConnectivityHint which is only
   // supported on Windows 10 Build 19041 (20H1) so versions before that wouldn't
   // have a working network change notifier when running in the sandbox.
-  // TODO(crbug.com/1450754): Move this to an API that works earlier than 20H1
+  // TODO(crbug.com/40915451): Move this to an API that works earlier than 20H1
   // and also works in the LPAC sandbox.
   static const bool supported =
       base::win::GetVersion() >= base::win::Version::WIN10_20H1;

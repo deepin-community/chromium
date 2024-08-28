@@ -119,11 +119,11 @@ bool GetIsAvailableInArcBySource(
         kChromeOSProjectorAppReauth:
     case AccountManagerFacade::AccountAdditionSource::
         kChromeSettingsReauthAccountButton:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return false;
     // Unused enums that cannot be deleted.
     case AccountManagerFacade::AccountAdditionSource::kPrintPreviewDialogUnused:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return false;
   }
 }
@@ -352,7 +352,7 @@ void AccountManagerFacadeImpl::GetAccounts(
       remote_version_ < RemoteMinVersions::kGetAccountsMinVersion) {
     // Remote side is disconnected or doesn't support GetAccounts. Do not return
     // an empty list as that may cause Lacros to delete user profiles.
-    // TODO(https://crbug.com/1287297): Try to reconnect, or return an error.
+    // TODO(crbug.com/40211181): Try to reconnect, or return an error.
     return;
   }
   RunAfterInitializationSequence(

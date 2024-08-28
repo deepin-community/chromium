@@ -5,6 +5,7 @@
 #include "components/ui_devtools/devtools_server.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/files/file_util.h"
@@ -14,6 +15,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
+#include "base/not_fatal_until.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -174,7 +176,7 @@ void UiDevToolsServer::AttachClient(std::unique_ptr<UiDevToolsClient> client) {
 }
 
 void UiDevToolsServer::SendOverWebSocket(int connection_id,
-                                         base::StringPiece message) {
+                                         std::string_view message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(devtools_server_sequence_);
   server_->SendOverWebSocket(connection_id, message, tag_);
 }
@@ -242,7 +244,7 @@ void UiDevToolsServer::OnWebSocketRequest(
 void UiDevToolsServer::OnWebSocketMessage(int connection_id, std::string data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(devtools_server_sequence_);
   auto it = connections_.find(connection_id);
-  DCHECK(it != connections_.end());
+  CHECK(it != connections_.end(), base::NotFatalUntil::M130);
   UiDevToolsClient* client = it->second;
   client->Dispatch(data);
 }

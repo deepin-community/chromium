@@ -188,7 +188,7 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
   }
 
   keyboard: KeyboardInfo;
-  protected isLoggedIn: boolean;
+  isLoggedIn: boolean;
   protected diagramTopRightKey: DiagramTopRightKey|null;
   private lostFocusToastLingerMs: number;
   private layoutIsKnown: boolean;
@@ -342,6 +342,10 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
     assert(diagram);
     diagram.resetAllKeys();
     this.$.dialog.close();
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete('showDefaultKeyboardTester');
+    history.pushState(null, '', url);
   }
 
   handleClose(): void {

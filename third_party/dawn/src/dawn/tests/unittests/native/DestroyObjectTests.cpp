@@ -62,11 +62,14 @@ using ::testing::_;
 using ::testing::ByMove;
 using ::testing::InSequence;
 using ::testing::Mock;
-using testing::MockCallback;
+using testing::MockCppCallback;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::StrictMock;
 using ::testing::Test;
+
+using MockMapAsyncCallback =
+    StrictMock<MockCppCallback<void (*)(wgpu::MapAsyncStatus, const char*)>>;
 
 static constexpr std::string_view kComputeShader = R"(
         @compute @workgroup_size(1) fn main() {}
@@ -235,7 +238,7 @@ TEST_F(DestroyObjectTests, MappedBufferApiExplicit) {
     desc.size = 16;
     desc.usage = wgpu::BufferUsage::MapRead;
 
-    StrictMock<MockCallback<wgpu::BufferMapCallback>> cb;
+    MockMapAsyncCallback cb;
     EXPECT_CALL(cb, Call).Times(1);
     Ref<BufferMock> bufferMock = AcquireRef(new BufferMock(mDeviceMock, &desc));
     {
@@ -247,8 +250,9 @@ TEST_F(DestroyObjectTests, MappedBufferApiExplicit) {
     {
         EXPECT_CALL(*mDeviceMock, CreateBufferImpl).WillOnce(Return(ByMove(std::move(bufferMock))));
         wgpu::Buffer buffer = device.CreateBuffer(ToCppAPI(&desc));
-        buffer.MapAsync(wgpu::MapMode::Read, 0, 16, cb.Callback(), cb.MakeUserdata(this));
-        device.Tick();
+        buffer.MapAsync(wgpu::MapMode::Read, 0, 16, wgpu::CallbackMode::AllowProcessEvents,
+                        cb.Callback());
+        ProcessEvents();
 
         EXPECT_TRUE(FromAPI(buffer.Get())->IsAlive());
         buffer.Destroy();
@@ -263,7 +267,7 @@ TEST_F(DestroyObjectTests, MappedBufferImplicit) {
     desc.size = 16;
     desc.usage = wgpu::BufferUsage::MapRead;
 
-    StrictMock<MockCallback<wgpu::BufferMapCallback>> cb;
+    MockMapAsyncCallback cb;
     EXPECT_CALL(cb, Call).Times(1);
     Ref<BufferMock> bufferMock = AcquireRef(new BufferMock(mDeviceMock, &desc));
     {
@@ -277,8 +281,9 @@ TEST_F(DestroyObjectTests, MappedBufferImplicit) {
 
         EXPECT_CALL(*mDeviceMock, CreateBufferImpl).WillOnce(Return(ByMove(std::move(bufferMock))));
         wgpu::Buffer buffer = device.CreateBuffer(ToCppAPI(&desc));
-        buffer.MapAsync(wgpu::MapMode::Read, 0, 16, cb.Callback(), cb.MakeUserdata(this));
-        device.Tick();
+        buffer.MapAsync(wgpu::MapMode::Read, 0, 16, wgpu::CallbackMode::AllowProcessEvents,
+                        cb.Callback());
+        ProcessEvents();
 
         EXPECT_TRUE(FromAPI(buffer.Get())->IsAlive());
     }
@@ -372,7 +377,7 @@ TEST_F(DestroyObjectTests, ExternalTextureNativeExplicit) {
     TextureViewDescriptor textureViewDesc = {};
     textureViewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
     Ref<TextureViewMock> textureViewMock =
-        AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), &textureViewDesc));
+        AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), Unpack(&textureViewDesc)));
 
     ExternalTextureDescriptor desc = {};
     std::array<float, 12> placeholderConstantArray;
@@ -402,7 +407,7 @@ TEST_F(DestroyObjectTests, ExternalTextureApiExplicit) {
     TextureViewDescriptor textureViewDesc = {};
     textureViewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
     Ref<TextureViewMock> textureViewMock =
-        AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), &textureViewDesc));
+        AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), Unpack(&textureViewDesc)));
 
     ExternalTextureDescriptor desc = {};
     std::array<float, 12> placeholderConstantArray;
@@ -436,7 +441,7 @@ TEST_F(DestroyObjectTests, ExternalTextureImplicit) {
     TextureViewDescriptor textureViewDesc = {};
     textureViewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
     Ref<TextureViewMock> textureViewMock =
-        AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), &textureViewDesc));
+        AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), Unpack(&textureViewDesc)));
 
     ExternalTextureDescriptor desc = {};
     std::array<float, 12> placeholderConstantArray;
@@ -712,7 +717,7 @@ TEST_F(DestroyObjectTests, TextureViewNativeExplicit) {
     {
         // Explicitly destroy the texture view.
         Ref<TextureViewMock> textureViewMock =
-            AcquireRef(new TextureViewMock(textureMock.Get(), &desc));
+            AcquireRef(new TextureViewMock(textureMock.Get(), Unpack(&desc)));
         EXPECT_CALL(*textureViewMock.Get(), DestroyImpl).Times(1);
 
         EXPECT_TRUE(textureViewMock->IsAlive());
@@ -722,7 +727,7 @@ TEST_F(DestroyObjectTests, TextureViewNativeExplicit) {
     {
         // Destroying the owning texture should cause the view to be destroyed as well.
         Ref<TextureViewMock> textureViewMock =
-            AcquireRef(new TextureViewMock(textureMock.Get(), &desc));
+            AcquireRef(new TextureViewMock(textureMock.Get(), Unpack(&desc)));
         EXPECT_CALL(*textureViewMock.Get(), DestroyImpl).Times(1);
 
         EXPECT_TRUE(textureViewMock->IsAlive());
@@ -742,7 +747,7 @@ TEST_F(DestroyObjectTests, TextureViewApiExplicit) {
     TextureViewDescriptor viewDesc = {};
     viewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
     Ref<TextureViewMock> textureViewMock =
-        AcquireRef(new TextureViewMock(textureMock.Get(), &viewDesc));
+        AcquireRef(new TextureViewMock(textureMock.Get(), Unpack(&viewDesc)));
     EXPECT_CALL(*textureViewMock.Get(), DestroyImpl).Times(1);
 
     EXPECT_CALL(*mDeviceMock, CreateTextureViewImpl(textureMock.Get(), _))
@@ -770,7 +775,7 @@ TEST_F(DestroyObjectTests, TextureViewImplicit) {
     viewDesc.format = wgpu::TextureFormat::RGBA8Unorm;
 
     Ref<TextureViewMock> textureViewMock =
-        AcquireRef(new TextureViewMock(textureMock.Get(), &viewDesc));
+        AcquireRef(new TextureViewMock(textureMock.Get(), Unpack(&viewDesc)));
     EXPECT_CALL(*textureViewMock.Get(), DestroyImpl).Times(1);
     {
         ScopedRawPtrExpectation scoped(textureViewMock.Get());
@@ -967,7 +972,7 @@ TEST_F(DestroyObjectTests, DestroyObjectsApiExplicit) {
         desc.format = wgpu::TextureFormat::RGBA8Unorm;
 
         ScopedRawPtrExpectation scoped(mDeviceMock);
-        textureViewMock = AcquireRef(new TextureViewMock(textureMock.Get(), &desc));
+        textureViewMock = AcquireRef(new TextureViewMock(textureMock.Get(), Unpack(&desc)));
         EXPECT_CALL(*mDeviceMock, CreateTextureViewImpl).WillOnce(Return(textureViewMock));
         textureView = texture.CreateView(ToCppAPI(&desc));
     }
@@ -1077,6 +1082,23 @@ TEST_F(DestroyObjectRegressionTests, LastRefInCommandComputePipeline) {
     wgpu::ComputePipelineDescriptor pipelineDesc;
     pipelineDesc.compute.module = ::dawn::utils::CreateShaderModule(device, kComputeShader.data());
     computeEncoder.SetPipeline(device.CreateComputePipeline(&pipelineDesc));
+
+    device.Destroy();
+}
+
+// Tests that when a BindGroup's last reference is held in a command in an unfinished
+// CommandEncoder, that destroying the device still works as expected (and does not cause
+// double-free).
+TEST_F(DestroyObjectRegressionTests, LastRefInCommandBindGroup) {
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    wgpu::ComputePassEncoder computeEncoder = encoder.BeginComputePass();
+
+    wgpu::Sampler sampler = device.CreateSampler();
+    wgpu::BindGroupLayout layout = ::dawn::utils::MakeBindGroupLayout(
+        device, {{0, wgpu::ShaderStage::Compute, wgpu::SamplerBindingType::Filtering}});
+    wgpu::BindGroup bindGroup = ::dawn::utils::MakeBindGroup(device, layout, {{0, sampler}});
+
+    computeEncoder.SetBindGroup(0, bindGroup);
 
     device.Destroy();
 }

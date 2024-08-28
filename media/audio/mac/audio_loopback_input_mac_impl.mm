@@ -290,7 +290,7 @@ SCKAudioInputStream::SCKAudioInputStream(
                                              params_.sample_rate())) {
   CHECK(AudioDeviceDescription::IsLoopbackDevice(device_id_));
   CHECK(!log_callback_.is_null());
-  // TODO(crbug.com/1480224): Update getDisplayMedia to handle sample rate
+  // TODO(crbug.com/40281254): Update getDisplayMedia to handle sample rate
   // constraints
   // ScreenCaptureKit supports only certain sample rates:
   // https://developer.apple.com/documentation/screencapturekit/scstreamconfiguration/3931903-samplerate
@@ -394,12 +394,15 @@ void SCKAudioInputStream::Start(AudioInputCallback* callback) {
       base::BindRepeating(&SCKAudioInputStream::OnStreamError,
                           base::Unretained(this)));
 
+  // Make a local copy of the shared_refptr in case the error handler is called
+  // after `this` is destroyed.
+  auto local_shared_helper = shared_helper_;
   [stream_ startCaptureWithCompletionHandler:^(NSError* error) {
     if (!error) {
       return;
     }
 
-    shared_helper_->OnStreamError(error);
+    local_shared_helper->OnStreamError(error);
   }];
 }
 

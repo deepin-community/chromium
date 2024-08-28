@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/check.h"
@@ -37,7 +38,6 @@
 #include "base/trace_event/base_tracing.h"
 #include "build/build_config.h"
 #include "third_party/abseil-cpp/absl/container/inlined_vector.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 namespace sequence_manager {
@@ -72,7 +72,7 @@ std::atomic<base::TimeDelta> g_max_precise_delay{kDefaultMaxPreciseDelay};
 std::atomic_bool g_explicit_high_resolution_timer_win{true};
 #endif  // BUILDFLAG(IS_WIN)
 
-void RunTaskSynchronously(const AssociatedThreadId* associated_thread,
+void RunTaskSynchronously(AssociatedThreadId* associated_thread,
                           scoped_refptr<SingleThreadTaskRunner> task_runner,
                           OnceClosure closure) {
   base::internal::TaskScope sequence_scope(
@@ -81,7 +81,9 @@ void RunTaskSynchronously(const AssociatedThreadId* associated_thread,
       /* is_running_synchronously=*/true);
   CurrentDefaultHandleOverrideForRunOrPostTask task_runner_override(
       std::move(task_runner));
+  associated_thread->StartInSequenceWithCurrentThread();
   std::move(closure).Run();
+  associated_thread->StopInSequenceWithCurrentThread();
 }
 
 }  // namespace
@@ -145,7 +147,7 @@ bool TaskQueueImpl::GuardedTaskPoster::RunOrPostTask(PostedTask task) {
 
 TaskQueueImpl::TaskRunner::TaskRunner(
     scoped_refptr<GuardedTaskPoster> task_poster,
-    scoped_refptr<const AssociatedThreadId> associated_thread,
+    scoped_refptr<AssociatedThreadId> associated_thread,
     TaskType task_type)
     : task_poster_(std::move(task_poster)),
       associated_thread_(std::move(associated_thread)),
@@ -395,14 +397,17 @@ void TaskQueueImpl::PostTask(PostedTask task) {
 }
 
 void TaskQueueImpl::RemoveCancelableTask(HeapHandle heap_handle) {
-  // Can only cancel from the current thread.
-  DCHECK(associated_thread_->IsBoundToCurrentThread());
+  associated_thread_->AssertInSequenceWithCurrentThread();
   DCHECK(heap_handle.IsValid());
 
   main_thread_only().delayed_incoming_queue.remove(heap_handle);
 
-  // Only update the delayed wake up if the top task is removed.
-  if (heap_handle.index() == 0u) {
+  // Only update the delayed wake up if the top task is removed and we're
+  // running on the main thread (a `RunOrPostTask` callback may run outside the
+  // main thread, but in sequence with it -- it's not safe to invoke
+  // `MessagePump::ScheduleDelayedWork()` in that context).
+  if (heap_handle.index() == 0u &&
+      associated_thread_->IsBoundToCurrentThread()) {
     LazyNow lazy_now(sequence_manager_->main_thread_clock());
     UpdateWakeUp(&lazy_now);
   }
@@ -607,7 +612,7 @@ void TaskQueueImpl::TakeImmediateIncomingQueueTasks(TaskDeque* queue) {
       DCHECK(!task.queue_time.is_null());
       DCHECK(task.delayed_run_time.is_null());
       if (task.queue_time >= main_thread_only().delayed_fence.value()) {
-        main_thread_only().delayed_fence = absl::nullopt;
+        main_thread_only().delayed_fence = std::nullopt;
         DCHECK(!main_thread_only().current_fence);
         main_thread_only().current_fence = Fence(task.task_order());
         // Do not trigger WorkQueueSets notification when taking incoming
@@ -666,10 +671,10 @@ bool TaskQueueImpl::HasTaskToRunImmediatelyOrReadyDelayedTask() const {
   return !any_thread_.immediate_incoming_queue.empty();
 }
 
-absl::optional<WakeUp> TaskQueueImpl::GetNextDesiredWakeUp() {
+std::optional<WakeUp> TaskQueueImpl::GetNextDesiredWakeUp() {
   // Note we don't scheduled a wake-up for disabled queues.
   if (main_thread_only().delayed_incoming_queue.empty() || !IsQueueEnabled())
-    return absl::nullopt;
+    return std::nullopt;
 
   const auto& top_task = main_thread_only().delayed_incoming_queue.top();
 
@@ -844,7 +849,7 @@ Value::Dict TaskQueueImpl::AsValue(TimeTicks now, bool force_verbose) const {
             StringPrintf("0x%" PRIx64, static_cast<uint64_t>(
                                            reinterpret_cast<uintptr_t>(this))));
   state.Set("enabled", IsQueueEnabled());
-  // TODO(crbug.com/1334256): Make base::Value able to store an int64_t and
+  // TODO(crbug.com/40228085): Make base::Value able to store an int64_t and
   // remove the various static_casts below.
   state.Set("any_thread_.immediate_incoming_queuesize",
             static_cast<int>(any_thread_.immediate_incoming_queue.size()));
@@ -936,9 +941,9 @@ void TaskQueueImpl::InsertFence(TaskQueue::InsertFencePosition position) {
 
 void TaskQueueImpl::InsertFence(Fence current_fence) {
   // Only one fence may be present at a time.
-  main_thread_only().delayed_fence = absl::nullopt;
+  main_thread_only().delayed_fence = std::nullopt;
 
-  absl::optional<Fence> previous_fence = main_thread_only().current_fence;
+  std::optional<Fence> previous_fence = main_thread_only().current_fence;
 
   // Tasks posted after this point will have a strictly higher enqueue order
   // and will be blocked from running.
@@ -981,9 +986,9 @@ void TaskQueueImpl::InsertFenceAt(TimeTicks time) {
 }
 
 void TaskQueueImpl::RemoveFence() {
-  absl::optional<Fence> previous_fence = main_thread_only().current_fence;
-  main_thread_only().current_fence = absl::nullopt;
-  main_thread_only().delayed_fence = absl::nullopt;
+  std::optional<Fence> previous_fence = main_thread_only().current_fence;
+  main_thread_only().current_fence = std::nullopt;
+  main_thread_only().delayed_fence = std::nullopt;
 
   bool front_task_unblocked =
       main_thread_only().immediate_work_queue->RemoveFence();
@@ -1041,7 +1046,7 @@ bool TaskQueueImpl::CouldTaskRun(EnqueueOrder enqueue_order) const {
   if (!main_thread_only().current_fence)
     return true;
 
-  // TODO(crbug.com/1249857): This should use TaskOrder. This is currently only
+  // TODO(crbug.com/40791504): This should use TaskOrder. This is currently only
   // used for tests and is fine as-is, but we should be using `TaskOrder` for
   // task comparisons. Also this test should be renamed with a testing suffix as
   // it is not used in production.
@@ -1129,7 +1134,7 @@ void TaskQueueImpl::SetQueueEnabled(bool enabled) {
 
   // Update the |main_thread_only_| struct.
   main_thread_only().is_enabled = enabled;
-  main_thread_only().disabled_time = absl::nullopt;
+  main_thread_only().disabled_time = std::nullopt;
 
   // |sequence_manager_| can be null in tests.
   if (!sequence_manager_)
@@ -1309,7 +1314,7 @@ void TaskQueueImpl::ResetThrottler() {
 }
 
 void TaskQueueImpl::UpdateWakeUp(LazyNow* lazy_now) {
-  absl::optional<WakeUp> wake_up = GetNextDesiredWakeUp();
+  std::optional<WakeUp> wake_up = GetNextDesiredWakeUp();
   if (main_thread_only().throttler && IsQueueEnabled()) {
     // GetNextAllowedWakeUp() may return a non-null wake_up even if |wake_up| is
     // nullopt, e.g. to throttle immediate tasks.
@@ -1320,7 +1325,7 @@ void TaskQueueImpl::UpdateWakeUp(LazyNow* lazy_now) {
 }
 
 void TaskQueueImpl::SetNextWakeUp(LazyNow* lazy_now,
-                                  absl::optional<WakeUp> wake_up) {
+                                  std::optional<WakeUp> wake_up) {
   if (main_thread_only().scheduled_wake_up == wake_up)
     return;
   main_thread_only().scheduled_wake_up = wake_up;
@@ -1418,7 +1423,7 @@ void TaskQueueImpl::ActivateDelayedFenceIfNeeded(const Task& task) {
   if (main_thread_only().delayed_fence.value() > task.delayed_run_time)
     return;
   InsertFence(Fence(task.task_order()));
-  main_thread_only().delayed_fence = absl::nullopt;
+  main_thread_only().delayed_fence = std::nullopt;
 }
 
 void TaskQueueImpl::MaybeReportIpcTaskQueuedFromMainThread(
@@ -1605,7 +1610,7 @@ TaskQueueImpl::DelayedIncomingQueue::DelayedIncomingQueue() = default;
 TaskQueueImpl::DelayedIncomingQueue::~DelayedIncomingQueue() = default;
 
 void TaskQueueImpl::DelayedIncomingQueue::push(Task task) {
-  // TODO(crbug.com/1247285): Remove this once the cause of corrupted tasks in
+  // TODO(crbug.com/40789839): Remove this once the cause of corrupted tasks in
   // the queue is understood.
   CHECK(task.task);
   if (task.is_high_res)

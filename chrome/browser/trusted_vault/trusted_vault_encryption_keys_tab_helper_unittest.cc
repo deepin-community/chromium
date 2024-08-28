@@ -83,10 +83,12 @@ class TrustedVaultEncryptionKeysTabHelperTest
   }
 
   TestingProfile::TestingFactories GetTestingFactories() const override {
-    return {{TrustedVaultServiceFactory::GetInstance(),
-             TrustedVaultServiceFactory::GetDefaultFactory()},
-            {ChromeSigninClientFactory::GetInstance(),
-             base::BindRepeating(&signin::BuildTestSigninClient)}};
+    return {TestingProfile::TestingFactory{
+                TrustedVaultServiceFactory::GetInstance(),
+                TrustedVaultServiceFactory::GetDefaultFactory()},
+            TestingProfile::TestingFactory{
+                ChromeSigninClientFactory::GetInstance(),
+                base::BindRepeating(&signin::BuildTestSigninClient)}};
   }
 
   base::test::ScopedFeatureList feature_list_;
@@ -105,7 +107,7 @@ TEST_F(TrustedVaultEncryptionKeysTabHelperTest,
   EXPECT_FALSE(HasEncryptionKeysApiInMainFrame());
 }
 
-// TODO(https://crbug.com/1394191): flaky on android bots.
+// TODO(crbug.com/40881433): flaky on android bots.
 TEST_F(TrustedVaultEncryptionKeysTabHelperTest,
        DISABLED_ShouldNotExposeMojoApiIfNavigatedAway) {
   web_contents_tester()->NavigateAndCommit(GaiaUrls::GetInstance()->gaia_url());
@@ -140,7 +142,7 @@ TEST_F(TrustedVaultEncryptionKeysTabHelperTest,
   EXPECT_FALSE(HasEncryptionKeysApiInMainFrame());
 }
 
-// TODO(https://crbug.com/1394191): flaky on android bots.
+// TODO(crbug.com/40881433): flaky on android bots.
 TEST_F(TrustedVaultEncryptionKeysTabHelperTest,
        DISABLED_ShouldNotExposeMojoApiIfNavigatedAwayToErrorPage) {
   web_contents_tester()->NavigateAndCommit(GaiaUrls::GetInstance()->gaia_url());

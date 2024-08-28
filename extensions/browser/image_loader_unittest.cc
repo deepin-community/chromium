@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "extensions/browser/image_loader.h"
 
 #include <stddef.h>
@@ -19,9 +24,9 @@
 #include "extensions/browser/unloaded_extension_reason.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
 #include "extensions/common/extension_paths.h"
 #include "extensions/common/extension_resource.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -112,10 +117,9 @@ TEST_F(ImageLoaderTest, LoadImage) {
       CreateExtension("image_loader", ManifestLocation::kInvalidLocation));
   ASSERT_TRUE(extension.get() != nullptr);
 
-  ExtensionResource image_resource =
-      IconsInfo::GetIconResource(extension.get(),
-                                 extension_misc::EXTENSION_ICON_SMALLISH,
-                                 ExtensionIconSet::MATCH_EXACTLY);
+  ExtensionResource image_resource = IconsInfo::GetIconResource(
+      extension.get(), extension_misc::EXTENSION_ICON_SMALLISH,
+      ExtensionIconSet::Match::kExactly);
   gfx::Size max_size(extension_misc::EXTENSION_ICON_SMALLISH,
                      extension_misc::EXTENSION_ICON_SMALLISH);
   ImageLoader loader;
@@ -144,10 +148,9 @@ TEST_F(ImageLoaderTest, DeleteExtensionWhileWaitingForCache) {
       CreateExtension("image_loader", ManifestLocation::kInvalidLocation));
   ASSERT_TRUE(extension.get() != nullptr);
 
-  ExtensionResource image_resource =
-      IconsInfo::GetIconResource(extension.get(),
-                                 extension_misc::EXTENSION_ICON_SMALLISH,
-                                 ExtensionIconSet::MATCH_EXACTLY);
+  ExtensionResource image_resource = IconsInfo::GetIconResource(
+      extension.get(), extension_misc::EXTENSION_ICON_SMALLISH,
+      ExtensionIconSet::Match::kExactly);
   gfx::Size max_size(extension_misc::EXTENSION_ICON_SMALLISH,
                      extension_misc::EXTENSION_ICON_SMALLISH);
   ImageLoader loader;
@@ -190,7 +193,7 @@ TEST_F(ImageLoaderTest, MultipleImages) {
                  extension_misc::EXTENSION_ICON_SMALLISH, };
   for (size_t i = 0; i < std::size(sizes); ++i) {
     ExtensionResource resource = IconsInfo::GetIconResource(
-        extension.get(), sizes[i], ExtensionIconSet::MATCH_EXACTLY);
+        extension.get(), sizes[i], ExtensionIconSet::Match::kExactly);
     info_list.push_back(ImageLoader::ImageRepresentation(
         resource, ImageLoader::ImageRepresentation::RESIZE_WHEN_LARGER,
         gfx::Size(sizes[i], sizes[i]), 1.f));
@@ -233,7 +236,7 @@ TEST_F(ImageLoaderTest, LoadImageFamily) {
                  extension_misc::EXTENSION_ICON_SMALLISH, };
   for (size_t i = 0; i < std::size(sizes); ++i) {
     ExtensionResource resource = IconsInfo::GetIconResource(
-        extension.get(), sizes[i], ExtensionIconSet::MATCH_EXACTLY);
+        extension.get(), sizes[i], ExtensionIconSet::Match::kExactly);
     info_list.push_back(ImageLoader::ImageRepresentation(
         resource, ImageLoader::ImageRepresentation::NEVER_RESIZE,
         gfx::Size(sizes[i], sizes[i]), 1.f));
@@ -241,10 +244,9 @@ TEST_F(ImageLoaderTest, LoadImageFamily) {
 
   // Add a second icon of 200P which should get grouped with the smaller icon's
   // ImageSkia.
-  ExtensionResource resource =
-      IconsInfo::GetIconResource(extension.get(),
-                                 extension_misc::EXTENSION_ICON_SMALLISH,
-                                 ExtensionIconSet::MATCH_EXACTLY);
+  ExtensionResource resource = IconsInfo::GetIconResource(
+      extension.get(), extension_misc::EXTENSION_ICON_SMALLISH,
+      ExtensionIconSet::Match::kExactly);
   info_list.push_back(ImageLoader::ImageRepresentation(
       resource, ImageLoader::ImageRepresentation::NEVER_RESIZE,
       gfx::Size(extension_misc::EXTENSION_ICON_BITTY,

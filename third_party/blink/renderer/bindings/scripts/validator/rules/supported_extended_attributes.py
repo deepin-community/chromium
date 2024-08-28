@@ -13,9 +13,9 @@ def _build_supported_extended_attributes():
     # T_EXPOSURE is used at 'applicable_to' if an extended attribute changes
     # the exposure of the IDL construct.
     T_EXPOSURE = [
-        T.ATTRIBUTE, T.CALLBACK_INTERFACE, T.CONSTANT, T.CONSTRUCTOR,
-        T.DICTIONARY_MEMBER, T.INTERFACE, T.LEGACY_WINDOW_ALIAS, T.NAMESPACE,
-        T.OPERATION
+        T.ASYNC_ITERABLE, T.ATTRIBUTE, T.CALLBACK_INTERFACE, T.CONSTANT,
+        T.CONSTRUCTOR, T.DICTIONARY_MEMBER, T.INTERFACE, T.ITERABLE,
+        T.LEGACY_WINDOW_ALIAS, T.NAMESPACE, T.OPERATION
     ]
     # V_CALL_WITH is used at 'values' of [CallWith], [GetterCallWith], and
     # [SetterCallWith].
@@ -88,13 +88,13 @@ def _build_supported_extended_attributes():
         E("Exposed",
           applicable_to=T_EXPOSURE,
           forms=[F.IDENT, F.IDENT_LIST, F.ARG_LIST]),
-        E("FlexibleArrayBufferView", applicable_to=[T.TYPE]),
         E("GetterCallWith",
           applicable_to=[T.ATTRIBUTE],
           forms=[F.IDENT, F.IDENT_LIST],
           values=V_CALL_WITH),
         E("Global", applicable_to=[T.INTERFACE], forms=[F.IDENT,
                                                         F.IDENT_LIST]),
+        E("HasAsyncIteratorReturnAlgorithm", applicable_to=[T.ASYNC_ITERABLE]),
         E("HighEntropy",
           applicable_to=[T.ATTRIBUTE, T.CONSTRUCTOR, T.OPERATION],
           forms=[F.NO_ARGS, F.IDENT],
@@ -106,6 +106,8 @@ def _build_supported_extended_attributes():
               T.INTERFACE, T.NAMESPACE, T.OPERATION
           ],
           forms=F.IDENT),
+        E("IDLTypeImplementedAsV8Promise", applicable_to=[T.TYPE]),
+        E("InjectionMitigated", applicable_to=T_EXPOSURE),
         E("IsCodeLike", applicable_to=[T.INTERFACE]),
         E("IsolatedContext", applicable_to=T_EXPOSURE),
         E("LegacyFactoryFunction",
@@ -152,6 +154,7 @@ def _build_supported_extended_attributes():
         E("NewObject", applicable_to=[T.OPERATION]),
         E("NoAllocDirectCall", applicable_to=[T.OPERATION]),
         E("NotEnumerable", applicable_to=[T.ATTRIBUTE, T.OPERATION]),
+        E("PassAsSpan", applicable_to=[T.TYPE]),
         E("PermissiveDictionaryConversion", applicable_to=[T.DICTIONARY]),
         E("PerWorldBindings", applicable_to=[T.ATTRIBUTE, T.OPERATION]),
         E("PutForwards",

@@ -4,22 +4,20 @@
 
 #include <optional>
 #include <sstream>
-#include "base/feature_list.h"
+
 #include "base/functional/overloaded.h"
 #include "base/test/metrics/user_action_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/toolbar_controller_util.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_util.h"
-#include "chrome/browser/ui/views/toolbar/chrome_labs_button.h"
+#include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_button.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -51,10 +49,6 @@ class ToolbarControllerUiTest : public InteractiveFeaturePromoTest {
       : InteractiveFeaturePromoTest(UseDefaultTrackerAllowingPromos(
             {feature_engagement::kIPHTabSearchFeature})) {
     ToolbarControllerUtil::SetPreventOverflowForTesting(false);
-    scoped_feature_list_.InitWithFeatures(
-        {features::kResponsiveToolbar, features::kSidePanelPinning,
-         features::kChromeRefresh2023},
-        {});
   }
 
   void SetUpOnMainThread() override {
@@ -128,7 +122,7 @@ class ToolbarControllerUiTest : public InteractiveFeaturePromoTest {
     auto button = std::make_unique<ToolbarButton>();
     button->SetPreferredSize(dummy_button_size_);
     button->SetMinSize(dummy_button_size_);
-    button->SetAccessibleName(u"dummybutton");
+    button->GetViewAccessibility().SetName(u"dummybutton");
     button->SetVisible(true);
     return button;
   }
@@ -255,7 +249,8 @@ class ToolbarControllerUiTest : public InteractiveFeaturePromoTest {
                  }),
                  WaitForShow(kSidePanelElementId), FlushEvents(),
                  PressButton(kSidePanelPinButtonElementId),
-                 PressButton(kSidePanelCloseButtonElementId));
+                 PressButton(kSidePanelCloseButtonElementId),
+                 WaitForHide(kSidePanelElementId), FlushEvents());
   }
 
   auto PinReadingModeToToolbar() {
@@ -333,12 +328,10 @@ class ToolbarControllerUiTest : public InteractiveFeaturePromoTest {
     return toolbar_controller_->GetOverflowedElements();
   }
   const ui::SimpleMenuModel* GetOverflowMenu() {
-    return static_cast<OverflowButton*>(overflow_button_)
-        ->menu_model_for_testing();
+    return toolbar_controller_->menu_model_for_testing();
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   raw_ptr<BrowserView> browser_view_;
   raw_ptr<ToolbarController> toolbar_controller_;
   raw_ptr<views::View> toolbar_container_view_;
@@ -351,8 +344,15 @@ class ToolbarControllerUiTest : public InteractiveFeaturePromoTest {
   int overflow_threshold_width_;
 };
 
+// TODO(crbug.com/41495158): Flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_StartBrowserWithThresholdWidth \
+  DISABLED_StartBrowserWithThresholdWidth
+#else
+#define MAYBE_StartBrowserWithThresholdWidth StartBrowserWithThresholdWidth
+#endif
 IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
-                       StartBrowserWithThresholdWidth) {
+                       MAYBE_StartBrowserWithThresholdWidth) {
   // Start browser with threshold width. Should not see overflow.
   SetBrowserWidth(overflow_threshold_width());
   EXPECT_FALSE(overflow_button()->GetVisible());
@@ -386,9 +386,16 @@ IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
   EXPECT_EQ(1, user_action_tester.GetActionCount(
                    "ResponsiveToolbar.OverflowButtonHidden"));
 }
-
+// TODO(crbug.com/41495158): Flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_StartBrowserWithWidthSmallerThanThreshold \
+  DISABLED_StartBrowserWithWidthSmallerThanThreshold
+#else
+#define MAYBE_StartBrowserWithWidthSmallerThanThreshold \
+  StartBrowserWithWidthSmallerThanThreshold
+#endif
 IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
-                       StartBrowserWithWidthSmallerThanThreshold) {
+                       MAYBE_StartBrowserWithWidthSmallerThanThreshold) {
   // Start browser with a smaller width than threshold. Should see overflow.
   SetBrowserWidth(overflow_threshold_width() - 1);
   EXPECT_TRUE(overflow_button()->GetVisible());
@@ -542,7 +549,7 @@ IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
                                 false));
 }
 
-// TODO(crbug.com/1522194): Flaky on multiple platforms.
+// TODO(crbug.com/41495158): Flaky on multiple platforms.
 IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
                        DISABLED_DeactivatedActionItemsOverflow) {
   RunTestSequence(PinBookmarkToToolbar(), SetBrowserSuperWide(), Do([this]() {
@@ -597,7 +604,14 @@ IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
 // overflow button should show. Verify: The pinned extension button should still
 // be visible because there's enough space for it. Extensions container should
 // not have animation because its visibility didn't change.
-IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest, ExtensionHasNoAnimationLoop) {
+// TODO(crbug.com/41495158): Flaky on Windows and Mac.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#define MAYBE_ExtensionHasNoAnimationLoop DISABLED_ExtensionHasNoAnimationLoop
+#else
+#define MAYBE_ExtensionHasNoAnimationLoop ExtensionHasNoAnimationLoop
+#endif
+IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
+                       MAYBE_ExtensionHasNoAnimationLoop) {
   RunTestSequence(
       LoadAndPinExtensionButton(), PinBookmarkToToolbar(),
       PinReadingModeToToolbar(), Do([this]() {
@@ -613,7 +627,14 @@ IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest, ExtensionHasNoAnimationLoop) {
                    ->is_animating());
 }
 
-IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest, DoNotShowIphWhenOverflowed) {
+// TODO(crbug.com/41495158): Flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_DoNotShowIphWhenOverflowed DISABLED_DoNotShowIphWhenOverflowed
+#else
+#define MAYBE_DoNotShowIphWhenOverflowed DoNotShowIphWhenOverflowed
+#endif
+IN_PROC_BROWSER_TEST_F(ToolbarControllerUiTest,
+                       MAYBE_DoNotShowIphWhenOverflowed) {
   RunTestSequence(
       ResizeRelativeToOverflow(-1),
       MaybeShowPromo(feature_engagement::kIPHTabSearchFeature,

@@ -197,7 +197,7 @@ class REMOTE_COCOA_APP_SHIM_EXPORT NativeWidgetNSWindowBridge
 
   // display::DisplayObserver:
   void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t metrics) override;
 
@@ -292,6 +292,7 @@ class REMOTE_COCOA_APP_SHIM_EXPORT NativeWidgetNSWindowBridge
   void DisplayContextMenu(mojom::ContextMenuPtr menu,
                           mojo::PendingRemote<mojom::MenuHost> host,
                           mojo::PendingReceiver<mojom::Menu> receiver) override;
+  void SetAllowScreenshots(bool allow) override;
 
   // Return true if [NSApp updateWindows] needs to be called after updating the
   // TextInputClient.

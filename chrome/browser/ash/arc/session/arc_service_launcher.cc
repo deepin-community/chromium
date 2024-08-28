@@ -17,15 +17,15 @@
 #include "ash/components/arc/clipboard/arc_clipboard_bridge.h"
 #include "ash/components/arc/compat_mode/arc_resize_lock_manager.h"
 #include "ash/components/arc/crash_collector/arc_crash_collector_bridge.h"
-#include "ash/components/arc/disk_quota/arc_disk_quota_bridge.h"
+#include "ash/components/arc/disk_space/arc_disk_space_bridge.h"
 #include "ash/components/arc/ime/arc_ime_service.h"
 #include "ash/components/arc/keyboard_shortcut/arc_keyboard_shortcut_bridge.h"
 #include "ash/components/arc/media_session/arc_media_session_bridge.h"
 #include "ash/components/arc/memory/arc_memory_bridge.h"
-#include "ash/components/arc/memory_pressure/arc_memory_pressure_bridge.h"
 #include "ash/components/arc/metrics/arc_metrics_service.h"
 #include "ash/components/arc/midis/arc_midis_bridge.h"
 #include "ash/components/arc/net/arc_net_host_impl.h"
+#include "ash/components/arc/net/arc_wifi_host_impl.h"
 #include "ash/components/arc/obb_mounter/arc_obb_mounter_bridge.h"
 #include "ash/components/arc/pay/arc_digital_goods_bridge.h"
 #include "ash/components/arc/pay/arc_payment_app_bridge.h"
@@ -60,6 +60,7 @@
 #include "chrome/browser/ash/arc/boot_phase_monitor/arc_boot_phase_monitor_bridge.h"
 #include "chrome/browser/ash/arc/enterprise/arc_enterprise_reporting_service.h"
 #include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service.h"
+#include "chrome/browser/ash/arc/error_notification/arc_error_notification_bridge.h"
 #include "chrome/browser/ash/arc/file_system_watcher/arc_file_system_watcher_service.h"
 #include "chrome/browser/ash/arc/fileapi/arc_documents_provider_root_map_factory.h"
 #include "chrome/browser/ash/arc/fileapi/arc_file_system_bridge.h"
@@ -73,7 +74,6 @@
 #include "chrome/browser/ash/arc/intent_helper/chrome_arc_intent_helper_delegate.h"
 #include "chrome/browser/ash/arc/keymaster/arc_keymaster_bridge.h"
 #include "chrome/browser/ash/arc/keymint/arc_keymint_bridge.h"
-#include "chrome/browser/ash/arc/kiosk/arc_kiosk_bridge.h"
 #include "chrome/browser/ash/arc/metrics/arc_metrics_service_proxy.h"
 #include "chrome/browser/ash/arc/nearby_share/arc_nearby_share_bridge.h"
 #include "chrome/browser/ash/arc/net/browser_url_opener_impl.h"
@@ -89,7 +89,7 @@
 #include "chrome/browser/ash/arc/process/arc_process_service.h"
 #include "chrome/browser/ash/arc/screen_capture/arc_screen_capture_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_disk_space_monitor.h"
-#include "chrome/browser/ash/arc/session/arc_initial_optin_notifier.h"
+#include "chrome/browser/ash/arc/session/arc_initial_optin_metrics_recorder.h"
 #include "chrome/browser/ash/arc/session/arc_play_store_enabled_preference_handler.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/sharesheet/arc_sharesheet_bridge.h"
@@ -160,8 +160,6 @@ ArcServiceLauncher::ArcServiceLauncher(
       base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
     arc_disk_space_monitor_ = std::make_unique<ArcDiskSpaceMonitor>();
   }
-
-  session_manager_obs_.Observe(arc_session_manager_.get());
 }
 
 ArcServiceLauncher::~ArcServiceLauncher() {
@@ -228,9 +226,7 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ash::ConfigureSwap(IsArcPlayStoreEnabledForProfile(profile));
 
   // Record metrics for ARC status based on device affiliation
-  if (base::FeatureList::IsEnabled(kUnaffiliatedDeviceArcRestriction)) {
-    RecordArcStatusBasedOnDeviceAffiliationUMA(profile);
-  }
+  RecordArcStatusBasedOnDeviceAffiliationUMA(profile);
 
   if (arc_session_manager_->profile() != profile) {
     // Profile is not matched, so the given |profile| is not allowed to use
@@ -260,9 +256,9 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcClipboardBridge::GetForBrowserContext(profile);
   ArcCrashCollectorBridge::GetForBrowserContext(profile);
   ArcDigitalGoodsBridge::GetForBrowserContext(profile);
-  ArcDiskQuotaBridge::GetForBrowserContext(profile)->SetAccountId(
-      multi_user_util::GetAccountIdFromProfile(profile));
+  ArcDiskSpaceBridge::GetForBrowserContext(profile);
   ArcEnterpriseReportingService::GetForBrowserContext(profile);
+  ArcErrorNotificationBridge::GetForBrowserContext(profile);
   ArcFileSystemBridge::GetForBrowserContext(profile);
   ArcFileSystemMounter::GetForBrowserContext(profile);
   ArcFileSystemWatcherService::GetForBrowserContext(profile);
@@ -284,7 +280,6 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   } else {
     ArcKeymasterBridge::GetForBrowserContext(profile);
   }
-  ArcKioskBridge::GetForBrowserContext(profile);
   ArcMediaSessionBridge::GetForBrowserContext(profile);
   {
     auto* metrics_service = ArcMetricsService::GetForBrowserContext(profile);
@@ -302,9 +297,7 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     arc_net_host_impl->SetPrefService(profile->GetPrefs());
     arc_net_host_impl->SetCertManager(
         std::make_unique<CertManagerImpl>(profile));
-    if (ash::features::IsPasspointARCSupportEnabled()) {
-      arc_net_url_opener_ = std::make_unique<BrowserUrlOpenerImpl>();
-    }
+    arc_net_url_opener_ = std::make_unique<BrowserUrlOpenerImpl>();
   }
   ArcOemCryptoBridge::GetForBrowserContext(profile);
   ArcPaymentAppBridge::GetForBrowserContext(profile);
@@ -330,17 +323,17 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcVolumeMounterBridge::GetForBrowserContext(profile);
   ArcWakeLockBridge::GetForBrowserContext(profile);
   ArcWallpaperService::GetForBrowserContext(profile);
+  ArcWifiHostImpl::GetForBrowserContext(profile);
   GpuArcVideoKeyedService::GetForBrowserContext(profile);
   CertStoreService::GetForBrowserContext(profile);
   apps::ArcAppsFactory::GetForProfile(profile);
   ash::ApkWebAppService::Get(profile);
   ash::app_restore::AppRestoreArcTaskHandler::GetForProfile(profile);
-  ArcInitialOptInNotifier::GetForProfile(profile);
+  ArcInitialOptInMetricsRecorder::GetForProfile(profile);
   ArcChromeFeatureFlagsBridge::GetForBrowserContext(profile);
 
   if (arc::IsArcVmEnabled()) {
     // ARCVM-only services.
-    ArcMemoryPressureBridge::GetForBrowserContext(profile);
     ArcVmmManager::GetForBrowserContext(profile)->set_user_id_hash(
         user_id_hash);
     ArcSystemStateBridge::GetForBrowserContext(profile);
@@ -381,7 +374,6 @@ void ArcServiceLauncher::ResetForTesting() {
   // First destroy the internal states, then re-initialize them.
   // These are for workaround of singletonness DCHECK in their ctors/dtors.
   Shutdown();
-  session_manager_obs_.Reset();
   arc_session_manager_.reset();
 
   // No recreation of arc_service_manager. Pointers to its ArcBridgeService
@@ -390,11 +382,6 @@ void ArcServiceLauncher::ResetForTesting() {
   arc_session_manager_ = CreateArcSessionManager(
       arc_service_manager_->arc_bridge_service(), chrome::GetChannel(),
       scheduler_configuration_manager_);
-  session_manager_obs_.Observe(arc_session_manager_.get());
-}
-
-void ArcServiceLauncher::OnArcPlayStoreEnabledChanged(bool enabled) {
-  ash::ConfigureSwap(/*arc_enabled=*/enabled);
 }
 
 #if BUILDFLAG(USE_ARC_PROTECTED_MEDIA)
@@ -463,16 +450,17 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   ArcClipboardBridge::EnsureFactoryBuilt();
   ArcCrashCollectorBridge::EnsureFactoryBuilt();
   ArcDigitalGoodsBridge::EnsureFactoryBuilt();
-  ArcDiskQuotaBridge::EnsureFactoryBuilt();
+  ArcDiskSpaceBridge::EnsureFactoryBuilt();
   ArcDocumentsProviderRootMapFactory::GetInstance();
   ArcEnterpriseReportingService::EnsureFactoryBuilt();
+  ArcErrorNotificationBridge::EnsureFactoryBuilt();
   ArcFileSystemMounter::EnsureFactoryBuilt();
   ArcFileSystemOperationRunner::EnsureFactoryBuilt();
   ArcFileSystemWatcherService::EnsureFactoryBuilt();
   ArcIdleManager::EnsureFactoryBuilt();
   ArcIioSensorBridge::EnsureFactoryBuilt();
   ArcImeService::EnsureFactoryBuilt();
-  ArcInitialOptInNotifier::EnsureFactoryBuilt();
+  ArcInitialOptInMetricsRecorder::EnsureFactoryBuilt();
   ArcInstanceThrottle::EnsureFactoryBuilt();
   ArcKeyboardShortcutBridge::EnsureFactoryBuilt();
   if (ShouldUseArcKeyMint()) {
@@ -480,10 +468,8 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   } else {
     ArcKeymasterBridge::EnsureFactoryBuilt();
   }
-  ArcKioskBridge::EnsureFactoryBuilt();
   ArcMediaSessionBridge::EnsureFactoryBuilt();
   ArcMemoryBridge::EnsureFactoryBuilt();
-  ArcMemoryPressureBridge::EnsureFactoryBuilt();
   ArcMetricsServiceFactory::GetInstance();
   ArcMetricsServiceProxy::EnsureFactoryBuilt();
   ArcMidisBridge::EnsureFactoryBuilt();
@@ -519,6 +505,7 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   ArcVolumeMounterBridge::EnsureFactoryBuilt();
   ArcWakeLockBridge::EnsureFactoryBuilt();
   ArcWallpaperService::EnsureFactoryBuilt();
+  ArcWifiHostImpl::EnsureFactoryBuilt();
   CertStoreService::EnsureFactoryBuilt();
   GpuArcVideoKeyedService::EnsureFactoryBuilt();
   input_overlay::ArcInputOverlayManager::EnsureFactoryBuilt();

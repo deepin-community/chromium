@@ -195,7 +195,7 @@ angle::Result FormatTable::initialize(const DisplayMtl *display)
         const auto formatId = static_cast<angle::FormatID>(i);
 
         mPixelFormatTable[i].init(display, formatId);
-        mPixelFormatTable[i].caps = &mNativePixelFormatCapsTable[mPixelFormatTable[i].metalFormat];
+        mPixelFormatTable[i].caps = mNativePixelFormatCapsTable[mPixelFormatTable[i].metalFormat];
 
         if (mPixelFormatTable[i].actualFormatId != mPixelFormatTable[i].intendedFormatId)
         {
@@ -208,7 +208,7 @@ angle::Result FormatTable::initialize(const DisplayMtl *display)
         mVertexFormatTables[1][i].init(formatId, true);
     }
 
-    // TODO(anglebug.com/5505): unmerged change from WebKit was here -
+    // TODO(anglebug.com/40096755): unmerged change from WebKit was here -
     // D24S8 fallback to D32_FLOAT_S8X24_UINT, since removed.
 
     return angle::Result::Continue;

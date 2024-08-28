@@ -113,6 +113,8 @@ class CORE_EXPORT HTMLElement : public Element {
     return HasLocalName(name.LocalName());
   }
 
+  const char* NameInHeapSnapshot() const override;
+
   String title() const final;
 
   void setInnerText(const String&);
@@ -162,7 +164,10 @@ class CORE_EXPORT HTMLElement : public Element {
 
   static bool IsValidDirAttribute(const AtomicString& value);
   static bool ElementAffectsDirectionality(const Node* node);
-  static bool ElementInheritsDirectionality(const Node* node);
+  static bool ElementInheritsDirectionality(const Node* node) {
+    return !HTMLElement::ElementAffectsDirectionality(node);
+  }
+
   static const TextControlElement*
   ElementIfAutoDirectionalityFormAssociatedOrNull(const Element* element);
   static TextControlElement* ElementIfAutoDirectionalityFormAssociatedOrNull(
@@ -177,6 +182,7 @@ class CORE_EXPORT HTMLElement : public Element {
   // origin trial is over.
   virtual bool IsHTMLFencedFrameElement() const { return false; }
   virtual bool IsHTMLFrameSetElement() const { return false; }
+  virtual bool IsHTMLPermissionElement() const { return false; }
   virtual bool IsHTMLUnknownElement() const { return false; }
   virtual bool IsPluginElement() const { return false; }
 
@@ -259,10 +265,11 @@ class CORE_EXPORT HTMLElement : public Element {
   // |exception_state| can be nullptr when exceptions can't be thrown, such as
   // when the browser hides a popover during light dismiss or shows a popover in
   // response to clicking a button with popovershowtarget.
-  void ShowPopoverInternal(Element* invoker, ExceptionState* exception_state);
-  void HidePopoverInternal(HidePopoverFocusBehavior focus_behavior,
-                           HidePopoverTransitionBehavior event_firing,
-                           ExceptionState* exception_state);
+  virtual void ShowPopoverInternal(Element* invoker,
+                                   ExceptionState* exception_state);
+  virtual void HidePopoverInternal(HidePopoverFocusBehavior focus_behavior,
+                                   HidePopoverTransitionBehavior event_firing,
+                                   ExceptionState* exception_state);
   void PopoverHideFinishIfNeeded(bool immediate);
   static const HTMLElement* FindTopmostPopoverAncestor(
       Element& new_popover_or_top_layer_element,
@@ -296,18 +303,20 @@ class CORE_EXPORT HTMLElement : public Element {
       mojom::blink::FocusType,
       InputDeviceCapabilities* source_capabilities) override;
 
-  // This allows customization of how Invokes are handled, per element.
-  // The default HTMLElement behavior handles popovers, and specific
+  // This allows customization of how Invoker Commands are handled, per
+  // element. The default HTMLElement behavior handles popovers, and specific
   // element subclasses - such as HTMLDialogElement - can handle
-  // other invocation actions such as showModal. Implementations should return
+  // other commands such as showModal. Implementations should return
   // `true` if they have handled, so that overrides can exit early.
   // Additionally, override implementations should not execute their own
-  // behavior before calling `HTMLElement::HandleInvokeInternal` as that
+  // behavior before calling `HTMLElement::HandleCommandInternal` as that
   // override governs the logic for global attributes such as `popover`;
   // for example a `<dialog popover>` should run `popover` invocation steps
   // before `<dialog>` invocation steps.
   // See: crbug.com/1490919, https://open-ui.org/components/invokers.explainer/
-  virtual bool HandleInvokeInternal(HTMLElement& invoker, AtomicString& action);
+  bool IsValidCommand(HTMLElement& invoker, CommandEventType command) override;
+  bool HandleCommandInternal(HTMLElement& invoker,
+                             CommandEventType command) override;
 
   // This allows developers to enable or disable browser-provided writing
   // suggestions. If the attribute is not explicitly set on an element, it
@@ -406,19 +415,12 @@ class CORE_EXPORT HTMLElement : public Element {
   int OffsetTopOrLeft(bool top);
 };
 
-template <typename T>
-bool IsElementOfType(const HTMLElement&);
-template <>
-inline bool IsElementOfType<const HTMLElement>(const HTMLElement&) {
-  return true;
-}
-template <>
-inline bool IsElementOfType<const HTMLElement>(const Node& node) {
-  return IsA<HTMLElement>(node);
-}
 template <>
 struct DowncastTraits<HTMLElement> {
   static bool AllowFrom(const Node& node) { return node.IsHTMLElement(); }
+  static bool AllowFrom(const Element& element) {
+    return element.IsHTMLElement();
+  }
 };
 
 inline HTMLElement::HTMLElement(const QualifiedName& tag_name,

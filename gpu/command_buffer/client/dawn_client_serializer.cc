@@ -36,7 +36,7 @@ size_t DawnClientSerializer::GetMaximumAllocationSize() const {
 
 #if DCHECK_IS_ON()
 void DawnClientSerializer::OnSerializeError() {
-  NOTREACHED() << "DawnClientSerializer error";
+  NOTREACHED_IN_MIGRATION() << "DawnClientSerializer error";
 }
 #endif
 
@@ -128,7 +128,7 @@ void DawnClientSerializer::Disconnect() {
     auto transfer_buffer = std::move(transfer_buffer_);
     // Wait for commands to finish before we free shared memory that
     // the GPU process is using.
-    // TODO(crbug.com/1231599): This Finish may not be necessary if the
+    // TODO(crbug.com/40779774): This Finish may not be necessary if the
     // shared memory is not immediately freed. Investigate this and
     // consider optimization.
     helper_->Finish();

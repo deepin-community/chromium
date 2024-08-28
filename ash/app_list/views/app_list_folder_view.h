@@ -134,6 +134,9 @@ class ASH_EXPORT AppListFolderView : public views::View,
   // Recalculates and updates the bounds of the folder `shadow_`  .
   void UpdateShadowBounds();
 
+  // Called when the  `shadow_` layer gets recreated.
+  void OnShadowLayerRecreated(ui::Layer* old_layer, ui::Layer* new_layer);
+
   // Returns true if this view's child views are in animation for opening or
   // closing the folder.
   bool IsAnimationRunning() const;
@@ -224,6 +227,8 @@ class ASH_EXPORT AppListFolderView : public views::View,
   // `hide_for_reparent` is true if an item in the folder is being reparented to
   // the root grid view.
   void OnHideAnimationDone(bool hide_for_reparent);
+
+  void UpdateExpandedCollapsedAccessibleState() const;
 
   // Controller interface implemented by the container for this view.
   const raw_ptr<AppListFolderController> folder_controller_;

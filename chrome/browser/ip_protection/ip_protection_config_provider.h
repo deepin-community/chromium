@@ -15,6 +15,9 @@
 #include "base/time/time.h"
 #include "chrome/browser/ip_protection/ip_protection_config_http.h"
 #include "chrome/browser/ip_protection/ip_protection_config_provider_factory.h"
+#include "components/ip_protection/ip_protection_config_provider_helper.h"
+#include "components/ip_protection/ip_protection_proxy_config_fetcher.h"
+#include "components/ip_protection/ip_protection_proxy_config_retriever.h"
 #include "components/privacy_sandbox/tracking_protection_settings.h"
 #include "components/privacy_sandbox/tracking_protection_settings_observer.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
@@ -92,23 +95,19 @@ class IpProtectionConfigProvider
 
   ~IpProtectionConfigProvider() override;
 
-  // Get a batch of blind-signed auth tokens.
-  //
-  // It is forbidden for two calls to this method to be outstanding at the same
-  // time.
+  // IpProtectionConfigGetter:
+
+  // Get a batch of blind-signed auth tokens. It is forbidden for two calls to
+  // this method for the same proxy layer to be outstanding at the same time.
   void TryGetAuthTokens(uint32_t batch_size,
                         network::mojom::IpProtectionProxyLayer proxy_layer,
                         TryGetAuthTokensCallback callback) override;
-
   // Get the list of IP Protection proxies.
   void GetProxyList(GetProxyListCallback callback) override;
 
-  // KeyedService:
-  void Shutdown() override;
-
-  static IpProtectionConfigProvider* Get(Profile* profile);
-
   static bool CanIpProtectionBeEnabled();
+
+  // Checks if IP Protection is disabled via user settings.
   bool IsIpProtectionEnabled();
 
   // Add bidirectional pipes to a new network service.
@@ -117,6 +116,11 @@ class IpProtectionConfigProvider
           pending_receiver,
       mojo::PendingRemote<network::mojom::IpProtectionProxyDelegate>
           pending_remote);
+
+  // KeyedService:
+  void Shutdown() override;
+
+  static IpProtectionConfigProvider* Get(Profile* profile);
 
   mojo::ReceiverSet<network::mojom::IpProtectionConfigGetter>&
   receivers_for_testing() {
@@ -131,26 +135,50 @@ class IpProtectionConfigProvider
 
   // Like `SetUp()`, but providing values for each of the member variables.
   void SetUpForTesting(
-      std::unique_ptr<IpProtectionConfigHttp> ip_protection_config_http_,
+      std::unique_ptr<ip_protection::IpProtectionProxyConfigRetriever>
+          ip_protection_proxy_config_retriever,
+      std::unique_ptr<IpProtectionConfigHttp> ip_protection_config_http,
       quiche::BlindSignAuthInterface* bsa);
-
-  // Base time deltas for calculating `try_again_after`.
-  static constexpr base::TimeDelta kNotEligibleBackoff = base::Days(1);
-  static constexpr base::TimeDelta kTransientBackoff = base::Seconds(5);
-  static constexpr base::TimeDelta kBugBackoff = base::Minutes(10);
 
  private:
   friend class IpProtectionConfigProviderTest;
   FRIEND_TEST_ALL_PREFIXES(IpProtectionConfigProviderTest, CalculateBackoff);
-  FRIEND_TEST_ALL_PREFIXES(IpProtectionConfigProviderBrowserTest,
+  FRIEND_TEST_ALL_PREFIXES(IpProtectionConfigProviderIdentityBrowserTest,
                            BackoffTimeResetAfterProfileAvailabilityChange);
   FRIEND_TEST_ALL_PREFIXES(IpProtectionConfigProviderUserSettingBrowserTest,
                            OnIpProtectionEnabledChanged);
 
-  // Set up `ip_protection_config_http_` and `bsa_`, if not already initialized.
+  // Set up `ip_protection_config_http_`, `ip_protection_proxy_config_retriever`
+  // and `bsa_`, if not already initialized.
   // This accomplishes lazy loading of these components to break dependency
   // loops in browser startup.
   void SetUp();
+
+  // `FetchBlindSignedToken()` calls into the `quiche::BlindSignAuth` library to
+  // request a blind-signed auth token for use at the IP Protection proxies.
+  void FetchBlindSignedToken(
+      std::optional<signin::AccessTokenInfo> access_token_info,
+      uint32_t batch_size,
+      network::mojom::IpProtectionProxyLayer proxy_layer,
+      TryGetAuthTokensCallback callback);
+
+  void OnFetchBlindSignedTokenCompleted(
+      base::TimeTicks bsa_get_tokens_start_time,
+      TryGetAuthTokensCallback callback,
+      absl::StatusOr<absl::Span<quiche::BlindSignToken>>);
+
+  // Finish a call to `TryGetAuthTokens()` by recording the result and invoking
+  // its callback.
+  void TryGetAuthTokensComplete(
+      std::optional<std::vector<network::mojom::BlindSignedAuthTokenPtr>>
+          bsa_tokens,
+      TryGetAuthTokensCallback callback,
+      IpProtectionTryGetAuthTokensResult result);
+
+  // Calculates the backoff time for the given result, based on
+  // `last_try_get_auth_tokens_..` fields, and updates those fields.
+  std::optional<base::TimeDelta> CalculateBackoff(
+      IpProtectionTryGetAuthTokensResult result);
 
   // Creating a generic callback in order for `RequestOAuthToken()` to work for
   // `TryGetAuthTokens()` and `GetProxyList()`.
@@ -183,28 +211,6 @@ class IpProtectionConfigProvider
       GoogleServiceAuthError error,
       signin::AccessTokenInfo access_token_info);
 
-  // Wrapping `ip_protection_config_http_->GetProxyConfig()` method
-  // to enable OAuth Token inclusion in the GetProxyConfig API call to Phosphor.
-  void CallGetProxyConfig(GetProxyListCallback callback,
-                          std::optional<std::string> oauth_token);
-  void OnGetProxyConfigCompleted(
-      GetProxyListCallback callback,
-      base::expected<ip_protection::GetProxyConfigResponse, std::string>
-          response);
-
-  // `FetchBlindSignedToken()` calls into the `quiche::BlindSignAuth` library to
-  // request a blind-signed auth token for use at the IP Protection proxies.
-  void FetchBlindSignedToken(signin::AccessTokenInfo access_token_info,
-                             uint32_t batch_size,
-                             network::mojom::IpProtectionProxyLayer proxy_layer,
-                             TryGetAuthTokensCallback callback);
-  void OnFetchBlindSignedTokenCompleted(
-      base::TimeTicks bsa_get_tokens_start_time,
-      TryGetAuthTokensCallback callback,
-      absl::StatusOr<absl::Span<quiche::BlindSignToken>>);
-  static network::mojom::BlindSignedAuthTokenPtr CreateBlindSignedAuthToken(
-      quiche::BlindSignToken bsa_token);
-
   void ClearOAuthTokenProblemBackoff();
 
   // The object used to get an OAuth token. `identity_manager_` will be set to
@@ -225,19 +231,6 @@ class IpProtectionConfigProvider
   // corresponding dependency (if needed) registered in the factory class.
   raw_ptr<Profile> profile_;
 
-  // Finish a call to `TryGetAuthTokens()` by recording the result and invoking
-  // its callback.
-  void TryGetAuthTokensComplete(
-      std::optional<std::vector<network::mojom::BlindSignedAuthTokenPtr>>
-          bsa_tokens,
-      TryGetAuthTokensCallback callback,
-      IpProtectionTryGetAuthTokensResult result);
-
-  // Calculates the backoff time for the given result, based on
-  // `last_try_get_auth_tokens_..` fields, and updates those fields.
-  std::optional<base::TimeDelta> CalculateBackoff(
-      IpProtectionTryGetAuthTokensResult result);
-
   // Instruct the `IpProtectionConfigCache()`(s) in the Network Service to
   // ignore any previously sent `try_again_after` times.
   void InvalidateNetworkContextTryAgainAfterTime();
@@ -247,7 +240,9 @@ class IpProtectionConfigProvider
       const signin::PrimaryAccountChangeEvent& event) override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
-      const GoogleServiceAuthError& error) override;
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
 
   // TrackingProtectionSettingsObserver:
   void OnIpProtectionEnabledChanged() override;
@@ -258,6 +253,8 @@ class IpProtectionConfigProvider
   // scoped_refptr here.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::unique_ptr<IpProtectionConfigHttp> ip_protection_config_http_;
+  std::unique_ptr<ip_protection::IpProtectionProxyConfigFetcher>
+      ip_protection_proxy_config_fetcher_;
   std::unique_ptr<quiche::BlindSignAuth> blind_sign_auth_;
 
   // For testing, BlindSignAuth is accessed via its interface. In production,

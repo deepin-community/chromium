@@ -7,15 +7,16 @@
 #include "xfa/fxfa/layout/cxfa_contentlayoutprocessor.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 #include <vector>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/adapters.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/stl_util.h"
 #include "fxjs/gc/container_trace.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/adapters.h"
-#include "third_party/base/notreached.h"
 #include "xfa/fxfa/cxfa_ffdoc.h"
 #include "xfa/fxfa/cxfa_ffnotify.h"
 #include "xfa/fxfa/cxfa_ffwidget.h"
@@ -36,6 +37,14 @@
 #include "xfa/fxfa/parser/xfa_utils.h"
 
 namespace {
+
+using NextPosRow = std::array<uint8_t, 9>;
+constexpr std::array<const NextPosRow, 4> kNextPosTable = {{
+    {{0, 1, 2, 3, 4, 5, 6, 7, 8}},
+    {{6, 3, 0, 7, 4, 1, 8, 5, 2}},
+    {{8, 7, 6, 5, 4, 3, 2, 1, 0}},
+    {{2, 5, 8, 1, 4, 7, 0, 3, 6}},
+}};
 
 std::vector<WideString> SeparateStringOnSpace(
     pdfium::span<const wchar_t> spStr) {
@@ -588,18 +597,13 @@ CFX_PointF CalculatePositionedContainerPos(CXFA_Node* pNode,
     default:
       break;
   }
-  static const uint8_t nNextPos[4][9] = {{0, 1, 2, 3, 4, 5, 6, 7, 8},
-                                         {6, 3, 0, 7, 4, 1, 8, 5, 2},
-                                         {8, 7, 6, 5, 4, 3, 2, 1, 0},
-                                         {2, 5, 8, 1, 4, 7, 0, 3, 6}};
-
   CFX_PointF pos(
       pNode->JSObject()->GetMeasureInUnit(XFA_Attribute::X, XFA_Unit::Pt),
       pNode->JSObject()->GetMeasureInUnit(XFA_Attribute::Y, XFA_Unit::Pt));
   int32_t nRotate =
       XFA_MapRotation(pNode->JSObject()->GetInteger(XFA_Attribute::Rotate)) /
       90;
-  int32_t nAbsoluteAnchorType = nNextPos[nRotate][nAnchorType];
+  int32_t nAbsoluteAnchorType = kNextPosTable[nRotate][nAnchorType];
   switch (nAbsoluteAnchorType / 3) {
     case 1:
       pos.y -= size.height / 2;
@@ -1189,7 +1193,7 @@ void CXFA_ContentLayoutProcessor::DoLayoutTableContainer(
       pLayoutNode->JSObject()->GetCData(XFA_Attribute::ColumnWidths);
   if (!wsColumnWidths.IsEmpty()) {
     for (auto& width : SeparateStringOnSpace(wsColumnWidths.span())) {
-      width.TrimLeft(L' ');
+      width.TrimFront(L' ');
       if (width.IsEmpty())
         continue;
 
@@ -1402,7 +1406,7 @@ float CXFA_ContentLayoutProcessor::InsertKeepLayoutItems() {
   }
 
   float fTotalHeight = 0;
-  for (const auto& item : pdfium::base::Reversed(m_ArrayKeepItems)) {
+  for (const auto& item : pdfium::Reversed(m_ArrayKeepItems)) {
     AddLeaderAfterSplit(item);
     fTotalHeight += item->m_sSize.height;
   }
@@ -1414,7 +1418,7 @@ float CXFA_ContentLayoutProcessor::InsertKeepLayoutItems() {
 bool CXFA_ContentLayoutProcessor::ProcessKeepForSplit(
     CXFA_ContentLayoutProcessor* pChildProcessor,
     Result eRetValue,
-    std::vector<cppgc::Persistent<CXFA_ContentLayoutItem>>* rgCurLineLayoutItem,
+    ContentLayoutItemVector& rgCurLineLayoutItem,
     float* fContentCurRowAvailWidth,
     float* fContentCurRowHeight,
     float* fContentCurRowY,
@@ -1447,7 +1451,7 @@ bool CXFA_ContentLayoutProcessor::ProcessKeepForSplit(
     return true;
   }
 
-  rgCurLineLayoutItem->push_back(pChildProcessor->ExtractLayoutItem());
+  rgCurLineLayoutItem.push_back(pChildProcessor->ExtractLayoutItem());
   *bAddedItemInRow = true;
   *fContentCurRowAvailWidth -= childSize.width;
   *fContentCurRowHeight = std::max(*fContentCurRowHeight, childSize.height);
@@ -1582,8 +1586,7 @@ CXFA_ContentLayoutProcessor::DoLayoutFlowedContainer(
     float fContentCurRowHeight = 0;
     float fContentCurRowAvailWidth = fContentWidthLimit;
     m_fWidthLimit = fContentCurRowAvailWidth;
-    std::vector<cppgc::Persistent<CXFA_ContentLayoutItem>>
-        rgCurLineLayoutItems[3];
+    std::array<ContentLayoutItemVector, 3> rgCurLineLayoutItems;
     uint8_t uCurHAlignState =
         (eFlowStrategy != XFA_AttributeValue::Rl_tb ? 0 : 2);
     if (pLastChild) {
@@ -1719,7 +1722,7 @@ CXFA_ContentLayoutProcessor::DoLayoutFlowedContainer(
                   bContainerWidthAutoSize, &calculated_size.width,
                   &calculated_size.height, &fContentCurRowY,
                   fContentCurRowHeight, fContentWidthLimit, false);
-              rgCurLineLayoutItems->clear();
+              rgCurLineLayoutItems.front().clear();
               auto* pTempProcessor =
                   cppgc::MakeGarbageCollected<CXFA_ContentLayoutProcessor>(
                       GetHeap()->GetAllocationHandle(), GetHeap(), pLeaderNode,
@@ -1909,8 +1912,7 @@ CXFA_ContentLayoutProcessor::DoLayoutFlowedContainer(
 }
 
 bool CXFA_ContentLayoutProcessor::CalculateRowChildPosition(
-    std::vector<cppgc::Persistent<CXFA_ContentLayoutItem>> (
-        &rgCurLineLayoutItems)[3],
+    std::array<ContentLayoutItemVector, 3>& rgCurLineLayoutItems,
     XFA_AttributeValue eFlowStrategy,
     bool bContainerHeightAutoSize,
     bool bContainerWidthAutoSize,
@@ -1920,8 +1922,8 @@ bool CXFA_ContentLayoutProcessor::CalculateRowChildPosition(
     float fContentCurRowHeight,
     float fContentWidthLimit,
     bool bRootForceTb) {
-  int32_t nGroupLengths[3] = {0, 0, 0};
-  float fGroupWidths[3] = {0, 0, 0};
+  std::array<int32_t, 3> nGroupLengths = {};
+  std::array<float, 3> fGroupWidths = {};
   int32_t nTotalLength = 0;
   for (int32_t i = 0; i < 3; i++) {
     nGroupLengths[i] = fxcrt::CollectionSize<int32_t>(rgCurLineLayoutItems[i]);
@@ -2337,8 +2339,7 @@ CXFA_ContentLayoutProcessor::InsertFlowedItem(
     float fContainerHeight,
     XFA_AttributeValue eFlowStrategy,
     uint8_t* uCurHAlignState,
-    std::vector<cppgc::Persistent<CXFA_ContentLayoutItem>> (
-        &rgCurLineLayoutItems)[3],
+    std::array<ContentLayoutItemVector, 3>& rgCurLineLayoutItems,
     bool bUseBreakControl,
     float fAvailHeight,
     float fRealHeight,
@@ -2529,7 +2530,7 @@ CXFA_ContentLayoutProcessor::InsertFlowedItem(
   }
 
   Result eResult;
-  if (ProcessKeepForSplit(pProcessor, eRetValue, &rgCurLineLayoutItems[uHAlign],
+  if (ProcessKeepForSplit(pProcessor, eRetValue, rgCurLineLayoutItems[uHAlign],
                           fContentCurRowAvailWidth, fContentCurRowHeight,
                           fContentCurRowY, bAddedItemInRow, bForceEndPage,
                           &eResult)) {

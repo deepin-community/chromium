@@ -10,11 +10,10 @@
 #include <string>
 
 #include "base/containers/flat_set.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "components/aggregation_service/features.h"
+#include "components/aggregation_service/aggregation_coordinator_utils.h"
 #include "components/attribution_reporting/source_type.mojom.h"
 #include "content/browser/aggregation_service/aggregatable_report.h"
 #include "content/browser/aggregation_service/aggregation_service_test_utils.h"
@@ -23,9 +22,9 @@
 #include "content/browser/attribution_reporting/attribution_test_utils.h"
 #include "content/browser/attribution_reporting/stored_source.h"
 #include "net/base/schemeful_site.h"
-#include "net/http/http_request_headers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/aggregation_service/aggregatable_report.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -232,72 +231,20 @@ TEST(AttributionReportTest, ReportBody_Aggregatable) {
       ReportBuilder(AttributionInfoBuilder().Build(),
                     SourceBuilder().BuildStored())
           .SetAggregatableHistogramContributions(
-              {AggregatableHistogramContribution(/*key=*/1, /*value=*/2)})
+              {blink::mojom::AggregatableReportHistogramContribution(
+                  /*bucket=*/1, /*value=*/2, /*filtering_id=*/std::nullopt)})
           .BuildAggregatableAttribution();
 
   EXPECT_THAT(report.ReportBody(), IsJson(expected));
 }
 
-TEST(AttributionReportTest, PopulateAdditionalHeaders) {
-  const std::optional<std::string> kTestCases[] = {
-      std::nullopt,
-      "foo",
-  };
-
-  for (const auto& verification_token : kTestCases) {
-    AttributionReport report = ReportBuilder(AttributionInfoBuilder().Build(),
-                                             SourceBuilder().BuildStored())
-                                   .SetVerificationToken(verification_token)
-                                   .BuildAggregatableAttribution();
-
-    net::HttpRequestHeaders headers;
-    report.PopulateAdditionalHeaders(headers);
-
-    if (verification_token.has_value()) {
-      std::string header;
-      headers.GetHeader("Sec-Attribution-Reporting-Private-State-Token",
-                        &header);
-      EXPECT_EQ(header, *verification_token);
-    } else {
-      EXPECT_TRUE(headers.IsEmpty());
-    }
-  }
-}
-
-TEST(AttributionReportTest, PopulateAdditionalHeadersNullAggregatableReport) {
-  const std::optional<std::string> kTestCases[] = {
-      std::nullopt,
-      "foo",
-  };
-
-  for (const auto& verification_token : kTestCases) {
-    AttributionReport report = ReportBuilder(AttributionInfoBuilder().Build(),
-                                             SourceBuilder().BuildStored())
-                                   .SetVerificationToken(verification_token)
-                                   .BuildNullAggregatable();
-
-    net::HttpRequestHeaders headers;
-    report.PopulateAdditionalHeaders(headers);
-
-    if (verification_token.has_value()) {
-      std::string header;
-      headers.GetHeader("Sec-Attribution-Reporting-Private-State-Token",
-                        &header);
-      EXPECT_EQ(header, *verification_token);
-    } else {
-      EXPECT_TRUE(headers.IsEmpty());
-    }
-  }
-}
-
 TEST(AttributionReportTest, NullAggregatableReport) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      ::aggregation_service::kAggregationServiceMultipleCloudProviders,
-      {{"aws_cloud", "https://aws.example.test"}});
+  ::aggregation_service::ScopedAggregationCoordinatorAllowlistForTesting
+      scoped_coordinator_allowlist(
+          {url::Origin::Create(GURL("https://a.test"))});
 
   base::Value::Dict expected = base::test::ParseJsonDict(R"json({
-    "aggregation_coordinator_origin":"https://aws.example.test",
+    "aggregation_coordinator_origin":"https://a.test",
     "aggregation_service_payloads": [{
       "key_id": "key",
       "payload": "ABCD1234"
@@ -333,13 +280,12 @@ TEST(AttributionReportTest, NullAggregatableReport) {
 }
 
 TEST(AttributionReportTest, ReportBody_AggregatableAttributionReport) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeatureWithParameters(
-      ::aggregation_service::kAggregationServiceMultipleCloudProviders,
-      {{"aws_cloud", "https://aws.example.test"}});
+  ::aggregation_service::ScopedAggregationCoordinatorAllowlistForTesting
+      scoped_coordinator_allowlist(
+          {url::Origin::Create(GURL("https://a.test"))});
 
   base::Value::Dict expected = base::test::ParseJsonDict(R"json({
-    "aggregation_coordinator_origin": "https://aws.example.test",
+    "aggregation_coordinator_origin": "https://a.test",
     "aggregation_service_payloads": [{
       "key_id": "key",
       "payload": "ABCD1234"
@@ -356,7 +302,8 @@ TEST(AttributionReportTest, ReportBody_AggregatableAttributionReport) {
                   kExclude)
           .SetTriggerContextId("123")
           .SetAggregatableHistogramContributions(
-              {AggregatableHistogramContribution(/*key=*/1, /*value=*/2)})
+              {blink::mojom::AggregatableReportHistogramContribution(
+                  /*bucket=*/1, /*value=*/2, /*filtering_id=*/std::nullopt)})
           .BuildAggregatableAttribution();
 
   auto& data =

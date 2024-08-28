@@ -3,10 +3,8 @@
 // found in the LICENSE file.
 
 #include "ash/wm/toplevel_window_event_handler.h"
-#include "base/memory/raw_ptr.h"
 
 #include "ash/accelerators/accelerator_controller_impl.h"
-#include "ash/constants/app_types.h"
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/display/screen_orientation_controller_test_api.h"
 #include "ash/public/cpp/shell_window_ids.h"
@@ -30,9 +28,12 @@
 #include "ash/wm/workspace_controller.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/capture_client.h"
@@ -1023,8 +1024,8 @@ void SendMouseReleaseAndReleaseCapture(ui::test::EventGenerator* generator,
 
 }  // namespace
 
-// Test that a drag is successful even if ET_MOUSE_CAPTURE_CHANGED is sent
-// immediately after the mouse release. views::Widget has this behavior.
+// Test that a drag is successful even if EventType::kMouseCaptureChanged is
+// sent immediately after the mouse release. views::Widget has this behavior.
 TEST_F(ToplevelWindowEventHandlerTest, CaptureLossAfterMouseRelease) {
   std::unique_ptr<aura::Window> window(CreateWindow(HTNOWHERE));
   ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow(),
@@ -1223,8 +1224,8 @@ class ToplevelWindowEventHandlerDragTest : public AshTestBase {
 
     dragged_window_ = CreateTestWindow();
     non_dragged_window_ = CreateTestWindow();
-    dragged_window_->SetProperty(aura::client::kAppType,
-                                 static_cast<int>(AppType::CHROME_APP));
+    dragged_window_->SetProperty(chromeos::kAppTypeKey,
+                                 chromeos::AppType::CHROME_APP);
   }
 
   void TearDown() override {
@@ -1278,9 +1279,9 @@ TEST_F(ToplevelWindowEventHandlerDragTest,
   dragged_window_->SetProperty(aura::client::kResizeBehaviorKey,
                                aura::client::kResizeBehaviorNone);
 
-  SendGestureEvent(gfx::Point(0, 0), 0, 5, ui::ET_GESTURE_SCROLL_BEGIN);
+  SendGestureEvent(gfx::Point(0, 0), 0, 5, ui::EventType::kGestureScrollBegin);
   SendGestureEvent(gfx::Point(700, 500), 700, 500,
-                   ui::ET_GESTURE_SCROLL_UPDATE);
+                   ui::EventType::kGestureScrollUpdate);
   EXPECT_FALSE(WindowState::Get(dragged_window_.get())->is_dragged());
 
   EXPECT_FALSE(OverviewController::Get()->InOverviewSession());
@@ -1288,9 +1289,9 @@ TEST_F(ToplevelWindowEventHandlerDragTest,
 
 // Test that if window destroyed during resize/dragging, no crash should happen.
 TEST_F(ToplevelWindowEventHandlerDragTest, WindowDestroyedDuringDragging) {
-  SendGestureEvent(gfx::Point(0, 0), 0, 5, ui::ET_GESTURE_SCROLL_BEGIN);
+  SendGestureEvent(gfx::Point(0, 0), 0, 5, ui::EventType::kGestureScrollBegin);
   SendGestureEvent(gfx::Point(700, 500), 700, 500,
-                   ui::ET_GESTURE_SCROLL_UPDATE);
+                   ui::EventType::kGestureScrollUpdate);
   EXPECT_TRUE(WindowState::Get(dragged_window_.get())->is_dragged());
   ToplevelWindowEventHandler* event_handler =
       Shell::Get()->toplevel_window_event_handler();
@@ -1301,12 +1302,12 @@ TEST_F(ToplevelWindowEventHandlerDragTest, WindowDestroyedDuringDragging) {
 }
 
 // Test that `gesture_target_` is set immediately with
-// `ET_GESTURE_BEGIN`. The client may call `AttemptToStartDrag()` after
-// `ET_GESTURE_BEGIN` but before `ET_GESTURE_SCROLL_BEGIN` or
-// `ET_GESTURE_PINCH_BEGIN`.
+// `EventType::kGestureBegin`. The client may call `AttemptToStartDrag()` after
+// `EventType::kGestureBegin` but before `EventType::kGestureScrollBegin` or
+// `EventType::kGesturePinchBegin`.
 TEST_F(ToplevelWindowEventHandlerDragTest,
        GestureTargetIsSetAsSoonAsGestureStarts) {
-  SendGestureEvent(gfx::Point(0, 0), ui::ET_GESTURE_BEGIN);
+  SendGestureEvent(gfx::Point(0, 0), ui::EventType::kGestureBegin);
   ToplevelWindowEventHandler* event_handler =
       Shell::Get()->toplevel_window_event_handler();
 
@@ -1334,10 +1335,7 @@ TEST_F(ToplevelWindowEventHandlerDragTest,
 
 class ToplevelWindowEventHandlerPipPinchToResizeTest : public AshTestBase {
  public:
-  ToplevelWindowEventHandlerPipPinchToResizeTest() {
-    scoped_feature_list_.InitWithFeatureStates({{features::kPipTilt, true}});
-  }
-
+  ToplevelWindowEventHandlerPipPinchToResizeTest() = default;
   ToplevelWindowEventHandlerPipPinchToResizeTest(
       const ToplevelWindowEventHandlerPipPinchToResizeTest&) = delete;
   ToplevelWindowEventHandlerPipPinchToResizeTest& operator=(
@@ -1377,9 +1375,6 @@ class ToplevelWindowEventHandlerPipPinchToResizeTest : public AshTestBase {
     window->Show();
     return window;
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(ToplevelWindowEventHandlerPipPinchToResizeTest,
@@ -1406,7 +1401,7 @@ TEST_F(ToplevelWindowEventHandlerPipPinchToResizeTest,
     base::RunLoop().RunUntilIdle();
 
     // Verify that PiP window bounds (origin and size) have changed.
-    EXPECT_EQ(gfx::Rect(8, 93, 506, 337), window->bounds());
+    EXPECT_EQ(gfx::Rect(8, 94, 506, 337), window->bounds());
   }
 
   {
@@ -1454,7 +1449,7 @@ TEST_F(ToplevelWindowEventHandlerPipPinchToResizeTest,
     base::RunLoop().RunUntilIdle();
 
     // Verify that PiP window did not exceed the maximum size.
-    EXPECT_EQ(gfx::Rect(8, 164, 600, 400), window->bounds());
+    EXPECT_EQ(gfx::Rect(8, 166, 600, 400), window->bounds());
 
     const WMEvent exit_pip(WM_EVENT_NORMAL);
     WindowState::Get(window.get())->OnWMEvent(&exit_pip);

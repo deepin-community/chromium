@@ -4,8 +4,20 @@
 
 package org.chromium.base.test.transit;
 
+import android.app.Activity;
+import android.view.View;
+
+import org.hamcrest.Matcher;
+
+import org.chromium.base.Callback;
+import org.chromium.base.test.transit.ViewConditions.NotDisplayedAnymoreCondition;
+
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * The elements that define a {@link ConditionalState}.
@@ -18,25 +30,33 @@ import java.util.List;
  * </pre>
  */
 public class Elements {
-
-    /** If passed as |id|, the description is considered the id. */
-    public static final String DESCRIPTION_AS_ID = "__DESCRIPTION_AS_ID";
-
     static final Elements EMPTY = new Elements();
 
-    private ArrayList<ElementInState> mElementsInState = new ArrayList<>();
+    private ArrayList<ElementInState<?>> mElementsInState = new ArrayList<>();
+    private Map<Condition, ElementFactory> mElementFactories = new HashMap<>();
     private ArrayList<Condition> mOtherEnterConditions = new ArrayList<>();
     private ArrayList<Condition> mOtherExitConditions = new ArrayList<>();
 
-    /** Private constructor, instantiated by {@link Builder#build()}. */
-    private Elements() {}
+    Elements() {}
 
-    public static Builder newBuilder() {
-        return new Builder(new Elements());
+    Builder newBuilder() {
+        return new Builder(this);
     }
 
-    List<ElementInState> getElementsInState() {
+    Set<String> getElementsInStateIds() {
+        Set<String> elementIds = new HashSet<>();
+        for (ElementInState<?> element : mElementsInState) {
+            elementIds.add(element.getId());
+        }
+        return elementIds;
+    }
+
+    List<ElementInState<?>> getElementsInState() {
         return mElementsInState;
+    }
+
+    Map<Condition, ElementFactory> getElementFactories() {
+        return mElementFactories;
     }
 
     List<Condition> getOtherEnterConditions() {
@@ -47,6 +67,13 @@ public class Elements {
         return mOtherExitConditions;
     }
 
+    void addAll(Elements otherElements) {
+        mElementsInState.addAll(otherElements.mElementsInState);
+        mElementFactories.putAll(otherElements.mElementFactories);
+        mOtherEnterConditions.addAll(otherElements.mOtherEnterConditions);
+        mOtherExitConditions.addAll(otherElements.mOtherExitConditions);
+    }
+
     /**
      * Builder for {@link Elements}.
      *
@@ -54,28 +81,45 @@ public class Elements {
      * ConditionalState's elements by calling the declare___() methods.
      */
     public static class Builder {
-
-        private Elements mElements;
+        private Elements mOwner;
+        private ArrayList<ElementInState<?>> mElementsInState = new ArrayList<>();
+        private Map<Condition, ElementFactory> mElementFactories = new HashMap<>();
+        private ArrayList<Condition> mOtherEnterConditions = new ArrayList<>();
+        private ArrayList<Condition> mOtherExitConditions = new ArrayList<>();
 
         /** Instantiate by calling {@link Elements#newBuilder()}. */
-        private Builder(Elements elements) {
-            mElements = elements;
+        private Builder(Elements owner) {
+            mOwner = owner;
+        }
+
+        /** Declare as an element an Android Activity of type |activityClass|. */
+        public <T extends Activity> ActivityElement<T> declareActivity(Class<T> activityClass) {
+            assertNotBuilt();
+            ActivityElement<T> element = new ActivityElement<>(activityClass);
+            mElementsInState.add(element);
+            return element;
         }
 
         /** Declare as an element a View that matches |viewMatcher|. */
-        public Builder declareView(ViewElement viewElement) {
-            mElements.mElementsInState.add(new ViewElementInState(viewElement, /* gate= */ null));
-            return this;
+        public ViewElementInState declareView(ViewElement viewElement) {
+            assertNotBuilt();
+            ViewElementInState inState = new ViewElementInState(viewElement, /* gate= */ null);
+            mElementsInState.add(inState);
+            return inState;
         }
 
-        /**
-         * Conditional version of {@link #declareView(ViewElement)}.
-         *
-         * <p>The element is only expected if |gate| returns true.
-         */
-        public Builder declareViewIf(ViewElement viewElement, Condition gate) {
-            mElements.mElementsInState.add(new ViewElementInState(viewElement, gate));
-            return this;
+        /** Declare an {@link ElementFactory} that is gated by a Condition. */
+        public <T extends Condition> T declareElementFactory(
+                T condition, Callback<Elements.Builder> delayedDeclarations) {
+            assertNotBuilt();
+            mElementFactories.put(condition, new ElementFactory(mOwner, delayedDeclarations));
+            return condition;
+        }
+
+        /** Declare as a Condition that a View is not displayed. */
+        public void declareNoView(Matcher<View> viewMatcher) {
+            assertNotBuilt();
+            mOtherEnterConditions.add(new NotDisplayedAnymoreCondition(viewMatcher));
         }
 
         /**
@@ -86,9 +130,10 @@ public class Elements {
          * LogicalElements do not generate exit Conditions when going to another ConditionalState
          * with the same LogicalElement.
          */
-        public Builder declareLogicalElement(LogicalElement logicalElement) {
-            mElements.mElementsInState.add(logicalElement);
-            return this;
+        public LogicalElement<?> declareLogicalElement(LogicalElement<?> logicalElement) {
+            assertNotBuilt();
+            mElementsInState.add(logicalElement);
+            return logicalElement;
         }
 
         /**
@@ -101,9 +146,10 @@ public class Elements {
          * <p>Further, no promises are made that the Condition is false after exiting the State. Use
          * a scoped {@link LogicalElement} in this case.
          */
-        public Builder declareEnterCondition(Condition condition) {
-            mElements.mOtherEnterConditions.add(condition);
-            return this;
+        public <T extends Condition> T declareEnterCondition(T condition) {
+            assertNotBuilt();
+            mOtherEnterConditions.add(condition);
+            return condition;
         }
 
         /**
@@ -113,26 +159,39 @@ public class Elements {
          * <p>No promises are made that the Condition is false as long as the ConditionalState is
          * ACTIVE. For these cases, use a scoped {@link LogicalElement}.
          */
-        public Builder declareExitCondition(Condition condition) {
-            mElements.mOtherExitConditions.add(condition);
-            return this;
+        public <T extends Condition> T declareExitCondition(T condition) {
+            assertNotBuilt();
+            mOtherExitConditions.add(condition);
+            return condition;
         }
 
-        void addAll(Elements otherElements) {
-            mElements.mElementsInState.addAll(otherElements.mElementsInState);
-            mElements.mOtherEnterConditions.addAll(otherElements.mOtherEnterConditions);
-            mElements.mOtherExitConditions.addAll(otherElements.mOtherExitConditions);
+        /** Declare a custom element, already rendered to an ElementInState. */
+        public <T extends ElementInState<?>> T declareElementInState(T elementInState) {
+            assertNotBuilt();
+            mElementsInState.add(elementInState);
+            return elementInState;
         }
 
         /**
-         * Instantiates the {@link Elements} of a given |conditionalState| after they were declared
-         * by calling the Builder's declare___() methods.
+         * Adds newly declared {@link Elements} (from calling the Builders declare___() methods) to
+         * the original {@link Elements} owned by a ConditionalState.
          */
-        Elements build() {
-            Elements elements = mElements;
-            mElements = null;
-            return elements;
+        Elements consolidate() {
+            assertNotBuilt();
+            Elements newElements = new Elements();
+            newElements.mElementsInState.addAll(mElementsInState);
+            newElements.mElementFactories.putAll(mElementFactories);
+            newElements.mOtherEnterConditions.addAll(mOtherEnterConditions);
+            newElements.mOtherExitConditions.addAll(mOtherExitConditions);
+            mOwner.addAll(newElements);
+            mOwner = null;
+            return newElements;
+        }
+
+        private void assertNotBuilt() {
+            assert mOwner != null
+                    : "Elements.Builder already built; if in declareElementFactory(), probably"
+                            + " using the outer Elements.Builder instead of the nested one";
         }
     }
-
 }

@@ -84,7 +84,7 @@ class CORE_EXPORT LayoutInputNode {
   bool IsBody() const { return IsBlock() && box_->IsBody(); }
   bool IsView() const { return IsBlock() && box_->IsLayoutView(); }
   bool IsDocumentElement() const { return box_->IsDocumentElement(); }
-  bool IsFlexItem() const { return IsBlock() && box_->IsFlexItemIncludingNG(); }
+  bool IsFlexItem() const { return IsBlock() && box_->IsFlexItem(); }
   bool IsFlexibleBox() const { return IsBlock() && box_->IsFlexibleBox(); }
   bool IsGrid() const { return IsBlock() && box_->IsLayoutGrid(); }
   bool ShouldBeConsideredAsReplaced() const {
@@ -101,7 +101,9 @@ class CORE_EXPORT LayoutInputNode {
     DCHECK(IsListMarker());
     return To<LayoutOutsideListMarker>(box_.Get())->NeedsOccupyWholeLine();
   }
-  bool IsButton() const { return IsBlock() && box_->IsButton(); }
+  bool IsButtonOrInputButton() const {
+    return IsBlock() && box_->IsButtonOrInputButton();
+  }
   bool IsFieldsetContainer() const { return IsBlock() && box_->IsFieldset(); }
   bool IsInitialLetterBox() const { return box_->IsInitialLetterBox(); }
   bool IsMedia() const { return box_->IsMedia(); }
@@ -237,11 +239,11 @@ class CORE_EXPORT LayoutInputNode {
   }
 
   LogicalAxes ContainedAxes() const {
-    LogicalAxes axes = kLogicalAxisNone;
+    LogicalAxes axes = kLogicalAxesNone;
     if (ShouldApplyInlineSizeContainment())
-      axes |= kLogicalAxisInline;
+      axes |= kLogicalAxesInline;
     if (ShouldApplyBlockSizeContainment())
-      axes |= kLogicalAxisBlock;
+      axes |= kLogicalAxesBlock;
     return axes;
   }
 
@@ -249,15 +251,10 @@ class CORE_EXPORT LayoutInputNode {
   // https://drafts.csswg.org/css-sizing-4/#intrinsic-size-override
   // Note that this returns kIndefiniteSize if the override was not specified.
   LayoutUnit OverrideIntrinsicContentInlineSize() const {
-    if (box_->HasOverrideIntrinsicContentLogicalWidth())
-      return box_->OverrideIntrinsicContentLogicalWidth();
-    return kIndefiniteSize;
+    return box_->OverrideIntrinsicContentInlineSize();
   }
-  // Note that this returns kIndefiniteSize if the override was not specified.
   LayoutUnit OverrideIntrinsicContentBlockSize() const {
-    if (box_->HasOverrideIntrinsicContentLogicalHeight())
-      return box_->OverrideIntrinsicContentLogicalHeight();
-    return kIndefiniteSize;
+    return box_->OverrideIntrinsicContentBlockSize();
   }
 
   LayoutUnit DefaultIntrinsicContentInlineSize() const {

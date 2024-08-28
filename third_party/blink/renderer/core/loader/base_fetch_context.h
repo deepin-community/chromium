@@ -68,6 +68,14 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
       ReportingDisposition,
       const KURL& url_before_redirects,
       ResourceRequest::RedirectStatus) const override;
+  std::optional<ResourceRequestBlockedReason> CheckAndEnforceCSPForRequest(
+      mojom::blink::RequestContextType,
+      network::mojom::RequestDestination request_destination,
+      const KURL&,
+      const ResourceLoaderOptions&,
+      ReportingDisposition,
+      const KURL& url_before_redirects,
+      ResourceRequest::RedirectStatus) const override;
 
   void Trace(Visitor*) const override;
 
@@ -116,7 +124,7 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
       : fetcher_properties_(properties), console_logger_(logger) {}
 
   // Used for security checks.
-  virtual bool AllowScriptFromSource(const KURL&) const = 0;
+  virtual bool AllowScript() const = 0;
 
   // Note: subclasses are expected to override following methods.
   // Used in the default implementation for CanRequest, CanFollowRedirect
@@ -129,7 +137,7 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
   virtual ContentSecurityPolicy* GetContentSecurityPolicyForWorld(
       const DOMWrapperWorld* world) const = 0;
 
-  virtual bool IsSVGImageChromeClient() const = 0;
+  virtual bool IsIsolatedSVGChromeClient() const = 0;
   virtual bool ShouldBlockFetchByMixedContentCheck(
       mojom::blink::RequestContextType request_context,
       network::mojom::blink::IPAddressSpace target_address_space,

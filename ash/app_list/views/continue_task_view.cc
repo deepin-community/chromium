@@ -159,7 +159,7 @@ ContinueTaskView::ContinueTaskView(AppListViewDelegate* view_delegate,
   } else {
     bubble_utils::ApplyStyle(title_, TypographyToken::kCrosBody1);
   }
-  title_->SetAccessibleName(std::u16string());
+  title_->GetViewAccessibility().SetName(std::u16string());
   title_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
   title_->SetElideBehavior(gfx::ElideBehavior::ELIDE_TAIL);
 
@@ -197,7 +197,8 @@ gfx::Size ContinueTaskView::GetMinimumSize() const {
                    GetLayoutManager()->GetPreferredSize(this).height());
 }
 
-gfx::Size ContinueTaskView::CalculatePreferredSize() const {
+gfx::Size ContinueTaskView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return GetMinimumSize();
 }
 
@@ -265,7 +266,7 @@ void ContinueTaskView::UpdateResult() {
   if (!result()) {
     title_->SetText(std::u16string());
     subtitle_->SetText(std::u16string());
-    GetViewAccessibility().OverrideName(
+    GetViewAccessibility().SetName(
         std::u16string(), ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
     return;
   }
@@ -274,8 +275,8 @@ void ContinueTaskView::UpdateResult() {
   subtitle_->SetText(result()->details());
   subtitle_->SetVisible(!result()->details().empty());
 
-  GetViewAccessibility().OverrideName(result()->title() + u" " +
-                                      result()->details());
+  GetViewAccessibility().SetName(result()->title() + u" " + result()->details(),
+                                 ax::mojom::NameFrom::kAttribute);
 }
 
 void ContinueTaskView::OnResultDestroying() {
@@ -330,7 +331,7 @@ void ContinueTaskView::ExecuteCommand(int command_id, int event_flags) {
       view_delegate_->SetHideContinueSection(true);
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -390,7 +391,7 @@ ContinueTaskView::TaskResultType ContinueTaskView::GetTaskResultType() {
     case AppListSearchResultType::kZeroStateDrive:
       return TaskResultType::kDriveFile;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return TaskResultType::kUnknown;
 }

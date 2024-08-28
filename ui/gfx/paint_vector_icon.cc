@@ -108,57 +108,7 @@ class PathParser {
 
  private:
   int GetArgumentCount() const {
-    switch (CurrentCommand()) {
-      case STROKE:
-      case H_LINE_TO:
-      case R_H_LINE_TO:
-      case V_LINE_TO:
-      case R_V_LINE_TO:
-      case CANVAS_DIMENSIONS:
-      case PATH_COLOR_ALPHA:
-        return 1;
-
-      case MOVE_TO:
-      case R_MOVE_TO:
-      case LINE_TO:
-      case R_LINE_TO:
-      case QUADRATIC_TO_SHORTHAND:
-      case R_QUADRATIC_TO_SHORTHAND:
-        return 2;
-
-      case CIRCLE:
-        return 3;
-
-      case PATH_COLOR_ARGB:
-      case CUBIC_TO_SHORTHAND:
-      case CLIP:
-      case QUADRATIC_TO:
-      case R_QUADRATIC_TO:
-      case OVAL:
-        return 4;
-
-      case ROUND_RECT:
-        return 5;
-
-      case CUBIC_TO:
-      case R_CUBIC_TO:
-        return 6;
-
-      case ARC_TO:
-      case R_ARC_TO:
-        return 7;
-
-      case NEW_PATH:
-      case PATH_MODE_CLEAR:
-      case CAP_SQUARE:
-      case CLOSE:
-      case DISABLE_AA:
-      case FLIPS_IN_RTL:
-        return 0;
-    }
-
-    NOTREACHED();
-    return 0;
+    return GetCommandArgumentCount(CurrentCommand());
   }
 
   raw_ptr<const PathElement, AllowPtrArithmetic> path_elements_;
@@ -173,6 +123,7 @@ CommandType CommandFromString(const std::string& source) {
     return command;
 
   RETURN_IF_IS(NEW_PATH);
+  RETURN_IF_IS(FILL_RULE_NONZERO);
   RETURN_IF_IS(PATH_COLOR_ALPHA);
   RETURN_IF_IS(PATH_COLOR_ARGB);
   RETURN_IF_IS(PATH_MODE_CLEAR);
@@ -205,7 +156,7 @@ CommandType CommandFromString(const std::string& source) {
   RETURN_IF_IS(FLIPS_IN_RTL);
 #undef RETURN_IF_IS
 
-  NOTREACHED() << "Unrecognized command: " << source;
+  NOTREACHED_IN_MIGRATION() << "Unrecognized command: " << source;
   return CLOSE;
 }
 
@@ -270,6 +221,10 @@ void PaintPath(Canvas* canvas,
     switch (command_type) {
       // Handled above.
       case NEW_PATH:
+        break;
+
+      case FILL_RULE_NONZERO:
+        path.setFillType(SkPathFillType::kWinding);
         break;
 
       case PATH_COLOR_ALPHA:

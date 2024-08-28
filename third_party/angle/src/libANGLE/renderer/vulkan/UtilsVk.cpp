@@ -14,8 +14,8 @@
 #include "libANGLE/renderer/vulkan/ContextVk.h"
 #include "libANGLE/renderer/vulkan/FramebufferVk.h"
 #include "libANGLE/renderer/vulkan/RenderTargetVk.h"
-#include "libANGLE/renderer/vulkan/RendererVk.h"
 #include "libANGLE/renderer/vulkan/SurfaceVk.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 #include "libANGLE/renderer/vulkan/vk_utils.h"
 
 namespace rx
@@ -398,7 +398,7 @@ void CalculateResolveOffset(const UtilsVk::BlitResolveParameters &params, int32_
     offset[1] = params.dstOffset[1] - params.srcOffset[1] * srcOffsetFactorY;
 }
 
-void SetDepthStateForWrite(RendererVk *renderer, vk::GraphicsPipelineDesc *desc)
+void SetDepthStateForWrite(vk::Renderer *renderer, vk::GraphicsPipelineDesc *desc)
 {
     if (!renderer->useDepthTestEnableDynamicState())
     {
@@ -414,7 +414,7 @@ void SetDepthStateForWrite(RendererVk *renderer, vk::GraphicsPipelineDesc *desc)
     }
 }
 
-void SetDepthStateForUnused(RendererVk *renderer, vk::GraphicsPipelineDesc *desc)
+void SetDepthStateForUnused(vk::Renderer *renderer, vk::GraphicsPipelineDesc *desc)
 {
     if (!renderer->useDepthTestEnableDynamicState())
     {
@@ -426,7 +426,8 @@ void SetDepthStateForUnused(RendererVk *renderer, vk::GraphicsPipelineDesc *desc
     }
 }
 
-void SetDepthDynamicStateForWrite(RendererVk *renderer, vk::RenderPassCommandBuffer *commandBuffer)
+void SetDepthDynamicStateForWrite(vk::Renderer *renderer,
+                                  vk::RenderPassCommandBuffer *commandBuffer)
 {
     if (renderer->useDepthTestEnableDynamicState())
     {
@@ -442,7 +443,8 @@ void SetDepthDynamicStateForWrite(RendererVk *renderer, vk::RenderPassCommandBuf
     }
 }
 
-void SetDepthDynamicStateForUnused(RendererVk *renderer, vk::RenderPassCommandBuffer *commandBuffer)
+void SetDepthDynamicStateForUnused(vk::Renderer *renderer,
+                                   vk::RenderPassCommandBuffer *commandBuffer)
 {
     if (renderer->useDepthTestEnableDynamicState())
     {
@@ -452,11 +454,15 @@ void SetDepthDynamicStateForUnused(RendererVk *renderer, vk::RenderPassCommandBu
     {
         commandBuffer->setDepthWriteEnable(VK_FALSE);
     }
+    if (renderer->useDepthCompareOpDynamicState())
+    {
+        commandBuffer->setDepthCompareOp(VK_COMPARE_OP_ALWAYS);
+    }
 }
 
 // Sets the appropriate settings in the pipeline for either the shader to output stencil, regardless
 // of whether its done through the reference value or the shader stencil export extension.
-void SetStencilStateForWrite(RendererVk *renderer, vk::GraphicsPipelineDesc *desc)
+void SetStencilStateForWrite(vk::Renderer *renderer, vk::GraphicsPipelineDesc *desc)
 {
     if (!renderer->useStencilTestEnableDynamicState())
     {
@@ -473,7 +479,7 @@ void SetStencilStateForWrite(RendererVk *renderer, vk::GraphicsPipelineDesc *des
     }
 }
 
-void SetStencilDynamicStateForWrite(RendererVk *renderer,
+void SetStencilDynamicStateForWrite(vk::Renderer *renderer,
                                     vk::RenderPassCommandBuffer *commandBuffer)
 {
     if (renderer->useStencilTestEnableDynamicState())
@@ -491,6 +497,26 @@ void SetStencilDynamicStateForWrite(RendererVk *renderer,
     }
 }
 
+void SetStencilDynamicStateForUnused(vk::Renderer *renderer,
+                                     vk::RenderPassCommandBuffer *commandBuffer)
+{
+    if (renderer->useStencilTestEnableDynamicState())
+    {
+        commandBuffer->setStencilTestEnable(false);
+    }
+    if (renderer->useStencilOpDynamicState())
+    {
+        commandBuffer->setStencilOp(VK_STENCIL_FACE_FRONT_BIT, VK_STENCIL_OP_REPLACE,
+                                    VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_REPLACE,
+                                    VK_COMPARE_OP_ALWAYS);
+        commandBuffer->setStencilOp(VK_STENCIL_FACE_BACK_BIT, VK_STENCIL_OP_REPLACE,
+                                    VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_REPLACE,
+                                    VK_COMPARE_OP_ALWAYS);
+    }
+    commandBuffer->setStencilCompareMask(0x00, 0x00);
+    commandBuffer->setStencilWriteMask(0x00, 0x00);
+    commandBuffer->setStencilReference(0x00, 0x00);
+}
 namespace unresolve
 {
 // The unresolve shader looks like the following, based on the number and types of unresolve
@@ -841,7 +867,7 @@ void InsertCommonTypes(angle::spirv::Blob *blobOut)
     spirv::WriteTypeFunction(blobOut, spirv::IdRef(kIdMainType), spirv::IdRef(kIdVoid), {});
 
     // Float types
-    spirv::WriteTypeFloat(blobOut, spirv::IdRef(kIdFloatType), spirv::LiteralInteger(32));
+    spirv::WriteTypeFloat(blobOut, spirv::IdRef(kIdFloatType), spirv::LiteralInteger(32), nullptr);
     InsertDerivativeTypes(spirv::IdRef(kIdFloatType), spirv::IdRef(kIdFloat4Type),
                           spirv::IdRef(kIdFloat4OutType), spirv::IdRef(kIdFloatSubpassImageType),
                           spirv::IdRef(kIdFloatSubpassInputType), blobOut);
@@ -1038,7 +1064,7 @@ angle::spirv::Blob MakeFragShader(
     code.reserve(169);
 
     // Header
-    spirv::WriteSpirvHeader(&code, kIdCount);
+    spirv::WriteSpirvHeader(&code, spirv::kVersion_1_0, kIdCount);
 
     // The preamble
     InsertPreamble(colorAttachmentCount, unresolveDepth, unresolveStencilWithShaderExport, &code);
@@ -1175,7 +1201,7 @@ void ResetDynamicState(ContextVk *contextVk, vk::RenderPassCommandBuffer *comman
     // - stencil func: UtilsVk sets this when enabling stencil test
     // - stencil ops: UtilsVk sets this when enabling stencil test
 
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     // Reset all other dynamic state, since it can affect UtilsVk functions:
     if (renderer->useCullModeDynamicState())
@@ -1234,7 +1260,7 @@ UtilsVk::ImageCopyShaderParams::ImageCopyShaderParams() = default;
 
 uint32_t UtilsVk::GetGenerateMipmapMaxLevels(ContextVk *contextVk)
 {
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     uint32_t maxPerStageDescriptorStorageImages =
         renderer->getPhysicalDeviceProperties().limits.maxPerStageDescriptorStorageImages;
@@ -1256,8 +1282,8 @@ UtilsVk::~UtilsVk() = default;
 
 void UtilsVk::destroy(ContextVk *contextVk)
 {
-    RendererVk *renderer = contextVk->getRenderer();
-    VkDevice device      = renderer->getDevice();
+    vk::Renderer *renderer = contextVk->getRenderer();
+    VkDevice device        = renderer->getDevice();
 
     for (Function f : angle::AllEnums<Function>())
     {
@@ -1417,8 +1443,8 @@ angle::Result UtilsVk::ensureResourcesInitialized(ContextVk *contextVk,
     uint32_t currentBinding = 0;
     for (size_t i = 0; i < setSizesCount; ++i)
     {
-        descriptorSetDesc.update(currentBinding, setSizes[i].type, setSizes[i].descriptorCount,
-                                 descStages, nullptr);
+        descriptorSetDesc.addBinding(currentBinding, setSizes[i].type, setSizes[i].descriptorCount,
+                                     descStages, nullptr);
         ++currentBinding;
     }
 
@@ -1427,8 +1453,7 @@ angle::Result UtilsVk::ensureResourcesInitialized(ContextVk *contextVk,
         &mDescriptorSetLayouts[function][DescriptorSetIndex::Internal]));
 
     vk::DescriptorSetLayoutBindingVector bindingVector;
-    std::vector<VkSampler> immutableSamplers;
-    descriptorSetDesc.unpackBindings(&bindingVector, &immutableSamplers);
+    descriptorSetDesc.unpackBindings(&bindingVector);
     std::vector<VkDescriptorPoolSize> descriptorPoolSizes;
 
     for (const VkDescriptorSetLayoutBinding &binding : bindingVector)
@@ -1595,8 +1620,8 @@ angle::Result UtilsVk::ensureImageCopyResourcesInitializedWithSampler(
         contextVk->getRenderer()->getSamplerCache().getSampler(contextVk, samplerDesc, &sampler));
 
     vk::DescriptorSetLayoutDesc descriptorSetDesc;
-    descriptorSetDesc.update(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                             VK_SHADER_STAGE_FRAGMENT_BIT, &sampler.get().get());
+    descriptorSetDesc.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                                 VK_SHADER_STAGE_FRAGMENT_BIT, &sampler.get().get());
 
     ANGLE_TRY(contextVk->getDescriptorSetLayoutCache().getDescriptorSetLayout(
         contextVk, descriptorSetDesc,
@@ -1804,7 +1829,7 @@ angle::Result UtilsVk::setupComputeProgram(
     size_t pushConstantsSize,
     vk::OutsideRenderPassCommandBufferHelper *commandBufferHelper)
 {
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     ASSERT(function >= Function::ComputeStartIndex);
 
@@ -1817,10 +1842,12 @@ angle::Result UtilsVk::setupComputeProgram(
 
     vk::PipelineHelper *pipeline;
     vk::PipelineCacheAccess pipelineCache;
-    ANGLE_TRY(renderer->getPipelineCache(&pipelineCache));
+    ANGLE_TRY(renderer->getPipelineCache(contextVk, &pipelineCache));
     ANGLE_TRY(programAndPipelines->program.getOrCreateComputePipeline(
         contextVk, &programAndPipelines->pipelines, &pipelineCache, pipelineLayout.get(),
-        contextVk->getComputePipelineFlags(), PipelineSource::Utils, &pipeline));
+        vk::GetComputePipelineOptions(contextVk->pipelineRobustness(),
+                                      contextVk->pipelineProtectedAccess()),
+        PipelineSource::Utils, &pipeline, nullptr, nullptr));
     commandBufferHelper->retainResource(pipeline);
 
     vk::OutsideRenderPassCommandBuffer *commandBuffer = &commandBufferHelper->getCommandBuffer();
@@ -1857,7 +1884,7 @@ angle::Result UtilsVk::setupGraphicsProgramWithLayout(
     size_t pushConstantsSize,
     vk::RenderPassCommandBuffer *commandBuffer)
 {
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     if (!programAndPipelines->program.valid(gl::ShaderType::Vertex))
     {
@@ -1870,12 +1897,12 @@ angle::Result UtilsVk::setupGraphicsProgramWithLayout(
 
     // This value is not used but is passed to getGraphicsPipeline to avoid a nullptr check.
     vk::PipelineCacheAccess pipelineCache;
-    ANGLE_TRY(renderer->getPipelineCache(&pipelineCache));
+    ANGLE_TRY(renderer->getPipelineCache(contextVk, &pipelineCache));
 
     // Pull in a compatible RenderPass.
     const vk::RenderPass *compatibleRenderPass = nullptr;
-    ANGLE_TRY(contextVk->getRenderPassCache().getCompatibleRenderPass(
-        contextVk, pipelineDesc->getRenderPassDesc(), &compatibleRenderPass));
+    ANGLE_TRY(contextVk->getCompatibleRenderPass(pipelineDesc->getRenderPassDesc(),
+                                                 &compatibleRenderPass));
 
     const vk::GraphicsPipelineDesc *descPtr;
     vk::PipelineHelper *helper;
@@ -2352,24 +2379,42 @@ angle::Result UtilsVk::startRenderPass(ContextVk *contextVk,
                                        const gl::Rectangle &renderArea,
                                        vk::RenderPassCommandBuffer **commandBufferOut)
 {
-    const vk::RenderPass *compatibleRenderPass = nullptr;
-    ANGLE_TRY(contextVk->getCompatibleRenderPass(renderPassDesc, &compatibleRenderPass));
+    vk::Framebuffer framebuffer;
+    vk::Framebuffer framebufferHandle;
+    vk::RenderPassFramebuffer renderPassFramebuffer;
 
-    VkFramebufferCreateInfo framebufferInfo = {};
+    const uint32_t framebufferWidth    = renderArea.x + renderArea.width;
+    const uint32_t framebufferHeight   = renderArea.y + renderArea.height;
+    const uint32_t framebufferLayers   = 1;
+    vk::ImagelessFramebuffer imageless = vk::ImagelessFramebuffer::Yes;
 
-    // Minimize the framebuffer coverage to only cover up to the render area.
-    framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebufferInfo.flags           = 0;
-    framebufferInfo.renderPass      = compatibleRenderPass->getHandle();
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments    = imageView->ptr();
-    framebufferInfo.width           = renderArea.x + renderArea.width;
-    framebufferInfo.height          = renderArea.y + renderArea.height;
-    framebufferInfo.layers          = 1;
+    if (!contextVk->getFeatures().preferDynamicRendering.enabled)
+    {
+        imageless = vk::ImagelessFramebuffer::No;
 
-    vk::MaybeImagelessFramebuffer framebuffer = {};
-    ANGLE_VK_TRY(contextVk,
-                 framebuffer.getFramebuffer().init(contextVk->getDevice(), framebufferInfo));
+        const vk::RenderPass *compatibleRenderPass = nullptr;
+        ANGLE_TRY(contextVk->getCompatibleRenderPass(renderPassDesc, &compatibleRenderPass));
+
+        VkFramebufferCreateInfo framebufferInfo = {};
+
+        // Minimize the framebuffer coverage to only cover up to the render area.
+        framebufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.flags           = 0;
+        framebufferInfo.renderPass      = compatibleRenderPass->getHandle();
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments    = imageView->ptr();
+        framebufferInfo.width           = framebufferWidth;
+        framebufferInfo.height          = framebufferHeight;
+        framebufferInfo.layers          = framebufferLayers;
+
+        ANGLE_VK_TRY(contextVk, framebuffer.init(contextVk->getDevice(), framebufferInfo));
+
+        framebufferHandle.setHandle(framebuffer.getHandle());
+    }
+
+    renderPassFramebuffer.setFramebuffer(
+        contextVk, std::move(framebufferHandle), {imageView->getHandle()}, framebufferWidth,
+        framebufferHeight, framebufferLayers, imageless, vk::RenderPassSource::InternalUtils);
 
     vk::AttachmentOpsArray renderPassAttachmentOps;
     vk::PackedClearValuesArray clearValues;
@@ -2379,10 +2424,10 @@ angle::Result UtilsVk::startRenderPass(ContextVk *contextVk,
                                               vk::ImageLayout::ColorWrite);
 
     ANGLE_TRY(contextVk->beginNewRenderPass(
-        framebuffer, renderArea, renderPassDesc, renderPassAttachmentOps,
+        std::move(renderPassFramebuffer), renderArea, renderPassDesc, renderPassAttachmentOps,
         vk::PackedAttachmentCount(1), vk::kAttachmentIndexInvalid, clearValues, commandBufferOut));
 
-    contextVk->addGarbage(&framebuffer.getFramebuffer());
+    contextVk->addGarbage(&framebuffer);
 
     return angle::Result::Continue;
 }
@@ -2391,7 +2436,7 @@ angle::Result UtilsVk::clearFramebuffer(ContextVk *contextVk,
                                         FramebufferVk *framebuffer,
                                         const ClearFramebufferParameters &params)
 {
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     ANGLE_TRY(ensureImageClearResourcesInitialized(contextVk));
 
@@ -2499,6 +2544,10 @@ angle::Result UtilsVk::clearFramebuffer(ContextVk *contextVk,
     {
         SetDepthDynamicStateForWrite(renderer, commandBuffer);
     }
+    else
+    {
+        SetDepthDynamicStateForUnused(renderer, commandBuffer);
+    }
 
     if (params.clearStencil)
     {
@@ -2510,7 +2559,11 @@ angle::Result UtilsVk::clearFramebuffer(ContextVk *contextVk,
         commandBuffer->setStencilWriteMask(params.stencilMask, params.stencilMask);
         commandBuffer->setStencilReference(clearStencilValue, clearStencilValue);
 
-        SetStencilDynamicStateForWrite(contextVk->getRenderer(), commandBuffer);
+        SetStencilDynamicStateForWrite(renderer, commandBuffer);
+    }
+    else
+    {
+        SetStencilDynamicStateForUnused(renderer, commandBuffer);
     }
 
     ASSERT(contextVk->hasStartedRenderPassWithQueueSerial(
@@ -2536,6 +2589,8 @@ angle::Result UtilsVk::clearImage(ContextVk *contextVk,
                                   vk::ImageHelper *dst,
                                   const ClearImageParameters &params)
 {
+    vk::Renderer *renderer = contextVk->getRenderer();
+
     ANGLE_TRY(ensureImageClearResourcesInitialized(contextVk));
 
     const angle::Format &dstActualFormat = dst->getActualFormat();
@@ -2554,9 +2609,8 @@ angle::Result UtilsVk::clearImage(ContextVk *contextVk,
     // cannot be taken if AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER hasn't been specified, even if the
     // format is renderable.
     //
-    // http://anglebug.com/6151
-    if (!vk::FormatHasNecessaryFeature(contextVk->getRenderer(), dstActualFormat.id,
-                                       dst->getTilingMode(),
+    // http://anglebug.com/42264676
+    if (!vk::FormatHasNecessaryFeature(renderer, dstActualFormat.id, dst->getTilingMode(),
                                        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT))
     {
         UNIMPLEMENTED();
@@ -2618,6 +2672,9 @@ angle::Result UtilsVk::clearImage(ContextVk *contextVk,
     VkRect2D scissor = gl_vk::GetRect(renderArea);
     commandBuffer->setScissor(0, 1, &scissor);
 
+    SetDepthDynamicStateForUnused(renderer, commandBuffer);
+    SetStencilDynamicStateForUnused(renderer, commandBuffer);
+
     // Note: this utility creates its own framebuffer, thus bypassing ContextVk::startRenderPass.
     // As such, occlusion queries are not enabled.
     commandBuffer->draw(3, 0);
@@ -2641,7 +2698,7 @@ angle::Result UtilsVk::colorBlitResolve(ContextVk *contextVk,
     // then the views are used in a new command buffer without having been retained for it.
     // http://crbug.com/1272266#c22
     //
-    // Note that depth/stencil views for blit are not derived from a ResourceVk object and are
+    // Note that depth/stencil views for blit are not derived from a |Resource| class and are
     // retained differently.
     ASSERT(!contextVk->hasActiveRenderPass());
 
@@ -2701,7 +2758,7 @@ angle::Result UtilsVk::blitResolveImpl(ContextVk *contextVk,
     // constant.
     //
     // The second method is implemented in this function, which shares code with the resolve method.
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     ANGLE_TRY(ensureBlitResolveResourcesInitialized(contextVk));
 
@@ -2840,17 +2897,17 @@ angle::Result UtilsVk::blitResolveImpl(ContextVk *contextVk,
     if (blitColor)
     {
         imageInfos[0].imageView   = srcColorView->getHandle();
-        imageInfos[0].imageLayout = src->getCurrentLayout(contextVk);
+        imageInfos[0].imageLayout = src->getCurrentLayout(renderer);
     }
     if (blitDepth)
     {
         imageInfos[0].imageView   = srcDepthView->getHandle();
-        imageInfos[0].imageLayout = src->getCurrentLayout(contextVk);
+        imageInfos[0].imageLayout = src->getCurrentLayout(renderer);
     }
     if (blitStencil)
     {
         imageInfos[1].imageView   = srcStencilView->getHandle();
-        imageInfos[1].imageLayout = src->getCurrentLayout(contextVk);
+        imageInfos[1].imageLayout = src->getCurrentLayout(renderer);
     }
 
     VkDescriptorImageInfo samplerInfo = {};
@@ -2919,6 +2976,10 @@ angle::Result UtilsVk::blitResolveImpl(ContextVk *contextVk,
     {
         SetDepthDynamicStateForWrite(renderer, commandBuffer);
     }
+    else
+    {
+        SetDepthDynamicStateForUnused(renderer, commandBuffer);
+    }
 
     if (blitStencil)
     {
@@ -2930,6 +2991,10 @@ angle::Result UtilsVk::blitResolveImpl(ContextVk *contextVk,
         commandBuffer->setStencilReference(kUnusedReference, kUnusedReference);
 
         SetStencilDynamicStateForWrite(renderer, commandBuffer);
+    }
+    else
+    {
+        SetStencilDynamicStateForUnused(renderer, commandBuffer);
     }
 
     // Note: this utility starts the render pass directly, thus bypassing
@@ -2949,6 +3014,8 @@ angle::Result UtilsVk::stencilBlitResolveNoShaderExport(ContextVk *contextVk,
                                                         const vk::ImageView *srcStencilView,
                                                         const BlitResolveParameters &params)
 {
+    vk::Renderer *renderer = contextVk->getRenderer();
+
     // When VK_EXT_shader_stencil_export is not available, stencil is blitted/resolved into a
     // temporary buffer which is then copied into the stencil aspect of the image.
     ANGLE_TRY(ensureBlitResolveStencilNoExportResourcesInitialized(contextVk));
@@ -2956,14 +3023,14 @@ angle::Result UtilsVk::stencilBlitResolveNoShaderExport(ContextVk *contextVk,
     bool isResolve = src->getSamples() > 1;
 
     // Create a temporary buffer to blit/resolve stencil into.
-    vk::RendererScoped<vk::BufferHelper> blitBuffer(contextVk->getRenderer());
+    vk::RendererScoped<vk::BufferHelper> blitBuffer(renderer);
 
     uint32_t bufferRowLengthInUints = UnsignedCeilDivide(params.blitArea.width, sizeof(uint32_t));
     VkDeviceSize bufferSize = bufferRowLengthInUints * sizeof(uint32_t) * params.blitArea.height;
 
     ANGLE_TRY(contextVk->initBufferAllocation(
-        &blitBuffer.get(), contextVk->getRenderer()->getDeviceLocalMemoryTypeIndex(),
-        static_cast<size_t>(bufferSize), contextVk->getRenderer()->getDefaultBufferAlignment(),
+        &blitBuffer.get(), renderer->getDeviceLocalMemoryTypeIndex(),
+        static_cast<size_t>(bufferSize), renderer->getDefaultBufferAlignment(),
         BufferUsageType::Static));
 
     BlitResolveStencilNoExportShaderParams shaderParams;
@@ -3050,7 +3117,7 @@ angle::Result UtilsVk::stencilBlitResolveNoShaderExport(ContextVk *contextVk,
     // Blit/resolve stencil into the buffer.
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageView             = srcStencilView->getHandle();
-    imageInfo.imageLayout           = src->getCurrentLayout(contextVk);
+    imageInfo.imageLayout           = src->getCurrentLayout(renderer);
 
     VkDescriptorBufferInfo bufferInfo = {};
     bufferInfo.buffer                 = blitBuffer.get().getBuffer().getHandle();
@@ -3122,7 +3189,7 @@ angle::Result UtilsVk::stencilBlitResolveNoShaderExport(ContextVk *contextVk,
 
     commandBuffer->copyBufferToImage(blitBuffer.get().getBuffer().getHandle(),
                                      depthStencilImage->getImage(),
-                                     depthStencilImage->getCurrentLayout(contextVk), 1, &region);
+                                     depthStencilImage->getCurrentLayout(renderer), 1, &region);
 
     return angle::Result::Continue;
 }
@@ -3134,6 +3201,8 @@ angle::Result UtilsVk::copyImage(ContextVk *contextVk,
                                  const vk::ImageView *srcView,
                                  const CopyImageParameters &params)
 {
+    vk::Renderer *renderer = contextVk->getRenderer();
+
     // The views passed to this function are already retained, so a render pass cannot be already
     // open.  Otherwise, this function closes the render pass, which may incur a vkQueueSubmit and
     // then the views are used in a new command buffer without having been retained for it.
@@ -3299,7 +3368,7 @@ angle::Result UtilsVk::copyImage(ContextVk *contextVk,
 
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageView             = srcView->getHandle();
-    imageInfo.imageLayout           = src->getCurrentLayout(contextVk);
+    imageInfo.imageLayout           = src->getCurrentLayout(renderer);
 
     VkWriteDescriptorSet writeInfo = {};
     writeInfo.sType                = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -3340,6 +3409,9 @@ angle::Result UtilsVk::copyImage(ContextVk *contextVk,
     VkRect2D scissor = gl_vk::GetRect(renderArea);
     commandBuffer->setScissor(0, 1, &scissor);
 
+    SetDepthDynamicStateForUnused(renderer, commandBuffer);
+    SetStencilDynamicStateForUnused(renderer, commandBuffer);
+
     // Note: this utility creates its own framebuffer, thus bypassing ContextVk::startRenderPass.
     // As such, occlusion queries are not enabled.
     commandBuffer->draw(3, 0);
@@ -3353,6 +3425,8 @@ angle::Result UtilsVk::copyImageBits(ContextVk *contextVk,
                                      vk::ImageHelper *src,
                                      const CopyImageBitsParameters &params)
 {
+    vk::Renderer *renderer = contextVk->getRenderer();
+
     // This function is used to copy the bit representation of an image to another, and is used to
     // support EXT_copy_image when a format is emulated.  Currently, only RGB->RGBA emulation is
     // possible, and so this function is tailored to this specific kind of emulation.
@@ -3384,8 +3458,8 @@ angle::Result UtilsVk::copyImageBits(ContextVk *contextVk,
     const angle::Format &dstImageFormat = dst->getActualFormat();
 
     // Create temporary buffers.
-    vk::RendererScoped<vk::BufferHelper> srcBuffer(contextVk->getRenderer());
-    vk::RendererScoped<vk::BufferHelper> dstBuffer(contextVk->getRenderer());
+    vk::RendererScoped<vk::BufferHelper> srcBuffer(renderer);
+    vk::RendererScoped<vk::BufferHelper> dstBuffer(renderer);
 
     const uint32_t srcPixelBytes = srcImageFormat.pixelBytes;
     const uint32_t dstPixelBytes = dstImageFormat.pixelBytes;
@@ -3447,7 +3521,7 @@ angle::Result UtilsVk::copyImageBits(ContextVk *contextVk,
     srcRegion.imageExtent.height              = params.copyExtents[1];
     srcRegion.imageExtent.depth               = isSrc3D ? params.copyExtents[2] : 1;
 
-    commandBuffer->copyImageToBuffer(src->getImage(), src->getCurrentLayout(contextVk),
+    commandBuffer->copyImageToBuffer(src->getImage(), src->getCurrentLayout(renderer),
                                      srcBuffer.get().getBuffer().getHandle(), 1, &srcRegion);
 
     // Add a barrier prior to dispatch call.
@@ -3573,7 +3647,7 @@ angle::Result UtilsVk::copyImageBits(ContextVk *contextVk,
     dstRegion.imageExtent.depth               = isDst3D ? params.copyExtents[2] : 1;
 
     commandBuffer->copyBufferToImage(dstBuffer.get().getBuffer().getHandle(), dst->getImage(),
-                                     dst->getCurrentLayout(contextVk), 1, &dstRegion);
+                                     dst->getCurrentLayout(renderer), 1, &dstRegion);
 
     return angle::Result::Continue;
 }
@@ -3583,6 +3657,7 @@ angle::Result UtilsVk::copyImageToBuffer(ContextVk *contextVk,
                                          vk::ImageHelper *src,
                                          const CopyImageToBufferParameters &params)
 {
+    vk::Renderer *renderer = contextVk->getRenderer();
     ANGLE_TRY(ensureCopyImageToBufferResourcesInitialized(contextVk));
 
     const angle::Format &srcFormat = src->getActualFormat();
@@ -3644,7 +3719,7 @@ angle::Result UtilsVk::copyImageToBuffer(ContextVk *contextVk,
 
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageView             = srcView.get().getHandle();
-    imageInfo.imageLayout           = src->getCurrentLayout(contextVk);
+    imageInfo.imageLayout           = src->getCurrentLayout(renderer);
 
     VkDescriptorBufferInfo bufferInfo = {};
     bufferInfo.buffer                 = dst->getBuffer().getHandle();
@@ -3780,7 +3855,7 @@ angle::Result UtilsVk::transCodeEtcToBc(ContextVk *contextVk,
                                         const VkBufferImageCopy *copyRegion)
 {
     ANGLE_TRY(ensureTransCodeEtcToBcResourcesInitialized(contextVk));
-    RendererVk *renderer                = contextVk->getRenderer();
+    vk::Renderer *renderer              = contextVk->getRenderer();
     const angle::Format &intendedFormat = dstImage->getIntendedFormat();
     vk::ContextScoped<vk::BufferViewHelper> bufferViewHelper(contextVk);
     const gl::InternalFormat &info =
@@ -3895,6 +3970,8 @@ angle::Result UtilsVk::generateMipmap(ContextVk *contextVk,
                                       const vk::Sampler &sampler,
                                       const GenerateMipmapParameters &params)
 {
+    vk::Renderer *renderer = contextVk->getRenderer();
+
     ANGLE_TRY(ensureGenerateMipmapResourcesInitialized(contextVk));
 
     const gl::Extents &srcExtents = src->getLevelExtents(vk::LevelIndex(params.srcLevel));
@@ -3923,12 +4000,12 @@ angle::Result UtilsVk::generateMipmap(ContextVk *contextVk,
     for (uint32_t level = 0; level < kGenerateMipmapMaxLevels; ++level)
     {
         destImageInfos[level].imageView   = destLevelViews[level]->getHandle();
-        destImageInfos[level].imageLayout = dst->getCurrentLayout(contextVk);
+        destImageInfos[level].imageLayout = dst->getCurrentLayout(renderer);
     }
 
     VkDescriptorImageInfo srcImageInfo = {};
     srcImageInfo.imageView             = srcLevelZeroView->getHandle();
-    srcImageInfo.imageLayout           = src->getCurrentLayout(contextVk);
+    srcImageInfo.imageLayout           = src->getCurrentLayout(renderer);
     srcImageInfo.sampler               = sampler.getHandle();
 
     VkWriteDescriptorSet writeInfos[2] = {};
@@ -3969,7 +4046,7 @@ angle::Result UtilsVk::unresolve(ContextVk *contextVk,
                                  const FramebufferVk *framebuffer,
                                  const UnresolveParameters &params)
 {
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     // Get attachment count and pointers to resolve images and views.
     gl::DrawBuffersArray<vk::ImageHelper *> colorSrc         = {};
@@ -4149,6 +4226,10 @@ angle::Result UtilsVk::unresolve(ContextVk *contextVk,
         {
             SetDepthDynamicStateForWrite(renderer, commandBuffer);
         }
+        else
+        {
+            SetDepthDynamicStateForUnused(renderer, commandBuffer);
+        }
 
         if (unresolveStencilWithShaderExport)
         {
@@ -4160,6 +4241,10 @@ angle::Result UtilsVk::unresolve(ContextVk *contextVk,
             commandBuffer->setStencilReference(kUnusedReference, kUnusedReference);
 
             SetStencilDynamicStateForWrite(renderer, commandBuffer);
+        }
+        else
+        {
+            SetStencilDynamicStateForUnused(renderer, commandBuffer);
         }
 
         // This draw call is made before ContextVk gets a chance to start the occlusion query.  As
@@ -4252,6 +4337,8 @@ angle::Result UtilsVk::drawOverlay(ContextVk *contextVk,
                                    const vk::ImageView *destView,
                                    const OverlayDrawParameters &params)
 {
+    vk::Renderer *renderer = contextVk->getRenderer();
+
     ANGLE_TRY(ensureOverlayDrawResourcesInitialized(contextVk));
 
     OverlayDrawShaderParams shaderParams;
@@ -4310,7 +4397,7 @@ angle::Result UtilsVk::drawOverlay(ContextVk *contextVk,
 
     VkDescriptorImageInfo imageInfo = {};
     imageInfo.imageView             = fontView->getHandle();
-    imageInfo.imageLayout           = font->getCurrentLayout(contextVk);
+    imageInfo.imageLayout           = font->getCurrentLayout(renderer);
 
     VkDescriptorBufferInfo bufferInfos[2] = {};
     bufferInfos[0].buffer                 = textWidgetsBuffer->getBuffer().getHandle();
@@ -4360,6 +4447,9 @@ angle::Result UtilsVk::drawOverlay(ContextVk *contextVk,
     VkRect2D scissor = gl_vk::GetRect(renderArea);
     commandBuffer->setScissor(0, 1, &scissor);
 
+    SetDepthDynamicStateForUnused(renderer, commandBuffer);
+    SetStencilDynamicStateForUnused(renderer, commandBuffer);
+
     // Draw all the graph widgets.
     if (params.graphWidgetCount > 0)
     {
@@ -4382,8 +4472,12 @@ angle::Result UtilsVk::drawOverlay(ContextVk *contextVk,
     // Overlay is always drawn as the last render pass before present.  Automatically move the
     // layout to PresentSrc.
     contextVk->onColorDraw(gl::LevelIndex(0), 0, 1, dst, nullptr, {}, vk::PackedAttachmentIndex(0));
-    contextVk->getStartedRenderPassCommands().setImageOptimizeForPresent(dst);
-    contextVk->finalizeImageLayout(dst, {});
+    if (contextVk->getFeatures().supportsPresentation.enabled &&
+        !contextVk->getFeatures().preferDynamicRendering.enabled)
+    {
+        contextVk->getStartedRenderPassCommands().setImageOptimizeForPresent(dst);
+        contextVk->finalizeImageLayout(dst, {});
+    }
 
     // Close the render pass for this temporary framebuffer.
     return contextVk->flushCommandsAndEndRenderPass(

@@ -21,7 +21,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
@@ -31,10 +30,8 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.FeatureList;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.metrics.UmaRecorderHolder;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.JniMocker;
 import org.chromium.chrome.browser.commerce.ShoppingFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -61,7 +58,6 @@ import java.util.concurrent.TimeUnit;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class CommerceSubscriptionsServiceUnitTest {
-    @Rule public TestRule mProcessor = new Features.JUnitProcessor();
 
     @Rule public JniMocker mJniMocker = new JniMocker();
 
@@ -86,7 +82,6 @@ public class CommerceSubscriptionsServiceUnitTest {
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
-        UmaRecorderHolder.resetForTesting();
 
         doNothing().when(mActivityLifecycleDispatcher).register(any());
         mSharedPreferencesManager = ChromeSharedPreferences.getInstance();
@@ -112,7 +107,7 @@ public class CommerceSubscriptionsServiceUnitTest {
         ProfileManager.setLastUsedProfileForTesting(mProfile);
         when(mUserPrefsJni.get(mProfile)).thenReturn(mPrefService);
 
-        mPriceDropNotificationManager = PriceDropNotificationManagerFactory.create();
+        mPriceDropNotificationManager = PriceDropNotificationManagerFactory.create(mProfile);
         mService =
                 new CommerceSubscriptionsService(mShoppingService, mPriceDropNotificationManager);
         mService.setImplicitSubscriptionsManagerForTesting(mImplicitSubscriptionsManager);

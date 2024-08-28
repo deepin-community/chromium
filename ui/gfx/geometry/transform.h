@@ -80,7 +80,7 @@ class GEOMETRY_SKIA_EXPORT Transform {
   // Creates a transform from explicit 2d elements. All other matrix elements
   // remain the same as the corresponding elements of an identity matrix.
   // Always creates a double precision 4x4 matrix.
-  // TODO(crbug.com/1359528): Revisit the above statement. Evaluate performance
+  // TODO(crbug.com/40237414): Revisit the above statement. Evaluate performance
   // and precision requirements of SVG and CSS transform:matrix().
   static constexpr Transform Affine(double a,    // a.k.a. r0c0 or scale_x
                                     double b,    // a.k.a. r1c0 or tan(skew_y)
@@ -306,6 +306,10 @@ class GEOMETRY_SKIA_EXPORT Transform {
   bool IsScaleOrTranslation() const {
     return LIKELY(!full_matrix_) || matrix_.IsScaleOrTranslation();
   }
+
+  // Returns true if, for 2d rects on the x/y plane, this matrix can be
+  // represented as a 2d affine transform on the x/y plane.
+  bool Preserves2dAffine() const;
 
   // Returns true if axis-aligned 2d rects will remain axis-aligned after being
   // transformed by this matrix.

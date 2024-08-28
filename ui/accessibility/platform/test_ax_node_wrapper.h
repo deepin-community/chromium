@@ -16,6 +16,7 @@
 #include "ui/accessibility/ax_tree.h"
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
+#include "ui/accessibility/platform/ax_unique_id.h"
 
 #if BUILDFLAG(IS_WIN)
 namespace gfx {
@@ -131,6 +132,8 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegate {
   std::optional<int> GetTableCellAriaColIndex() const override;
   std::optional<int> GetTableCellAriaRowIndex() const override;
   std::optional<int32_t> GetCellId(int row_index, int col_index) const override;
+  std::optional<int32_t> GetCellIdAriaCoords(int aria_row_index,
+                                             int aria_col_index) const override;
   std::optional<int32_t> CellIndexToId(int cell_index) const override;
   bool IsCellOrHeaderOfAriaGrid() const override;
   gfx::AcceleratedWidget GetTargetForNativeAccessibilityEvent() override;
@@ -142,7 +145,7 @@ class TestAXNodeWrapper : public AXPlatformNodeDelegate {
       ax::mojom::ImageAnnotationStatus status) const override;
   std::u16string GetStyleNameAttributeAsLocalizedString() const override;
   bool ShouldIgnoreHoveredStateForTesting() override;
-  const ui::AXUniqueId& GetUniqueId() const override;
+  AXPlatformNodeId GetUniqueId() const override;
   bool HasVisibleCaretOrSelection() const override;
   std::vector<AXPlatformNode*> GetSourceNodesForReverseRelations(
       ax::mojom::IntAttribute attr) override;

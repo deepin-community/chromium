@@ -5,13 +5,18 @@
 #ifndef COMPONENTS_HEAP_PROFILING_IN_PROCESS_HEAP_PROFILER_PARAMETERS_H_
 #define COMPONENTS_HEAP_PROFILING_IN_PROCESS_HEAP_PROFILER_PARAMETERS_H_
 
+#include <string_view>
+
 #include "base/feature_list.h"
 #include "base/json/json_value_converter.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "components/metrics/call_stacks/call_stack_profile_params.h"
 
 namespace heap_profiling {
+
+// If this is enabled, heap profiling in subprocesses is controlled centrally
+// from the browser process.
+BASE_DECLARE_FEATURE(kHeapProfilerCentralControl);
 
 // If this is disabled, the client will not collect heap profiles. If it is
 // enabled, the client may enable the sampling heap profiler (with probability
@@ -48,7 +53,7 @@ struct HeapProfilerParameters {
   // Missing parameters will not be touched. If parsing fails, returns false and
   // sets `is_supported` to false to ensure heap profiling doesn't run with
   // invalid parameters.
-  bool UpdateFromJSON(base::StringPiece json_string);
+  bool UpdateFromJSON(std::string_view json_string);
 };
 
 // Returns a default set of parameters to use if not overridden for a

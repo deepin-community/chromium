@@ -115,7 +115,8 @@ class AutoclickRingHandler::AutoclickRingView : public views::View {
 
  private:
   // Overridden from views::View.
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     return gfx::Size(2 * (radius_ + kAutoclickRingArcWidth * 2),
                      2 * (radius_ + kAutoclickRingArcWidth * 2));
   }
@@ -186,7 +187,7 @@ void AutoclickRingHandler::StartAnimation(base::TimeDelta delay) {
       break;
     }
     case AnimationType::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }
@@ -211,7 +212,7 @@ void AutoclickRingHandler::AnimateToState(double state) {
       view_->UpdateWithGrowAnimation(this);
       break;
     case AnimationType::kNone:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }

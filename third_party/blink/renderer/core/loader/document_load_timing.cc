@@ -28,7 +28,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/time/default_clock.h"
 #include "base/time/default_tick_clock.h"
-#include "base/trace_event/named_trigger.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
@@ -121,7 +120,6 @@ void DocumentLoadTiming::MarkNavigationStart() {
       GetFrameIdForTracing(GetFrame()), "data", [&](perfetto::TracedValue ctx) {
         WriteNavigationStartDataIntoTracedValue(std::move(ctx));
       });
-  base::trace_event::EmitNamedTrigger("navigation-start");
   NotifyDocumentTimingChanged();
 }
 
@@ -186,6 +184,14 @@ void DocumentLoadTiming::SetUserTimingMarkInteractive(
     base::TimeDelta interactive_time) {
   user_timing_mark_interactive_ = interactive_time;
   NotifyDocumentTimingChanged();
+}
+
+void DocumentLoadTiming::NotifyCustomUserTimingMarkAdded(
+    const AtomicString& mark_name,
+    const base::TimeDelta& start_time) {
+  custom_user_timing_mark_.emplace(std::make_tuple(mark_name, start_time));
+  NotifyDocumentTimingChanged();
+  custom_user_timing_mark_.reset();
 }
 
 void DocumentLoadTiming::AddRedirect(const KURL& redirecting_url,
@@ -289,8 +295,8 @@ void DocumentLoadTiming::MarkCommitNavigationEnd() {
 
 void DocumentLoadTiming::SetActivationStart(base::TimeTicks activation_start) {
   activation_start_ = activation_start;
-  TRACE_EVENT_MARK_WITH_TIMESTAMP1("blink.user_timing", "activationtart",
-                                   activation_start, "frame",
+  TRACE_EVENT_MARK_WITH_TIMESTAMP1("blink.user_timing", "activationStart",
+                                   activation_start_, "frame",
                                    GetFrameIdForTracing(GetFrame()));
   NotifyDocumentTimingChanged();
 }

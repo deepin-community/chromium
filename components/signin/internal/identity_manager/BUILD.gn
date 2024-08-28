@@ -9,12 +9,9 @@ import("//components/signin/features.gni")
 # (//components/signin/public/identity_manager/identity_manager.*).
 source_set("identity_manager") {
   sources = [
-    "account_capabilities_constants.cc",
-    "account_capabilities_constants.h",
     "account_capabilities_fetcher.cc",
     "account_capabilities_fetcher.h",
     "account_capabilities_fetcher_factory.h",
-    "account_capabilities_list.h",
     "account_fetcher_service.cc",
     "account_fetcher_service.h",
     "account_info_fetcher.cc",
@@ -49,6 +46,7 @@ source_set("identity_manager") {
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   public_deps = [
+    ":capabilities",
     "//base",
     "//components/signin/public/base",
     "//components/signin/public/base:signin_buildflags",
@@ -144,6 +142,14 @@ source_set("identity_manager") {
   }
 }
 
+source_set("capabilities") {
+  sources = [
+    "account_capabilities_constants.cc",
+    "account_capabilities_constants.h",
+    "account_capabilities_list.h",
+  ]
+}
+
 source_set("unit_tests") {
   testonly = true
 
@@ -191,10 +197,7 @@ source_set("unit_tests") {
   if (is_android) {
     sources += [ "profile_oauth2_token_service_delegate_android_unittest.cc" ]
 
-    deps += [
-      "//components/signin/public/android:signin_java_test_support",
-      "//components/signin/public/android:test_support_jni_headers",
-    ]
+    deps += [ "//components/signin/public/android:test_support_jni_headers" ]
   }
 
   if (is_chromeos) {

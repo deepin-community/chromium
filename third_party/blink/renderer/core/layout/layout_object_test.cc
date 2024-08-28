@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 
 #include "testing/gmock/include/gmock/gmock-matchers.h"
@@ -25,7 +30,6 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/json/json_values.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "ui/gfx/geometry/decomposed_transform.h"
 
 namespace blink {
@@ -799,7 +803,6 @@ TEST_F(LayoutObjectTest, VisualRect) {
       return PhysicalRect(10, 10, 20, 20);
     }
     const char* GetName() const final { return "MockLayoutObject"; }
-    void UpdateLayout() final {}
     gfx::RectF LocalBoundingBoxRectForAccessibility() const final {
       return gfx::RectF();
     }

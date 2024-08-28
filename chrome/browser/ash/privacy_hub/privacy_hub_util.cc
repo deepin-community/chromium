@@ -7,25 +7,33 @@
 #include <optional>
 #include <string>
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/privacy_hub_delegate.h"
 #include "ash/shell.h"
 #include "ash/system/geolocation/geolocation_controller.h"
 #include "ash/system/privacy_hub/camera_privacy_switch_controller.h"
 #include "ash/system/privacy_hub/geolocation_privacy_switch_controller.h"
+#include "ash/system/privacy_hub/microphone_privacy_switch_controller.h"
 #include "ash/system/privacy_hub/privacy_hub_controller.h"
 #include "ash/system/privacy_hub/privacy_hub_notification_controller.h"
 #include "ash/system/privacy_hub/sensor_disabled_notification_delegate.h"
+#include "ash/webui/settings/public/constants/routes.mojom-forward.h"
 #include "base/check_deref.h"
+#include "base/functional/callback.h"
+#include "base/notreached.h"
 #include "base/supports_user_data.h"
 #include "chrome/browser/ash/camera_presence_notifier.h"
+#include "chrome/browser/ash/privacy_hub/content_block_observation.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/app_access_notifier.h"
+#include "chrome/browser/ui/settings_window_manager_chromeos.h"
+#include "components/prefs/pref_service.h"
 
 namespace ash::privacy_hub_util {
 
 void SetFrontend(PrivacyHubDelegate* ptr) {
-  if (!features::IsCrosPrivacyHubEnabled()) {
-    return;
-  }
   PrivacyHubController* const controller = PrivacyHubController::Get();
   if (controller != nullptr) {
     // Controller may not be available when used from a test.
@@ -46,10 +54,6 @@ bool ShouldForceDisableCameraSwitch() {
 }
 
 void SetUpCameraCountObserver() {
-  if (!features::IsCrosPrivacyHubEnabled()) {
-    return;
-  }
-
   auto* camera_controller = CameraPrivacySwitchController::Get();
   CHECK(camera_controller);
 
@@ -69,8 +73,7 @@ void SetUpCameraCountObserver() {
 
 // Notifies the Privacy Hub controller.
 void TrackGeolocationAttempted(const std::string& name) {
-  if (!features::IsCrosPrivacyHubEnabled() ||
-      !features::IsCrosPrivacyHubLocationEnabled()) {
+  if (!features::IsCrosPrivacyHubLocationEnabled()) {
     return;
   }
   GeolocationPrivacySwitchController* controller =
@@ -83,8 +86,7 @@ void TrackGeolocationAttempted(const std::string& name) {
 
 // Notifies the Privacy Hub controller.
 void TrackGeolocationRelinquished(const std::string& name) {
-  if (!features::IsCrosPrivacyHubEnabled() ||
-      !features::IsCrosPrivacyHubLocationEnabled()) {
+  if (!features::IsCrosPrivacyHubLocationEnabled()) {
     return;
   }
   GeolocationPrivacySwitchController* controller =
@@ -95,6 +97,21 @@ void TrackGeolocationRelinquished(const std::string& name) {
   }
 }
 
+bool IsCrosLocationOobeNegotiationNeeded() {
+  // No negotiation needed, if the PH Location feature is not yet enabled.
+  if (!ash::features::IsCrosPrivacyHubLocationEnabled()) {
+    return false;
+  }
+
+  const Profile* profile = ProfileManager::GetPrimaryUserProfile();
+  if (profile->GetPrefs()->IsManagedPreference(
+          ash::prefs::kUserGeolocationAccessLevel)) {
+    return false;
+  }
+
+  return true;
+}
+
 namespace {
 std::optional<bool> camera_led_fallback_for_testing{};
 }
@@ -102,9 +119,6 @@ std::optional<bool> camera_led_fallback_for_testing{};
 // TODO(b/289510726): remove when all cameras fully support the software
 // switch.
 bool UsingCameraLEDFallback() {
-  if (!features::IsCrosPrivacyHubEnabled()) {
-    return false;
-  }
   if (!camera_led_fallback_for_testing.has_value()) {
     CameraPrivacySwitchController* const controller =
         CameraPrivacySwitchController::Get();
@@ -177,6 +191,67 @@ std::pair<base::Time, base::Time> SunriseSunsetSchedule() {
                                    default_sunset_time)
                              : default_sunrise_time;
   return std::make_pair(sunrise_time, sunset_time);
+}
+
+bool ContentBlocked(ContentType type) {
+  switch (type) {
+    case ContentType::MEDIASTREAM_CAMERA: {
+      auto* const controller = CameraPrivacySwitchController::Get();
+      CHECK(controller);
+      return !controller->IsCameraUsageAllowed();
+    }
+    case ContentType::MEDIASTREAM_MIC: {
+      auto* const controller = MicrophonePrivacySwitchController::Get();
+      CHECK(controller);
+      return !controller->IsMicrophoneUsageAllowed();
+    }
+    case ContentType::GEOLOCATION: {
+      if (!features::IsCrosPrivacyHubLocationEnabled()) {
+        return true;
+      }
+      auto* const controller = GeolocationPrivacySwitchController::Get();
+      CHECK(controller);
+      return !controller->IsGeolocationUsageAllowedForApps();
+    }
+    default: {
+      // If the provided content type is not controllable in ChromeOS, then it
+      // is not blocked.
+      return false;
+    }
+  }
+}
+
+std::unique_ptr<base::CheckedObserver> CreateObservationForBlockedContent(
+    ContentBlockCallback callback) {
+  return ContentBlockObservation::Create(std::move(callback));
+}
+
+void OpenSystemSettings(Profile* profile, ContentType type) {
+  const char* settings_path = "";
+  switch (type) {
+    case ContentType::MEDIASTREAM_CAMERA: {
+      settings_path = chromeos::settings::mojom::kPrivacyHubCameraSubpagePath;
+      break;
+    }
+    case ContentType::MEDIASTREAM_MIC: {
+      settings_path =
+          chromeos::settings::mojom::kPrivacyHubGeolocationSubpagePath;
+      break;
+    }
+    case ContentType::GEOLOCATION: {
+      settings_path =
+          chromeos::settings::mojom::kPrivacyHubGeolocationSubpagePath;
+      break;
+    }
+    default: {
+      // This should only be called for camera, microphone, or geolocation.
+      NOTREACHED_IN_MIGRATION();
+      return;
+    }
+  }
+
+  chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(profile,
+                                                               settings_path);
 }
 
 }  // namespace ash::privacy_hub_util

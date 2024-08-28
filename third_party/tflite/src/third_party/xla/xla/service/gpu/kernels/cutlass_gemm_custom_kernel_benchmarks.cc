@@ -20,8 +20,9 @@ limitations under the License.
 #include "xla/service/gpu/kernels/cutlass_gemm_custom_kernel.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/kernel.h"
-#include "xla/stream_executor/multi_platform_manager.h"
+#include "xla/stream_executor/kernel_factory.h"
 #include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/platform_manager.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla_data.pb.h"
@@ -40,13 +41,11 @@ static uint32_t BitPattern(float value) {
 
 static void BM_RowMajorGemm(benchmark::State& state) {
   se::Platform* platform =
-      se::MultiPlatformManager::PlatformWithName("CUDA").value();
+      se::PlatformManager::PlatformWithName("CUDA").value();
   se::StreamExecutor* executor = platform->ExecutorForDevice(0).value();
   const se::DeviceDescription& device = executor->GetDeviceDescription();
 
-  se::Stream stream(executor);
-  stream.Init();
-  ASSERT_TRUE(stream.ok());
+  TF_ASSERT_OK_AND_ASSIGN(auto stream, executor->CreateStream());
 
   // GEMM: 8192x4096 * 4096x16384 -> 8192x16384
   int32_t m = 8192;
@@ -58,25 +57,26 @@ static void BM_RowMajorGemm(benchmark::State& state) {
                            /*indices=*/{0, 1, 2}, /*slices=*/{}, device);
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto gemm, se::Kernel::Create(executor, custom_kernel->kernel_spec()));
+      auto gemm,
+      se::KernelFactory::Create(executor, custom_kernel->kernel_spec()));
 
   // Prepare arguments: a=1.1, b=1.2, c=0.0
   se::DeviceMemory<float> a = executor->AllocateArray<float>(m * k, 0);
   se::DeviceMemory<float> b = executor->AllocateArray<float>(k * n, 0);
   se::DeviceMemory<float> c = executor->AllocateArray<float>(m * n, 0);
 
-  stream.ThenMemset32(&a, BitPattern(1.1f), a.size());
-  stream.ThenMemset32(&b, BitPattern(1.2f), b.size());
-  stream.ThenMemZero(&c, c.size());
+  TF_CHECK_OK(stream->Memset32(&a, BitPattern(1.1f), a.size()));
+  TF_CHECK_OK(stream->Memset32(&b, BitPattern(1.2f), b.size()));
+  TF_CHECK_OK(stream->MemZero(&c, c.size()));
 
   se::KernelArgsDeviceMemoryArray args(
       std::vector<se::DeviceMemoryBase>({a, b, c}),
       custom_kernel->shared_memory_bytes());
 
   for (auto s : state) {
-    TF_CHECK_OK(executor->Launch(&stream, custom_kernel->thread_dims(),
-                                 custom_kernel->block_dims(), *gemm, args));
-    TF_CHECK_OK(stream.BlockHostUntilDone());
+    TF_CHECK_OK(stream->Launch(custom_kernel->thread_dims(),
+                               custom_kernel->block_dims(), *gemm, args));
+    TF_CHECK_OK(stream->BlockHostUntilDone());
   }
 }
 

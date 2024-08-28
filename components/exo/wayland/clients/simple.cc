@@ -13,6 +13,7 @@
 
 #include "base/command_line.h"
 #include "base/containers/circular_deque.h"
+#include "base/not_fatal_until.h"
 #include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "components/exo/wayland/clients/client_helper.h"
@@ -77,7 +78,7 @@ void FeedbackDiscarded(void* data, struct wp_presentation_feedback* feedback) {
   auto it =
       base::ranges::find(presentation->submitted_frames, feedback,
                          [](Frame& frame) { return frame.feedback.get(); });
-  DCHECK(it != presentation->submitted_frames.end());
+  CHECK(it != presentation->submitted_frames.end(), base::NotFatalUntil::M130);
   presentation->submitted_frames.erase(it);
 }
 
@@ -132,7 +133,11 @@ void Simple::Run(int frames,
   bool frame_callback_pending = false;
   wp_viewport* viewport =
       wp_viewporter_get_viewport(globals_.wp_viewporter.get(), surface_.get());
+
+  int dispatch_res = 0;
   do {
+    DCHECK(dispatch_res != -1);
+
     if (frame_callback_pending)
       continue;
 
@@ -198,7 +203,9 @@ void Simple::Run(int frames,
 
     wl_surface_commit(surface_.get());
     wl_display_flush(display_.get());
-  } while (wl_display_dispatch(display_.get()) != -1);
+  } while ((dispatch_res = wl_display_dispatch(display_.get())));
+
+  wp_viewport_destroy(viewport);
 
   if (feedback)
     *feedback = presentation.feedback;

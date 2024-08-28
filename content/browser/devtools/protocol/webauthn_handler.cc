@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/devtools/protocol/webauthn_handler.h"
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -13,7 +19,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "content/browser/devtools/protocol/web_authn.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/webauth/authenticator_environment.h"
@@ -93,7 +98,7 @@ class GetCredentialCallbackAggregator
       std::make_unique<Array<WebAuthn::Credential>>();
 };
 
-device::ProtocolVersion ConvertToProtocolVersion(base::StringPiece protocol) {
+device::ProtocolVersion ConvertToProtocolVersion(std::string_view protocol) {
   if (protocol == WebAuthn::AuthenticatorProtocolEnum::Ctap2)
     return device::ProtocolVersion::kCtap2;
   if (protocol == WebAuthn::AuthenticatorProtocolEnum::U2f)
@@ -102,7 +107,7 @@ device::ProtocolVersion ConvertToProtocolVersion(base::StringPiece protocol) {
 }
 
 std::optional<device::Ctap2Version> ConvertToCtap2Version(
-    base::StringPiece version) {
+    std::string_view version) {
   if (version == WebAuthn::Ctap2VersionEnum::Ctap2_0)
     return device::Ctap2Version::kCtap2_0;
   if (version == WebAuthn::Ctap2VersionEnum::Ctap2_1)
@@ -246,7 +251,7 @@ Response WebAuthnHandler::AddVirtualAuthenticator(
           options->GetDefaultBackupState(/*defaultValue=*/false);
       break;
     case device::ProtocolVersion::kUnknown:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 

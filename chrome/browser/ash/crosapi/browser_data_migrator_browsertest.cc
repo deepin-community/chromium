@@ -10,9 +10,9 @@
 #include "ash/constants/ash_switches.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
-#include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "chrome/browser/ash/app_mode/kiosk_controller.h"
 #include "chrome/browser/ash/crosapi/browser_util.h"
 #include "chrome/browser/ash/crosapi/move_migrator.h"
@@ -87,7 +87,7 @@ void SetLacrosAvailability(
 // Concretely it tests `MaybeRestartToMigrate()` called from
 // `UserSessionManager::DoBrowserLaunchInternal()` and
 // `MaybeForceResumeMoveMigration()` called from
-// `ExistingUserController::ContinueAuthSuccessAfterResumeAttempt()`.
+// `ExistingUserController::OnAuthSuccess()`.
 class BrowserDataMigratorOnSignIn : public ash::LoginManagerTest {
  public:
   BrowserDataMigratorOnSignIn() = default;
@@ -140,13 +140,13 @@ class BrowserDataMigratorMoveMigrateOnSignInByPolicy
 // Enabling LacrosOnly by policy should trigger move migration during signin.
 IN_PROC_BROWSER_TEST_F(BrowserDataMigratorMoveMigrateOnSignInByPolicy,
                        MigrateOnSignIn) {
-  base::RunLoop run_loop;
+  base::test::TestFuture<void> future;
   ScopedRestartAttemptForTesting scoped_restart_attempt(
-      base::BindLambdaForTesting([&]() { run_loop.Quit(); }));
+      future.GetRepeatingCallback());
   SetLacrosAvailability(
       ash::standalone_browser::LacrosAvailability::kLacrosOnly);
   ASSERT_TRUE(LoginAsExistingRegularUser());
-  run_loop.Run();
+  EXPECT_TRUE(future.Wait());
   EXPECT_TRUE(
       FakeSessionManagerClient::Get()->request_browser_data_migration_called());
   EXPECT_TRUE(FakeSessionManagerClient::Get()
@@ -180,11 +180,11 @@ class BrowserDataMigratorMoveMigrateOnSignInByFeature
 // signin.
 IN_PROC_BROWSER_TEST_F(BrowserDataMigratorMoveMigrateOnSignInByFeature,
                        MigrateOnSignIn) {
-  base::RunLoop run_loop;
+  base::test::TestFuture<void> future;
   ScopedRestartAttemptForTesting scoped_restart_attempt(
-      base::BindLambdaForTesting([&]() { run_loop.Quit(); }));
+      future.GetRepeatingCallback());
   ASSERT_TRUE(LoginAsExistingRegularUser());
-  run_loop.Run();
+  EXPECT_TRUE(future.Wait());
   EXPECT_TRUE(
       FakeSessionManagerClient::Get()->request_browser_data_migration_called());
   EXPECT_TRUE(FakeSessionManagerClient::Get()
@@ -249,12 +249,12 @@ class BrowserDataMigratorResumeOnSignIn : public BrowserDataMigratorOnSignIn,
 
 IN_PROC_BROWSER_TEST_F(BrowserDataMigratorResumeOnSignIn, ForceResumeOnLogin) {
   // Test `MaybeForceResumeMoveMigration()` in
-  // `ExistingUserController::ContinueAuthSuccessAfterResumeAttempt()`.
-  base::RunLoop run_loop;
+  // `ExistingUserController::OnAuthSuccess()`.
+  base::test::TestFuture<void> future;
   ScopedRestartAttemptForTesting scoped_restart_attempt(
-      base::BindLambdaForTesting([&]() { run_loop.Quit(); }));
+      future.GetRepeatingCallback());
   ASSERT_TRUE(LoginAsExistingRegularUser());
-  run_loop.Run();
+  EXPECT_TRUE(future.Wait());
   EXPECT_TRUE(
       FakeSessionManagerClient::Get()->request_browser_data_migration_called());
   EXPECT_TRUE(FakeSessionManagerClient::Get()
@@ -440,12 +440,11 @@ IN_PROC_BROWSER_TEST_F(BrowserDataMigratorForKiosk, MigrateOnKioskLaunch) {
   PrepareAppLaunch();
   CreatePreferenceFileForProfile(test_kiosk_app().id().account_id);
 
-  base::RunLoop run_loop;
+  base::test::TestFuture<void> future;
   ScopedRestartAttemptForTesting scoped_restart_attempt(
-      base::BindLambdaForTesting([&]() { run_loop.Quit(); }));
-  StartAppLaunchFromLoginScreen(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
-  run_loop.Run();
+      future.GetRepeatingCallback());
+  StartAppLaunchFromLoginScreen(NetworkStatus::kOnline);
+  EXPECT_TRUE(future.Wait());
   EXPECT_TRUE(
       FakeSessionManagerClient::Get()->request_browser_data_migration_called());
 }

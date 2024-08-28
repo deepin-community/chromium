@@ -5,14 +5,13 @@
 #ifndef CHROME_BROWSER_UI_PASSWORDS_BUBBLE_CONTROLLERS_MANAGE_PASSWORDS_BUBBLE_CONTROLLER_H_
 #define CHROME_BROWSER_UI_PASSWORDS_BUBBLE_CONTROLLERS_MANAGE_PASSWORDS_BUBBLE_CONTROLLER_H_
 
-#include "chrome/browser/ui/passwords/bubble_controllers/password_bubble_controller_base.h"
-
 #include <string>
 
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "chrome/browser/ui/passwords/bubble_controllers/password_bubble_controller_base.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "ui/gfx/image/image.h"
@@ -45,6 +44,11 @@ class ManagePasswordsBubbleController : public PasswordBubbleControllerBase {
 
   // Called by the view code when the manage button is clicked by the user.
   void OnManageClicked(password_manager::ManagePasswordsReferrer referrer);
+
+  // Called by the view code when the user clicks the "Manage button" to open
+  // the details page for a particular credential.
+  void OnManagePasswordClicked(
+      password_manager::ManagePasswordsReferrer referrer);
 
   // Makes a request to the favicon service for the icon of current visible URL.
   // The request to the favicon store is canceled on destruction of the

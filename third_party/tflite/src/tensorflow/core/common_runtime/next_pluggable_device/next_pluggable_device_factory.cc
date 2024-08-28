@@ -25,16 +25,16 @@ limitations under the License.
 #include "tensorflow/c/tf_status_helper.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "xla/stream_executor/tpu/c_api_conversions.h"
+#include "xla/tsl/framework/device_id_utils.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/next_pluggable_device.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/next_pluggable_device_api.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/utils.h"
 #include "tensorflow/core/public/session_options.h"
-#include "tsl/framework/device_id_utils.h"
 #include "tsl/platform/errors.h"
 
 namespace tensorflow {
 namespace {
-StatusOr<xla::Shape> DeviceShapeRepresentation(
+absl::StatusOr<xla::Shape> DeviceShapeRepresentation(
     const TensorShape& shape, DataType type, bool use_fast_memory,
     XlaLayoutPreference layout_preference) {
   xla::Shape xla_shape;

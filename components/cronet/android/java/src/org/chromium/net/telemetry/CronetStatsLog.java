@@ -9,8 +9,11 @@
 
 package org.chromium.net.telemetry;
 
+import android.os.Build;
 import android.util.StatsEvent;
 import android.util.StatsLog;
+
+import androidx.annotation.RequiresApi;
 
 /** Utility class for logging statistics events. */
 public final class CronetStatsLog {
@@ -54,9 +57,9 @@ public final class CronetStatsLog {
      * response_body_size, int http_status_code, long negotiated_protocol_hash, int
      * headers_latency_millis, int overall_latency_millis, boolean connection_migration_attempted,
      * boolean connection_migration_successful, int samples_rate_limited, int terminal_state, int
-     * user_callback_exception_count, long total_idle_time_millis, long
+     * nonfinal_user_callback_exception_count, long total_idle_time_millis, long
      * total_user_executor_execute_latency_millis, int read_count, int on_upload_read_count, int
-     * is_bidi_stream);<br>
+     * is_bidi_stream, int final_user_callback_threw);<br>
      */
     public static final int CRONET_TRAFFIC_REPORTED = 704;
 
@@ -341,6 +344,14 @@ public final class CronetStatsLog {
     public static final int CRONET_TRAFFIC_REPORTED__IS_BIDI_STREAM__OPTIONAL_BOOLEAN_TRUE = 1;
     public static final int CRONET_TRAFFIC_REPORTED__IS_BIDI_STREAM__OPTIONAL_BOOLEAN_FALSE = 2;
 
+    // Values for CronetTrafficReported.final_user_callback_threw
+    public static final int
+            CRONET_TRAFFIC_REPORTED__FINAL_USER_CALLBACK_THREW__OPTIONAL_BOOLEAN_UNSET = 0;
+    public static final int
+            CRONET_TRAFFIC_REPORTED__FINAL_USER_CALLBACK_THREW__OPTIONAL_BOOLEAN_TRUE = 1;
+    public static final int
+            CRONET_TRAFFIC_REPORTED__FINAL_USER_CALLBACK_THREW__OPTIONAL_BOOLEAN_FALSE = 2;
+
     // Values for CronetEngineBuilderInitialized.author
     public static final int CRONET_ENGINE_BUILDER_INITIALIZED__AUTHOR__AUTHOR_UNSPECIFIED = 0;
     public static final int CRONET_ENGINE_BUILDER_INITIALIZED__AUTHOR__AUTHOR_API = 1;
@@ -351,10 +362,10 @@ public final class CronetStatsLog {
             0;
     public static final int
             CRONET_ENGINE_BUILDER_INITIALIZED__SOURCE__CRONET_SOURCE_EMBEDDED_NATIVE = 1;
-    public static final int CRONET_ENGINE_BUILDER_INITIALIZED__SOURCE__CRONET_SOURCE_EMBEDDED_JAVA =
-            2;
     public static final int
-            CRONET_ENGINE_BUILDER_INITIALIZED__SOURCE__CRONET_SOURCE_GMSCORE_NATIVE = 3;
+            CRONET_ENGINE_BUILDER_INITIALIZED__SOURCE__CRONET_SOURCE_GMSCORE_NATIVE = 2;
+    public static final int CRONET_ENGINE_BUILDER_INITIALIZED__SOURCE__CRONET_SOURCE_EMBEDDED_JAVA =
+            3;
     public static final int
             CRONET_ENGINE_BUILDER_INITIALIZED__SOURCE__CRONET_SOURCE_HTTPENGINE_NATIVE = 4;
 
@@ -372,16 +383,31 @@ public final class CronetStatsLog {
     public static final int CRONET_INITIALIZED__HTTP_FLAGS_SUCCESSFUL__OPTIONAL_BOOLEAN_FALSE = 2;
 
     // Annotation constants.
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_IS_UID = StatsLog.ANNOTATION_ID_IS_UID;
+
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_TRUNCATE_TIMESTAMP =
             StatsLog.ANNOTATION_ID_TRUNCATE_TIMESTAMP;
+
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_PRIMARY_FIELD = StatsLog.ANNOTATION_ID_PRIMARY_FIELD;
+
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_EXCLUSIVE_STATE = StatsLog.ANNOTATION_ID_EXCLUSIVE_STATE;
+
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_PRIMARY_FIELD_FIRST_UID =
             StatsLog.ANNOTATION_ID_PRIMARY_FIELD_FIRST_UID;
+
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_DEFAULT_STATE = StatsLog.ANNOTATION_ID_DEFAULT_STATE;
+
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_TRIGGER_STATE_RESET =
             StatsLog.ANNOTATION_ID_TRIGGER_STATE_RESET;
+
+    @android.annotation.SuppressLint("InlinedApi")
     public static final byte ANNOTATION_ID_STATE_NESTED = StatsLog.ANNOTATION_ID_STATE_NESTED;
 
     // Write methods
@@ -526,7 +552,8 @@ public final class CronetStatsLog {
             long arg16,
             int arg17,
             int arg18,
-            int arg19) {
+            int arg19,
+            int arg20) {
         final StatsEvent.Builder builder = StatsEvent.newBuilder();
         builder.setAtomId(code);
         builder.writeLong(arg1);
@@ -548,11 +575,14 @@ public final class CronetStatsLog {
         builder.writeInt(arg17);
         builder.writeInt(arg18);
         builder.writeInt(arg19);
+        builder.writeInt(arg20);
 
         builder.usePooledBuffer();
         StatsLog.write(builder.build());
     }
 
+    @android.annotation.SuppressLint("ObsoleteSdkInt")
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     public static void write(
             int code, long arg1, int arg2, int arg3, int arg4, int arg5, long[] arg6, long[] arg7) {
         final StatsEvent.Builder builder = StatsEvent.newBuilder();

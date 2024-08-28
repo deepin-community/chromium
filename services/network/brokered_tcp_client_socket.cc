@@ -43,7 +43,7 @@ int BrokeredTcpClientSocket::Bind(const net::IPEndPoint& address) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (IsConnected() || is_connect_in_progress_) {
     // Cannot bind the socket if we are already connected or connecting.
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return net::ERR_UNEXPECTED;
   }
   // Since opening a socket must be done via an asynchronous IPC, we will store
@@ -93,7 +93,7 @@ int BrokeredTcpClientSocket::Connect(net::CompletionOnceCallback callback) {
 
   net_log_source_.BeginEvent(net::NetLogEventType::BROKERED_CREATE_SOCKET);
 
-  // TODO(https://crbug.com/1321274): Pass in AddressFamily of single IPEndPoint
+  // TODO(crbug.com/40223835): Pass in AddressFamily of single IPEndPoint
   client_socket_factory_->BrokerCreateTcpSocket(
       addresses_.begin()->GetFamily(),
       base::BindOnce(&BrokeredTcpClientSocket::DidCompleteCreate,

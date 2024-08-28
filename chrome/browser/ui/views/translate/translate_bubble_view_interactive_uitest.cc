@@ -10,7 +10,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/base_i18n_switches.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
@@ -160,7 +159,7 @@ class TranslateBubbleViewUITest
                                            const std::string& expected_lang) {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
     if (GetParam() == "MultipleBubble") {
-      chrome::GenerateQRCodeFromPageAction(browser());
+      chrome::GenerateQRCode(browser());
     }
 
     while (expected_lang !=

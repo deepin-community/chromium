@@ -9,18 +9,20 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
-#include <cstdlib>
 #include <cstdint>
-#include <unordered_map>
+#include <cstdlib>
+#include <functional>
+#include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
+#include <unordered_map>
 #include <vector>
-#include <type_traits>
-
-#include <xnnpack.h>
-#include <xnnpack/subgraph.h>
 
 #include <gtest/gtest.h>
+#include "xnnpack.h"
+#include "xnnpack/subgraph.h"
+#include "replicable_random_device.h"
 
 namespace xnnpack {
 
@@ -87,9 +89,17 @@ class SubgraphTester {
     status = xnn_create_subgraph(external_value_ids, 0 /* flags */, &subgraph_ptr);
     EXPECT_EQ(status, xnn_status_success);
     subgraph_.reset(subgraph_ptr);
+  }
 
-    std::random_device random_device;
-    rng_ = std::mt19937(random_device());
+  inline SubgraphTester& AddInternalDynamicTensorF32(const std::vector<size_t>& dims,
+                                   uint32_t* id_out,
+                                   uint32_t flags = 0) {
+    const xnn_status status =
+        xnn_define_tensor_value(subgraph_.get(), xnn_datatype_fp32, dims.size(),
+                                dims.data(), nullptr, XNN_INVALID_VALUE_ID, flags, id_out);
+    EXPECT_EQ(status, xnn_status_success);
+
+    return *this;
   }
 
   inline SubgraphTester& AddDynamicTensorF32(const std::vector<size_t>& dims,
@@ -158,7 +168,7 @@ class SubgraphTester {
         // 1. Generate non-zero elements in the beginning of the vector
         // 2. Randomize positions of non-zero elements
         const size_t num_nonzero_elements = num_elements / 10;
-        std::generate(data, data + num_nonzero_elements, [&]() { return f32dist(rng_); });
+        std::generate(data, data + num_nonzero_elements, [&]() { return w8dist(rng_); });
         std::shuffle(data, data + num_elements, rng_);
       }
     }
@@ -204,8 +214,7 @@ class SubgraphTester {
     return *this;
   }
 
-
-  inline SubgraphTester& AddInputTensorF32(const std::vector<size_t>& dims, uint32_t external_id) {
+  SubgraphTester& AddInputTensorF32(const std::vector<size_t>& dims, uint32_t external_id) {
     AddDynamicTensorF32(dims, external_id, XNN_VALUE_FLAG_EXTERNAL_INPUT);
     size_t num_elements = NumElements(dims);
     auto input = std::vector<char>(num_elements * sizeof(float) + XNN_EXTRA_BYTES * sizeof(char));
@@ -216,7 +225,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddInputTensorQS8(int32_t zero_point, float scale, const std::vector<size_t>& dims, uint32_t external_id) {
+  SubgraphTester& AddInputTensorQS8(int32_t zero_point, float scale, const std::vector<size_t>& dims, uint32_t external_id) {
     AddDynamicTensorQS8(zero_point, scale, dims, external_id, XNN_VALUE_FLAG_EXTERNAL_INPUT);
     size_t num_elements = NumElements(dims);
     auto input = std::vector<char>(num_elements * sizeof(float) + XNN_EXTRA_BYTES * sizeof(char));
@@ -227,7 +236,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddOutputTensorF32(const std::vector<size_t>& dims, uint32_t external_id) {
+  SubgraphTester& AddOutputTensorF32(const std::vector<size_t>& dims, uint32_t external_id) {
     output_id_ = external_id;
     AddDynamicTensorF32(dims, external_id, XNN_VALUE_FLAG_EXTERNAL_OUTPUT);
     size_t num_elements = NumElements(dims);
@@ -239,7 +248,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddConcatenate2(size_t axis, uint32_t input1_id, uint32_t input2_id, uint32_t output_id) {
+  SubgraphTester& AddConcatenate2(size_t axis, uint32_t input1_id, uint32_t input2_id, uint32_t output_id) {
     const xnn_status status = xnn_define_concatenate2(
         subgraph_.get(), axis, input1_id, input2_id, output_id, 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -270,7 +279,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddConvert(uint32_t input_id, uint32_t output_id) {
+  SubgraphTester& AddConvert(uint32_t input_id, uint32_t output_id) {
     const xnn_status status = xnn_define_convert(
         subgraph_.get(), input_id, output_id, 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -294,7 +303,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddCopy(uint32_t input_id, uint32_t output_id) {
+  SubgraphTester& AddCopy(uint32_t input_id, uint32_t output_id) {
     const xnn_status status = xnn_define_copy(
         subgraph_.get(), input_id, output_id, 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -317,7 +326,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddAddition(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
+  SubgraphTester& AddAddition(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
     const xnn_status status =
         xnn_define_add2(subgraph_.get(), -std::numeric_limits<float>::infinity(),
                         std::numeric_limits<float>::infinity(), input_id1,
@@ -343,7 +352,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddClamp(float output_min, float output_max, uint32_t input_id, uint32_t output_id) {
+  SubgraphTester& AddClamp(float output_min, float output_max, uint32_t input_id, uint32_t output_id) {
     const xnn_status status =
         xnn_define_clamp(subgraph_.get(), output_min, output_max, input_id, output_id, 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -393,7 +402,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddDivide(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
+  SubgraphTester& AddDivide(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
     const xnn_status status =
         xnn_define_divide(subgraph_.get(), -std::numeric_limits<float>::infinity(),
                         std::numeric_limits<float>::infinity(), input_id1,
@@ -403,7 +412,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddEvenSplit2(size_t split_dim, uint32_t input_id, uint32_t output1_id, uint32_t output2_id) {
+  SubgraphTester& AddEvenSplit2(size_t split_dim, uint32_t input_id, uint32_t output1_id, uint32_t output2_id) {
     const xnn_status status = xnn_define_even_split2(
         subgraph_.get(), split_dim, input_id, output1_id, output2_id, 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -423,7 +432,7 @@ class SubgraphTester {
   }
 
 
-  inline SubgraphTester& AddGlobalAveragePooling(uint32_t input_id, uint32_t output_id) {
+  SubgraphTester& AddGlobalAveragePooling(uint32_t input_id, uint32_t output_id) {
     const xnn_status status = xnn_define_global_average_pooling_2d(
         subgraph_.get(), -std::numeric_limits<float>::infinity(),
         std::numeric_limits<float>::infinity(), input_id, output_id, 0 /* flags */);
@@ -432,7 +441,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddEvenSplit3(uint32_t input_id, uint32_t output_id0, uint32_t output_id1, uint32_t output_id2) {
+  SubgraphTester& AddEvenSplit3(uint32_t input_id, uint32_t output_id0, uint32_t output_id1, uint32_t output_id2) {
     const xnn_status status = xnn_define_even_split3(
         subgraph_.get(), 0, input_id, output_id0, output_id1, output_id2, 0 /*flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -440,7 +449,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddHardSwish(uint32_t input_id, uint32_t output_id) {
+  SubgraphTester& AddHardSwish(uint32_t input_id, uint32_t output_id) {
     const xnn_status status =
         xnn_define_hardswish(subgraph_.get(), input_id, output_id, 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -448,7 +457,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddLeakyRelu(float negative_slope, uint32_t input_id, uint32_t output_id) {
+  SubgraphTester& AddLeakyRelu(float negative_slope, uint32_t input_id, uint32_t output_id) {
     const xnn_status status =
         xnn_define_leaky_relu(subgraph_.get(), negative_slope, input_id, output_id, 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
@@ -472,7 +481,7 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddMultiply(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
+  SubgraphTester& AddMultiply(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
     const xnn_status status =
         xnn_define_multiply2(subgraph_.get(), -std::numeric_limits<float>::infinity(),
                         std::numeric_limits<float>::infinity(), input_id1,
@@ -482,14 +491,14 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& AddPrelu(uint32_t input_id, uint32_t slope_id, uint32_t output_id) {
+  SubgraphTester& AddPrelu(uint32_t input_id, uint32_t slope_id, uint32_t output_id) {
     const xnn_status status = xnn_define_prelu(subgraph_.get(), input_id, slope_id, output_id, /*flags=*/0);
     EXPECT_EQ(status, xnn_status_success);
 
     return *this;
   }
 
-  inline SubgraphTester& AddSubtract(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
+  SubgraphTester& AddSubtract(uint32_t input_id1, uint32_t input_id2, uint32_t output_id) {
     const xnn_status status =
         xnn_define_subtract(subgraph_.get(), -std::numeric_limits<float>::infinity(),
                         std::numeric_limits<float>::infinity(), input_id1,
@@ -499,76 +508,73 @@ class SubgraphTester {
     return *this;
   }
 
-  inline SubgraphTester& Optimize() {
+  SubgraphTester& Optimize() {
     const xnn_status status = xnn_subgraph_optimize(subgraph_.get(), 0 /* flags */);
     EXPECT_EQ(status, xnn_status_success);
 
     return *this;
   }
 
-  inline SubgraphTester& InferShape() {
-    const xnn_status status = xnn_subgraph_infer_shape(subgraph_.get(), /*flags=*/0);
-    EXPECT_EQ(status, xnn_status_success);
-
-    return *this;
-  }
-
-  inline SubgraphTester& RewriteForNchw() {
+  SubgraphTester& RewriteForNchw() {
     xnn_subgraph_rewrite_for_nchw(subgraph_.get());
 
     return *this;
   }
 
-  inline SubgraphTester& RewriteForFp16() {
+  SubgraphTester& RewriteForFp16() {
     EXPECT_TRUE(xnn_subgraph_rewrite_for_fp16(subgraph_.get()));
 
     return *this;
   }
 
-  inline SubgraphTester& RewriteForFp16WithFailure() {
+  SubgraphTester& RewriteForFp16WithFailure() {
     EXPECT_FALSE(xnn_subgraph_rewrite_for_fp16(subgraph_.get()));
 
     return *this;
   }
 
-  inline xnn_layout_type GetLayout(uint32_t value_id) const {
+  xnn_layout_type GetLayout(uint32_t value_id) const {
     return subgraph_->values[value_id].layout;
   }
 
-  inline const xnn_value* const Value(uint32_t value_id) const {
+  const xnn_value* Value(uint32_t value_id) const {
     return &subgraph_->values[value_id];
   }
 
-  inline const xnn_node* const Node(uint32_t node_id) const {
+  const xnn_node* Node(uint32_t node_id) const {
     return &subgraph_->nodes[node_id];
   }
 
-  inline size_t NumNodes() const {
+  size_t NumNodes() const {
     return subgraph_->num_nodes;
   }
 
-  inline size_t NumValues() const {
+  size_t NumValues() const {
     return subgraph_->num_values;
   }
 
-  inline xnn_subgraph* Subgraph() const {
+  xnn_subgraph* Subgraph() const {
     return subgraph_.get();
+  }
+
+  float* GetExternalTensorDataF32(uint32_t external_id) {
+    return reinterpret_cast<float*>(external_tensors_[external_id].data());
+  }
+
+  static inline size_t NumElements(const std::vector<size_t>& dims) {
+    return std::accumulate(std::begin(dims), std::end(dims), size_t(1), std::multiplies<size_t>());
   }
 
  protected:
   std::unique_ptr<xnn_subgraph, decltype(&xnn_delete_subgraph)> subgraph_{nullptr, xnn_delete_subgraph};
   std::unordered_map<uint32_t, std::vector<char>> external_tensors_;
   uint32_t output_id_;
-
- private:
-  static inline size_t NumElements(const std::vector<size_t>& dims) {
-    return std::accumulate(std::begin(dims), std::end(dims), size_t(1), std::multiplies<size_t>());
-  }
-
-  std::vector<std::vector<char>> static_data_;
-  std::mt19937 rng_;
+  xnnpack::ReplicableRandomDevice rng_;
   std::uniform_real_distribution<float> f32dist = std::uniform_real_distribution<float>(-1.0f, +1.0f);
   std::uniform_int_distribution<int32_t> w8dist = std::uniform_int_distribution<int32_t>(-std::numeric_limits<int8_t>::max(), std::numeric_limits<int8_t>::max());
+
+ private:
+  std::vector<std::vector<char>> static_data_;
 };
 
 }  // namespace xnnpack

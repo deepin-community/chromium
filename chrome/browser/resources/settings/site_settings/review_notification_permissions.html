@@ -13,7 +13,7 @@
         expanded="{{notificationPermissionReviewListExpanded_}}">
     </cr-expand-button>
   </div>
-  <iron-collapse class="site-list"
+  <cr-collapse class="site-list"
       opened="[[notificationPermissionReviewListExpanded_]]">
     <template is="dom-repeat" items="[[sites_]]">
       <div class="list-item site-entry">
@@ -41,10 +41,10 @@
         $i18n{safetyCheckNotificationPermissionReviewBlockAllLabel}
       </cr-button>
     </div>
-  </iron-collapse>
-  <paper-tooltip fit-to-visible-bounds manual-mode position="top" offset="3">
+  </cr-collapse>
+  <cr-tooltip fit-to-visible-bounds manual-mode position="top" offset="3">
     $i18n{safetyCheckNotificationPermissionReviewDontAllowLabel}
-  </paper-tooltip>
+  </cr-tooltip>
   <cr-action-menu role-description="$i18n{menu}">
     <button class="dropdown-item" id="ignore" on-click="onIgnoreClick_"
         aria-label$="[[getIgnoreAriaLabelForOrigins(lastOrigins_)]]">

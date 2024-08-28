@@ -50,15 +50,15 @@ WindowProxy::~WindowProxy() {
 void WindowProxy::Trace(Visitor* visitor) const {
   visitor->Trace(frame_);
   visitor->Trace(global_proxy_);
+  visitor->Trace(world_);
 }
 
 WindowProxy::WindowProxy(v8::Isolate* isolate,
                          Frame& frame,
-                         scoped_refptr<DOMWrapperWorld> world)
+                         DOMWrapperWorld* world)
     : isolate_(isolate),
       frame_(frame),
-
-      world_(std::move(world)),
+      world_(world),
       lifecycle_(Lifecycle::kContextIsUninitialized) {}
 
 void WindowProxy::ClearForClose() {
@@ -80,7 +80,7 @@ void WindowProxy::ClearForV8MemoryPurge() {
   DisposeContext(Lifecycle::kV8MemoryIsForciblyPurged, kFrameWillNotBeReused);
 }
 
-v8::Local<v8::Object> WindowProxy::GlobalProxyIfNotDetached() {
+v8::MaybeLocal<v8::Object> WindowProxy::GlobalProxyIfNotDetached() {
   if (lifecycle_ == Lifecycle::kContextIsInitialized) {
     DLOG_IF(FATAL, !is_global_object_attached_)
         << "Context is initialized but global object is detached!";

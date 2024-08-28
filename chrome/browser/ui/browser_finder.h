@@ -29,6 +29,21 @@ class ElementContext;
 }
 
 // Collection of functions to find Browsers based on various criteria.
+//
+// WARNING: Most functions in this file should not be used.
+//
+// Functions in this file typically create non-local control flow. This is hard
+// to stub for tests, hard to debug, and hard to maintain due to imprecise API
+// surfaces. See
+// https://source.chromium.org/chromium/chromium/src/+/main:docs/chrome_browser_design_principles.md
+// for details. See TabInterface and TabFeatures for a common structure that
+// avoids these functions.
+//
+// There are a few functions that have valid use cases. For example, we can
+// imagine a hypothetical feature of the task manager (which is not conceptually
+// associated with any given browser window) which wants to display the number
+// of browser windows to the user. This would be a valid use case for
+// GetTotalBrowserCount().
 
 namespace chrome {
 
@@ -46,17 +61,20 @@ namespace chrome {
 // in the corresponding display may be returned. If `ignore_closing_browsers` is
 // false, browsers that are in the closing state (i.e. browsers registered in
 // `BrowserList::currently_closing_browsers_`) may be returned.
+// WARNING: Do not use this method. See comment at top of file.
 Browser* FindTabbedBrowser(Profile* profile,
                            bool match_original_profiles,
                            int64_t display_id = display::kInvalidDisplayId,
                            bool ignore_closing_browsers = false);
 
 // Returns an existing browser window of any kind.
+// WARNING: Do not use this method. See comment at top of file.
 Browser* FindAnyBrowser(Profile* profile, bool match_original_profiles);
 
 // Returns an existing browser window with the provided profile. Searches in the
 // order of last activation. Only browsers that have been active can be
 // returned. Returns nullptr if no such browser currently exists.
+// WARNING: Do not use this method. See comment at top of file.
 Browser* FindBrowserWithProfile(Profile* profile);
 
 // Returns all tabbed browsers with the provided profile. Returns an empty
@@ -77,6 +95,7 @@ Browser* FindBrowserWithWindow(gfx::NativeWindow window);
 
 // Returns the browser with the currently active window. Returns nullptr if no
 // such browser currently exists.
+// WARNING: Do not use this method. See comment at top of file.
 Browser* FindBrowserWithActiveWindow();
 
 // Returns the browser containing the specified `web_contents` as a tab in that
@@ -92,16 +111,19 @@ Browser* FindBrowserWithActiveWindow();
 // WARNING: This only will find a browser for which the specified contents is a
 // tab. Other uses of WebContents within the browser will not cause the browser
 // to be found via this method.
+// WARNING: Do not use this method. See comment at top of file.
 Browser* FindBrowserWithTab(const content::WebContents* web_contents);
 
 // Returns the browser containing the group with ID `group` within the given
 // `profile`. If the specified profile is nullptr, returns any browser
 // containing a group with the given group ID. Returns nullptr if no such
 // browser currently exists.
+// WARNING: Do not use this method. See comment at top of file.
 Browser* FindBrowserWithGroup(tab_groups::TabGroupId group, Profile* profile);
 
 // Returns the browser for the given element context. Returns nullptr if no such
 // browser currently exists.
+// WARNING: Do not use this method. See comment at top of file.
 Browser* FindBrowserWithUiElementContext(ui::ElementContext context);
 
 // Returns the browser owned by `profile` whose window was most recently active.

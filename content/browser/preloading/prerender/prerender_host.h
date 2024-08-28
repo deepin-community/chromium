@@ -19,8 +19,13 @@
 #include "content/browser/renderer_host/navigation_controller_delegate.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/render_frame_host.h"
+#include "net/http/http_no_vary_search_data.h"
 #include "third_party/blink/public/mojom/navigation/navigation_params.mojom-forward.h"
 #include "url/gurl.h"
+
+namespace base {
+class TimeDelta;
+}  // namespace base
 
 namespace blink {
 class EnabledClientHints;
@@ -34,6 +39,7 @@ namespace content {
 
 class DevToolsPrerenderAttempt;
 class FrameTreeNode;
+class NavigationHandle;
 class PrerenderCancellationReason;
 class PrerenderHostRegistry;
 class RenderFrameHostImpl;
@@ -83,12 +89,42 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
     kMaxValue = kRequestDestination,
   };
 
+  // Reasons blocking navigation while waiting for headers started.
+  enum class WaitingForHeadersStartedReason { kWithoutTimeout, kWithTimeout };
+
+  // Reasons blocking navigation while waiting for headers finished.
+  enum class WaitingForHeadersFinishedReason {
+    kHeadersReceived,
+    kHostDestroyed,
+    kTimeoutElapsed,
+    kMaybeNavigationCancelled
+  };
+
+  // Types of URL match
+  enum class UrlMatchType { kExact, kNoVarySearch, kURLPredicateMatch };
+
   // Observes a triggered prerender. Note that the observer should overlive the
   // prerender host instance, or be removed properly upon destruction.
   class Observer : public base::CheckedObserver {
    public:
     // Called on the page activation.
     virtual void OnActivated() {}
+
+    // Called from PrerenderHost::ReadyToCommitNavigation when headers are
+    // received for the initial navigation.
+    virtual void OnHeadersReceived() {}
+
+    // Called from PrerenderHost::OnWaitingForHeadersStarted when we start
+    // blocking navigation waiting for headers.
+    virtual void OnWaitingForHeadersStarted(
+        NavigationHandle& navigation_handle,
+        WaitingForHeadersStartedReason reason) {}
+
+    // Called from PrerenderHost::OnWaitingForHeadersFinished when we are
+    // done blocking navigation waiting for headers.
+    virtual void OnWaitingForHeadersFinished(
+        NavigationHandle& navigation_handle,
+        WaitingForHeadersFinishedReason reason) {}
 
     // Called from the PrerenderHost's destructor. The observer should drop any
     // reference to the host.
@@ -105,7 +141,7 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
 
   // Checks whether two headers are the same in a case-insensitive and
   // order-insensitive way.
-  // TODO(https://crbug.com/1443922): Migrate this method into
+  // TODO(crbug.com/40267487): Migrate this method into
   // `HttpRequestHeaders`.
   static bool IsActivationHeaderMatch(
       const net::HttpRequestHeaders& potential_activation_headers,
@@ -116,7 +152,7 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
       const std::string& potential_activation_headers_str,
       const std::string& prerender_headers_str,
       PreloadingTriggerType trigger_type,
-      const std::string& embedder_histogram_suffix,
+      const std::string& histogram_suffix,
       PrerenderCancellationReason& reason);
 
   // Sets a callback to be called on PrerenderHost creation.
@@ -136,7 +172,7 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
 
   // FrameTree::Delegate
 
-  // TODO(https://crbug.com/1199682): Correctly handle load events. Ignored for
+  // TODO(crbug.com/40177943): Correctly handle load events. Ignored for
   // now as it confuses WebContentsObserver instances because they can not
   // distinguish between the different FrameTrees.
 
@@ -148,6 +184,8 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
   int GetOuterDelegateFrameTreeNodeId() override;
   RenderFrameHostImpl* GetProspectiveOuterDocument() override;
   void SetFocusedFrame(FrameTreeNode* node, SiteInstanceGroup* source) override;
+  FrameTree* GetOwnedPictureInPictureFrameTree() override;
+  FrameTree* GetPictureInPictureOpenerFrameTree() override;
 
   // NavigationControllerDelegate
   void NotifyNavigationStateChangedFromController(
@@ -181,8 +219,31 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
   // be ready for activation.
   void DidFinishNavigation(NavigationHandle* navigation_handle);
 
+  // Called from PrerenderHostRegistry::ReadyToCommitNavigation().
+  // Check to see if this is the initial navigation, then if there is a
+  // No-Vary-Search header store it.
+  void ReadyToCommitNavigation(NavigationHandle* navigation_handle);
+
   // Activates the prerendered page and returns StoredPage containing the page.
   // This must be called after this host gets ready for activation.
+  //
+  // After this method runs, the outermost RenderFrameHost of the prerendered
+  // page will be moved to the root FrameTreeNode of the primary FrameTree. More
+  // precisely,
+  //
+  // - Let `rfh_a` (respectively `rfh_b`) be the primary (resp. prerendered)
+  //   RenderFrameHost just before this method is called.
+  // - Let `ftn_root_a` (resp. `ftn_root_b`) be the root FrameTreeNode which
+  //   `rfh_a` (resp. `rfh_b`) is attached to.
+  // - Let `stored_page` be the return value.
+  //
+  // After this method is called, the following holds true:
+  //
+  // - `stored_page` holds `rfh_b`.
+  // - `rfh_b` and `ftn_root_a` are associated with each other.
+  // - Subframe nodes of `ftn_root_b` now also belong to the primary FrameTree,
+  //   since the root `rfh_b` is part of the primary FrameTree.
+  // - `ftn_root_b` shutdown.
   std::unique_ptr<StoredPage> Activate(NavigationRequest& navigation_request);
 
   // Returns true if the navigation params that were used in the initial
@@ -236,7 +297,11 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
 
   // Returns true if the given `url` indicates the same destination to the
   // initial_url.
-  bool IsUrlMatch(const GURL& url) const;
+  std::optional<UrlMatchType> IsUrlMatch(const GURL& url) const;
+
+  // Returns true if the given `url` might indicate the same destination to the
+  // initial_url based on `no_vary_search_expected`.
+  bool IsNoVarySearchHintUrlMatch(const GURL& url) const;
 
   // Called when the prerender pages asks the client to change the Accept Client
   // Hints. The instruction applies to the prerendering page before activation,
@@ -249,6 +314,8 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
   void GetAllowedClientHintsOnPage(
       const url::Origin& origin,
       blink::EnabledClientHints* client_hints) const;
+
+  std::string GetHistogramSuffix() const;
 
   // Returns std::nullopt iff prerendering is initiated by the browser (not by
   // a renderer using Speculation Rules API).
@@ -296,6 +363,33 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
 
   base::WeakPtr<PreloadingAttempt> preloading_attempt() { return attempt_; }
 
+  const std::optional<net::HttpNoVarySearchData>& no_vary_search() const {
+    return no_vary_search_;
+  }
+
+  const std::optional<net::HttpNoVarySearchData>& no_vary_search_expected()
+      const {
+    return attributes_.no_vary_search_expected;
+  }
+
+  bool should_warm_up_compositor() const {
+    return attributes_.should_warm_up_compositor;
+  }
+
+  bool IsInitialNavigation(const NavigationRequest& navigation_request) const;
+
+  bool were_headers_received() const { return were_headers_received_; }
+
+  // Gets the timeout configured for waiting on head.
+  base::TimeDelta WaitUntilHeadTimeout();
+
+  // Called when we start blocking navigation while waiting for headers.
+  void OnWaitingForHeadersStarted(NavigationHandle& navigation_handle,
+                                  WaitingForHeadersStartedReason reason);
+  // Called when we stop blocking navigation while waiting for headers.
+  void OnWaitingForHeadersFinished(NavigationHandle& navigation_handle,
+                                   WaitingForHeadersFinishedReason reason);
+
  private:
   void RecordFailedFinalStatusImpl(const PrerenderCancellationReason& reason);
 
@@ -311,10 +405,14 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
   ActivationNavigationParamsMatch
   AreBeginNavigationParamsCompatibleWithNavigation(
       const blink::mojom::BeginNavigationParams& potential_activation,
+      bool allow_initiator_and_transition_mismatch,
       PrerenderCancellationReason& reason);
   ActivationNavigationParamsMatch
   AreCommonNavigationParamsCompatibleWithNavigation(
-      const blink::mojom::CommonNavigationParams& potential_activation);
+      const blink::mojom::CommonNavigationParams& potential_activation,
+      bool allow_initiator_and_transition_mismatch);
+
+  void SetNoVarySearch(net::HttpNoVarySearchData no_vary_search);
 
   const PrerenderAttributes attributes_;
 
@@ -327,6 +425,11 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
   int frame_tree_node_id_ = RenderFrameHost::kNoFrameTreeNodeId;
 
   std::optional<PrerenderFinalStatus> final_status_;
+
+  // Cache the suffix of metrics based on trigger type and embedder suffix.
+  // TODO(https://crbug.com/40243375): Remove the use pattern of
+  // `Report*(base_name, trigger_type(), embedder_suffix())`
+  const std::string metric_suffix_;
 
   base::ObserverList<Observer> observers_;
 
@@ -366,6 +469,13 @@ class CONTENT_EXPORT PrerenderHost : public FrameTree::Delegate,
   // out from |frame_tree_| and moved over to |web_contents_|'s primary frame
   // tree, while |frame_tree_| will be deleted.
   std::unique_ptr<FrameTree> frame_tree_;
+
+  // No-Vary-Search header information for the main frame of the prerendered
+  // page.
+  std::optional<net::HttpNoVarySearchData> no_vary_search_;
+
+  // True if headers were received.
+  bool were_headers_received_ = false;
 };
 
 }  // namespace content

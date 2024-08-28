@@ -23,19 +23,22 @@ namespace browsing_data {
 enum class BrowsingDataType {
   HISTORY,
   CACHE,
-  COOKIES,
+  SITE_DATA,
   PASSWORDS,
   FORM_DATA,
   SITE_SETTINGS,
-  // Only for Android:
-  BOOKMARKS,
   // Only for Desktop:
   DOWNLOADS,
   HOSTED_APPS_DATA,
-  NUM_TYPES
+  TABS,
+  MAX_VALUE = TABS,
 };
 
 // Time period ranges available when doing browsing data removals.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused. Keep in sync with respective enums in
+// tools/metrics/histograms/metadata/settings/enums.xml and
+// c/b/r/s/clear_browsing_data_dialog/clear_browsing_data_dialog.ts
 //
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.browsing_data

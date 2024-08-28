@@ -9,6 +9,7 @@ You may obtain a copy of the License at
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
@@ -16,8 +17,8 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_MODEL_INDEXING_ANALYSIS_H_
 #define XLA_SERVICE_GPU_MODEL_INDEXING_ANALYSIS_H_
 
-#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -25,7 +26,8 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/types/span.h"
-#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/SmallVector.h"
+#include "mlir/IR/AffineExpr.h"  // from @llvm-project
 #include "mlir/IR/AffineMap.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -62,8 +64,6 @@ struct HloInstructionIndexing {
 std::ostream& operator<<(std::ostream& out,
                          const HloInstructionIndexing& instr_indexing);
 
-std::string ToString(const mlir::AffineMap& affine_map);
-
 // Computes indexing maps for all input operands necessary to compute an element
 // of the `output_id` instruction output.
 HloInstructionIndexing ComputeOutputToInputIndexing(const HloInstruction* instr,
@@ -76,12 +76,41 @@ HloInstructionIndexing ComputeInputToOutputIndexing(const HloInstruction* instr,
                                                     int input_id,
                                                     mlir::MLIRContext* ctx);
 
+// Computes the indexing for `epilogue_parent`'s epilogue. For example, if
+// `epilogue_parent` is a transpose, computes the input to output indexing for
+// the path from the transpose's output to the root's output.
+//
+//   transpose
+//       |
+//     bitcast
+//       |
+//      ROOT
+//
+// The root must be specified because in HLO, an instruction can both be a hero
+// and part of a side output:
+//
+//          reduce
+//         /      \
+//   broadcast    log
+//        |        |
+//       neg    bitcast
+//         \      /
+//           ROOT
+//
+// Here, the we must use the path through the `log` for the epilogue indexing,
+// since the other path is not actually an epilogue (it's a side output). This
+// fusion does not make much sense, but they are created sometimes.
+IndexingMap ComputeEpilogueInputToOutputIndexing(
+    HloInstructionAdaptor epilogue_parent, HloInstructionAdaptor epilogue_root,
+    mlir::MLIRContext* mlir_context);
+
 using GroupedByOpIndexingMap =
     absl::flat_hash_map<const HloInstruction*, IndexingMapSet>;
 
-// Computes indexing for every instruction within a fusion cluster.
+// Computes output-to-input indexing for every instruction within a fusion
+// cluster starting with `target_instr` and going from def to use.
 GroupedByOpIndexingMap ComputeGroupedOutputToInputIndexing(
-    const HloFusionAdaptor& fusion_adaptor, int output_id,
+    const HloFusionAdaptor& fusion_adaptor, HloInstructionAdaptor target_instr,
     mlir::MLIRContext* ctx);
 
 // Groups indexing maps by instructions.
@@ -89,42 +118,82 @@ absl::flat_hash_map<const HloInstruction*, IndexingMapSet>
 GroupIndexingMapsByProducers(const HloInstructionIndexing& indexing,
                              const HloInstruction* instr);
 
+// Computes producer indexing maps and fuse/compose them with the consumer
+// indexing maps.
+bool FuseProducerConsumerOutputToInputIndexing(
+    const HloInstruction* producer_instr,
+    absl::flat_hash_map<const HloInstruction*, IndexingMapSet>*
+        consumer_indexing,
+    mlir::MLIRContext* mlir_context);
+
 // Creates an indexing map for bitcasting from `input_shape` to `output_shape`.
 // Equivalent to linearizing the input_shape index and then delinearizing it
 // to output_shape.
 IndexingMap GetBitcastMap(const Shape& input_shape, const Shape& output_shape,
-                          mlir::MLIRContext* ctx);
+                          mlir::MLIRContext* mlir_context);
+IndexingMap GetBitcastMap(absl::Span<const int64_t> input_shape,
+                          const Shape& output_shape,
+                          mlir::MLIRContext* mlir_context);
 
 // Creates an indexing map from the physical layout of the tensor to its logical
 // layout.
-IndexingMap GetIndexingMapFromPhysicalLayoutToLogical(const Shape& shape,
-                                                      mlir::MLIRContext* ctx);
+IndexingMap GetIndexingMapFromPhysicalLayoutToLogical(
+    const Shape& shape, mlir::MLIRContext* mlir_context);
 
 // Creates an indexing map from the logical layout of the tensor to its physical
 // layout.
-IndexingMap GetIndexingMapFromLogicalToPhysicalLayout(const Shape& shape,
-                                                      mlir::MLIRContext* ctx);
+IndexingMap GetIndexingMapFromLogicalToPhysicalLayout(
+    const Shape& shape, mlir::MLIRContext* mlir_context);
 
 // Creates an indexing map from thread and block IDs to elements of the tiled
 // shape. Uses the same convention as KernelFusionInterface: dimensions 0 to 2
 // are thread indices (currently only 0 is used), dimensions 3 to 5 are block
 // indices (currently only 3 is used).
+mlir::AffineMap GetBlockOffsetsForTiling(
+    absl::Span<const int64_t> num_blocks,
+    absl::Span<const int64_t> tile_sizes_per_block, int64_t rank,
+    mlir::MLIRContext* mlir_context);
 mlir::AffineMap GetBlockOffsetsForTiling(const Tiling& tiling,
-                                         mlir::MLIRContext* ctx);
+                                         mlir::MLIRContext* mlir_context);
+mlir::AffineMap GetThreadOffsetsForTiling(
+    absl::Span<const int64_t> num_threads,
+    absl::Span<const int64_t> tile_sizes_per_thread, int64_t rank,
+    mlir::MLIRContext* mlir_context);
 mlir::AffineMap GetThreadOffsetsForTiling(const Tiling& tiling,
-                                          mlir::MLIRContext* ctx);
+                                          mlir::MLIRContext* mlir_context);
 
 // Convenience functions for the two functions above
 // (`GetBlockOffsestsForTiling` + `GetThreadOffsetsForTiling`). Also sets up
 // the ranges of dimensions and symbols.
 IndexingMap GetIndexingMapForTiling(const Tiling& tiling,
-                                    mlir::MLIRContext* ctx);
+                                    mlir::MLIRContext* mlir_context);
 IndexingMap GetIndexingMapForTiling(mlir::AffineMap block_offsets,
                                     mlir::AffineMap thread_offsets,
-                                    const Tiling& tiling);
+                                    int64_t threads_per_block,
+                                    int64_t num_blocks,
+                                    absl::Span<const int64_t> thread_tile_sizes,
+                                    absl::Span<const int64_t> tiled_shape);
 
 // Returns the shape of the output of the instruction.
 const Shape& GetOutputShape(const HloInstruction* instr, int64_t output_id);
+
+// Computes 1D index given a shape and N-d indexing expressions.
+mlir::AffineExpr LinearizeShape(
+    absl::Span<const int64_t> dims,
+    absl::Span<const mlir::AffineExpr> dimension_exprs,
+    mlir::MLIRContext* mlir_context);
+
+// Computes N-d indexing expressions given a linear index and a shape.
+std::vector<mlir::AffineExpr> DelinearizeIndex(absl::Span<const int64_t> dims,
+                                               mlir::AffineExpr linear_index,
+                                               mlir::MLIRContext* mlir_context);
+
+// Creates an identity indexing map corresponding to the parameter shape.
+IndexingMap CreateIdentityMap(const Shape& shape,
+                              mlir::MLIRContext* mlir_context);
+
+llvm::SmallVector<mlir::AffineExpr, 4> DelinearizeInBoundsIndex(
+    mlir::AffineExpr linear, absl::Span<const int64_t> sizes);
 
 }  // namespace gpu
 }  // namespace xla

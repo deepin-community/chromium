@@ -3,17 +3,18 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog.h"
+
 #include <memory>
 #include <string>
 
 #include "base/feature_list.h"
 #include "base/functional/overloaded.h"
 #include "base/metrics/user_metrics_action.h"
-#include "chrome/browser/browsing_data/cookies_tree_model.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/privacy_sandbox/tracking_protection_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -26,7 +27,6 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/browsing_data/content/browsing_data_model.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
-#include "components/browsing_data/core/features.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
@@ -35,6 +35,8 @@
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/omnibox/browser/favicon_cache.h"
+#include "components/privacy_sandbox/privacy_sandbox_features.h"
+#include "components/privacy_sandbox/tracking_protection_settings.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/browsing_data_remover.h"
@@ -71,15 +73,6 @@ int GetContentSettingRowOrder(ContentSetting setting) {
   }
 }
 
-// Creates a new CookiesTreeModel for all objects in the container,
-// copying each of them.
-std::unique_ptr<CookiesTreeModel> CreateCookiesTreeModel(
-    const browsing_data::LocalSharedObjectsContainer& shared_objects) {
-  return std::make_unique<CookiesTreeModel>(
-      LocalDataContainer::CreateFromLocalSharedObjectsContainer(shared_objects),
-      /*special_storage_policy=*/nullptr);
-}
-
 // Returns the registable domain (eTLD+1) for the |origin|. If it doesn't exist,
 // returns the host.
 std::string GetEtldPlusOne(const url::Origin& origin) {
@@ -99,7 +92,7 @@ std::string GetEtldPlusOne(const url::Origin& origin) {
 std::vector<PageSpecificSiteDataDialogSection> GetSections(
     std::vector<PageSpecificSiteDataDialogSite> all_sites,
     const url::Origin& current_origin) {
-  // TODO(crbug.com/1344787): Use actual strings.
+  // TODO(crbug.com/40231917): Use actual strings.
   auto eltd_current_origin = GetEtldPlusOne(current_origin);
 
   PageSpecificSiteDataDialogSection first_party_section;
@@ -140,14 +133,6 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
   explicit PageSpecificSiteDataDialogModelDelegate(
       content::WebContents* web_contents)
       : web_contents_(web_contents->GetWeakPtr()) {
-    auto* content_settings =
-        content_settings::PageSpecificContentSettings::GetForFrame(
-            web_contents->GetPrimaryMainFrame());
-    allowed_cookies_tree_model_ = CreateCookiesTreeModel(
-        content_settings->allowed_local_shared_objects());
-    blocked_cookies_tree_model_ = CreateCookiesTreeModel(
-        content_settings->blocked_local_shared_objects());
-
     Profile* profile =
         Profile::FromBrowserContext(web_contents_->GetBrowserContext());
     favicon_cache_ = std::make_unique<FaviconCache>(
@@ -156,11 +141,12 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
         HistoryServiceFactory::GetForProfile(
             profile, ServiceAccessType::EXPLICIT_ACCESS));
     cookie_settings_ = CookieSettingsFactory::GetForProfile(profile);
+    tracking_protection_settings_ =
+        TrackingProtectionSettingsFactory::GetForProfile(profile);
     host_content_settings_map_ =
         HostContentSettingsMapFactory::GetForProfile(profile);
 
-    RecordPageSpecificSiteDataDialogAction(
-        PageSpecificSiteDataDialogAction::kDialogOpened);
+    RecordPageSpecificSiteDataDialogOpenedAction();
   }
 
   void OnDialogExplicitlyClosed() {
@@ -198,24 +184,6 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
   std::vector<PageSpecificSiteDataDialogSite> GetAllSites() {
     std::map<BrowsingDataModel::DataOwner, PageSpecificSiteDataDialogSite>
         sites_map;
-    for (const std::unique_ptr<CookieTreeNode>& node :
-         allowed_cookies_tree_model_->GetRoot()->children()) {
-      std::string host_name = node->GetDetailedInfo().origin.host();
-      auto existing_site = sites_map.find(host_name);
-      if (existing_site == sites_map.end()) {
-        sites_map.emplace(
-            host_name,
-            CreateSiteFromHostNode(node.get(), /*from_allowed_tree=*/true));
-      } else {
-        // To display the result entry as fully partitioned, both entries have
-        // to be partitioned.
-        existing_site->second.is_fully_partitioned &=
-            IsCookieTreeNodeFullyPartitioned(node.get());
-      }
-      sites_map.emplace(
-          node->GetDetailedInfo().origin.host(),
-          CreateSiteFromHostNode(node.get(), /*from_allowed_tree=*/true));
-    }
     for (const BrowsingDataModel::BrowsingDataEntryView& entry :
          *allowed_browsing_data_model()) {
       const BrowsingDataModel::DataOwner& owner = *entry.data_owner;
@@ -228,22 +196,6 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
         // models have to be partitioned.
         existing_site->second.is_fully_partitioned &=
             IsBrowsingDataEntryViewFullyPartitioned(entry);
-      }
-    }
-    for (const std::unique_ptr<CookieTreeNode>& node :
-         blocked_cookies_tree_model_->GetRoot()->children()) {
-      auto existing_site =
-          sites_map.find(node->GetDetailedInfo().origin.host());
-      // If there are multiple entries from the same tree, ignore the entry from
-      // the blocked tree. It might be caused by partitioned allowed cookies and
-      // regular blocked cookies or by cookies being set after creating an
-      // exception and not reloading the page. Existing site entries doesn't
-      // need to be updated as partitioned state isn't relevant for blocked
-      // entries.
-      if (existing_site == sites_map.end()) {
-        sites_map.emplace(
-            node->GetDetailedInfo().origin.host(),
-            CreateSiteFromHostNode(node.get(), /*from_allowed_tree=*/false));
       }
     }
     for (const BrowsingDataModel::BrowsingDataEntryView& entry :
@@ -285,17 +237,14 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
   void DeleteStoredObjects(const url::Origin& origin) {
     status_changed_ = true;
 
-    // The both models have to checked, as the site might be in the blocked
+    // The both models have to be checked, as the site might be in the blocked
     // model, then be allowed and deleted. Without reloading the page the site
     // will remain in the blocked model.
-    DeleteMatchingHostNodeFromModel(allowed_cookies_tree_model_.get(), origin);
-    DeleteMatchingHostNodeFromModel(blocked_cookies_tree_model_.get(), origin);
-
     // Removing origin from Browsing Data Model to support new storage types.
     // The UI assumes deletion completed successfully, so we're passing
     // `base::DoNothing` callback.
-    // TODO(crbug.com/1394352): Future tests will need to know when the deletion
-    // is completed, this will require a callback to be passed here.
+    // TODO(crbug.com/40248546): Future tests will need to know when the
+    // deletion is completed, this will require a callback to be passed here.
     allowed_browsing_data_model()->RemoveBrowsingData(origin.host(),
                                                       base::DoNothing());
     allowed_browsing_data_model()->RemovePartitionedBrowsingData(
@@ -305,8 +254,7 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
     blocked_browsing_data_model()->RemovePartitionedBrowsingData(
         origin.host(), net::SchemefulSite(origin), base::DoNothing());
 
-    RecordPageSpecificSiteDataDialogAction(
-        PageSpecificSiteDataDialogAction::kSiteDeleted);
+    RecordPageSpecificSiteDataDialogRemoveButtonClickedAction();
 
     browsing_data::RecordDeleteBrowsingDataAction(
         browsing_data::DeleteBrowsingDataAction::kCookiesInUseDialog);
@@ -322,8 +270,6 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
       cookie_settings_->ResetCookieSetting(url);
       cookie_settings_->SetCookieSetting(url, setting);
     }
-    RecordPageSpecificSiteDataDialogAction(
-        GetDialogActionForContentSetting(setting));
   }
 
   void OnManageOnDeviceSiteDataClicked() {
@@ -332,55 +278,13 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
   }
 
  private:
-  // Deletes the host node matching |origin| and all stored objects for it.
-  void DeleteMatchingHostNodeFromModel(CookiesTreeModel* model,
-                                       const url::Origin& origin) {
-    CookieTreeNode* node_to_delete = nullptr;
-    for (const auto& node : model->GetRoot()->children()) {
-      if (origin == node->GetDetailedInfo().origin) {
-        DCHECK(!node_to_delete)
-            << "The node with a matching origin should only be found once";
-        node_to_delete = node.get();
-      }
-    }
-    if (node_to_delete) {
-      DCHECK_EQ(node_to_delete->GetDetailedInfo().node_type,
-                CookieTreeNode::DetailedInfo::TYPE_HOST);
-      model->DeleteCookieNode(node_to_delete);
-    }
-  }
-
-  void DeletePartitionedStorage(const url::Origin& origin) {
-    Profile* profile =
-        Profile::FromBrowserContext(web_contents_->GetBrowserContext());
-    content::BrowsingDataRemover* remover = profile->GetBrowsingDataRemover();
-    auto filter = content::BrowsingDataFilterBuilder::Create(
-        content::BrowsingDataFilterBuilder::Mode::kDelete,
-        content::BrowsingDataFilterBuilder::OriginMatchingMode::
-            kOriginInAllContexts);
-    filter->AddOrigin(origin);
-    remover->RemoveWithFilter(
-        base::Time::Min(), base::Time::Max(),
-        content::BrowsingDataRemover::DATA_TYPE_DOM_STORAGE,
-        content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB,
-        std::move(filter));
-  }
 
   bool CanCreateContentException(GURL url) const { return !url.SchemeIsFile(); }
-
-  PageSpecificSiteDataDialogSite CreateSiteFromHostNode(
-      CookieTreeNode* node,
-      bool from_allowed_tree) {
-    url::Origin origin = node->GetDetailedInfo().origin;
-    return CreateSite(
-        origin, from_allowed_tree,
-        from_allowed_tree && IsCookieTreeNodeFullyPartitioned(node));
-  }
 
   PageSpecificSiteDataDialogSite CreateSiteFromEntryView(
       const BrowsingDataModel::BrowsingDataEntryView& entry,
       bool from_allowed_model) {
-    // TODO(crbug.com/1271155): BDM provides host name only while
+    // TODO(crbug.com/40205603): BDM provides host name only while
     // CookieTreeModel provides url::Origin. This classes works with
     // url::Origin, so here we convert host name to origin with some assumptions
     // (which might not be true). We should either convert to work only with
@@ -404,18 +308,6 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
     return entry.GetThirdPartyPartitioningSite().has_value();
   }
 
-  bool IsCookieTreeNodeFullyPartitioned(CookieTreeNode* node) {
-    GURL current_url = web_contents_->GetVisibleURL();
-    url::Origin origin = node->GetDetailedInfo().origin;
-    // TODO(crbug.com/1344787): Add a test to verify partitioned logic.
-    // TODO(crbug.com/1271155): Consider reporting partitioned storage access
-    // directly and remove this.
-    return GetEtldPlusOne(origin) !=
-               GetEtldPlusOne(url::Origin::Create(current_url)) &&
-           IsOnlyPartitionedStorageAccessAllowed(origin) &&
-           AreAllCookiesPartitioned(node);
-  }
-
   PageSpecificSiteDataDialogSite CreateSite(url::Origin origin,
                                             bool from_allowed_model,
                                             bool is_fully_partitioned) {
@@ -433,7 +325,7 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
       site.setting = CONTENT_SETTING_BLOCK;
     }
     site.is_fully_partitioned = is_fully_partitioned;
-    // TODO(crbug.com/1344787): Handle sources other than SETTING_SOURCE_USER.
+    // TODO(crbug.com/40231917): Handle sources other than SettingSource::kUser.
     return site;
   }
 
@@ -448,13 +340,20 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
         host_content_settings_map_->GetContentSetting(
             current_url, GURL(), ContentSettingsType::COOKIES);
 
+    // Check for either a COOKIES or TRACKING_PROTECTION site exception.
     content_settings::SettingInfo info;
-    const base::Value value = host_content_settings_map_->GetWebsiteSetting(
+    host_content_settings_map_->GetContentSetting(
         site_origin.GetURL(), current_url, ContentSettingsType::COOKIES, &info);
-
     bool has_site_level_exception =
         info.primary_pattern != ContentSettingsPattern::Wildcard() ||
         info.secondary_pattern != ContentSettingsPattern::Wildcard();
+
+    if (base::FeatureList::IsEnabled(
+            privacy_sandbox::kTrackingProtectionContentSettingFor3pcb)) {
+      has_site_level_exception |=
+          tracking_protection_settings_->GetTrackingProtectionSetting(
+              current_url) == CONTENT_SETTING_ALLOW;
+    }
 
     // Partitioned access is displayed when all of these conditions are met:
     return
@@ -469,26 +368,6 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
         // considered first party cookies, if first party is blocked from
         // accessing storage, partitioned cookies are too)
         && first_party_setting != CONTENT_SETTING_BLOCK;
-  }
-
-  bool AreAllCookiesPartitioned(CookieTreeNode* node) {
-    bool all_partitioned = true;
-    for (const auto& storage_type_node : node->children()) {
-      if (storage_type_node->GetDetailedInfo().node_type !=
-          CookieTreeNode::DetailedInfo::TYPE_COOKIES) {
-        all_partitioned = false;
-        break;
-      }
-
-      for (const auto& cookie_node : storage_type_node->children()) {
-        if (!cookie_node->GetDetailedInfo().cookie->IsPartitioned()) {
-          all_partitioned = false;
-          break;
-        }
-      }
-    }
-
-    return all_partitioned;
   }
 
   BrowsingDataModel* allowed_browsing_data_model() {
@@ -514,17 +393,17 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
   }
 
   base::WeakPtr<content::WebContents> web_contents_;
-  // Each model represent separate local storage container. The implementation
+  // Each model represent separate data container. The implementation
   // doesn't make a difference between allowed and blocked models and checks
   // the actual content settings to determine the state.
-  std::unique_ptr<CookiesTreeModel> allowed_cookies_tree_model_;
-  std::unique_ptr<CookiesTreeModel> blocked_cookies_tree_model_;
   raw_ptr<BrowsingDataModel, DanglingUntriaged>
       allowed_browsing_data_model_for_testing_ = nullptr;
   raw_ptr<BrowsingDataModel, DanglingUntriaged>
       blocked_browsing_data_model_for_testing_ = nullptr;
   std::unique_ptr<FaviconCache> favicon_cache_;
   scoped_refptr<content_settings::CookieSettings> cookie_settings_;
+  raw_ptr<privacy_sandbox::TrackingProtectionSettings>
+      tracking_protection_settings_;
   raw_ptr<HostContentSettingsMap> host_content_settings_map_;
 
   // Whether user has done any changes to the site data, deleted site data for a

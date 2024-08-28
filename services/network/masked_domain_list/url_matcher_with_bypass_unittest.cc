@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "services/network/masked_domain_list/url_matcher_with_bypass.h"
+
+#include <optional>
 #include <vector>
 
 #include "base/strings/strcat.h"
@@ -21,7 +23,7 @@ struct MatchTest {
   std::string req;
   std::string top;
   bool skip_bypass_check;
-  UrlMatcherWithBypass::MatchResult match_result;
+  bool matches;
 };
 
 }  // namespace
@@ -38,30 +40,6 @@ TEST_F(UrlMatcherWithBypassTest, PartitionMapKey) {
   EXPECT_EQ(PartitionMapKey("foo.co.uk"), "co.uk");
 }
 
-TEST_F(UrlMatcherWithBypassTest, AddDomainWithBypass_InvalidDomainString) {
-  UrlMatcherWithBypass matcher;
-  matcher.AddDomainWithBypass("", net::SchemeHostPortMatcher(), true);
-  EXPECT_FALSE(matcher.IsPopulated());
-}
-
-TEST_F(UrlMatcherWithBypassTest, AddDomainWithBypass_SubdomainMatching) {
-  UrlMatcherWithBypass matcher;
-  matcher.AddDomainWithBypass("foo.com", net::SchemeHostPortMatcher(), true);
-  EXPECT_TRUE(matcher
-                  .Matches(GURL("http://bar.foo.com"), net::SchemefulSite(),
-                           /*skip_bypass_check=*/true)
-                  .matches);
-}
-
-TEST_F(UrlMatcherWithBypassTest, AddDomainWithBypass_NoSubdomainMatching) {
-  UrlMatcherWithBypass matcher;
-  matcher.AddDomainWithBypass("foo.com", net::SchemeHostPortMatcher(), false);
-  EXPECT_FALSE(matcher
-                   .Matches(GURL("http://bar.foo.com"), net::SchemefulSite(),
-                            /*skip_bypass_check=*/true)
-                   .matches);
-}
-
 TEST_F(UrlMatcherWithBypassTest, BuildBypassMatcher_Dedupes) {
   auto resource_owner = masked_domain_list::ResourceOwner();
   resource_owner.add_owned_properties("example.com");
@@ -72,7 +50,26 @@ TEST_F(UrlMatcherWithBypassTest, BuildBypassMatcher_Dedupes) {
       UrlMatcherWithBypass::BuildBypassMatcher(resource_owner);
 
   // 2 distinct domains become 4 rules because of subdomain matching rules.
-  EXPECT_EQ(bypass_matcher.rules().size(), 4u);
+  EXPECT_EQ(bypass_matcher->rules().size(), 4u);
+}
+
+TEST_F(UrlMatcherWithBypassTest, AddRulesWithoutBypass_BypassCheckIsSkipped) {
+  UrlMatcherWithBypass matcher;
+
+  matcher.AddRulesWithoutBypass({"example.com"});
+  EXPECT_TRUE(matcher.Matches(GURL("http://example.com"),
+                              /*top_frame_site=*/std::nullopt,
+                              /*skip_bypass_check=*/true));
+}
+
+TEST_F(UrlMatcherWithBypassTest,
+       AddRulesWithoutBypass_BypassCheckIsNotSkipped) {
+  UrlMatcherWithBypass matcher;
+
+  matcher.AddRulesWithoutBypass({"example.com"});
+  EXPECT_TRUE(matcher.Matches(GURL("http://example.com"),
+                              net::SchemefulSite(GURL("http://top.frame.com")),
+                              /*skip_bypass_check=*/false));
 }
 
 class UrlMatcherWithBypassMatchTest : public testing::TestWithParam<MatchTest> {
@@ -97,78 +94,79 @@ TEST_P(UrlMatcherWithBypassMatchTest, Match) {
   resourceOwner->add_owned_properties("bbco-pb.co.uk");
 
   for (auto owner : mdl.resource_owners()) {
+    std::set<std::string> domains;
     for (auto resource : owner.owned_resources()) {
-      matcher.AddMaskedDomainListRules(resource.domain(), owner);
+      domains.emplace(resource.domain());
     }
+    matcher.AddMaskedDomainListRules(domains, owner);
   }
 
   const MatchTest& p = GetParam();
   GURL request_url(base::StrCat({"https://", p.req}));
   net::SchemefulSite top_frame_site(GURL(base::StrCat({"https://", p.top})));
-  EXPECT_EQ(p.match_result,
+  EXPECT_EQ(p.matches,
             matcher.Matches(request_url, top_frame_site, p.skip_bypass_check));
 }
 
-// TODO(aakallam): Remove concept of 1st and 3rd party from these test cases.
 const std::vector<MatchTest> kMatchTests = {
     // First-party requests should never be proxied.
     MatchTest{"1PRsrcHost",
               "acme-ra.com",
               "acme-ra.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"1PPropHost",
               "bbco-pb.co.uk",
               "bbco-pb.co.uk",
               false,
-              {.matches = false, .is_third_party = false}},
+              false},
     MatchTest{"1POtherHost",
               "somehost.com",
               "somehost.com",
               false,
-              {.matches = false, .is_third_party = false}},
+              false},
 
     // "First-party" is defined as schemefully same-site.
     MatchTest{"1PSameSiteOther1",
               "www.somehost.com",
               "somehost.com",
               false,
-              {.matches = false, .is_third_party = false}},
+              false},
     MatchTest{"1PSameSiteOther2",
               "somehost.com",
               "www.somehost.com",
               false,
-              {.matches = false, .is_third_party = false}},
+              false},
     MatchTest{"1PSameSiteRsrc1",
               "www.acme-ra.com",
               "acme-ra.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"1PSameSiteRsrc2",
               "acme-ra.com",
               "www.acme-ra.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"1PSameSiteRsrcSub1",
               "sub.sub.acme-ra.com",
               "acme-ra.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"1PSameSiteRsrcSub2",
               "acme-ra.com",
               "sub.sub.acme-ra.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"1PSameSiteProp1",
               "www.bbco-pb.co.uk",
               "bbco-pb.co.uk",
               false,
-              {.matches = false, .is_third_party = false}},
+              false},
     MatchTest{"1PSameSiteProp2",
               "bbco-pb.co.uk",
               "www.bbco-pb.co.uk",
               false,
-              {.matches = false, .is_third_party = false}},
+              false},
 
     // Third-party requests for hosts not appearing in the MDL should never be
     // proxied, regardless of the top-level.
@@ -176,17 +174,17 @@ const std::vector<MatchTest> kMatchTests = {
               "somehost.com",
               "otherhost.com",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
     MatchTest{"3POtherReqInRsrc",
               "somehost.com",
               "acme-rb.co.uk",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
     MatchTest{"3POtherReqInProp",
               "somehost.com",
               "bbco-pb.co.uk",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
 
     // Third-party requests for resources (including subdomains) in the MDL
     // should be proxied (with exceptions below).
@@ -194,27 +192,27 @@ const std::vector<MatchTest> kMatchTests = {
               "acme-ra.com",
               "somehost.com",
               false,
-              {.matches = true, .is_third_party = true}},
+              true},
     MatchTest{"3PRsrcInOtherRsrc",
               "acme-ra.com",
               "bbco-rb.co.ch",
               false,
-              {.matches = true, .is_third_party = true}},
+              true},
     MatchTest{"3PRsrcInOtherProp",
               "acme-ra.com",
               "bbco-pa.com",
               false,
-              {.matches = true, .is_third_party = true}},
+              true},
     MatchTest{"3PSubRsrc",
               "sub.acme-ra.com",
               "somehost.com",
               false,
-              {.matches = true, .is_third_party = true}},
+              true},
     MatchTest{"3PSub2Rsrc",
               "sub.sub.acme-ra.com",
               "somehost.com",
               false,
-              {.matches = true, .is_third_party = true}},
+              true},
 
     // Third-party requests for properties in the MDL should not be proxied
     // if bypass policy is kFirstPartyToTopLevelFrame.
@@ -222,27 +220,27 @@ const std::vector<MatchTest> kMatchTests = {
               "acme-pa.com",
               "somehost.com",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
     MatchTest{"3PPropInOtherRsrc",
               "acme-pa.com",
               "bbco-rb.co.ch",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
     MatchTest{"3PPropInOtherProp",
               "acme-pa.com",
               "bbco-pa.com",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
     MatchTest{"3PPropInSameRsrc",
               "acme-pa.com",
               "acme-rb.co.uk",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
     MatchTest{"3PPropInSameProp",
               "acme-pa.com",
               "acme-pb.co.uk",
               false,
-              {.matches = false, .is_third_party = true}},
+              false},
 
     // As an exception, third-party requests for resources (including
     // subdomains) in the MDL should be not be proxied when the top-level site
@@ -252,49 +250,49 @@ const std::vector<MatchTest> kMatchTests = {
               "acme-ra.com",
               "acme-pa.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"3PRsrcInRsrcSameOwner",
               "acme-ra.com",
               "acme-rb.co.uk",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"3PRsrcInSubRsrcSameOwner",
               "acme-ra.com",
               "sub.acme-rb.co.uk",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"3PSubRsrcInSubRsrcSameOwner",
               "sub.acme-ra.com",
               "sub.acme-rb.co.uk",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"3PSubSameOwner",
               "sub.acme-ra.com",
               "acme-pa.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
     MatchTest{"3PSubSubSameOwner",
               "sub.sub.acme-ra.com",
               "acme-pa.com",
               false,
-              {.matches = true, .is_third_party = false}},
+              false},
 
     // Skip the bypass check.
     MatchTest{"MatchWithSameSiteAndBypass",
               "acme-ra.com",
               "acme-ra.com",
               true,
-              {.matches = true, .is_third_party = true}},
+              true},
     MatchTest{"MatchWithSameOwnerAndBypass",
               "acme-ra.com",
               "acme-pa.com",
               true,
-              {.matches = true, .is_third_party = true}},
+              true},
     MatchTest{"NoMatchWithSameOwnerAndBypass",
               "safe.com",
               "acme-pa.com",
               true,
-              {.matches = false, .is_third_party = true}},
+              false},
 };
 
 INSTANTIATE_TEST_SUITE_P(All,

@@ -19,6 +19,7 @@
 #include <string_view>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "./centipede/binary_info.h"
 #include "./centipede/corpus.h"
 
@@ -30,6 +31,8 @@ struct AnalyzeCorporaResults {
   std::vector<size_t> b_pcs;
   std::vector<size_t> a_only_pcs;
   std::vector<size_t> b_only_pcs;
+  absl::flat_hash_map<size_t, CorpusRecord> a_pc_to_corpus_record;
+  absl::flat_hash_map<size_t, CorpusRecord> b_pc_to_corpus_record;
   BinaryInfo binary_info;
 };
 
@@ -47,6 +50,11 @@ CoverageResults GetCoverage(const std::vector<CorpusRecord>& records,
 CoverageResults GetCoverage(std::string_view binary_name,
                             std::string_view binary_hash,
                             std::string_view workdir);
+
+// Dumps `coverage_results` to `coverage_report_path` in the same format as read
+// by `SymbolTable::ReadFromLLVMSymbolizer`.
+void DumpCoverageReport(const CoverageResults& coverage_results,
+                        std::string_view coverage_report_path);
 
 // Compares the corpus within `workdir_a` with the corpus in `workdir_b`.
 AnalyzeCorporaResults AnalyzeCorpora(std::string_view binary_name,

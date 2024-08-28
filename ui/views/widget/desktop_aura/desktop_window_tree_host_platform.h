@@ -98,7 +98,6 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform
   void Activate() override;
   void Deactivate() override;
   bool IsActive() const override;
-  bool CanMaximize() override;
   void Maximize() override;
   void Minimize() override;
   void Restore() override;
@@ -122,7 +121,6 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform
   bool ShouldUseNativeFrame() const override;
   bool ShouldWindowContentsBeTransparent() const override;
   void FrameTypeChanged() override;
-  bool CanFullscreen() override;
   void SetFullscreen(bool fullscreen, int64_t display_id) override;
   bool IsFullscreen() const override;
   void SetOpacity(float opacity) override;
@@ -139,6 +137,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform
   bool ShouldCreateVisibilityController() const override;
   void UpdateWindowShapeIfNeeded(const ui::PaintContext& context) override;
   void SetBoundsInDIP(const gfx::Rect& bounds) override;
+  void SetAllowScreenshots(bool allow) override;
+  bool AreScreenshotsAllowed() override;
 
   // WindowTreeHost:
   gfx::Transform GetRootTransform() const override;
@@ -147,7 +147,15 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform
   gfx::Rect CalculateRootWindowBounds() const override;
   gfx::Rect GetBoundsInDIP() const override;
 
+  // CompositorObserver:
+  void OnCompositorVisibilityChanging(ui::Compositor* compositor,
+                                      bool visible) override;
+  void OnCompositorVisibilityChanged(ui::Compositor* compositor,
+                                     bool visible) override;
+
   // PlatformWindowDelegate:
+  gfx::Insets CalculateInsetsInDIP(
+      ui::PlatformWindowState window_state) const override;
   void OnClosed() override;
   void OnWindowStateChanged(ui::PlatformWindowState old_state,
                             ui::PlatformWindowState new_state) override;
@@ -157,8 +165,10 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform
   bool OnRotateFocus(ui::PlatformWindowDelegate::RotateDirection direction,
                      bool reset) override;
   void OnActivationChanged(bool active) override;
-  std::optional<gfx::Size> GetMinimumSizeForWindow() override;
-  std::optional<gfx::Size> GetMaximumSizeForWindow() override;
+  std::optional<gfx::Size> GetMinimumSizeForWindow() const override;
+  std::optional<gfx::Size> GetMaximumSizeForWindow() const override;
+  bool CanMaximize() const override;
+  bool CanFullscreen() const override;
   SkPath GetWindowMaskForWindowShapeInPixels() override;
   std::optional<ui::OwnedWindowAnchor> GetOwnedWindowAnchorAndRectInDIP()
       override;
@@ -166,6 +176,8 @@ class VIEWS_EXPORT DesktopWindowTreeHostPlatform
   gfx::Rect ConvertRectToDIP(const gfx::Rect& rect_in_pixels) const override;
   gfx::PointF ConvertScreenPointToLocalDIP(
       const gfx::Point& screen_in_pixels) const override;
+  gfx::Insets ConvertInsetsToPixels(
+      const gfx::Insets& insets_dip) const override;
 
   // ui::WorkspaceExtensionDelegate:
   void OnWorkspaceChanged() override;

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/webcodecs/video_frame.h"
 
 #include <limits>
@@ -38,6 +43,7 @@
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect_read_only.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_image_source.h"
+#include "third_party/blink/renderer/core/html/canvas/predefined_color_space.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
@@ -50,8 +56,10 @@
 #include "third_party/blink/renderer/modules/webcodecs/video_frame_layout.h"
 #include "third_party/blink/renderer/modules/webcodecs/video_frame_rect_util.h"
 #include "third_party/blink/renderer/platform/geometry/geometry_hash_traits.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_color_params.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/graphics/skia/sk_image_info_hash.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
@@ -80,16 +88,43 @@ namespace blink {
 
 namespace {
 
+// Controls if VideoFrame.copyTo() reads GPU frames asynchronously
+BASE_FEATURE(kVideoFrameAsyncCopyTo,
+             "VideoFrameAsyncCopyTo",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 media::VideoPixelFormat ToMediaPixelFormat(V8VideoPixelFormat::Enum fmt) {
   switch (fmt) {
     case V8VideoPixelFormat::Enum::kI420:
       return media::PIXEL_FORMAT_I420;
+    case V8VideoPixelFormat::Enum::kI420P10:
+      return media::PIXEL_FORMAT_YUV420P10;
+    case V8VideoPixelFormat::Enum::kI420P12:
+      return media::PIXEL_FORMAT_YUV420P12;
     case V8VideoPixelFormat::Enum::kI420A:
       return media::PIXEL_FORMAT_I420A;
+    case V8VideoPixelFormat::Enum::kI420AP10:
+      return media::PIXEL_FORMAT_YUV420AP10;
     case V8VideoPixelFormat::Enum::kI422:
       return media::PIXEL_FORMAT_I422;
+    case V8VideoPixelFormat::Enum::kI422P10:
+      return media::PIXEL_FORMAT_YUV422P10;
+    case V8VideoPixelFormat::Enum::kI422P12:
+      return media::PIXEL_FORMAT_YUV422P12;
+    case V8VideoPixelFormat::Enum::kI422A:
+      return media::PIXEL_FORMAT_I422A;
+    case V8VideoPixelFormat::Enum::kI422AP10:
+      return media::PIXEL_FORMAT_YUV422AP10;
     case V8VideoPixelFormat::Enum::kI444:
       return media::PIXEL_FORMAT_I444;
+    case V8VideoPixelFormat::Enum::kI444P10:
+      return media::PIXEL_FORMAT_YUV444P10;
+    case V8VideoPixelFormat::Enum::kI444P12:
+      return media::PIXEL_FORMAT_YUV444P12;
+    case V8VideoPixelFormat::Enum::kI444A:
+      return media::PIXEL_FORMAT_I444A;
+    case V8VideoPixelFormat::Enum::kI444AP10:
+      return media::PIXEL_FORMAT_YUV422AP10;
     case V8VideoPixelFormat::Enum::kNV12:
       return media::PIXEL_FORMAT_NV12;
     case V8VideoPixelFormat::Enum::kRGBA:
@@ -103,11 +138,23 @@ media::VideoPixelFormat ToMediaPixelFormat(V8VideoPixelFormat::Enum fmt) {
   }
 }
 
+// TODO(crbug.com/40215121): This is very similar to the method in
+// video_encoder.cc.
 media::VideoPixelFormat ToOpaqueMediaPixelFormat(media::VideoPixelFormat fmt) {
   DCHECK(!media::IsOpaque(fmt));
   switch (fmt) {
     case media::PIXEL_FORMAT_I420A:
       return media::PIXEL_FORMAT_I420;
+    case media::PIXEL_FORMAT_YUV420AP10:
+      return media::PIXEL_FORMAT_YUV420P10;
+    case media::PIXEL_FORMAT_I422A:
+      return media::PIXEL_FORMAT_I422;
+    case media::PIXEL_FORMAT_YUV422AP10:
+      return media::PIXEL_FORMAT_YUV422P10;
+    case media::PIXEL_FORMAT_I444A:
+      return media::PIXEL_FORMAT_I444;
+    case media::PIXEL_FORMAT_YUV444AP10:
+      return media::PIXEL_FORMAT_YUV444P10;
     case media::PIXEL_FORMAT_ARGB:
       return media::PIXEL_FORMAT_XRGB;
     case media::PIXEL_FORMAT_ABGR:
@@ -123,12 +170,34 @@ std::optional<V8VideoPixelFormat> ToV8VideoPixelFormat(
   switch (fmt) {
     case media::PIXEL_FORMAT_I420:
       return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI420);
+    case media::PIXEL_FORMAT_YUV420P10:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI420P10);
+    case media::PIXEL_FORMAT_YUV420P12:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI420P12);
     case media::PIXEL_FORMAT_I420A:
       return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI420A);
+    case media::PIXEL_FORMAT_YUV420AP10:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI420AP10);
     case media::PIXEL_FORMAT_I422:
       return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI422);
+    case media::PIXEL_FORMAT_YUV422P10:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI422P10);
+    case media::PIXEL_FORMAT_YUV422P12:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI422P12);
+    case media::PIXEL_FORMAT_I422A:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI422A);
+    case media::PIXEL_FORMAT_YUV422AP10:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI422AP10);
     case media::PIXEL_FORMAT_I444:
       return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI444);
+    case media::PIXEL_FORMAT_YUV444P10:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI444P10);
+    case media::PIXEL_FORMAT_YUV444P12:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI444P12);
+    case media::PIXEL_FORMAT_I444A:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI444A);
+    case media::PIXEL_FORMAT_YUV444AP10:
+      return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kI444AP10);
     case media::PIXEL_FORMAT_NV12:
       return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kNV12);
     case media::PIXEL_FORMAT_ABGR:
@@ -140,8 +209,37 @@ std::optional<V8VideoPixelFormat> ToV8VideoPixelFormat(
     case media::PIXEL_FORMAT_XRGB:
       return V8VideoPixelFormat(V8VideoPixelFormat::Enum::kBGRX);
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return std::nullopt;
+  }
+}
+
+bool IsFormatEnabled(media::VideoPixelFormat fmt) {
+  switch (fmt) {
+    case media::PIXEL_FORMAT_I420:
+    case media::PIXEL_FORMAT_I420A:
+    case media::PIXEL_FORMAT_I422:
+    case media::PIXEL_FORMAT_I444:
+    case media::PIXEL_FORMAT_NV12:
+    case media::PIXEL_FORMAT_ABGR:
+    case media::PIXEL_FORMAT_XBGR:
+    case media::PIXEL_FORMAT_ARGB:
+    case media::PIXEL_FORMAT_XRGB:
+      return true;
+    case media::PIXEL_FORMAT_YUV420P10:
+    case media::PIXEL_FORMAT_YUV420P12:
+    case media::PIXEL_FORMAT_YUV420AP10:
+    case media::PIXEL_FORMAT_YUV422P10:
+    case media::PIXEL_FORMAT_YUV422P12:
+    case media::PIXEL_FORMAT_I422A:
+    case media::PIXEL_FORMAT_YUV422AP10:
+    case media::PIXEL_FORMAT_YUV444P10:
+    case media::PIXEL_FORMAT_YUV444P12:
+    case media::PIXEL_FORMAT_I444A:
+    case media::PIXEL_FORMAT_YUV444AP10:
+      return RuntimeEnabledFeatures::WebCodecsHBDFormatsEnabled();
+    default:
+      return false;
   }
 }
 
@@ -345,31 +443,25 @@ const base::TimeDelta CanvasResourceProviderCache::kIdleTimeout =
 
 std::optional<media::VideoPixelFormat> CopyToFormat(
     const media::VideoFrame& frame) {
-  const bool mappable = frame.IsMappable() || frame.HasGpuMemoryBuffer();
+  const bool mappable = frame.IsMappable() || frame.HasMappableGpuBuffer();
   const bool texturable = frame.HasTextures();
   if (!(mappable || texturable))
     return std::nullopt;
 
-  // The |frame|.BitDepth() restriction is to avoid treating a P016LE frame as a
-  // low-bit depth frame.
-  if (!mappable && frame.RequiresExternalSampler() && frame.BitDepth() == 8u) {
+  // Readback is not supported for high bit-depth formats.
+  if (!mappable && frame.BitDepth() != 8u) {
+    return std::nullopt;
+  }
+
+  // Externally-sampled frames read back as RGB, regardless of the format.
+  // TODO(crbug.com/40215121): Enable alpha readback for supported formats.
+  if (!mappable && frame.RequiresExternalSampler()) {
     DCHECK_EQ(frame.NumTextures(), 1u);
     return media::PIXEL_FORMAT_XRGB;
   }
 
-  switch (frame.format()) {
-    case media::PIXEL_FORMAT_I420:
-    case media::PIXEL_FORMAT_I420A:
-    case media::PIXEL_FORMAT_I422:
-    case media::PIXEL_FORMAT_I444:
-    case media::PIXEL_FORMAT_XBGR:
-    case media::PIXEL_FORMAT_ABGR:
-    case media::PIXEL_FORMAT_XRGB:
-    case media::PIXEL_FORMAT_ARGB:
-    case media::PIXEL_FORMAT_NV12:
-      break;
-    default:
-      return std::nullopt;
+  if (!IsFormatEnabled(frame.format())) {
+    return std::nullopt;
   }
 
   if (mappable) {
@@ -427,7 +519,6 @@ bool CopyTexturablePlanes(media::VideoFrame& src_frame,
     return false;
 
   auto* ri = provider->RasterInterface();
-  auto* gr_context = provider->GetGrContext();
   if (!ri)
     return false;
 
@@ -438,7 +529,7 @@ bool CopyTexturablePlanes(media::VideoFrame& src_frame,
     uint8_t* dest_pixels = dest_buffer.data() + dest_layout.Offset(i);
     if (!media::ReadbackTexturePlaneToMemorySync(
             src_frame, i, plane_src_rect, dest_pixels, dest_layout.Stride(i),
-            ri, gr_context, provider->GetCapabilities())) {
+            ri, provider->GetCapabilities())) {
       // It's possible to fail after copying some but not all planes, leaving
       // the output buffer in a corrupt state D:
       return false;
@@ -466,10 +557,15 @@ bool ParseCopyToOptions(const media::VideoFrame& frame,
   media::VideoPixelFormat copy_to_format = frame_format.value();
   if (options->hasFormat()) {
     copy_to_format = ToMediaPixelFormat(options->format().AsEnum());
+    if (!IsFormatEnabled(copy_to_format)) {
+      exception_state.ThrowTypeError("Unsupported format.");
+      return false;
+    }
   }
 
   if (options->hasColorSpace() &&
-      options->colorSpace() != V8PredefinedColorSpace::Enum::kSRGB) {
+      options->colorSpace() != V8PredefinedColorSpace::Enum::kSRGB &&
+      options->colorSpace() != V8PredefinedColorSpace::Enum::kDisplayP3) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotSupportedError,
         "This pixel conversion to this color space is not supported.");
@@ -531,10 +627,12 @@ HeapVector<Member<PlaneLayout>> ConvertLayout(
 VideoFrame::VideoFrame(scoped_refptr<media::VideoFrame> frame,
                        ExecutionContext* context,
                        std::string monitoring_source_id,
-                       sk_sp<SkImage> sk_image) {
+                       sk_sp<SkImage> sk_image,
+                       bool use_capture_timestamp) {
   DCHECK(frame);
   handle_ = base::MakeRefCounted<VideoFrameHandle>(
-      frame, std::move(sk_image), context, std::move(monitoring_source_id));
+      frame, std::move(sk_image), context, std::move(monitoring_source_id),
+      use_capture_timestamp);
   external_allocated_memory_ =
       media::VideoFrame::AllocationSize(frame->format(), frame->coded_size());
   context->GetIsolate()->AdjustAmountOfExternalAllocatedMemory(
@@ -592,7 +690,7 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
           source_frame = wmp->GetCurrentFrameThenUpdate();
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
 
     if (!source_frame) {
@@ -674,7 +772,7 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
 
   SourceImageStatus status = kInvalidSourceImageStatus;
   auto image = image_source->GetSourceImageForCanvas(
-      FlushReason::kCreateVideoFrame, &status, source_size);
+      FlushReason::kCreateVideoFrame, &status, source_size, kPremultiplyAlpha);
   if (!image || status != kNormalSourceImageStatus) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "Invalid source state");
@@ -826,6 +924,11 @@ VideoFrame* VideoFrame::Create(ScriptState* script_state,
   // Handle format; the string was validated by the V8 binding.
   auto typed_fmt = V8VideoPixelFormat::Create(init->format());
   auto media_fmt = ToMediaPixelFormat(typed_fmt->AsEnum());
+
+  if (!IsFormatEnabled(media_fmt)) {
+    exception_state.ThrowTypeError("Unsupported format.");
+    return nullptr;
+  }
 
   // Validate coded size.
   uint32_t coded_width = init->codedWidth();
@@ -1101,34 +1204,33 @@ uint32_t VideoFrame::allocationSize(VideoFrameCopyToOptions* options,
 void VideoFrame::ConvertAndCopyToRGB(scoped_refptr<media::VideoFrame> frame,
                                      const gfx::Rect& src_rect,
                                      const VideoFrameLayout& dest_layout,
-                                     base::span<uint8_t> buffer) {
+                                     base::span<uint8_t> buffer,
+                                     PredefinedColorSpace target_color_space) {
   DCHECK(media::IsRGB(dest_layout.Format()));
   SkColorType skia_pixel_format = media::SkColorTypeForPlane(
-      dest_layout.Format(), media::VideoFrame::kARGBPlane);
+      dest_layout.Format(), media::VideoFrame::Plane::kARGB);
 
   if (frame->visible_rect() != src_rect) {
     frame = media::VideoFrame::WrapVideoFrame(frame, frame->format(), src_rect,
                                               src_rect.size());
   }
 
+  auto sk_color_space = PredefinedColorSpaceToSkColorSpace(target_color_space);
   SkImageInfo dst_image_info =
       SkImageInfo::Make(src_rect.width(), src_rect.height(), skia_pixel_format,
-                        kUnpremul_SkAlphaType, SkColorSpace::MakeSRGB());
+                        kUnpremul_SkAlphaType, sk_color_space);
 
-  SkBitmap bitmap;
   const wtf_size_t plane = 0;
   DCHECK_EQ(dest_layout.NumPlanes(), 1u);
   uint8_t* dst = buffer.data() + dest_layout.Offset(plane);
-  bitmap.installPixels(dst_image_info, dst, dest_layout.Stride(plane));
-  void* last_pixel_addr =
-      bitmap.getAddr(src_rect.width() - 1, src_rect.height() - 1);
-  CHECK_LE(last_pixel_addr, buffer.data() + buffer.size());
+  auto sk_canvas = SkCanvas::MakeRasterDirect(dst_image_info, dst,
+                                              dest_layout.Stride(plane));
 
   cc::PaintFlags flags;
   flags.setBlendMode(SkBlendMode::kSrc);
   flags.setFilterQuality(cc::PaintFlags::FilterQuality::kNone);
 
-  cc::SkiaPaintCanvas canvas(bitmap);
+  cc::SkiaPaintCanvas canvas(sk_canvas.get());
   // TODO(crbug.com/1442991): Cache this instance of PaintCanvasVideoRenderer
   media::PaintCanvasVideoRenderer renderer;
   auto context_provider = GetRasterContextProvider();
@@ -1137,7 +1239,7 @@ void VideoFrame::ConvertAndCopyToRGB(scoped_refptr<media::VideoFrame> frame,
 }
 
 bool VideoFrame::CopyToAsync(
-    ScriptPromiseResolverTyped<IDLSequence<PlaneLayout>>* resolver,
+    ScriptPromiseResolver<IDLSequence<PlaneLayout>>* resolver,
     scoped_refptr<media::VideoFrame> frame,
     gfx::Rect src_rect,
     const AllowSharedBufferSource* destination,
@@ -1153,7 +1255,7 @@ bool VideoFrame::CopyToAsync(
 
   auto readback_done_handler =
       [](ArrayBufferContents contents,
-         ScriptPromiseResolverTyped<IDLSequence<PlaneLayout>>* resolver,
+         ScriptPromiseResolver<IDLSequence<PlaneLayout>>* resolver,
          VideoFrameLayout dest_layout, bool success) {
         if (success) {
           resolver->Resolve(ConvertLayout(dest_layout));
@@ -1170,14 +1272,15 @@ bool VideoFrame::CopyToAsync(
   return true;
 }
 
-ScriptPromiseTyped<IDLSequence<PlaneLayout>> VideoFrame::copyTo(
+ScriptPromise<IDLSequence<PlaneLayout>> VideoFrame::copyTo(
     ScriptState* script_state,
     const AllowSharedBufferSource* destination,
     VideoFrameCopyToOptions* options,
     ExceptionState& exception_state) {
   auto local_frame = handle_->frame();
-  auto* resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<IDLSequence<PlaneLayout>>>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLSequence<PlaneLayout>>>(
+          script_state);
   auto promise = resolver->Promise();
   if (!local_frame) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -1204,12 +1307,25 @@ ScriptPromiseTyped<IDLSequence<PlaneLayout>> VideoFrame::copyTo(
   }
 
   if (RuntimeEnabledFeatures::WebCodecsCopyToRGBEnabled() &&
-      dest_layout.Format() != local_frame->format() &&
-      media::IsRGB(dest_layout.Format())) {
-    ConvertAndCopyToRGB(local_frame, src_rect, dest_layout, buffer);
+      options->hasFormat()) {
+    if (!media::IsRGB(dest_layout.Format())) {
+      exception_state.ThrowDOMException(
+          DOMExceptionCode::kNotSupportedError,
+          "copyTo() doesn't support explicit copy to non-RGB formats. Remove "
+          "format parameter to use VideoFrame's pixel format.");
+    }
+    PredefinedColorSpace target_color_space = PredefinedColorSpace::kSRGB;
+    if (options->hasColorSpace()) {
+      if (!ValidateAndConvertColorSpace(options->colorSpace(),
+                                        target_color_space, exception_state)) {
+        return ScriptPromise<IDLSequence<PlaneLayout>>();
+      }
+    }
+    ConvertAndCopyToRGB(local_frame, src_rect, dest_layout, buffer,
+                        target_color_space);
   } else if (local_frame->IsMappable()) {
     CopyMappablePlanes(*local_frame, src_rect, dest_layout, buffer);
-  } else if (local_frame->HasGpuMemoryBuffer()) {
+  } else if (local_frame->HasMappableGpuBuffer()) {
     auto mapped_frame = media::ConvertToMemoryMappedFrame(local_frame);
     if (!mapped_frame) {
       exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -1220,9 +1336,11 @@ ScriptPromiseTyped<IDLSequence<PlaneLayout>> VideoFrame::copyTo(
   } else {
     DCHECK(local_frame->HasTextures());
 
-    if (CopyToAsync(resolver, local_frame, src_rect, destination,
-                    dest_layout)) {
-      return promise;
+    if (base::FeatureList::IsEnabled(kVideoFrameAsyncCopyTo)) {
+      if (CopyToAsync(resolver, local_frame, src_rect, destination,
+                      dest_layout)) {
+        return promise;
+      }
     }
 
     if (!CopyTexturablePlanes(*local_frame, src_rect, dest_layout, buffer)) {
@@ -1366,16 +1484,17 @@ gfx::Size VideoFrame::BitmapSourceSize() const {
   return local_frame->natural_size();
 }
 
-ScriptPromise VideoFrame::CreateImageBitmap(ScriptState* script_state,
-                                            std::optional<gfx::Rect> crop_rect,
-                                            const ImageBitmapOptions* options,
-                                            ExceptionState& exception_state) {
+ScriptPromise<ImageBitmap> VideoFrame::CreateImageBitmap(
+    ScriptState* script_state,
+    std::optional<gfx::Rect> crop_rect,
+    const ImageBitmapOptions* options,
+    ExceptionState& exception_state) {
   const auto local_handle = handle_->CloneForInternalUse();
   if (!local_handle) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
         "Cannot create ImageBitmap from closed VideoFrame.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   // SkImages are always immutable, so we don't actually need to make a copy of
@@ -1420,7 +1539,7 @@ ScriptPromise VideoFrame::CreateImageBitmap(ScriptState* script_state,
         String(("Unsupported VideoFrame: " +
                 local_handle->frame()->AsHumanReadableString())
                    .c_str()));
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   auto* image_bitmap =

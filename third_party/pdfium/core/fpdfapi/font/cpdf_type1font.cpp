@@ -7,11 +7,13 @@
 #include "core/fpdfapi/font/cpdf_type1font.h"
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <utility>
 
 #include "build/build_config.h"
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
+#include "core/fxcrt/fx_memcpy_wrappers.h"
 #include "core/fxcrt/fx_system.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxge/cfx_fontmapper.h"
@@ -71,7 +73,7 @@ CPDF_Type1Font::CPDF_Type1Font(CPDF_Document* pDocument,
                                RetainPtr<CPDF_Dictionary> pFontDict)
     : CPDF_SimpleFont(pDocument, std::move(pFontDict)) {
 #if BUILDFLAG(IS_APPLE)
-  memset(m_ExtGID, 0xff, sizeof(m_ExtGID));
+  m_ExtGID.fill(0xffff);
 #endif
 }
 
@@ -148,7 +150,7 @@ void CPDF_Type1Font::LoadGlyphMap() {
     if (UseTTCharmapMSSymbol(face)) {
       bool bGotOne = false;
       for (uint32_t charcode = 0; charcode < kInternalTableSize; charcode++) {
-        const uint8_t prefix[4] = {0x00, 0xf0, 0xf1, 0xf2};
+        constexpr std::array<uint8_t, 4> prefix = {{0x00, 0xf0, 0xf1, 0xf2}};
         for (int j = 0; j < 4; j++) {
           uint16_t unicode = prefix[j] * 256 + charcode;
           m_GlyphIndex[charcode] = face->GetCharIndex(unicode);
@@ -163,8 +165,9 @@ void CPDF_Type1Font::LoadGlyphMap() {
       }
       if (bGotOne) {
 #if BUILDFLAG(IS_APPLE)
-        if (!bCoreText)
-          memcpy(m_ExtGID, m_GlyphIndex, sizeof(m_ExtGID));
+        if (!bCoreText) {
+          m_ExtGID = m_GlyphIndex;
+        }
 #endif
         return;
       }
@@ -195,8 +198,7 @@ void CPDF_Type1Font::LoadGlyphMap() {
     }
 #if BUILDFLAG(IS_APPLE)
     if (!bCoreText) {
-      fxcrt::spancpy(pdfium::make_span(m_ExtGID),
-                     pdfium::make_span(m_GlyphIndex));
+      m_ExtGID = m_GlyphIndex;
     }
 #endif
     return;
@@ -276,8 +278,9 @@ void CPDF_Type1Font::LoadGlyphMap() {
       }
     }
 #if BUILDFLAG(IS_APPLE)
-    if (!bCoreText)
-      memcpy(m_ExtGID, m_GlyphIndex, sizeof(m_ExtGID));
+    if (!bCoreText) {
+      m_ExtGID = m_GlyphIndex;
+    }
 #endif
     return;
   }
@@ -304,8 +307,9 @@ void CPDF_Type1Font::LoadGlyphMap() {
     }
   }
 #if BUILDFLAG(IS_APPLE)
-  if (!bCoreText)
-    memcpy(m_ExtGID, m_GlyphIndex, sizeof(m_ExtGID));
+  if (!bCoreText) {
+    m_ExtGID = m_GlyphIndex;
+  }
 #endif
 }
 

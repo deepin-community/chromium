@@ -28,7 +28,6 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/account_managed_status_finder.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
-#include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
@@ -52,15 +51,13 @@ std::unique_ptr<TestingProfile> BuildTestingProfile(
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
           &test_url_loader_factory));
 
-  TestingProfile::TestingFactories factories =
+  builder.AddTestingFactories(
       IdentityTestEnvironmentProfileAdaptor::
-          GetIdentityTestEnvironmentFactories();
-  factories.emplace_back(
-      ChromeSigninClientFactory::GetInstance(),
-      base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
-                          &test_url_loader_factory));
-
-  builder.AddTestingFactories(factories);
+          GetIdentityTestEnvironmentFactoriesWithAppendedFactories(
+              {TestingProfile::TestingFactory{
+                  ChromeSigninClientFactory::GetInstance(),
+                  base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
+                                      &test_url_loader_factory)}}));
 
   return IdentityTestEnvironmentProfileAdaptor::
       CreateProfileForIdentityTestEnvironment(builder);
@@ -75,8 +72,6 @@ class BrowserSigninDetectorServiceTest : public testing::Test {
 
     identity_test_environment_profile_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile_.get());
-
-    EnableAccountCapabilitiesFetches(identity_manager());
 
     identity_test_env()->SetTestURLLoaderFactory(&test_url_loader_factory_);
   }

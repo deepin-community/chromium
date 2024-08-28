@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "headless/public/headless_web_contents.h"
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,7 +28,6 @@
 #include "content/public/test/browser_test.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
 #include "headless/public/headless_browser.h"
-#include "headless/public/headless_web_contents.h"
 #include "headless/test/headless_browser_test.h"
 #include "headless/test/headless_browser_test_utils.h"
 #include "headless/test/headless_devtooled_browsertest.h"
@@ -249,16 +250,10 @@ class HeadlessWebContentsScreenshotWindowPositionTest
   }
 };
 
-#if BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER)
-// TODO(crbug.com/1086872): Disabled due to flakiness on Mac ASAN.
-DISABLED_HEADLESS_DEVTOOLED_TEST_P(
-    HeadlessWebContentsScreenshotWindowPositionTest);
-#else
 HEADLESS_DEVTOOLED_TEST_P(HeadlessWebContentsScreenshotWindowPositionTest);
-#endif
 
 // Instantiate test case for both software and gpu compositing modes.
-INSTANTIATE_TEST_SUITE_P(HeadlessWebContentsScreenshotWindowPositionTests,
+INSTANTIATE_TEST_SUITE_P(/* no prefix */,
                          HeadlessWebContentsScreenshotWindowPositionTest,
                          ::testing::Bool());
 
@@ -603,7 +598,7 @@ class HeadlessWebContentsBeginFrameControlViewportTest
   }
 };
 
-// TODO(crbug.com/1459385): Turning this off since it's flaking regularly.
+// TODO(crbug.com/40274291): Turning this off since it's flaking regularly.
 DISABLED_HEADLESS_DEVTOOLED_TEST_F(
     HeadlessWebContentsBeginFrameControlViewportTest);
 

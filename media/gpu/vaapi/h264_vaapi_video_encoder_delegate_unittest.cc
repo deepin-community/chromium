@@ -9,7 +9,6 @@
 #include "base/logging.h"
 #include "build/build_config.h"
 #include "media/base/video_bitrate_allocation.h"
-#include "media/gpu/vaapi/va_surface.h"
 #include "media/gpu/vaapi/vaapi_common.h"
 #include "media/gpu/vaapi/vaapi_wrapper.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -30,12 +29,11 @@ VideoEncodeAccelerator::Config DefaultVEAConfig() {
   VideoEncodeAccelerator::Config vea_config(
       PIXEL_FORMAT_I420, gfx::Size(1280, 720), H264PROFILE_BASELINE,
       /* = maximum bitrate in bits per second for level 3.1 */
-      Bitrate::ConstantBitrate(14000000u));
+      Bitrate::ConstantBitrate(14000000u),
+      VideoEncodeAccelerator::kDefaultFramerate,
+      VideoEncodeAccelerator::Config::StorageType::kShmem,
+      VideoEncodeAccelerator::Config::ContentType::kCamera);
 
-  vea_config.initial_framerate = VideoEncodeAccelerator::kDefaultFramerate;
-  vea_config.storage_type = VideoEncodeAccelerator::Config::StorageType::kShmem;
-  vea_config.content_type =
-      VideoEncodeAccelerator::Config::ContentType::kCamera;
   return vea_config;
 }
 
@@ -163,10 +161,9 @@ class H264VaapiVideoEncoderDelegateTest
 
 std::unique_ptr<VaapiVideoEncoderDelegate::EncodeJob>
 H264VaapiVideoEncoderDelegateTest::CreateEncodeJob(bool keyframe) {
-  auto va_surface = base::MakeRefCounted<VASurface>(
-      next_surface_id_++, DefaultVEAConfig().input_visible_size,
-      VA_RT_FORMAT_YUV420, base::DoNothing());
-  scoped_refptr<H264Picture> picture(new VaapiH264Picture(va_surface));
+  scoped_refptr<H264Picture> picture(
+      new VaapiH264Picture(std::make_unique<VASurfaceHandle>(
+          next_surface_id_++, base::DoNothing())));
 
   constexpr VABufferID kDummyVABufferID = 12;
   auto scoped_va_buffer = ScopedVABuffer::CreateForTesting(
@@ -177,8 +174,8 @@ H264VaapiVideoEncoderDelegateTest::CreateEncodeJob(bool keyframe) {
   // metadata.
   constexpr base::TimeDelta timestamp;
   return std::make_unique<VaapiVideoEncoderDelegate::EncodeJob>(
-      keyframe, timestamp, /*end_of_picture=*/true, next_surface_id_++, picture,
-      std::move(scoped_va_buffer));
+      keyframe, timestamp, /*spatial_index=*/0u, /*end_of_picture=*/true,
+      next_surface_id_++, picture, std::move(scoped_va_buffer));
 }
 
 void H264VaapiVideoEncoderDelegateTest::SetUp() {
@@ -200,7 +197,7 @@ bool H264VaapiVideoEncoderDelegateTest::InitializeEncoder(
   sl.width = vea_config.input_visible_size.width();
   sl.height = vea_config.input_visible_size.height();
   sl.bitrate_bps = vea_config.bitrate.target_bps();
-  sl.framerate = vea_config.initial_framerate.value_or(30);
+  sl.framerate = vea_config.framerate;
   sl.max_qp = 30;
   sl.num_of_temporal_layers = num_temporal_layers;
   return encoder_->Initialize(vea_config, kDefaultVEADelegateConfig);

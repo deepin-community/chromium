@@ -4,8 +4,9 @@
 
 #include "chrome/browser/ui/views/file_system_access/file_system_access_usage_bubble_view.h"
 
+#include <vector>
+
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/i18n/message_formatter.h"
 #include "base/i18n/unicodestring.h"
 #include "base/memory/raw_ptr.h"
@@ -203,6 +204,11 @@ class CollapsibleListView : public views::View {
     table_view_parent_->SetVisible(false);
   }
 
+  void ClearModel() {
+    static_cast<views::TableView*>(table_view_parent_->contents())
+        ->SetModel(nullptr);
+  }
+
   // views::View
   void OnThemeChanged() override {
     views::View::OnThemeChanged();
@@ -309,12 +315,12 @@ void FileSystemAccessUsageBubbleView::ShowBubble(
   // the readable lists.
   std::set<base::FilePath> writable_directories(
       usage.writable_directories.begin(), usage.writable_directories.end());
-  base::EraseIf(usage.readable_directories, [&](const base::FilePath& path) {
+  std::erase_if(usage.readable_directories, [&](const base::FilePath& path) {
     return base::Contains(writable_directories, path);
   });
   std::set<base::FilePath> writable_files(usage.writable_files.begin(),
                                           usage.writable_files.end());
-  base::EraseIf(usage.readable_files, [&](const base::FilePath& path) {
+  std::erase_if(usage.readable_files, [&](const base::FilePath& path) {
     return base::Contains(writable_files, path);
   });
 
@@ -346,7 +352,9 @@ FileSystemAccessUsageBubbleView::FileSystemAccessUsageBubbleView(
     content::WebContents* web_contents,
     const url::Origin& origin,
     Usage usage)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents),
+    : LocationBarBubbleDelegateView(anchor_view,
+                                    web_contents,
+                                    /*autosize=*/true),
       origin_(origin),
       usage_(std::move(usage)),
       readable_paths_model_(std::move(usage_.readable_files),
@@ -364,7 +372,16 @@ FileSystemAccessUsageBubbleView::FileSystemAccessUsageBubbleView(
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
 }
 
-FileSystemAccessUsageBubbleView::~FileSystemAccessUsageBubbleView() = default;
+FileSystemAccessUsageBubbleView::~FileSystemAccessUsageBubbleView() {
+  if (readable_collapsible_list_view_) {
+    static_cast<CollapsibleListView*>(readable_collapsible_list_view_)
+        ->ClearModel();
+  }
+  if (writable_collapsible_list_view_) {
+    static_cast<CollapsibleListView*>(writable_collapsible_list_view_)
+        ->ClearModel();
+  }
+}
 
 std::u16string FileSystemAccessUsageBubbleView::GetAccessibleWindowTitle()
     const {
@@ -425,7 +442,7 @@ void FileSystemAccessUsageBubbleView::Init() {
         label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
         AddChildView(std::move(label));
       }
-      AddChildView(
+      writable_collapsible_list_view_ = AddChildView(
           std::make_unique<CollapsibleListView>(&writable_paths_model_));
     }
 
@@ -439,7 +456,7 @@ void FileSystemAccessUsageBubbleView::Init() {
         label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
         AddChildView(std::move(label));
       }
-      AddChildView(
+      readable_collapsible_list_view_ = AddChildView(
           std::make_unique<CollapsibleListView>(&readable_paths_model_));
     }
   }
@@ -473,12 +490,6 @@ void FileSystemAccessUsageBubbleView::CloseBubble() {
   // this. Additionally web_contents() may have been destroyed.
   bubble_ = nullptr;
   LocationBarBubbleDelegateView::CloseBubble();
-}
-
-void FileSystemAccessUsageBubbleView::ChildPreferredSizeChanged(
-    views::View* child) {
-  LocationBarBubbleDelegateView::ChildPreferredSizeChanged(child);
-  SizeToContents();
 }
 
 BEGIN_METADATA(FileSystemAccessUsageBubbleView)

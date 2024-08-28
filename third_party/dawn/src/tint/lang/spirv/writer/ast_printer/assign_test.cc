@@ -26,7 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/spirv/writer/ast_printer/helper_test.h"
 #include "src/tint/lang/spirv/writer/common/spv_dump_test.h"
 
@@ -37,6 +36,7 @@ using namespace tint::core::fluent_types;     // NOLINT
 using namespace tint::core::number_suffixes;  // NOLINT
 
 using SpirvASTPrinterTest = TestHelper;
+using SpirvASTPrinterDeathTest = TestHelper;
 
 TEST_F(SpirvASTPrinterTest, Assign_Var) {
     auto* v = GlobalVar("var", ty.f32(), core::AddressSpace::kPrivate);
@@ -66,8 +66,8 @@ TEST_F(SpirvASTPrinterTest, Assign_Var) {
 )");
 }
 
-TEST_F(SpirvASTPrinterTest, Assign_Var_OutsideFunction_IsError) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(SpirvASTPrinterDeathTest, Assign_Var_OutsideFunction_IsError) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder pb;
 

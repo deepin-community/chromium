@@ -22,7 +22,7 @@ class ChromeWebdriverTestCase(BaseCrossbenchTestCase):
     with self.assertRaises(argparse.ArgumentTypeError) as cm:
       ChromeWebDriverForTesting(
           label="browser-label",
-          path=mock_browser.MockChromeStable.APP_PATH,
+          path=mock_browser.MockChromeStable.mock_app_path(),
           js_flags=[],
           flags=["--disable-field-trial-config", "--enable-field-trial-config"],
           platform=self.platform)
@@ -33,17 +33,28 @@ class ChromeWebdriverTestCase(BaseCrossbenchTestCase):
   def test_auto_disabling_field_trials(self):
     browser = ChromeWebDriverForTesting(
         label="browser-label",
-        path=mock_browser.MockChromeStable.APP_PATH,
+        path=mock_browser.MockChromeStable.mock_app_path(),
         platform=self.platform)
     self.assertIn("--disable-field-trial-config", browser.flags)
 
     browser_field_trial = ChromeWebDriverForTesting(
         label="browser-label",
-        path=mock_browser.MockChromeStable.APP_PATH,
+        path=mock_browser.MockChromeStable.mock_app_path(),
         flags=["--force-fieldtrials"],
         platform=self.platform)
     self.assertIn("--force-fieldtrials", browser_field_trial.flags)
     self.assertNotIn("--disable-field-trial-config", browser_field_trial.flags)
+
+  def test_auto_disabling_field_trials_all(self):
+    for field_trial_flag in ChromeWebDriver.FIELD_TRIAL_FLAGS:
+      browser = ChromeWebDriverForTesting(
+          label="browser-label",
+          path=mock_browser.MockChromeStable.mock_app_path(),
+          flags=[field_trial_flag],
+          platform=self.platform)
+      flags = browser.flags
+      for no_experiment_flag in ChromeWebDriver.NO_EXPERIMENTS_FLAGS:
+        self.assertNotIn(no_experiment_flag, flags)
 
 
 if __name__ == "__main__":

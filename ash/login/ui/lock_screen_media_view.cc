@@ -143,7 +143,8 @@ LockScreenMediaView::~LockScreenMediaView() {
 ///////////////////////////////////////////////////////////////////////////////
 // views::View implementations:
 
-gfx::Size LockScreenMediaView::CalculatePreferredSize() const {
+gfx::Size LockScreenMediaView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return global_media_controls::kCrOSMediaItemUpdatedUISize;
 }
 
@@ -268,6 +269,17 @@ void LockScreenMediaView::MediaControllerImageChanged(
 
   CHECK_EQ(media_session::mojom::MediaSessionImageType::kArtwork, type);
   view_->UpdateWithMediaArtwork(gfx::ImageSkia::CreateFrom1xBitmap(bitmap));
+}
+
+void LockScreenMediaView::MediaControllerChapterImageChanged(
+    int chapter_index,
+    const SkBitmap& bitmap) {
+  if (switch_media_delay_timer_->IsRunning()) {
+    return;
+  }
+
+  view_->UpdateWithChapterArtwork(chapter_index,
+                                  gfx::ImageSkia::CreateFrom1xBitmap(bitmap));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

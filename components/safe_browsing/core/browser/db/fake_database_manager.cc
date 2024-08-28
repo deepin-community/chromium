@@ -33,9 +33,10 @@ void FakeSafeBrowsingDatabaseManager::ClearDangerousUrl(
   dangerous_urls_.erase(dangerous_url);
 }
 
-bool FakeSafeBrowsingDatabaseManager::CanCheckRequestDestination(
-    network::mojom::RequestDestination request_destination) const {
-  return true;
+void FakeSafeBrowsingDatabaseManager::SetHighConfidenceAllowlistMatchResult(
+    const GURL& url,
+    bool match_allowlist) {
+  high_confidence_allowlist_match_urls_[url] = match_allowlist;
 }
 
 bool FakeSafeBrowsingDatabaseManager::CheckBrowseUrl(
@@ -48,8 +49,9 @@ bool FakeSafeBrowsingDatabaseManager::CheckBrowseUrl(
     return true;
 
   const SBThreatType result_threat_type = it->second;
-  if (result_threat_type == SB_THREAT_TYPE_SAFE)
+  if (result_threat_type == SBThreatType::SB_THREAT_TYPE_SAFE) {
     return true;
+  }
 
   ThreatPatternType pattern_type = ThreatPatternType::NONE;
   const auto it1 = dangerous_patterns_.find(url);
@@ -75,8 +77,9 @@ bool FakeSafeBrowsingDatabaseManager::CheckDownloadUrl(
       continue;
 
     const SBThreatType result_threat_type = it->second;
-    if (result_threat_type == SB_THREAT_TYPE_SAFE)
+    if (result_threat_type == SBThreatType::SB_THREAT_TYPE_SAFE) {
       continue;
+    }
 
     sb_task_runner()->PostTask(
         FROM_HERE,
@@ -92,6 +95,21 @@ bool FakeSafeBrowsingDatabaseManager::CheckExtensionIDs(
     const std::set<std::string>& extension_ids,
     Client* client) {
   return true;
+}
+
+std::optional<
+    SafeBrowsingDatabaseManager::HighConfidenceAllowlistCheckLoggingDetails>
+FakeSafeBrowsingDatabaseManager::CheckUrlForHighConfidenceAllowlist(
+    const GURL& url,
+    base::OnceCallback<void(bool)> callback) {
+  const auto it = high_confidence_allowlist_match_urls_.find(url);
+  if (it == high_confidence_allowlist_match_urls_.end()) {
+    std::move(callback).Run(false);
+    return std::nullopt;
+  }
+  bool matched_allowlist = it->second;
+  std::move(callback).Run(matched_allowlist);
+  return std::nullopt;
 }
 
 bool FakeSafeBrowsingDatabaseManager::CheckUrlForSubresourceFilter(

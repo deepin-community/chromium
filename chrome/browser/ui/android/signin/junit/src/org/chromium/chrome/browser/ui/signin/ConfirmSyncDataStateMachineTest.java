@@ -16,7 +16,6 @@ import static org.mockito.Mockito.when;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
@@ -27,7 +26,6 @@ import org.mockito.quality.Strictness;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
@@ -41,8 +39,6 @@ public class ConfirmSyncDataStateMachineTest {
     @Rule
     public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    @Rule public final TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
-
     @Mock private ConfirmSyncDataStateMachineDelegate mDelegateMock;
 
     @Mock private ConfirmSyncDataStateMachine.Listener mStateMachineListenerMock;
@@ -52,6 +48,9 @@ public class ConfirmSyncDataStateMachineTest {
     @Mock private Profile mProfile;
 
     @Captor private ArgumentCaptor<Callback<Boolean>> mCallbackArgument;
+
+    @Captor
+    private ArgumentCaptor<ConfirmManagedSyncDataDialogCoordinator.Listener> mListenerArgument;
 
     private final String mOldAccountName = "old.account.test@testdomain.com";
 
@@ -129,7 +128,7 @@ public class ConfirmSyncDataStateMachineTest {
                 new ConfirmSyncDataStateMachine(
                         mProfile, mDelegateMock, null, mNewAccountName, mStateMachineListenerMock);
         verify(mDelegateMock).dismissAllDialogs();
-        verify(mStateMachineListenerMock).onConfirm(false);
+        verify(mStateMachineListenerMock).onConfirm(false, false);
     }
 
     @Test
@@ -140,9 +139,9 @@ public class ConfirmSyncDataStateMachineTest {
                 new ConfirmSyncDataStateMachine(
                         mProfile, mDelegateMock, null, mNewAccountName, mStateMachineListenerMock);
         verify(mDelegateMock)
-                .showSignInToManagedAccountDialog(
-                        any(ConfirmManagedSyncDataDialogCoordinator.Listener.class),
-                        eq(mNewAccountName));
+                .showSignInToManagedAccountDialog(mListenerArgument.capture(), eq(mNewAccountName));
+        mListenerArgument.getValue().onConfirm();
+        verify(mStateMachineListenerMock).onConfirm(false, true);
     }
 
     @Test
@@ -161,8 +160,9 @@ public class ConfirmSyncDataStateMachineTest {
         Callback<Boolean> callback = mCallbackArgument.getValue();
         callback.onResult(true);
         verify(mDelegateMock)
-                .showSignInToManagedAccountDialog(
-                        any(ConfirmManagedSyncDataDialogCoordinator.Listener.class), eq(domain));
+                .showSignInToManagedAccountDialog(mListenerArgument.capture(), eq(domain));
+        mListenerArgument.getValue().onConfirm();
+        verify(mStateMachineListenerMock).onConfirm(false, true);
     }
 
     @Test

@@ -26,7 +26,6 @@ class AccountId;
 
 namespace ash {
 
-class KioskLaunchController;
 class LoginFeedback;
 class OobeMetricsHelper;
 class OobeCrosEventsMetrics;
@@ -50,7 +49,6 @@ class LoginDisplayHostCommon : public LoginDisplayHost,
   bool IsFinalizing() final;
   void Finalize(base::OnceClosure completion_callback) final;
   void FinalizeImmediately() final;
-  KioskLaunchController* GetKioskLaunchController() final;
   void StartUserAdding(base::OnceClosure completion_callback) final;
   void StartSignInScreen() final;
   void StartKiosk(const KioskAppId& kiosk_app_id, bool is_auto_launch) final;
@@ -64,8 +62,6 @@ class LoginDisplayHostCommon : public LoginDisplayHost,
       const AccountId& account_id,
       const std::optional<user_manager::UserType>& user_type) final;
   void CancelPasswordChangedFlow() final;
-  void MigrateUserData(const std::string& old_password) final;
-  void ResyncUserData() final;
   void AddWizardCreatedObserverForTests(
       base::RepeatingClosure on_created) final;
   base::WeakPtr<quick_start::TargetDeviceBootstrapController>
@@ -122,9 +118,6 @@ class LoginDisplayHostCommon : public LoginDisplayHost,
 
   // Triggers |on_wizard_controller_created_for_tests_| callback.
   void NotifyWizardCreated();
-
-  // Kiosk launch controller.
-  std::unique_ptr<KioskLaunchController> kiosk_launch_controller_;
 
  private:
   void Cleanup();

@@ -12,6 +12,7 @@
 
 #include <Availability.h>
 #include <TargetConditionals.h>
+#include <stdio.h>
 
 #include "common/MemoryBuffer.h"
 #include "common/string_utils.h"
@@ -788,7 +789,8 @@ static MTLLanguageVersion GetUserSetOrHighestMSLVersion(const MTLLanguageVersion
             case 1:
                 switch (minor)
                 {
-#if (defined(__IPHONE_9_0) && __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_9_0) && \
+#if (defined(__IPHONE_9_0) && __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_9_0) &&   \
+    (!defined(__IPHONE_16_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_16_0) && \
     (TARGET_OS_IOS || TARGET_OS_TV) && !TARGET_OS_MACCATALYST
                     case 0:
                         return MTLLanguageVersion1_0;
@@ -848,7 +850,7 @@ static MTLLanguageVersion GetUserSetOrHighestMSLVersion(const MTLLanguageVersion
 }
 
 AutoObjCPtr<id<MTLLibrary>> CreateShaderLibrary(
-    const mtl::ContextDevice &metalDevice,
+    id<MTLDevice> metalDevice,
     const std::string &source,
     const std::map<std::string, std::string> &substitutionMacros,
     bool disableFastMath,
@@ -859,7 +861,7 @@ AutoObjCPtr<id<MTLLibrary>> CreateShaderLibrary(
                                disableFastMath, usesInvariance, error);
 }
 
-AutoObjCPtr<id<MTLLibrary>> CreateShaderLibrary(const mtl::ContextDevice &metalDevice,
+AutoObjCPtr<id<MTLLibrary>> CreateShaderLibrary(id<MTLDevice> metalDevice,
                                                 const std::string &source,
                                                 AutoObjCPtr<NSError *> *error)
 {
@@ -868,7 +870,7 @@ AutoObjCPtr<id<MTLLibrary>> CreateShaderLibrary(const mtl::ContextDevice &metalD
 }
 
 AutoObjCPtr<id<MTLLibrary>> CreateShaderLibrary(
-    const mtl::ContextDevice &metalDevice,
+    id<MTLDevice> metalDevice,
     const char *source,
     size_t sourceLen,
     const std::map<std::string, std::string> &substitutionMacros,
@@ -928,7 +930,7 @@ AutoObjCPtr<id<MTLLibrary>> CreateShaderLibrary(
         auto *platform   = ANGLEPlatformCurrent();
         double startTime = platform->currentTime(platform);
 
-        auto library = metalDevice.newLibraryWithSource(nsSource, options, &nsError);
+        auto library = [metalDevice newLibraryWithSource:nsSource options:options error:&nsError];
         if (angle::GetEnvironmentVar(kANGLEPrintMSLEnv)[0] == '1')
         {
             NSLog(@"%@\n", nsSource);
@@ -967,8 +969,10 @@ std::string CompileShaderLibraryToFile(const std::string &source,
     }
     // Save the source.
     {
-        angle::SaveFileHelper saveFileHelper(metalFileName.value());
-        saveFileHelper << source;
+        FILE *fp = fopen(metalFileName.value().c_str(), "wb");
+        ASSERT(fp);
+        fwrite(source.c_str(), sizeof(char), metalFileName.value().length(), fp);
+        fclose(fp);
     }
 
     // metal -> air
@@ -1515,7 +1519,8 @@ bool SupportsAppleGPUFamily(id<MTLDevice> device, uint8_t appleFamily)
     }   // Metal 2.2
 #endif  // __IPHONE_OS_VERSION_MAX_ALLOWED
 
-#if (!TARGET_OS_IOS && !TARGET_OS_TV) || TARGET_OS_MACCATALYST
+#if (!TARGET_OS_IOS && !TARGET_OS_TV) || TARGET_OS_MACCATALYST || \
+    (TARGET_OS_IOS && defined(__IPHONE_16_0) && __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_16_0)
     return false;
 #else
     // If device doesn't support [MTLDevice supportsFamily:], then use

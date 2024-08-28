@@ -47,7 +47,6 @@ class FormFieldParserTest
     ParsingContext context(GeoIpCountryCode(""), LanguageCode(""),
                            GetActivePatternSource().value());
     FormFieldParser::ParseSingleFieldForms(context, fields_,
-                                           /*is_form_tag=*/true,
                                            field_candidates_map_);
     return field_candidates_map_.size();
   }
@@ -126,7 +125,7 @@ TEST_P(MatchTest, Match) {
   const auto& [label, positive_patterns, negative_patterns] = GetParam();
   AutofillField field;
   SCOPED_TRACE("label = " + base::UTF16ToUTF8(label));
-  field.label = label;
+  field.set_label(label);
   field.set_parseable_label(label);
   for (const auto& pattern : positive_patterns) {
     ParsingContext context(GeoIpCountryCode(""), LanguageCode(""),
@@ -287,7 +286,7 @@ TEST_P(ParseInAnyOrderTest, ParseInAnyOrder) {
   // is a string.
   for (size_t i = 0; i < n; i++) {
     FormFieldData form_field_data;
-    form_field_data.max_length = i;
+    form_field_data.set_max_length(i);
     fields.push_back(std::make_unique<AutofillField>(form_field_data));
   }
 
@@ -296,7 +295,7 @@ TEST_P(ParseInAnyOrderTest, ParseInAnyOrder) {
   // `testcase.field_matches_parser`.
   auto Matches = [](AutofillScanner* scanner,
                     const std::vector<bool>& matching_ids) -> bool {
-    return matching_ids[scanner->Cursor()->max_length];
+    return matching_ids[scanner->Cursor()->max_length()];
   };
 
   // Construct n parsers from `testcase.field_matches_parser`.
@@ -354,15 +353,11 @@ TEST_P(FormFieldParserTest, ParseFormRequires3DistinctFieldTypes) {
 }
 
 TEST_P(FormFieldParserTest, ParseStandaloneZipDisabledForUS) {
-  base::test::ScopedFeatureList enabled{
-      features::kAutofillEnableZipOnlyAddressForms};
   AddTextFormFieldData("zip", "ZIP", ADDRESS_HOME_ZIP);
   EXPECT_EQ(0, ParseFormFields(GeoIpCountryCode("US")));
 }
 
 TEST_P(FormFieldParserTest, ParseStandaloneZipEnabledForBR) {
-  base::test::ScopedFeatureList enabled{
-      features::kAutofillEnableZipOnlyAddressForms};
   AddTextFormFieldData("cep", "CEP", ADDRESS_HOME_ZIP);
   EXPECT_EQ(1, ParseFormFields(GeoIpCountryCode("BR")));
   TestClassificationExpectations();

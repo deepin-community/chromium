@@ -65,7 +65,8 @@ class LayoutTreeBuilder {
                     const ComputedStyle* style)
       : node_(&node), context_(context), style_(style) {
     DCHECK(!node.GetLayoutObject());
-    DCHECK(node.GetDocument().InStyleRecalc());
+    DCHECK(node.GetDocument().InStyleRecalc() ||
+           node.GetDocument().GetStyleEngine().InScrollMarkersAttachment());
     DCHECK(node.InActiveDocument());
     DCHECK(context.parent);
   }
@@ -86,6 +87,10 @@ class LayoutTreeBuilder {
       return next;
     auto* const parent = next->Parent();
     if (!IsAnonymousInline(parent))
+      return next;
+    // Should return a normal result for display:ruby though it can be
+    // an anonymous inline.
+    if (UNLIKELY(parent->IsInlineRuby()))
       return next;
     if (!LIKELY(parent->IsLayoutTextCombine())) {
       return parent;

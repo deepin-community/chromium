@@ -45,7 +45,7 @@ class ControllerDelegate : public ModelTypeControllerDelegate {
   void OnSyncStarting(const DataTypeActivationRequest& request,
                       StartCallback callback) override {
     if (!bridge_) {
-      // TODO(crbug.com/1394815): Consider running `callback` here to avoid
+      // TODO(crbug.com/40248786): Consider running `callback` here to avoid
       // blocking the Sync machinery.
       return;
     }
@@ -59,9 +59,17 @@ class ControllerDelegate : public ModelTypeControllerDelegate {
     GetBridgeDelegate()->OnSyncStopping(metadata_fate);
   }
 
+  void HasUnsyncedData(base::OnceCallback<void(bool)> callback) override {
+    if (!bridge_) {
+      std::move(callback).Run(false);
+      return;
+    }
+    GetBridgeDelegate()->HasUnsyncedData(std::move(callback));
+  }
+
   void GetAllNodesForDebugging(AllNodesCallback callback) override {
     if (!bridge_) {
-      // TODO(crbug.com/1394815): Consider running `callback` here.
+      // TODO(crbug.com/40248786): Consider running `callback` here.
       return;
     }
     GetBridgeDelegate()->GetAllNodesForDebugging(std::move(callback));
@@ -71,7 +79,7 @@ class ControllerDelegate : public ModelTypeControllerDelegate {
       base::OnceCallback<void(const TypeEntitiesCount&)> callback)
       const override {
     if (!bridge_) {
-      // TODO(crbug.com/1394815): Consider running `callback` here.
+      // TODO(crbug.com/40248786): Consider running `callback` here.
       return;
     }
     GetBridgeDelegate()->GetTypeEntitiesCountForDebugging(std::move(callback));

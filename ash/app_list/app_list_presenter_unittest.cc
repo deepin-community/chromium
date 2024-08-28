@@ -139,15 +139,17 @@ void EnableTabletMode(bool enable) {
 }
 
 std::unique_ptr<TestSearchResult> CreateOmniboxSuggestionResult(
-    const std::string& result_id) {
+    const std::string& result_id,
+    bool support_removal) {
   auto suggestion_result = std::make_unique<TestSearchResult>();
   suggestion_result->set_result_id(result_id);
   suggestion_result->set_best_match(true);
   suggestion_result->set_display_type(SearchResultDisplayType::kList);
-  SearchResultActions actions;
-  actions.emplace_back(SearchResultActionType::kRemove, u"Remove");
-  suggestion_result->SetActions(actions);
-
+  if (support_removal) {
+    SearchResultActions actions;
+    actions.emplace_back(SearchResultActionType::kRemove, u"Remove");
+    suggestion_result->SetActions(actions);
+  }
   // Give this item a name so that the accessibility paint checks pass.
   // (Focusable items should have accessible names.)
   suggestion_result->SetAccessibleName(base::UTF8ToUTF16(result_id));
@@ -303,7 +305,7 @@ class AppListPresenterTest : public AshTestBase,
   void LongPressAt(const gfx::Point& point) {
     ui::GestureEvent long_press(
         point.x(), point.y(), 0, base::TimeTicks::Now(),
-        ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
+        ui::GestureEventDetails(ui::EventType::kGestureLongPress));
     GetEventGenerator()->Dispatch(&long_press);
   }
 };
@@ -435,7 +437,7 @@ class AppListBubbleAndTabletTestBase : public AshTestBase {
     views::WidgetDelegate* widget_delegate = widget->widget_delegate();
     views::test::WidgetDestroyedWaiter widget_waiter(widget);
     GestureTapOn(static_cast<RemoveQueryConfirmationDialog*>(widget_delegate)
-                     ->cancel_button_for_test());
+                     ->GetCancelButtonForTesting());
     widget_waiter.Wait();
   }
 
@@ -444,7 +446,7 @@ class AppListBubbleAndTabletTestBase : public AshTestBase {
     views::WidgetDelegate* widget_delegate = widget->widget_delegate();
     views::test::WidgetDestroyedWaiter widget_waiter(widget);
     GestureTapOn(static_cast<RemoveQueryConfirmationDialog*>(widget_delegate)
-                     ->accept_button_for_test());
+                     ->GetAcceptButtonForTesting());
     widget_waiter.Wait();
   }
 
@@ -485,7 +487,7 @@ class AppListBubbleAndTabletTestBase : public AshTestBase {
   void LongPressAt(const gfx::Point& point) {
     ui::GestureEvent long_press(
         point.x(), point.y(), 0, base::TimeTicks::Now(),
-        ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
+        ui::GestureEventDetails(ui::EventType::kGestureLongPress));
     GetEventGenerator()->Dispatch(&long_press);
   }
 
@@ -1711,17 +1713,17 @@ TEST_P(AppListBubbleAndTabletTest, AppListEventTargeterForAssistantScrolling) {
 
   // Scroll events are blocked for that window.
   constexpr int offset = 10;
-  ui::ScrollEvent scroll_down(ui::ET_SCROLL, gfx::Point(),
+  ui::ScrollEvent scroll_down(ui::EventType::kScroll, gfx::Point(),
                               base::TimeTicks::Now(), ui::EF_NONE, 0, offset, 0,
                               offset, /*finger_count=*/2);
   EXPECT_FALSE(targeter->SubtreeShouldBeExploredForEvent(child, scroll_down));
 
   // Click events are not blocked.
-  ui::MouseEvent press(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
+  ui::MouseEvent press(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
                        base::TimeTicks::Now(), ui::EF_NONE,
                        ui::EF_LEFT_MOUSE_BUTTON);
-  ui::MouseEvent release(ui::ET_MOUSE_RELEASED, gfx::Point(), gfx::Point(),
-                         base::TimeTicks::Now(), ui::EF_NONE,
+  ui::MouseEvent release(ui::EventType::kMouseReleased, gfx::Point(),
+                         gfx::Point(), base::TimeTicks::Now(), ui::EF_NONE,
                          ui::EF_LEFT_MOUSE_BUTTON);
   EXPECT_TRUE(targeter->SubtreeShouldBeExploredForEvent(child, press));
   EXPECT_TRUE(targeter->SubtreeShouldBeExploredForEvent(child, press));
@@ -1907,11 +1909,11 @@ TEST_P(AppListBubbleAndTabletTest, RemoveSuggestionShowsConfirmDialog) {
 
   // Add suggestion results - the result that will be tested is in
   // the second place.
-  GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult("Another suggestion"));
+  GetSearchModel()->results()->Add(CreateOmniboxSuggestionResult(
+      "Another suggestion", /*support_removal=*/true));
   const std::string kTestResultId = "Test suggestion";
   GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult(kTestResultId));
+      CreateOmniboxSuggestionResult(kTestResultId, /*support_removal=*/true));
   // The result list is updated asynchronously.
   base::RunLoop().RunUntilIdle();
 
@@ -2014,11 +2016,11 @@ TEST_P(AppListBubbleAndTabletTest, RemoveSuggestionUsingLongTap) {
 
   // Add suggestion results - the result that will be tested is in
   // the second place.
-  GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult("Another suggestion"));
+  GetSearchModel()->results()->Add(CreateOmniboxSuggestionResult(
+      "Another suggestion", /*support_removal=*/true));
   const std::string kTestResultId = "Test suggestion";
   GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult(kTestResultId));
+      CreateOmniboxSuggestionResult(kTestResultId, /*support_removal=*/true));
   GetAppListTestHelper()->WaitUntilIdle();
 
   SearchResultBaseView* result_view =
@@ -2094,6 +2096,111 @@ TEST_P(AppListBubbleAndTabletTest, RemoveSuggestionUsingLongTap) {
   EXPECT_EQ(expected_actions, invoked_actions);
 }
 
+TEST_P(AppListBubbleAndTabletTest, RemoveSuggestionUsingKeyboard) {
+  EnableTabletMode(tablet_mode_param());
+  EnsureLauncherShown();
+
+  // Show search page.
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->PressKey(ui::VKEY_A, 0);
+  EXPECT_TRUE(AppListSearchResultPageVisible());
+
+  // Add suggestion results - the result that will be tested is in
+  // the second place.
+  GetSearchModel()->results()->Add(CreateOmniboxSuggestionResult(
+      "Another suggestion", /*support_removal=*/true));
+  const std::string kTestResultId = "Test suggestion";
+  GetSearchModel()->results()->Add(
+      CreateOmniboxSuggestionResult(kTestResultId, /*support_removal=*/true));
+  GetAppListTestHelper()->WaitUntilIdle();
+
+  // Select a removable suggestion.
+  generator->PressKey(ui::VKEY_DOWN, 0);
+
+  SearchResultBaseView* result_view =
+      GetDefaultSearchResultListView()->GetResultViewAt(1);
+  ASSERT_TRUE(result_view);
+  ASSERT_TRUE(result_view->result());
+  ASSERT_EQ(kTestResultId, result_view->result()->id());
+  ASSERT_TRUE(result_view->selected());
+  ASSERT_TRUE(result_view->actions_view());
+  EXPECT_EQ(1u, result_view->actions_view()->children().size());
+
+  // Press shortcut to delete the result.
+  generator->PressKey(ui::VKEY_BROWSER_BACK, ui::EF_ALT_DOWN);
+
+  EXPECT_TRUE(GetAppListTestHelper()
+                  ->app_list_client()
+                  ->GetAndResetInvokedResultActions()
+                  .empty());
+  ASSERT_TRUE(GetSearchResultPageDialog());
+
+  // Expect the removal confirmation dialog - accept it.
+  ASSERT_TRUE(GetSearchResultPageDialog());
+  AcceptSearchResultPageDialog();
+
+  // The app list should remain showing search results, the dialog should be
+  // closed, and result removal action should be invoked.
+  EXPECT_TRUE(AppListSearchResultPageVisible());
+  EXPECT_FALSE(GetSearchResultPageDialog());
+  EXPECT_FALSE(result_view->selected());
+
+  std::vector<TestAppListClient::SearchResultActionId> expected_actions = {
+      {kTestResultId, SearchResultActionType::kRemove}};
+
+  std::vector<TestAppListClient::SearchResultActionId> invoked_actions =
+      GetAppListTestHelper()
+          ->app_list_client()
+          ->GetAndResetInvokedResultActions();
+  EXPECT_EQ(expected_actions, invoked_actions);
+}
+
+TEST_P(AppListBubbleAndTabletTest,
+       SuggestionRemoveShortcutOnViewWithNoRemovalAction) {
+  EnableTabletMode(tablet_mode_param());
+  EnsureLauncherShown();
+
+  // Show search page.
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->PressKey(ui::VKEY_A, 0);
+  EXPECT_TRUE(AppListSearchResultPageVisible());
+
+  // Add suggestion results.
+  GetSearchModel()->results()->Add(CreateOmniboxSuggestionResult(
+      "Another suggestion", /*support_removal=*/false));
+  const std::string kTestResultId = "Test suggestion";
+  GetSearchModel()->results()->Add(
+      CreateOmniboxSuggestionResult(kTestResultId, /*support_removal=*/false));
+  GetAppListTestHelper()->WaitUntilIdle();
+
+  generator->PressKey(ui::VKEY_DOWN, 0);
+
+  SearchResultBaseView* result_view =
+      GetDefaultSearchResultListView()->GetResultViewAt(1);
+  ASSERT_TRUE(result_view);
+  ASSERT_TRUE(result_view->result());
+  ASSERT_EQ(kTestResultId, result_view->result()->id());
+  ASSERT_TRUE(result_view->selected());
+
+  // Press shortcut to delete the result.
+  generator->PressKey(ui::VKEY_BROWSER_BACK, ui::EF_ALT_DOWN);
+
+  EXPECT_TRUE(GetAppListTestHelper()
+                  ->app_list_client()
+                  ->GetAndResetInvokedResultActions()
+                  .empty());
+  EXPECT_FALSE(GetSearchResultPageDialog());
+
+  EXPECT_TRUE(AppListSearchResultPageVisible());
+  EXPECT_EQ(u"a", GetSearchBoxView()->search_box()->GetText());
+
+  result_view = GetDefaultSearchResultListView()->GetResultViewAt(1);
+  ASSERT_TRUE(result_view);
+  ASSERT_TRUE(result_view->result());
+  EXPECT_EQ(kTestResultId, result_view->result()->id());
+  EXPECT_TRUE(result_view->selected());
+}
+
 TEST_P(AppListBubbleAndTabletTest,
        TransitionToAppsContainerClosesRemoveSuggestionDialog) {
   EnableTabletMode(tablet_mode_param());
@@ -2107,7 +2214,7 @@ TEST_P(AppListBubbleAndTabletTest,
   // Add a zero state suggestion result.
   const std::string kTestResultId = "Test suggestion";
   GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult(kTestResultId));
+      CreateOmniboxSuggestionResult(kTestResultId, /*support_removal=*/true));
   GetAppListTestHelper()->WaitUntilIdle();
 
   SearchResultBaseView* result_view =
@@ -2158,7 +2265,7 @@ TEST_P(AppListBubbleAndTabletTest,
   // Add a suggestion result.
   const std::string kTestResultId = "Test suggestion";
   GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult(kTestResultId));
+      CreateOmniboxSuggestionResult(kTestResultId, /*support_removal=*/true));
   GetAppListTestHelper()->WaitUntilIdle();
 
   SearchResultBaseView* result_view =
@@ -2169,7 +2276,7 @@ TEST_P(AppListBubbleAndTabletTest,
 
   auto* const keyboard_ui_controller = keyboard::KeyboardUIController::Get();
   keyboard_ui_controller->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // Show remove suggestion dialog.
   result_view->GetWidget()->LayoutRootViewIfNecessary();
@@ -2205,7 +2312,7 @@ TEST_P(AppListBubbleAndTabletTest,
   widget_close_waiter.Wait();
 }
 
-// Verifies that rotation the screen when launcher is shown does not crash.
+// Verifies that rotating the screen when launcher is shown does not crash.
 TEST_P(AppListBubbleAndTabletTest, RotationAnimationSmoke) {
   test::AppListTestModel* model = GetAppListModel();
   model->PopulateApps(15);
@@ -2225,6 +2332,63 @@ TEST_P(AppListBubbleAndTabletTest, RotationAnimationSmoke) {
                    DisplayConfigurationController::ANIMATION_SYNC);
 }
 
+// Verifies that rotating the screen and shutting down when the launcher is
+// shown does not crash.
+TEST_P(AppListBubbleAndTabletTest, ShutdownDuringRotationAnimationSmoke) {
+  test::AppListTestModel* model = GetAppListModel();
+  model->PopulateApps(1);
+  model->CreateAndPopulateFolderWithApps(3);
+  model->PopulateApps(1);
+
+  EnableTabletMode(tablet_mode_param());
+  EnsureLauncherShown();
+
+  display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  ScreenRotationAnimator* animator =
+      DisplayConfigurationControllerTestApi(
+          Shell::Get()->display_configuration_controller())
+          .GetScreenRotationAnimatorForDisplay(display.id());
+  ui::ScopedAnimationDurationScaleMode non_zero_duration_mode(
+      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  animator->Rotate(display::Display::ROTATE_90,
+                   display::Display::RotationSource::USER,
+                   DisplayConfigurationController::ANIMATION_SYNC);
+}
+
+// Verifies that rotating the screen when launcher is shown does not crash.
+TEST_P(AppListBubbleAndTabletTest, RotationAnimationWithFolderSmoke) {
+  test::AppListTestModel* model = GetAppListModel();
+  model->PopulateApps(1);
+  model->CreateAndPopulateFolderWithApps(3);
+  model->PopulateApps(1);
+
+  EnableTabletMode(tablet_mode_param());
+  EnsureLauncherShown();
+
+  // Tap the folder item to show it.
+  GestureTapOn(apps_grid_view_->GetItemViewAt(1));
+  ASSERT_TRUE(AppListIsInFolderView());
+
+  display::Display display = display::Screen::GetScreen()->GetPrimaryDisplay();
+  ScreenRotationAnimator* animator =
+      DisplayConfigurationControllerTestApi(
+          Shell::Get()->display_configuration_controller())
+          .GetScreenRotationAnimatorForDisplay(display.id());
+  animator->Rotate(display::Display::ROTATE_90,
+                   display::Display::RotationSource::USER,
+                   DisplayConfigurationController::ANIMATION_SYNC);
+
+  // Close the folder view.
+  ui::test::EventGenerator* event_generator = GetEventGenerator();
+  event_generator->MoveMouseTo(
+      GetFolderView()->GetBoundsInScreen().right_center() +
+      gfx::Vector2d(10, 0));
+  event_generator->ClickLeftButton();
+  ASSERT_FALSE(AppListIsInFolderView());
+
+  EXPECT_FALSE(GetFolderView()->shadow()->GetLayer()->visible());
+}
+
 TEST_P(AppListBubbleAndTabletTest, RotationAnimationInSearchSmoke) {
   EnableTabletMode(tablet_mode_param());
   EnsureLauncherShown();
@@ -2236,11 +2400,11 @@ TEST_P(AppListBubbleAndTabletTest, RotationAnimationInSearchSmoke) {
 
   // Add suggestion results - the result that will be tested is in
   // the second place.
-  GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult("Another suggestion"));
+  GetSearchModel()->results()->Add(CreateOmniboxSuggestionResult(
+      "Another suggestion", /*support_removal=*/true));
   const std::string kTestResultId = "Test suggestion";
   GetSearchModel()->results()->Add(
-      CreateOmniboxSuggestionResult(kTestResultId));
+      CreateOmniboxSuggestionResult(kTestResultId, /*support_removal=*/true));
   // The result list is updated asynchronously.
   base::RunLoop().RunUntilIdle();
 
@@ -3196,7 +3360,7 @@ TEST_P(PopulatedAppListWithVKEnabledTest,
   // Manually show the virtual keyboard.
   auto* const keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(true /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // Touch the apps_grid outside of any apps. Expect that the keyboard is
   // closed.
@@ -3205,7 +3369,7 @@ TEST_P(PopulatedAppListWithVKEnabledTest,
 
   // Reshow the VKeyboard
   keyboard_controller->ShowKeyboard(true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // Touch the apps_grid between two apps. Expect that the keyboard is closed.
   GetEventGenerator()->GestureTapAt(between_apps);
@@ -3594,8 +3758,10 @@ TEST_F(AppListTabletTest,
 
   // Add some search results to the search model.
   SearchModel* search_model = GetSearchModel();
-  search_model->results()->Add(CreateOmniboxSuggestionResult("Suggestion1"));
-  search_model->results()->Add(CreateOmniboxSuggestionResult("Suggestion2"));
+  search_model->results()->Add(
+      CreateOmniboxSuggestionResult("Suggestion1", /*support_removal=*/true));
+  search_model->results()->Add(
+      CreateOmniboxSuggestionResult("Suggestion2", /*support_removal=*/true));
 
   EXPECT_TRUE(AppListSearchResultPageVisible());
 
@@ -3667,7 +3833,8 @@ TEST_P(AppListPresenterTest, ShouldNotCrashOnItemClickAfterMonitorDisconnect) {
 
   // Click on an item.
   AppListItemView* item_view = apps_grid_view()->GetItemViewAt(0);
-  EXPECT_EQ(item_view->GetAccessibleName(), base::UTF8ToUTF16(item0->id()));
+  EXPECT_EQ(item_view->GetViewAccessibility().GetCachedName(),
+            base::UTF8ToUTF16(item0->id()));
   LeftClickOn(item_view);
 
   // No crash. No use-after-free detected by ASAN.
@@ -3685,7 +3852,8 @@ TEST_F(AppListPresenterTest, TapAppListThenSystemTrayShowsAutoHiddenShelf) {
   shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
 
   // Create a normal unmaximized window; the shelf should be hidden.
-  std::unique_ptr<views::Widget> window = CreateTestWidget();
+  std::unique_ptr<views::Widget> window =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   window->SetBounds(gfx::Rect(0, 0, 100, 100));
   GetAppListTestHelper()->CheckVisibility(false);
   EXPECT_EQ(SHELF_AUTO_HIDE, shelf->GetVisibilityState());
@@ -3714,7 +3882,8 @@ TEST_F(AppListPresenterTest, TapAppListThenShelfHidesAutoHiddenShelf) {
   shelf->SetAutoHideBehavior(ShelfAutoHideBehavior::kAlways);
 
   // Create a normal unmaximized window; the shelf should be hidden.
-  std::unique_ptr<views::Widget> window = CreateTestWidget();
+  std::unique_ptr<views::Widget> window =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   window->SetBounds(gfx::Rect(0, 0, 100, 100));
   EXPECT_EQ(SHELF_AUTO_HIDE_HIDDEN, shelf->GetAutoHideState());
 
@@ -4140,7 +4309,7 @@ TEST_F(AppListPresenterHomeLauncherTest, HomeButtonDismissesSearchResults) {
 
   // Enable accessibility feature that forces home button to be shown even with
   // kHideShelfControlsInTabletMode enabled.
-  // TODO(https://crbug.com/1050544) Use the a11y feature specific to showing
+  // TODO(crbug.com/40673209) Use the a11y feature specific to showing
   // navigation buttons in tablet mode once it lands.
   Shell::Get()->accessibility_controller()->autoclick().SetEnabled(true);
 
@@ -4315,7 +4484,7 @@ TEST_F(AppListPresenterHomeLauncherTest, WallpaperContextMenu) {
   ui::test::EventGenerator* generator = GetEventGenerator();
   ui::GestureEvent long_press(
       onscreen_point.x(), onscreen_point.y(), 0, base::TimeTicks(),
-      ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
+      ui::GestureEventDetails(ui::EventType::kGestureLongPress));
   generator->Dispatch(&long_press);
   GetAppListTestHelper()->WaitUntilIdle();
   const aura::Window* root = window_util::GetRootWindowAt(onscreen_point);
@@ -4324,9 +4493,9 @@ TEST_F(AppListPresenterHomeLauncherTest, WallpaperContextMenu) {
   EXPECT_TRUE(root_window_controller->IsContextMenuShown());
 
   // Tap down to close the context menu.
-  ui::GestureEvent tap_down(onscreen_point.x(), onscreen_point.y(), 0,
-                            base::TimeTicks(),
-                            ui::GestureEventDetails(ui::ET_GESTURE_TAP_DOWN));
+  ui::GestureEvent tap_down(
+      onscreen_point.x(), onscreen_point.y(), 0, base::TimeTicks(),
+      ui::GestureEventDetails(ui::EventType::kGestureTapDown));
   generator->Dispatch(&tap_down);
   GetAppListTestHelper()->WaitUntilIdle();
   EXPECT_FALSE(root_window_controller->IsContextMenuShown());
@@ -4435,7 +4604,7 @@ TEST_P(AppListPresenterVirtualKeyboardTest,
   // Manually show the virtual keyboard.
   auto* const keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // Tap or click outside the searchbox, the virtual keyboard should hide.
   ClickOrTap(GetPointOutsideSearchbox());
@@ -4469,7 +4638,7 @@ TEST_P(AppListPresenterVirtualKeyboardTest,
   // Manually show the virtual keyboard.
   auto* const keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   // Tap or click outside the searchbox, the virtual keyboard should hide and
   // the searchbox should be inactive when there is no text in the searchbox.

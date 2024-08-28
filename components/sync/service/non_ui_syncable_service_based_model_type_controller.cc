@@ -25,7 +25,7 @@ namespace {
 // ModelTypeSyncBridge implementation for test-only code-path :(
 // This is required to allow calling
 // ModelTypeController::ClearMetadataWhileStopped() in browser tests.
-// TODO(crbug.com/1418351): Remove test-only code-path.
+// TODO(crbug.com/40894683): Remove test-only code-path.
 class FakeSyncableServiceBasedBridge : public ModelTypeSyncBridge {
  public:
   explicit FakeSyncableServiceBasedBridge(
@@ -36,34 +36,36 @@ class FakeSyncableServiceBasedBridge : public ModelTypeSyncBridge {
 
   // ModelTypeSyncBridge implementation.
   std::unique_ptr<MetadataChangeList> CreateMetadataChangeList() override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return nullptr;
   }
   std::optional<ModelError> MergeFullSyncData(
       std::unique_ptr<MetadataChangeList> /*metadata_change_list*/,
       EntityChangeList /*entity_data*/) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return {};
   }
   std::optional<ModelError> ApplyIncrementalSyncChanges(
       std::unique_ptr<MetadataChangeList> /*metadata_change_list*/,
       EntityChangeList /*entity_changes*/) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return {};
   }
-  void GetData(StorageKeyList /*storage_keys*/,
-               DataCallback /*callback*/) override {
-    NOTREACHED();
+  std::unique_ptr<DataBatch> GetDataForCommit(
+      StorageKeyList /*storage_keys*/) override {
+    NOTREACHED_IN_MIGRATION();
+    return nullptr;
   }
-  void GetAllDataForDebugging(DataCallback /*callback*/) override {
-    NOTREACHED();
+  std::unique_ptr<DataBatch> GetAllDataForDebugging() override {
+    NOTREACHED_IN_MIGRATION();
+    return nullptr;
   }
   std::string GetClientTag(const EntityData& /*entity_data*/) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return {};
   }
   std::string GetStorageKey(const EntityData& /*entity_data*/) override {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return {};
   }
 };
@@ -122,7 +124,7 @@ class BridgeBuilder {
         std::make_unique<ClientTagBasedModelTypeProcessor>(type, dump_stack);
 
     // |syncable_service| can be null in tests.
-    // TODO(crbug.com/1418351): Remove test-only code-path.
+    // TODO(crbug.com/40894683): Remove test-only code-path.
     if (syncable_service) {
       bridge_ = std::make_unique<SyncableServiceBasedBridge>(
           type, std::move(store_factory), std::move(processor),

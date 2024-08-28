@@ -17,7 +17,6 @@ import android.content.res.Resources;
 import android.view.View;
 
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -28,8 +27,7 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.Callback;
 import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
-import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.omnibox.LocationBarDataProvider;
 import org.chromium.chrome.browser.omnibox.NewTabPageDelegate;
@@ -51,8 +49,6 @@ public class LocationBarFocusScrimHandlerTest {
     @Mock private ObservableSupplier<Integer> mTabStripHeightSupplier;
 
     LocationBarFocusScrimHandler mScrimHandler;
-
-    @Rule public Features.JUnitProcessor mTestFeature = new Features.JUnitProcessor();
 
     @Before
     public void setUp() {
@@ -99,7 +95,7 @@ public class LocationBarFocusScrimHandlerTest {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.DYNAMIC_TOP_CHROME)
+    @DisableFeatures(ChromeFeatureList.TAB_STRIP_LAYOUT_OPTIMIZATION)
     public void testTabStripHeightChangeCallback() {
         ArgumentCaptor<Callback<Integer>> captor = ArgumentCaptor.forClass(Callback.class);
         verify(mTabStripHeightSupplier).addObserver(captor.capture());

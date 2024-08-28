@@ -17,10 +17,11 @@
 #include "base/check_op.h"
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/numerics/clamped_math.h"
 #include "components/aggregation_service/aggregation_coordinator_utils.h"
-#include "components/aggregation_service/features.h"
+#include "content/browser/private_aggregation/private_aggregation_host.h"
 #include "content/browser/private_aggregation/private_aggregation_manager.h"
 #include "content/common/content_export.h"
 #include "content/services/auction_worklet/public/mojom/private_aggregation_request.mojom.h"
@@ -28,16 +29,12 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/abseil-cpp/absl/numeric/int128.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/private_aggregation/aggregatable_report.mojom.h"
+#include "third_party/blink/public/mojom/aggregation_service/aggregatable_report.mojom.h"
 #include "third_party/blink/public/mojom/private_aggregation/private_aggregation_host.mojom.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
 
 namespace content {
-
-const char kReservedAlways[] = "reserved.always";
-const char kReservedWin[] = "reserved.win";
-const char kReservedLoss[] = "reserved.loss";
 
 namespace {
 
@@ -70,7 +67,7 @@ std::optional<double> GetBaseValue(
       }
       return std::nullopt;
   }
-  NOTREACHED();
+  NOTREACHED(base::NotFatalUntil::M128);
   return std::nullopt;
 }
 
@@ -93,7 +90,7 @@ std::optional<absl::uint128> CalculateBucket(
   double scaled_base_value = base.value() * bucket_obj->scale;
 
   // Returns std::nullopt if scaled_base_value is NaN.
-  // TODO(crbug.com/1410339): Throw a bad message if scale is NaN or infinity.
+  // TODO(crbug.com/40254312): Throw a bad message if scale is NaN or infinity.
   if (std::isnan(scaled_base_value)) {
     return std::nullopt;
   }
@@ -151,7 +148,7 @@ std::optional<int32_t> CalculateValue(
 
   double scaled_base_value = base.value() * value_obj->scale;
   // Returns std::nullopt if the product of base and scale is NaN.
-  // TODO(crbug.com/1410339): Throw a bad message if scale is NaN or infinity.
+  // TODO(crbug.com/40254312): Throw a bad message if scale is NaN or infinity.
   if (std::isnan(scaled_base_value)) {
     return std::nullopt;
   }
@@ -208,7 +205,7 @@ CalculateContributionBucketAndValue(
       // this, but the worklet process may be compromised. Since it has no
       // effect on the result of the auction, we just clamp it to 0 instead of
       // terminate the auction.
-      // TODO(crbug.com/1410534): Report a bad mojom message when int value is
+      // TODO(crbug.com/40254406): Report a bad mojom message when int value is
       // negative.
       value = 0;
     }
@@ -225,8 +222,14 @@ CalculateContributionBucketAndValue(
     value = value_opt.value();
   }
 
-  return blink::mojom::AggregatableReportHistogramContribution::New(bucket,
-                                                                    value);
+  std::optional<uint64_t> filtering_id;
+  if (base::FeatureList::IsEnabled(
+          blink::features::kPrivateAggregationApiFilteringIds)) {
+    filtering_id = contribution->filtering_id;
+  }
+
+  return blink::mojom::AggregatableReportHistogramContribution::New(
+      bucket, value, filtering_id);
 }
 
 }  // namespace
@@ -255,9 +258,9 @@ FillInPrivateAggregationRequest(
     const std::optional<auction_worklet::mojom::RejectReason> reject_reason,
     const PrivateAggregationTimings& timings,
     bool is_winner) {
-  DCHECK(request);
+  CHECK(request, base::NotFatalUntil::M128);
   if (request->contribution->is_histogram_contribution()) {
-    // TODO(crbug.com/1410534): Report a bad mojom message when contribution's
+    // TODO(crbug.com/40254406): Report a bad mojom message when contribution's
     // value is negative. The worklet code should prevent that, but the worklet
     // process may be compromised.
     PrivateAggregationRequestWithEventType request_with_event_type(
@@ -270,34 +273,40 @@ FillInPrivateAggregationRequest(
 
   // The mojom API declaration should ensure `contribution` being a
   // for-event contribution if not a histogram contribution.
-  DCHECK(contribution->is_for_event_contribution());
-  const std::string event_type =
+  CHECK(contribution->is_for_event_contribution(), base::NotFatalUntil::M128);
+  const auction_worklet::mojom::EventTypePtr& event_type =
       contribution->get_for_event_contribution()->event_type;
-  std::optional<std::string> final_event_type = std::nullopt;
-  if (!base::StartsWith(event_type, "reserved.")) {
-    final_event_type = event_type;
+  std::optional<std::string> non_reserved_event_type = std::nullopt;
+  std::optional<auction_worklet::mojom::ReservedEventType> reserved_event_type =
+      std::nullopt;
+  if (event_type->is_non_reserved()) {
+    non_reserved_event_type = event_type->get_non_reserved();
+  } else {
+    reserved_event_type = event_type->get_reserved();
   }
 
-  // Rejects invalid reserved event type. The worklet code should prevent this,
-  // but the process may be compromised. This is largely preventing the owner
-  // from messing up its own private aggregation reporting function.
-  //
-  // Note that the data received here has no effect on the result of the
-  // auction, so just reject the data and continue with the auction to keep
-  // the code simple.
-  if (!final_event_type.has_value() &&
-      (event_type != kReservedWin && event_type != kReservedLoss &&
-       event_type != kReservedAlways)) {
-    return std::nullopt;
+  if (is_winner) {
+    // Don't run loss events for a winner.
+    if (reserved_event_type.has_value() &&
+        *reserved_event_type ==
+            auction_worklet::mojom::ReservedEventType::kReservedLoss) {
+      return std::nullopt;
+    }
+  } else {
+    // Private aggregation requests of non reserved event types are not kept for
+    // losing bidders.
+    if (non_reserved_event_type.has_value()) {
+      return std::nullopt;
+    }
+
+    // Don't run win events for a loser.
+    if (reserved_event_type.has_value() &&
+        *reserved_event_type ==
+            auction_worklet::mojom::ReservedEventType::kReservedWin) {
+      return std::nullopt;
+    }
   }
 
-  // Private aggregation requests of non reserved event types are not kept for
-  // losing bidders.
-  if ((is_winner && event_type == kReservedLoss) ||
-      (!is_winner &&
-       (event_type == kReservedWin || final_event_type.has_value()))) {
-    return std::nullopt;
-  }
   blink::mojom::AggregatableReportHistogramContributionPtr
       calculated_contribution = CalculateContributionBucketAndValue(
           std::move(contribution->get_for_event_contribution()), winning_bid,
@@ -311,7 +320,7 @@ FillInPrivateAggregationRequest(
           auction_worklet::mojom::AggregatableReportContribution::
               NewHistogramContribution(std::move(calculated_contribution)),
           request->aggregation_mode, std::move(request->debug_mode_details)),
-      final_event_type);
+      non_reserved_event_type);
   return request_with_event_type;
 }
 
@@ -355,15 +364,6 @@ void SplitContributionsIntoBatchesThenSendToHost(
         std::move(request->contribution->get_histogram_contribution()));
   }
 
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kPrivateAggregationApiMultipleCloudProviders) ||
-      !base::FeatureList::IsEnabled(
-          aggregation_service::kAggregationServiceMultipleCloudProviders)) {
-    // Override with the default if a non-default coordinator is specified when
-    // the feature is disabled.
-    aggregation_coordinator_origin = std::nullopt;
-  }
-
   if (aggregation_coordinator_origin &&
       !aggregation_service::IsAggregationCoordinatorOriginAllowed(
           aggregation_coordinator_origin.value())) {
@@ -380,6 +380,7 @@ void SplitContributionsIntoBatchesThenSendToHost(
         PrivateAggregationBudgetKey::Api::kProtectedAudience,
         /*context_id=*/std::nullopt,
         /*timeout=*/std::nullopt, aggregation_coordinator_origin,
+        PrivateAggregationHost::kDefaultFilteringIdMaxBytes,
         remote_host.BindNewPipeAndPassReceiver());
 
     // The worklet origin should be potentially trustworthy (and no context ID
@@ -393,6 +394,26 @@ void SplitContributionsIntoBatchesThenSendToHost(
     remote_host->ContributeToHistogram(std::move(contributions));
     remote_host.reset();
   }
+}
+
+bool HasValidFilteringId(
+    const auction_worklet::mojom::PrivateAggregationRequestPtr& request) {
+  std::optional<uint64_t> filtering_id;
+  if (request->contribution->is_histogram_contribution()) {
+    filtering_id =
+        request->contribution->get_histogram_contribution()->filtering_id;
+  } else {
+    CHECK(request->contribution->is_for_event_contribution());
+    filtering_id =
+        request->contribution->get_for_event_contribution()->filtering_id;
+  }
+
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kPrivateAggregationApiFilteringIds)) {
+    return filtering_id == std::nullopt;
+  }
+
+  return filtering_id.value_or(0) <= 255;
 }
 
 }  // namespace content

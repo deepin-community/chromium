@@ -152,6 +152,7 @@ HttpNetworkSession::HttpNetworkSession(const HttpNetworkSessionParams& params,
                          context.http_server_properties,
                          context.cert_verifier,
                          context.transport_security_state,
+                         context.proxy_delegate,
                          context.sct_auditing_delegate,
                          context.socket_performance_watcher_factory,
                          context.quic_crypto_client_stream_factory,
@@ -336,7 +337,7 @@ void HttpNetworkSession::CloseAllConnections(int net_error,
                                                          net_log_reason_utf8);
   websocket_socket_pool_manager_->FlushSocketPoolsWithError(
       net_error, net_log_reason_utf8);
-  spdy_session_pool_.CloseCurrentSessions(static_cast<net::Error>(net_error));
+  spdy_session_pool_.CloseCurrentSessions(static_cast<Error>(net_error));
   quic_session_pool_.CloseAllSessions(net_error, quic::QUIC_PEER_GOING_AWAY);
 }
 
@@ -386,7 +387,7 @@ ClientSocketPoolManager* HttpNetworkSession::GetSocketPoolManager(
     case WEBSOCKET_SOCKET_POOL:
       return websocket_socket_pool_manager_.get();
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return nullptr;

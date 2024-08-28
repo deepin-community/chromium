@@ -10,8 +10,6 @@
 #include "extensions/common/extension_id.h"
 #include "extensions/renderer/extensions_renderer_api_provider.h"
 
-class GURL;
-
 namespace extensions {
 class Extension;
 class ExtensionsRendererAPIProvider;
@@ -27,6 +25,10 @@ class ExtensionsRendererClient {
  public:
   ExtensionsRendererClient();
   virtual ~ExtensionsRendererClient();
+
+  // Notifies that the main render thread has started. Used to finalize any
+  // setup. Mirrors the ContentRendererClient method of the same name.
+  virtual void RenderThreadStarted() = 0;
 
   // Returns true if the current render process was launched incognito.
   virtual bool IsIncognitoProcess() const = 0;
@@ -44,14 +46,6 @@ class ExtensionsRendererClient {
   virtual void OnExtensionLoaded(const Extension& extension) {}
   virtual void OnExtensionUnloaded(const ExtensionId& extension) {}
 
-  // Returns whether or not extension APIs are allowed for the specified
-  // script. The script must be specified in the extension's manifest
-  // background section and the scope must be the root scope of the
-  // extension.
-  virtual bool ExtensionAPIEnabledForServiceWorkerScript(
-      const GURL& scope,
-      const GURL& script_url) const = 0;
-
   // Adds an API provider that can extend the behavior of extension's renderer
   // side. API providers need to be added before |Dispatcher| is created.
   void AddAPIProvider(
@@ -64,7 +58,8 @@ class ExtensionsRendererClient {
   static void Set(ExtensionsRendererClient* client);
 
  protected:
-  std::vector<std::unique_ptr<ExtensionsRendererAPIProvider>> api_providers_;
+  std::vector<std::unique_ptr<const ExtensionsRendererAPIProvider>>
+      api_providers_;
 };
 
 }  // namespace extensions

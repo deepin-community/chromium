@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>  // NOLINT(build/c++11)
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -31,18 +33,15 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
-#include "./centipede/blob_file.h"
 #include "./centipede/centipede_callbacks.h"
 #include "./centipede/centipede_default_callbacks.h"
 #include "./centipede/centipede_interface.h"
-#include "./centipede/corpus.h"
 #include "./centipede/defs.h"
 #include "./centipede/environment.h"
 #include "./centipede/feature.h"
 #include "./centipede/logging.h"
 #include "./centipede/mutation_input.h"
 #include "./centipede/runner_result.h"
-#include "./centipede/shard_reader.h"
 #include "./centipede/test_util.h"
 #include "./centipede/util.h"
 #include "./centipede/workdir.h"
@@ -292,21 +291,22 @@ TEST(Centipede, ShardsAndDistillTest) {
   MockFactory factory(mock);
   CentipedeMain(env, factory);  // Run distilling in shard `shard_index`.
   EXPECT_EQ(CountFilesInDir(env.corpus_dir[0]), 0);
+  size_t distilled_size = 0;
   for (size_t shard_index = 0; shard_index < env.total_shards; shard_index++) {
     SCOPED_TRACE(absl::StrCat("Shard ", shard_index));
-    auto distilled_size =
+    const auto shard_distilled_size =
         tmp_dir.CountElementsInCorpusFile(shard_index, "distilled-.");
     if (shard_index == env.total_shards - 1) {
       // Didn't distill in the last shard.
-      EXPECT_EQ(distilled_size, 0);
-    } else {
-      // Distillation is expected to find more inputs than any individual shard.
-      EXPECT_GT(distilled_size, max_shard_size);
-      // And since we are expecting 512 features, with 2-byte inputs,
-      // we get at least 512/2 corpus elements after distillation.
-      EXPECT_GT(distilled_size, 256);
+      EXPECT_EQ(shard_distilled_size, 0);
     }
+    distilled_size += shard_distilled_size;
   }
+  // Distillation is expected to find more inputs than any individual shard.
+  EXPECT_GT(distilled_size, max_shard_size);
+  // And since we are expecting 512 features, with 2-byte inputs,
+  // we get at least 512/2 corpus elements after distillation.
+  EXPECT_GT(distilled_size, 256);
 }
 
 // Tests --input_filter. test_input_filter filters out inputs with 'b' in them.
@@ -792,64 +792,6 @@ TEST(Centipede, UndetectedCrashingInput) {
   ASSERT_EQ(found_crash_file_names.size(), kCrashingInputIdxInBatch + 1);
 }
 
-static void WriteBlobsToFile(const std::vector<ByteArray> &blobs,
-                             const std::string_view path) {
-  auto appender = DefaultBlobFileWriterFactory();
-  CHECK_OK(appender->Open(path, "a"));
-  for (const auto &blob : blobs) {
-    CHECK_OK(appender->Write(blob));
-  }
-}
-
-TEST(Centipede, ShardReader) {
-  ByteArray data1 = {1, 2, 3};
-  ByteArray data2 = {3, 4, 5, 6};
-  ByteArray data3 = {7, 8, 9, 10, 11};
-  ByteArray data4 = {12, 13, 14};
-  ByteArray data5 = {15, 16};
-  FeatureVec fv1 = {100, 200, 300};
-  FeatureVec fv2 = {300, 400, 500, 600};
-  FeatureVec fv3 = {700, 800, 900, 1000, 1100};
-  FeatureVec fv4 = {};  // empty.
-
-  std::vector<ByteArray> corpus_blobs;
-  corpus_blobs.push_back(data1);
-  corpus_blobs.push_back(data2);
-  corpus_blobs.push_back(data3);
-  corpus_blobs.push_back(data4);
-  corpus_blobs.push_back(data5);
-
-  std::vector<ByteArray> features_blobs;
-  features_blobs.push_back(PackFeaturesAndHash(data1, fv1));
-  features_blobs.push_back(PackFeaturesAndHash(data2, fv2));
-  features_blobs.push_back(PackFeaturesAndHash(data3, fv3));
-  features_blobs.push_back(PackFeaturesAndHash(data4, fv4));
-
-  TempDir tmp_dir{test_info_->name()};
-  std::string corpus_path = tmp_dir.GetFilePath("corpus");
-  std::string features_path = tmp_dir.GetFilePath("features");
-  WriteBlobsToFile(corpus_blobs, corpus_path);
-  WriteBlobsToFile(features_blobs, features_path);
-
-  std::vector<CorpusRecord> res;
-  ReadShard(corpus_path, features_path,
-            [&res](const ByteArray &input, const FeatureVec &features) {
-              res.push_back(CorpusRecord{input, features});
-            });
-
-  EXPECT_EQ(res.size(), 5UL);
-  EXPECT_EQ(res[0].data, data1);
-  EXPECT_EQ(res[1].data, data2);
-  EXPECT_EQ(res[2].data, data3);
-  EXPECT_EQ(res[3].data, data4);
-  EXPECT_EQ(res[4].data, data5);
-  EXPECT_EQ(res[0].features, fv1);
-  EXPECT_EQ(res[1].features, fv2);
-  EXPECT_EQ(res[2].features, fv3);
-  EXPECT_EQ(res[3].features, FeatureVec{feature_domains::kNoFeature});
-  EXPECT_EQ(res[4].features, FeatureVec());
-}
-
 TEST(Centipede, GetsSeedInputs) {
   Environment env;
   env.binary =
@@ -865,6 +807,14 @@ TEST(Centipede, GetsSeedInputs) {
   EXPECT_EQ(callbacks.GetSeeds(100, seeds), 10);
   EXPECT_THAT(seeds, testing::ContainerEq(std::vector<ByteArray>{
                          {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}}));
+}
+
+TEST(Centipede, GetsSerializedTargetConfig) {
+  Environment env;
+  env.binary =
+      GetDataDependencyFilepath("centipede/testing/fuzz_target_with_config");
+  CentipedeDefaultCallbacks callbacks(env);
+  EXPECT_EQ(callbacks.GetSerializedTargetConfig(), "fake serialized config");
 }
 
 TEST(Centipede, CleansUpMetadataAfterStartup) {
@@ -883,6 +833,52 @@ TEST(Centipede, CleansUpMetadataAfterStartup) {
         if (b == ByteArray{'F', 'u', 'z', 'z'}) found_startup_cmp_entry = true;
       });
   EXPECT_FALSE(found_startup_cmp_entry);
+}
+
+namespace {
+
+class FakeCentipedeCallbacksForThreadChecking : public CentipedeCallbacks {
+ public:
+  FakeCentipedeCallbacksForThreadChecking(const Environment &env,
+                                          std::thread::id execute_thread_id)
+      : CentipedeCallbacks(env), execute_thread_id_(execute_thread_id) {}
+
+  bool Execute(std::string_view binary, const std::vector<ByteArray> &inputs,
+               BatchResult &batch_result) override {
+    batch_result.ClearAndResize(inputs.size());
+    thread_check_passed_ = thread_check_passed_ &&
+                           std::this_thread::get_id() == execute_thread_id_;
+    return true;
+  }
+
+  void Mutate(const std::vector<MutationInputRef> &inputs, size_t num_mutants,
+              std::vector<ByteArray> &mutants) override {
+    mutants.resize(num_mutants, {0});
+  }
+
+  bool thread_check_passed() { return thread_check_passed_; }
+
+ private:
+  std::thread::id execute_thread_id_;
+  bool thread_check_passed_ = true;
+};
+
+}  // namespace
+
+TEST(Centipede, RunsExecuteCallbackInTheCurrentThreadWhenFuzzingWithOneThread) {
+  TempDir temp_dir{test_info_->name()};
+  Environment env;
+  env.workdir = temp_dir.path();
+  env.require_pc_table = false;
+  ASSERT_EQ(env.num_threads, 1);
+  FakeCentipedeCallbacksForThreadChecking callbacks(env,
+                                                    std::this_thread::get_id());
+  BatchResult batch_result;
+  const std::vector<ByteArray> inputs = {{0}};
+  env.num_runs = 100;
+  MockFactory factory(callbacks);
+  EXPECT_EQ(CentipedeMain(env, factory), EXIT_SUCCESS);
+  EXPECT_TRUE(callbacks.thread_check_passed());
 }
 
 }  // namespace centipede

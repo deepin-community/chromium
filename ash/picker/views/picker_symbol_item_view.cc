@@ -8,12 +8,10 @@
 #include <utility>
 
 #include "ash/picker/views/picker_item_view.h"
-#include "ash/style/style_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/font_list.h"
-#include "ui/gfx/geometry/rounded_corners_f.h"
-#include "ui/views/controls/button/button.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
 
 namespace ash {
@@ -25,7 +23,7 @@ const gfx::FontList kPickerSymbolFont({"Google Sans", "Roboto"},
                                       kPickerSymbolFontSize,
                                       gfx::Font::Weight::NORMAL);
 
-constexpr auto kPickerSymbolItemCornerRadius = gfx::RoundedCornersF(4);
+constexpr int kPickerSymbolItemCornerRadius = 4;
 
 }  // namespace
 
@@ -34,6 +32,7 @@ PickerSymbolItemView::PickerSymbolItemView(
     const std::u16string& symbol)
     : PickerItemView(std::move(select_item_callback)) {
   SetUseDefaultFillLayout(true);
+  SetCornerRadius(kPickerSymbolItemCornerRadius);
 
   symbol_label_ =
       AddChildView(views::Builder<views::Label>()
@@ -41,10 +40,7 @@ PickerSymbolItemView::PickerSymbolItemView(
                        .SetEnabledColorId(cros_tokens::kCrosSysOnSurface)
                        .SetFontList(kPickerSymbolFont)
                        .Build());
-  SetAccessibleName(symbol_label_);
-
-  StyleUtil::InstallRoundedCornerHighlightPathGenerator(
-      this, kPickerSymbolItemCornerRadius);
+  GetViewAccessibility().SetName(*symbol_label_);
 }
 
 PickerSymbolItemView::~PickerSymbolItemView() = default;

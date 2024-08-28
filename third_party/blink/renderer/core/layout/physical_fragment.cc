@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 
 #include "base/ranges/algorithm.h"
@@ -49,8 +54,17 @@ String StringForBoxType(const PhysicalFragment& fragment) {
     case PhysicalFragment::BoxType::kColumnBox:
       result.Append("column");
       break;
-    case PhysicalFragment::BoxType::kPageBox:
-      result.Append("page");
+    case PhysicalFragment::BoxType::kPageContainer:
+      result.Append("page container");
+      break;
+    case PhysicalFragment::BoxType::kPageBorderBox:
+      result.Append("page border box");
+      break;
+    case PhysicalFragment::BoxType::kPageMargin:
+      result.Append("page margin");
+      break;
+    case PhysicalFragment::BoxType::kPageArea:
+      result.Append("page area");
       break;
     case PhysicalFragment::BoxType::kAtomicInline:
       result.Append("atomic-inline");
@@ -410,7 +424,6 @@ PhysicalFragment::PhysicalFragment(FragmentBuilder* builder,
                     ? nullptr
                     : OofDataFromBuilder(builder)) {
   CHECK(builder->layout_object_);
-  CHECK(builder->layout_object_->Style());
 
   // A line with a float / block in a parallel flow should not have an outgoing
   // break token associated. An outgoing inline break token from a line means
@@ -467,24 +480,8 @@ PhysicalFragment::PhysicalFragment(const PhysicalFragment& other)
       break_token_(other.break_token_),
       oof_data_(other.oof_data_ ? other.CloneOofData() : nullptr) {
   CHECK(layout_object_);
-  CHECK(layout_object_->Style());
   DCHECK(other.children_valid_);
   DCHECK(children_valid_);
-}
-
-PhysicalFragment::~PhysicalFragment() {
-  Dispose();
-}
-
-void PhysicalFragment::Dispose() {
-  switch (Type()) {
-    case kFragmentBox:
-      static_cast<PhysicalBoxFragment*>(this)->Dispose();
-      break;
-    case kFragmentLineBox:
-      static_cast<PhysicalLineBoxFragment*>(this)->Dispose();
-      break;
-  }
 }
 
 bool PhysicalFragment::IsBlockFlow() const {
@@ -556,7 +553,8 @@ PhysicalFragment::OofData* PhysicalFragment::OofDataFromBuilder(
       oof_data->oof_positioned_descendants.emplace_back(
           descendant.Node(),
           descendant.static_position.ConvertToPhysical(converter),
-          descendant.requires_content_before_breaking, inline_container);
+          descendant.requires_content_before_breaking,
+          descendant.is_hidden_for_paint, inline_container);
     }
   }
 
@@ -607,7 +605,8 @@ PhysicalFragment::OofData* PhysicalFragment::FragmentedOofDataFromBuilder(
         descendant.Node(),
         descendant.static_position.ConvertToPhysical(
             containing_block_converter),
-        descendant.requires_content_before_breaking, inline_container,
+        descendant.requires_content_before_breaking,
+        descendant.is_hidden_for_paint, inline_container,
         PhysicalContainingBlock(builder, size, containing_block_size,
                                 descendant.containing_block),
         PhysicalContainingBlock(builder, size,
@@ -693,7 +692,8 @@ void PhysicalFragment::CheckType() const {
       } else {
         DCHECK(layout_object_->IsBox());
       }
-      if (IsFragmentainerBox()) {
+      if (IsFragmentainerBox() || GetBoxType() == kPageContainer ||
+          GetBoxType() == kPageBorderBox || GetBoxType() == kPageMargin) {
         // Fragmentainers are associated with the same layout object as their
         // multicol container (or the LayoutView, in case of printing). The
         // fragments themselves are regular in-flow block container fragments
@@ -880,9 +880,11 @@ void PhysicalFragment::AddOutlineRectsForCursor(
     }
     switch (item.Type()) {
       case FragmentItem::kLine: {
-        AddOutlineRectsForDescendant(
-            {item.LineBoxFragment(), item.OffsetInContainerFragment()},
-            collector, additional_offset, outline_type, containing_block);
+        if (item.LineBoxFragment()) {
+          AddOutlineRectsForDescendant(
+              {item.LineBoxFragment(), item.OffsetInContainerFragment()},
+              collector, additional_offset, outline_type, containing_block);
+        }
         break;
       }
       case FragmentItem::kGeneratedText:
@@ -1022,10 +1024,11 @@ bool PhysicalFragment::DependsOnPercentageBlockSize(
   }
 
   const ComputedStyle& style = builder.Style();
-  if (style.LogicalHeight().IsPercentOrCalc() ||
-      style.LogicalMinHeight().IsPercentOrCalc() ||
-      style.LogicalMaxHeight().IsPercentOrCalc())
+  if (style.LogicalHeight().MayHavePercentDependence() ||
+      style.LogicalMinHeight().MayHavePercentDependence() ||
+      style.LogicalMaxHeight().MayHavePercentDependence()) {
     return true;
+  }
 
   return false;
 }

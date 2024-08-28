@@ -30,10 +30,6 @@ CONTENT_EXPORT extern const base::FeatureParam<int>
 // itself. See crbug.com/1502326
 BASE_DECLARE_FEATURE(kPrefetchNIKScope);
 
-// If enabled, the early cookie copy in `PrefetchDocumentManager` is
-// skipped. See crbug.com/1503003 for details.
-BASE_DECLARE_FEATURE(kPrefetchDocumentManagerEarlyCookieCopySkipped);
-
 // If enabled, a will retrieve and store responses from/to the HTTP cache
 // whenever possible.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchUsesHTTPCache);
@@ -58,12 +54,24 @@ CONTENT_EXPORT extern const base::FeatureParam<
     PrefetchClientHintsCrossSiteBehavior>
     kPrefetchClientHintsCrossSiteBehavior;
 
+// If enabled, prefetch requests may include X-Client-Data request header.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchXClientDataHeader);
+
 // If enabled, then prefetch serving will apply mitigations if it may have been
 // contaminated by cross-partition state.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchStateContaminationMitigation);
 
+// If true, contaminated prefetches will also force a browsing context group
+// swap.
+CONTENT_EXPORT extern const base::FeatureParam<bool>
+    kPrefetchStateContaminationSwapsBrowsingContextGroup;
+
 // If explicitly disabled, prefetch proxy is not used.
 BASE_DECLARE_FEATURE(kPrefetchProxy);
+
+// If enabled, responses with an operative Cookie-Indices will not be used
+// if the relevant cookie values have changed.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrefetchCookieIndices);
 
 }  // namespace features
 

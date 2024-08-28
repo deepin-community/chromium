@@ -54,7 +54,6 @@
 
 namespace blink {
 
-class BrowserInterfaceBrokerProxy;
 class WebDevToolsAgentImpl;
 class WebLocalFrameImpl;
 class WebSpellCheckPanelHostClient;
@@ -139,10 +138,10 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       const std::optional<Impression>& impression,
       const LocalFrameToken* initiator_frame_token,
       std::unique_ptr<SourceLocation> source_location,
-      mojo::PendingRemote<mojom::blink::PolicyContainerHostKeepAliveHandle>
-          initiator_policy_container_keep_alive_handle,
+      mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>
+          initiator_navigation_state_keep_alive_handle,
       bool is_container_initiated,
-      bool is_fullscreen_requested) override;
+      bool has_rel_opener) override;
   void DispatchWillSendSubmitEvent(HTMLFormElement*) override;
   void DidStartLoading() override;
   void DidStopLoading() override;
@@ -153,8 +152,9 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   void DidDispatchPingLoader(const KURL&) override;
   void DidChangePerformanceTiming() override;
   void DidObserveUserInteraction(base::TimeTicks max_event_start,
-                                 base::TimeTicks max_event_end,
                                  base::TimeTicks max_event_queued_main_thread,
+                                 base::TimeTicks max_event_commit_finish,
+                                 base::TimeTicks max_event_end,
                                  UserInteractionType interaction_type,
                                  uint64_t interaction_offset) override;
   void DidChangeCpuTiming(base::TimeDelta) override;
@@ -166,9 +166,6 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   void DidObserveNewFeatureUsage(const UseCounterFeature&) override;
   void DidObserveSoftNavigation(SoftNavigationMetrics metrics) override;
   void DidObserveLayoutShift(double score, bool after_input_or_scroll) override;
-  void PreloadSubresourceOptimizationsForOrigins(
-      const WTF::HashSet<scoped_refptr<const SecurityOrigin>>& origins)
-      override;
   void SelectorMatchChanged(const Vector<String>& added_selectors,
                             const Vector<String>& removed_selectors) override;
 
@@ -233,12 +230,8 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   scoped_refptr<WebBackgroundResourceFetchAssets>
   MaybeGetBackgroundResourceFetchAssets() override;
 
-  blink::BrowserInterfaceBrokerProxy& GetBrowserInterfaceBroker() override;
-
   AssociatedInterfaceProvider* GetRemoteNavigationAssociatedInterfaces()
       override;
-
-  void AnnotatedRegionsChanged() override;
 
   base::UnguessableToken GetDevToolsFrameToken() const override;
 
@@ -287,8 +280,6 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
   void NotifyAutoscrollForSelectionInMainFrame(
       bool autoscroll_selection) override;
 
-  bool UsePrintingLayout() const override;
-
   std::unique_ptr<blink::ResourceLoadInfoNotifierWrapper>
   CreateResourceLoadInfoNotifierWrapper() override;
 
@@ -296,6 +287,8 @@ class CORE_EXPORT LocalFrameClientImpl final : public LocalFrameClient {
       mojo::PendingAssociatedRemote<mojom::blink::DevToolsAgentHost> host,
       mojo::PendingAssociatedReceiver<mojom::blink::DevToolsAgent> receiver)
       override;
+
+  bool IsDomStorageDisabled() const override;
 
  private:
   bool IsLocalFrameClientImpl() const override { return true; }

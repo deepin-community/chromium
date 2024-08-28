@@ -300,7 +300,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, DISABLED_SelectAllOnClick) {
   ASSERT_NO_FATAL_FAILURE(ClickBrowserWindowCenter());
   ASSERT_NO_FATAL_FAILURE(Click(ui_controls::MIDDLE,
                                 click_location, click_location));
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
+// TODO(crbug.com/40118868): Revisit the macro expression once build flag switch
 // of lacros-chrome is complete.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
   EXPECT_TRUE(ui_test_utils::IsViewFocused(browser(), VIEW_ID_OMNIBOX));
@@ -310,10 +310,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, DISABLED_SelectAllOnClick) {
   EXPECT_FALSE(omnibox_view->IsSelectAll());
 }
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
-IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, SelectionClipboard) {
+// TODO(crbug.com/339098004): Flaky across multiple builders.
+IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, DISABLED_SelectionClipboard) {
   OmniboxView* omnibox_view = nullptr;
   ASSERT_NO_FATAL_FAILURE(GetOmniboxViewForBrowser(browser(), &omnibox_view));
   omnibox_view->SetUserText(u"http://www.google.com/");
@@ -358,7 +356,6 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, SelectionClipboard) {
   EXPECT_EQ(u"http://www.goo4567123gle.com/", omnibox_view->GetText());
   EXPECT_EQ(18U, omnibox_view_views->GetCursorPosition());
 }
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
 
 // No touch on desktop Mac. Tracked in http://crbug.com/445520.
 #if !BUILDFLAG(IS_MAC) || defined(USE_AURA)
@@ -491,14 +488,14 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, CloseOmniboxPopupOnTextDrag) {
 
   // Simulate a mouse click before dragging the mouse.
   gfx::Point point(omnibox_view_views->origin() + gfx::Vector2d(10, 10));
-  ui::MouseEvent pressed(ui::ET_MOUSE_PRESSED, point, point,
+  ui::MouseEvent pressed(ui::EventType::kMousePressed, point, point,
                          ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
                          ui::EF_LEFT_MOUSE_BUTTON);
   omnibox_view_views->OnMousePressed(pressed);
   EXPECT_TRUE(omnibox_view->model()->PopupIsOpen());
 
   // Simulate a mouse drag of the omnibox text, and the omnibox should close.
-  ui::MouseEvent dragged(ui::ET_MOUSE_DRAGGED, point, point,
+  ui::MouseEvent dragged(ui::EventType::kMouseDragged, point, point,
                          ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0);
   omnibox_view_views->OnMouseDragged(dragged);
 
@@ -720,7 +717,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, AccessiblePopup) {
       popup_node_data_1.HasIntAttribute(ax::mojom::IntAttribute::kPopupForId));
   EXPECT_EQ(
       popup_node_data_1.GetIntAttribute(ax::mojom::IntAttribute::kPopupForId),
-      omnibox_view_views->GetViewAccessibility().GetUniqueId().Get());
+      omnibox_view_views->GetViewAccessibility().GetUniqueId());
 
   // Populate suggestions for the omnibox popup.
   AutocompleteController* autocomplete_controller =
@@ -971,6 +968,10 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsUIATest, GetSelectionAndBounds) {
           gfx::Rect(range_start_offset + bounds_in_screen.x(), 0, 0, 0))
           .x();
 
+  // Adust `textfield_rect` to account for the border.
+  textfield_rect.top += omnibox_view_views->GetInsets().top();
+  textfield_rect.height -= omnibox_view_views->GetInsets().height();
+
   std::vector<double> expected_values = std::vector<double>{
       static_cast<double>(left_bound), textfield_rect.top,
       static_cast<double>(range_end_offset - range_start_offset),
@@ -1054,7 +1055,9 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsIMETest, TextInputTypeInitRespectsIME) {
 // Looks like the same problem as in the SelectAllOnClick().
 // Tracked in: https://crbug.com/915591
 // Test is also flaky on Linux: https://crbug.com/1157250
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+// Click goes to the popup widget, but doesn't sets focus to the popup view if
+// it's a separate accelerated widget on Lacros: https://crbug.com/329271186
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
 #define MAYBE_HandleExternalProtocolURLs DISABLED_HandleExternalProtocolURLs
 #else
 #define MAYBE_HandleExternalProtocolURLs HandleExternalProtocolURLs
@@ -1138,7 +1141,8 @@ IN_PROC_BROWSER_TEST_F(OmniboxViewViewsTest, MAYBE_HandleExternalProtocolURLs) {
 }
 
 // SendKeyPressSync times out on Mac, probably due to https://crbug.com/824418.
-#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/332299695): Also fails on lacros.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS_LACROS)
 #define MAYBE_DefaultTypedNavigationsToHttps_ZeroSuggest_NoUpgrade \
   DISABLED_DefaultTypedNavigationsToHttps_ZeroSuggest_NoUpgrade
 #else

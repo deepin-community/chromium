@@ -8,7 +8,7 @@
 
 #include <limits>
 
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
+#include "base/allocator/partition_allocator/src/partition_alloc/buildflags.h"
 #include "base/command_line.h"
 #include "base/metrics/field_trial.h"
 #include "base/no_destructor.h"
@@ -45,10 +45,10 @@ class MediaInitializer {
     // Disable logging as it interferes with layout tests.
     av_log_set_level(AV_LOG_QUIET);
 
-#if BUILDFLAG(USE_ALLOCATOR_SHIM)
+#if PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
     // Remove allocation limit from ffmpeg, so calls go down to shim layer.
     av_max_alloc(std::numeric_limits<size_t>::max());
-#endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
+#endif  // PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
 
 #endif  // BUILDFLAG(ENABLE_FFMPEG)
 

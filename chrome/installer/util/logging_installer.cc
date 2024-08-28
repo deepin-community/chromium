@@ -4,8 +4,10 @@
 
 #include "chrome/installer/util/logging_installer.h"
 
-#include <stdint.h>
 #include <windows.h>
+
+#include <shlobj.h>
+#include <stdint.h>
 
 #include <tuple>
 
@@ -125,9 +127,12 @@ base::FilePath GetLogFilePath(const installer::InitialPreferences& prefs) {
       FILE_PATH_LITERAL("chromium_installer.log");
 #endif
 
-  // Fallback to current directory if getting the temp directory fails.
+  // Fallback to current directory if getting the secure or temp directory
+  // fails.
   base::FilePath tmp_path;
-  std::ignore = base::PathService::Get(base::DIR_TEMP, &tmp_path);
+  std::ignore = ::IsUserAnAdmin()
+                    ? base::GetSecureSystemTemp(&tmp_path)
+                    : base::PathService::Get(base::DIR_TEMP, &tmp_path);
   return tmp_path.Append(kLogFilename);
 }
 

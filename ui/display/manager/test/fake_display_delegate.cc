@@ -131,12 +131,12 @@ void FakeDisplayDelegate::GetDisplays(GetDisplaysCallback callback) {
 void FakeDisplayDelegate::Configure(
     const std::vector<display::DisplayConfigurationParams>& config_requests,
     ConfigureCallback callback,
-    uint32_t modeset_flag) {
+    display::ModesetFlags modeset_flags) {
   bool config_success = true;
   for (const auto& config : config_requests) {
     bool request_success = false;
 
-    if (config.mode.has_value()) {
+    if (config.mode) {
       // Find display snapshot of display ID.
       auto snapshot =
           find_if(displays_.begin(), displays_.end(),
@@ -146,7 +146,7 @@ void FakeDisplayDelegate::Configure(
       if (snapshot != displays_.end()) {
         // Check that config mode is appropriate for the display snapshot.
         for (const auto& existing_mode : snapshot->get()->modes()) {
-          if (AreModesEqual(*existing_mode.get(), *config.mode.value().get())) {
+          if (AreModesEqual(*existing_mode.get(), *config.mode)) {
             request_success = true;
             break;
           }
@@ -202,22 +202,16 @@ void FakeDisplayDelegate::SetColorCalibration(
 void FakeDisplayDelegate::SetGammaAdjustment(int64_t display_id,
                                              const GammaAdjustment& gamma) {}
 
-bool FakeDisplayDelegate::SetColorMatrix(
-    int64_t display_id,
-    const std::vector<float>& color_matrix) {
-  return false;
-}
-
-bool FakeDisplayDelegate::SetGammaCorrection(int64_t display_id,
-                                             const display::GammaCurve& degamma,
-                                             const display::GammaCurve& gamma) {
-  return false;
-}
-
 void FakeDisplayDelegate::SetPrivacyScreen(int64_t display_id,
                                            bool enabled,
                                            SetPrivacyScreenCallback callback) {
   std::move(callback).Run(false);
+}
+
+void FakeDisplayDelegate::GetSeamlessRefreshRates(
+    int64_t display_id,
+    GetSeamlessRefreshRatesCallback callback) const {
+  std::move(callback).Run(std::nullopt);
 }
 
 void FakeDisplayDelegate::AddObserver(NativeDisplayObserver* observer) {

@@ -120,7 +120,7 @@ Study::CpuArchitecture GetCurrentCpuArchitecture() {
     }
     return Study::X86_64;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return Study::X86_64;
 }
 
@@ -203,7 +203,7 @@ Study::Channel ConvertProductChannelToStudyChannel(
     case version_info::Channel::UNKNOWN:
       return Study::UNKNOWN;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return Study::UNKNOWN;
 }
 
@@ -249,9 +249,9 @@ bool VariationsFieldTrialCreatorBase::SetUpFieldTrials(
 
   MaybeExtendVariationsSafeMode(metrics_state_manager);
 
-  // TODO(crbug/1257204): Some FieldTrial-setup-related code is here and some is
-  // in MetricsStateManager::InstantiateFieldTrialList(). It's not ideal that
-  // it's in two places.
+  // TODO(crbug.com/40796250): Some FieldTrial-setup-related code is here and
+  // some is in MetricsStateManager::InstantiateFieldTrialList(). It's not ideal
+  // that it's in two places.
   VariationsIdsProvider* http_header_provider =
       VariationsIdsProvider::GetInstance();
 
@@ -272,7 +272,7 @@ bool VariationsFieldTrialCreatorBase::SetUpFieldTrials(
     case VariationsIdsProvider::ForceIdsResult::INVALID_VECTOR_ENTRY:
       // It should not be possible to have invalid variation ids from the
       // vector param (which corresponds to chrome://flags).
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     case VariationsIdsProvider::ForceIdsResult::SUCCESS:
       break;
@@ -299,7 +299,7 @@ bool VariationsFieldTrialCreatorBase::SetUpFieldTrials(
   feature_list->RegisterExtraFeatureOverrides(extra_overrides);
 
   bool used_testing_config = false;
-  // TODO(crbug/1342057): Remove this code path.
+  // TODO(crbug.com/40230862): Remove this code path.
 #if BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
   if (ShouldUseFieldTrialTestingConfig(command_line)) {
     ApplyFieldTrialTestingConfig(feature_list.get());
@@ -526,8 +526,8 @@ void VariationsFieldTrialCreatorBase::ApplyFieldTrialTestingConfig(
 #endif  // BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
 
 base::Time VariationsFieldTrialCreatorBase::CalculateSeedFreshness() {
-  // TODO(crbug/1462588): Consider comparing the server-provided fetch time with
-  // the network time.
+  // TODO(crbug.com/40274989): Consider comparing the server-provided fetch time
+  // with the network time.
   return seed_type_ == SeedType::kSafeSeed
              ? GetSeedStore()->GetSafeSeedFetchTime()
              : GetSeedStore()->GetLastFetchTime();

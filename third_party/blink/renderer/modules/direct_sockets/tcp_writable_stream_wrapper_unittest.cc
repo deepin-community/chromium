@@ -61,10 +61,9 @@ class StreamCreator : public GarbageCollected<StreamCreator> {
   // Reads everything from |data_pipe_consumer_| and returns it in a vector.
   Vector<uint8_t> ReadAllPendingData() {
     Vector<uint8_t> data;
-    const void* buffer = nullptr;
-    uint32_t buffer_num_bytes = 0;
+    base::span<const uint8_t> buffer;
     MojoResult result = data_pipe_consumer_->BeginReadData(
-        &buffer, &buffer_num_bytes, MOJO_BEGIN_READ_DATA_FLAG_NONE);
+        MOJO_BEGIN_READ_DATA_FLAG_NONE, buffer);
 
     switch (result) {
       case MOJO_RESULT_OK:
@@ -78,8 +77,8 @@ class StreamCreator : public GarbageCollected<StreamCreator> {
         return data;
     }
 
-    data.Append(static_cast<const uint8_t*>(buffer), buffer_num_bytes);
-    data_pipe_consumer_->EndReadData(buffer_num_bytes);
+    data.AppendRange(buffer.begin(), buffer.end());
+    data_pipe_consumer_->EndReadData(buffer.size());
     return data;
   }
 
@@ -123,7 +122,7 @@ TEST(TCPWritableStreamWrapperTest, WriteArrayBuffer) {
   auto* writer = tcp_writable_stream_wrapper->Writable()->getWriter(
       script_state, ASSERT_NO_EXCEPTION);
   auto* chunk = DOMArrayBuffer::Create("A", 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester tester(script_state, result);
@@ -144,7 +143,7 @@ TEST(TCPWritableStreamWrapperTest, WriteArrayBufferView) {
   auto* buffer = DOMArrayBuffer::Create("*B", 2);
   // Create a view into the buffer with offset 1, ie. "B".
   auto* chunk = DOMUint8Array::Create(buffer, 1, 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester tester(script_state, result);
@@ -174,7 +173,7 @@ TEST(TCPWritableStreamWrapperTest, AsyncWrite) {
   // Write a chunk that definitely will not fit in the pipe.
   const size_t kChunkSize = kPipeCapacity * 3;
   auto* chunk = DOMArrayBuffer::Create(kChunkSize, 1);
-  ScriptPromise result =
+  ScriptPromiseUntyped result =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester tester(script_state, result);
@@ -226,11 +225,11 @@ TEST(TCPWritableStreamWrapperTest, WriteThenClose) {
   auto* writer = tcp_writable_stream_wrapper->Writable()->getWriter(
       script_state, ASSERT_NO_EXCEPTION);
   auto* chunk = DOMArrayBuffer::Create("D", 1);
-  ScriptPromise write_promise =
+  ScriptPromiseUntyped write_promise =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
 
-  ScriptPromise close_promise =
+  ScriptPromiseUntyped close_promise =
       writer->close(script_state, ASSERT_NO_EXCEPTION);
   ScriptPromiseTester write_tester(script_state, write_promise);
   ScriptPromiseTester close_tester(script_state, close_promise);
@@ -257,7 +256,7 @@ TEST(TCPWritableStreamWrapperTest, DISABLED_TriggerHasAborted) {
   auto* writer = tcp_writable_stream_wrapper->Writable()->getWriter(
       script_state, ASSERT_NO_EXCEPTION);
   auto* chunk = DOMArrayBuffer::Create("D", 1);
-  ScriptPromise write_promise =
+  ScriptPromiseUntyped write_promise =
       writer->write(script_state, ScriptValue::From(script_state, chunk),
                     ASSERT_NO_EXCEPTION);
   ScriptPromiseTester write_tester(script_state, write_promise);
@@ -289,7 +288,7 @@ TEST_P(TCPWritableStreamWrapperCloseTestWithMaybePendingWrite, TriggerClose) {
   if (pending_write) {
     auto* script_state = scope.GetScriptState();
     auto* chunk = DOMArrayBuffer::Create("D", 2);
-    ScriptPromise write_promise =
+    ScriptPromiseUntyped write_promise =
         tcp_writable_stream_wrapper->Writable()
             ->getWriter(script_state, ASSERT_NO_EXCEPTION)
             ->write(script_state, ScriptValue::From(script_state, chunk),
@@ -326,7 +325,7 @@ TEST_P(TCPWritableStreamWrapperCloseTestWithMaybePendingWrite,
   if (pending_write) {
     auto* script_state = scope.GetScriptState();
     auto* chunk = DOMArrayBuffer::Create("D", 2);
-    ScriptPromise write_promise =
+    ScriptPromiseUntyped write_promise =
         tcp_writable_stream_wrapper->Writable()
             ->getWriter(script_state, ASSERT_NO_EXCEPTION)
             ->write(script_state, ScriptValue::From(script_state, chunk),

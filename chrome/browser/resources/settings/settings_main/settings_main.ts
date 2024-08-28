@@ -7,7 +7,7 @@
  * 'settings-main' displays the selected settings page.
  */
 import 'chrome://resources/cr_components/managed_footnote/managed_footnote.js';
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
+import '/shared/settings/prefs/prefs.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
 import 'chrome://resources/cr_elements/icons.html.js';
@@ -107,7 +107,7 @@ export class SettingsMainElement extends SettingsMainElementBase {
   private showNoResultsFound_: boolean;
   private showingSubpage_: boolean;
   toolbarSpinnerActive: boolean;
-  pageVisibility: PageVisibility;
+  pageVisibility?: PageVisibility;
 
   /**
    * Updates the hidden state of the about and settings pages based on the

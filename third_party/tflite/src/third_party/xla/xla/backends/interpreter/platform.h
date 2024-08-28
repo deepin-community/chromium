@@ -18,8 +18,11 @@ limitations under the License.
 #include <memory>
 #include <string>
 
+#include "absl/status/statusor.h"
 #include "xla/backends/interpreter/platform_id.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/executor_cache.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "tsl/platform/statusor.h"
 
@@ -39,15 +42,15 @@ class XlaInterpreterPlatform : public Platform {
 
   const std::string& Name() const override;
 
-  tsl::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(
+  absl::StatusOr<std::unique_ptr<DeviceDescription>> DescriptionForDevice(
       int ordinal) const override;
 
-  tsl::StatusOr<StreamExecutor*> ExecutorForDevice(int ordinal) override;
+  absl::StatusOr<StreamExecutor*> ExecutorForDevice(int ordinal) override;
 
-  tsl::StatusOr<StreamExecutor*> GetExecutor(
+  absl::StatusOr<StreamExecutor*> GetExecutor(
       const StreamExecutorConfig& config) override;
 
-  tsl::StatusOr<std::unique_ptr<StreamExecutor>> GetUncachedExecutor(
+  absl::StatusOr<std::unique_ptr<StreamExecutor>> GetUncachedExecutor(
       const StreamExecutorConfig& config) override;
 
  private:

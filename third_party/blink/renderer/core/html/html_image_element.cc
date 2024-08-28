@@ -24,7 +24,6 @@
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 
 #include "third_party/blink/public/common/loader/lcp_critical_path_predictor_util.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_image_bitmap_options.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
@@ -58,7 +57,6 @@
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_image.h"
-#include "third_party/blink/renderer/core/layout/layout_ng_block_flow.h"
 #include "third_party/blink/renderer/core/lcp_critical_path_predictor/element_locator.h"
 #include "third_party/blink/renderer/core/lcp_critical_path_predictor/lcp_critical_path_predictor.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
@@ -111,10 +109,6 @@ HTMLImageElement::HTMLImageElement(Document& document, bool created_by_parser)
       form_was_set_by_parser_(false),
       element_created_by_parser_(created_by_parser),
       is_fallback_image_(false),
-      is_default_overridden_intrinsic_size_(
-          !document.IsImageDocument() && GetExecutionContext() &&
-          !GetExecutionContext()->IsFeatureEnabled(
-              mojom::blink::DocumentPolicyFeature::kUnsizedMedia)),
       is_legacy_format_or_unoptimized_image_(false),
       is_ad_related_(false),
       is_lcp_element_(false),
@@ -123,11 +117,9 @@ HTMLImageElement::HTMLImageElement(Document& document, bool created_by_parser)
       is_predicted_lcp_element_(false) {
   if (blink::LcppScriptObserverEnabled()) {
     if (LocalFrame* frame = document.GetFrame()) {
-      if (LCPCriticalPathPredictor* lcpp = frame->GetLCPP()) {
-        if (LCPScriptObserver* script_observer = lcpp->lcp_script_observer()) {
-          // Record scripts that created this HTMLImageElement.
-          creator_scripts_ = script_observer->GetExecutingScriptUrls();
-        }
+      if (LCPScriptObserver* script_observer = frame->GetScriptObserver()) {
+        // Record scripts that created this HTMLImageElement.
+        creator_scripts_ = script_observer->GetExecutingScriptUrls();
       }
     }
   }
@@ -398,8 +390,19 @@ void HTMLImageElement::ParseAttribute(
   } else if (name == html_names::kAttributionsrcAttr) {
     LocalDOMWindow* window = GetDocument().domWindow();
     if (window && window->GetFrame()) {
+      // Copied from `ImageLoader::DoUpdateFromElement()`.
+      network::mojom::ReferrerPolicy referrer_policy =
+          network::mojom::ReferrerPolicy::kDefault;
+      AtomicString referrer_policy_attribute =
+          FastGetAttribute(html_names::kReferrerpolicyAttr);
+      if (!referrer_policy_attribute.IsNull()) {
+        SecurityPolicy::ReferrerPolicyFromString(
+            referrer_policy_attribute, kSupportReferrerPolicyLegacyKeywords,
+            &referrer_policy);
+      }
       window->GetFrame()->GetAttributionSrcLoader()->Register(params.new_value,
-                                                              /*element=*/this);
+                                                              /*element=*/this,
+                                                              referrer_policy);
     }
   } else if (name == html_names::kSharedstoragewritableAttr &&
              RuntimeEnabledFeatures::SharedStorageAPIM118Enabled(
@@ -410,12 +413,6 @@ void HTMLImageElement::ParseAttribute(
           mojom::blink::ConsoleMessageLevel::kError,
           WebString::FromUTF8("sharedStorageWritable: sharedStorage operations "
                               "are only available in secure contexts.")));
-    } else if (GetExecutionContext()->GetSecurityOrigin()->IsOpaque()) {
-      GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
-          mojom::blink::ConsoleMessageSource::kOther,
-          mojom::blink::ConsoleMessageLevel::kError,
-          WebString::FromUTF8("sharedStorageWritable: sharedStorage operations "
-                              "are not available for opaque origins.")));
     } else if (!params.new_value.IsNull()) {
       UseCounter::Count(GetDocument(),
                         WebFeature::kSharedStorageAPI_Image_Attribute);
@@ -526,7 +523,7 @@ LayoutObject* HTMLImageElement::CreateLayoutObject(const ComputedStyle& style) {
     }
     case LayoutDisposition::kCollapsed:  // Falls through.
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return nullptr;
   }
 }
@@ -565,22 +562,25 @@ Node::InsertionNotificationRequest HTMLImageElement::InsertedInto(
     }
   }
 
-  if (base::FeatureList::IsEnabled(features::kLCPScriptObserver)) {
+  static const bool is_lcp_script_observer_enabled =
+      blink::LcppScriptObserverEnabled();
+  if (is_lcp_script_observer_enabled) {
     if (LocalFrame* frame = GetDocument().GetFrame()) {
-      if (LCPCriticalPathPredictor* lcpp = frame->GetLCPP()) {
-        if (LCPScriptObserver* script_observer = lcpp->lcp_script_observer()) {
-          // Record scripts that inserted this HTMLImageElement.
-          for (auto& url : script_observer->GetExecutingScriptUrls()) {
-            creator_scripts_.insert(url);
-          }
+      if (LCPScriptObserver* script_observer = frame->GetScriptObserver()) {
+        // Record scripts that inserted this HTMLImageElement.
+        for (auto& url : script_observer->GetExecutingScriptUrls()) {
+          creator_scripts_.insert(url);
         }
       }
     }
   }
 
-  if (features::
+  static const bool is_image_lcpp_enabled =
+      base::FeatureList::IsEnabled(features::kLCPCriticalPathPredictor) &&
+      features::
           kLCPCriticalPathPredictorImageLoadPriorityEnabledForHTMLImageElement
-              .Get()) {
+              .Get();
+  if (is_image_lcpp_enabled) {
     if (LocalFrame* frame = GetDocument().GetFrame()) {
       if (LCPCriticalPathPredictor* lcpp = frame->GetLCPP()) {
         if (lcpp->IsElementMatchingLocator(*this)) {
@@ -664,10 +664,6 @@ unsigned HTMLImageElement::height() {
 }
 
 PhysicalSize HTMLImageElement::DensityCorrectedIntrinsicDimensions() const {
-  if (IsDefaultIntrinsicSize()) {
-    return PhysicalSize(LayoutUnit(LayoutReplaced::kDefaultWidth),
-                        LayoutUnit(LayoutReplaced::kDefaultHeight));
-  }
   ImageResourceContent* image_content = GetImageLoader().GetContent();
   if (!image_content || !image_content->HasImage())
     return PhysicalSize();
@@ -841,8 +837,9 @@ int HTMLImageElement::y() const {
   return abs_pos.top.ToInt();
 }
 
-ScriptPromise HTMLImageElement::decode(ScriptState* script_state,
-                                       ExceptionState& exception_state) {
+ScriptPromise<IDLUndefined> HTMLImageElement::decode(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
   return GetImageLoader().Decode(script_state, exception_state);
 }
 
@@ -897,8 +894,12 @@ gfx::SizeF HTMLImageElement::DefaultDestinationSize(
     return gfx::SizeF();
 
   Image* image = image_content->GetImage();
-  if (auto* svg_image = DynamicTo<SVGImage>(image))
-    return svg_image->ConcreteObjectSize(default_object_size);
+  if (auto* svg_image = DynamicTo<SVGImage>(image)) {
+    const SVGImageViewInfo* view_info =
+        SVGImageForContainer::CreateViewInfo(*svg_image, *this);
+    return SVGImageForContainer::ConcreteObjectSize(*svg_image, view_info,
+                                                    default_object_size);
+  }
 
   PhysicalSize size(image->Size(respect_orientation));
   if (GetLayoutObject() && GetLayoutObject()->IsLayoutImage() &&
@@ -918,9 +919,15 @@ static SourceSizeValueResult SourceSizeValue(const Element* element,
   SourceSizeValueResult result;
 
   auto* img = DynamicTo<HTMLImageElement>(element);
-  if (auto* picture_parent =
-          DynamicTo<HTMLPictureElement>(element->parentNode())) {
-    img = DynamicTo<HTMLImageElement>(picture_parent->lastChild());
+
+  if (!img) {
+    // Lookup the <img> from the parent <picture>. The content model for
+    // <picture> is "zero or more source elements, followed by one img element,
+    // optionally intermixed with script-supporting elements."
+    // https://html.spec.whatwg.org/multipage/embedded-content.html#the-picture-element
+    if (auto* picture = DynamicTo<HTMLPictureElement>(element->parentNode())) {
+      img = Traversal<HTMLImageElement>::LastChild(*picture);
+    }
   }
 
   String sizes = element->FastGetAttribute(html_names::kSizesAttr);
@@ -1112,7 +1119,7 @@ void HTMLImageElement::SetLayoutDisposition(
 
 void HTMLImageElement::AdjustStyle(ComputedStyleBuilder& builder) {
   DCHECK_EQ(layout_disposition_, LayoutDisposition::kFallbackContent);
-  HTMLImageFallbackHelper::CustomStyleForAltText(*this, builder);
+  HTMLImageFallbackHelper::AdjustHostStyle(*this, builder);
 }
 
 void HTMLImageElement::AssociateWith(HTMLFormElement* form) {

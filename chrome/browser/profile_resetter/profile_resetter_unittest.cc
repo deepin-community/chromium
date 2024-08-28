@@ -36,7 +36,7 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
@@ -116,6 +116,19 @@ const char kXmlConfig[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
 using extensions::Extension;
 using extensions::Manifest;
 
+class FakeNtpCustomBackgroundService : public NtpCustomBackgroundService {
+ public:
+  using NtpCustomBackgroundService::NtpCustomBackgroundService;
+  void FetchCustomBackgroundAndExtractBackgroundColor(
+      const GURL& image_url,
+      const GURL& fetch_url) override {}
+};
+
+std::unique_ptr<KeyedService> CreateFakeNtpCustomBackgroundService(
+    content::BrowserContext* context) {
+  Profile* profile = Profile::FromBrowserContext(context);
+  return std::make_unique<FakeNtpCustomBackgroundService>(profile);
+}
 
 // ProfileResetterTest --------------------------------------------------------
 
@@ -155,7 +168,12 @@ ProfileResetterTest::~ProfileResetterTest() {
 
 void ProfileResetterTest::SetUp() {
   extensions::ExtensionServiceTestBase::SetUp();
-  InitializeEmptyExtensionService();
+  ExtensionServiceInitParams params;
+  params.testing_factories = {TestingProfile::TestingFactory(
+      NtpCustomBackgroundServiceFactory::GetInstance(),
+      base::BindRepeating(&CreateFakeNtpCustomBackgroundService))};
+
+  InitializeExtensionService(std::move(params));
 
   TemplateURLServiceFactory::GetInstance()->SetTestingFactory(
       profile(), base::BindRepeating(&CreateTemplateURLServiceForTesting));
@@ -367,7 +385,7 @@ scoped_refptr<Extension> CreateExtension(const std::u16string& name,
       // do nothing
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   manifest.SetByDottedPath(extensions::manifest_keys::kOmniboxKeyword, name);
   std::string error;

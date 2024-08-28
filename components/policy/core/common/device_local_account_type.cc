@@ -20,7 +20,6 @@ constexpr auto kDomainPrefixMap =
     base::MakeFixedFlatMap<DeviceLocalAccountType, std::string_view>({
         {DeviceLocalAccountType::kPublicSession, "public-accounts"},
         {DeviceLocalAccountType::kKioskApp, "kiosk-apps"},
-        {DeviceLocalAccountType::kArcKioskApp, "arc-kiosk-apps"},
         {DeviceLocalAccountType::kSamlPublicSession, "saml-public-accounts"},
         {DeviceLocalAccountType::kWebKioskApp, "web-kiosk-apps"},
     });
@@ -29,9 +28,20 @@ constexpr char kDeviceLocalAccountDomainSuffix[] = ".device-local.localhost";
 
 }  // namespace
 
+bool IsValidDeviceLocalAccountType(int value) {
+  switch (static_cast<DeviceLocalAccountType>(value)) {
+    case DeviceLocalAccountType::kPublicSession:
+    case DeviceLocalAccountType::kKioskApp:
+    case DeviceLocalAccountType::kSamlPublicSession:
+    case DeviceLocalAccountType::kWebKioskApp:
+      return true;
+  }
+  return false;
+}
+
 std::string GenerateDeviceLocalAccountUserId(std::string_view account_id,
                                              DeviceLocalAccountType type) {
-  const auto* it = kDomainPrefixMap.find(type);
+  const auto it = kDomainPrefixMap.find(type);
   CHECK(it != kDomainPrefixMap.end());
   return gaia::CanonicalizeEmail(
       base::StrCat({base::HexEncode(account_id), "@", it->second,
@@ -66,7 +76,7 @@ GetDeviceLocalAccountType(std::string_view user_id) {
   }
 
   // |user_id| is a device-local account but its type is not recognized.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return base::unexpected(GetDeviceLocalAccountTypeError::kUnknownDomain);
 }
 

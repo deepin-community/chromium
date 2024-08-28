@@ -39,13 +39,13 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.quality.Strictness;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.test.util.BlankUiTestActivity;
@@ -97,7 +97,7 @@ public class ConfirmImportSyncDataDialogTest {
 
     @Before
     public void setUp() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDialogManager =
                             new ModalDialogManager(
@@ -138,7 +138,7 @@ public class ConfirmImportSyncDataDialogTest {
     @MediumTest
     public void testListenerOnCancelNotCalledWhenDialogDismissedInternally() {
         showConfirmImportSyncDataDialog(false);
-        TestThreadUtils.runOnUiThreadBlocking(mDialogCoordinator::dismissDialog);
+        ThreadUtils.runOnUiThreadBlocking(mDialogCoordinator::dismissDialog);
         verify(mListenerMock, never()).onCancel();
     }
 
@@ -146,7 +146,7 @@ public class ConfirmImportSyncDataDialogTest {
     @MediumTest
     public void testListenerOnCancelCalledWhenDialogDismissedByUser() {
         showConfirmImportSyncDataDialog(false);
-        onView(isRoot()).perform(pressBack());
+        onView(isRoot()).inRoot(isDialog()).perform(pressBack());
         verify(mListenerMock).onCancel();
     }
 
@@ -163,7 +163,7 @@ public class ConfirmImportSyncDataDialogTest {
     @Test
     @MediumTest
     public void testForNonDisplayableAccountEmail_noSplitStoresAndUPMForLocal() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDialogCoordinator =
                             new ConfirmImportSyncDataDialogCoordinator(
@@ -184,14 +184,14 @@ public class ConfirmImportSyncDataDialogTest {
                 activity.getString(R.string.sync_import_data_prompt, defaultAccountName);
         final String unexpectedString =
                 activity.getString(R.string.sync_import_data_prompt, "old.testaccount@gmail.com");
-        onView(withText(expectedString)).check(matches(isDisplayed()));
+        onView(withText(expectedString)).inRoot(isDialog()).check(matches(isDisplayed()));
         onView(withText(unexpectedString)).check(doesNotExist());
     }
 
     @Test
     @MediumTest
     public void testForNonDisplayableAccountEmail_usesSplitStoresAndUPMForLocal() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDialogCoordinator =
                             new ConfirmImportSyncDataDialogCoordinator(
@@ -215,14 +215,14 @@ public class ConfirmImportSyncDataDialogTest {
                 activity.getString(
                         R.string.sync_import_data_prompt_without_passwords,
                         "old.testaccount@gmail.com");
-        onView(withText(expectedString)).check(matches(isDisplayed()));
+        onView(withText(expectedString)).inRoot(isDialog()).check(matches(isDisplayed()));
         onView(withText(unexpectedString)).check(doesNotExist());
     }
 
     @Test
     @MediumTest
     public void testTextForNonManagedAccount_noSplitStoresAndUPMForLocal() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDialogCoordinator =
                             new ConfirmImportSyncDataDialogCoordinator(
@@ -239,13 +239,13 @@ public class ConfirmImportSyncDataDialogTest {
                 sActivityTestRule
                         .getActivity()
                         .getString(R.string.sync_import_data_prompt, "old.testaccount@gmail.com");
-        onView(withText(expectedText)).check(matches(isDisplayed()));
+        onView(withText(expectedText)).inRoot(isDialog()).check(matches(isDisplayed()));
     }
 
     @Test
     @MediumTest
     public void testTextForNonManagedAccount_withSplitStoresAndUPMForLocal() {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDialogCoordinator =
                             new ConfirmImportSyncDataDialogCoordinator(
@@ -264,11 +264,11 @@ public class ConfirmImportSyncDataDialogTest {
                         .getString(
                                 R.string.sync_import_data_prompt_without_passwords,
                                 "old.testaccount@gmail.com");
-        onView(withText(expectedText)).check(matches(isDisplayed()));
+        onView(withText(expectedText)).inRoot(isDialog()).check(matches(isDisplayed()));
     }
 
     private void showConfirmImportSyncDataDialog(boolean isCurrentAccountManaged) {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDialogCoordinator =
                             new ConfirmImportSyncDataDialogCoordinator(
@@ -283,7 +283,7 @@ public class ConfirmImportSyncDataDialogTest {
     }
 
     private void showConfirmImportSyncDataDialog(Predicate<String> checkIfDisplayableEmailAddress) {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDialogCoordinator =
                             new ConfirmImportSyncDataDialogCoordinator(

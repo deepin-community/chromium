@@ -117,17 +117,26 @@ TEST_F(AuctionMetricsRecorderTest, MostMethodsCrashAfterOnAuctionEnd) {
   EXPECT_DEATH_IF_SUPPORTED(recorder().SetNumInterestGroups(4), "");
 }
 
-TEST_F(AuctionMetricsRecorderTest, LoadInterestGroupPhaseLatencyInMillis) {
-  FastForwardTime(base::Milliseconds(720));
+TEST_F(AuctionMetricsRecorderTest, NoLoadInterestGroupPhaseLatencyAndEndTime) {
+  recorder().OnAuctionEnd(AuctionResult::kSuccess);
+  EXPECT_FALSE(HasMetric(UkmEntry::kLoadInterestGroupPhaseLatencyInMillisName));
+  EXPECT_FALSE(HasMetric(UkmEntry::kLoadInterestGroupPhaseEndTimeInMillisName));
+}
+
+TEST_F(AuctionMetricsRecorderTest, LoadInterestGroupPhaseLatencyAndEndTime) {
+  FastForwardTime(base::Milliseconds(722));
   recorder().OnLoadInterestGroupPhaseComplete();
-  FastForwardTime(base::Milliseconds(280));
   recorder().OnAuctionEnd(AuctionResult::kSuccess);
 
-  // e2e latency is reported as 700 and not 720 because of bucketing
+  // phase latency is reported as 700 (duration bucketing)
   EXPECT_EQ(
       GetMetricValue(UkmEntry::kLoadInterestGroupPhaseLatencyInMillisName),
       700);
-  EXPECT_EQ(GetMetricValue(UkmEntry::kEndToEndLatencyInMillisName), 1000);
+
+  // phase end time is reported as 720 (linear 10 ms bucketing)
+  EXPECT_EQ(
+      GetMetricValue(UkmEntry::kLoadInterestGroupPhaseEndTimeInMillisName),
+      720);
 }
 
 TEST_F(AuctionMetricsRecorderTest, NumInterestGroups) {
@@ -666,6 +675,17 @@ TEST_F(AuctionMetricsRecorderTest,
       GetMetricValue(
           UkmEntry::kNumInterestGroupsWithSeparateBidsForKAnonAndNonKAnonName),
       17);
+}
+
+TEST_F(AuctionMetricsRecorderTest, NumInterestGroupsWithOtherMultiBid) {
+  for (size_t i = 0; i < 30; ++i) {
+    recorder().RecordInterestGroupWithOtherMultiBid();
+  }
+  recorder().OnAuctionEnd(AuctionResult::kSuccess);
+
+  // 30 becomes 29 because of bucketing
+  EXPECT_EQ(GetMetricValue(UkmEntry::kNumInterestGroupsWithOtherMultiBidName),
+            29);
 }
 
 TEST_F(AuctionMetricsRecorderTest,
@@ -1812,6 +1832,28 @@ TEST_F(AuctionMetricsRecorderTest,
   EXPECT_FALSE(HasMetric(
       UkmEntry::
           kMeanScoreAdTrustedScoringSignalsCriticalPathLatencyInMillisName));
+}
+
+TEST_F(AuctionMetricsRecorderTest, MultiBidCount) {
+  recorder().RecordNumberOfBidsFromGenerateBid(4, 10);
+  recorder().RecordNumberOfBidsFromGenerateBid(2, 2);
+  recorder().OnAuctionEnd(AuctionResult::kSuccess);
+
+  histogram_tester().ExpectBucketCount(
+      /*name=*/"Ads.InterestGroup.Auction.NumBidsGeneratedAtOnce",
+      /*sample=*/10, /*expected_count=*/1);
+
+  histogram_tester().ExpectBucketCount(
+      /*name=*/"Ads.InterestGroup.Auction.NumBidsGeneratedAtOnce",
+      /*sample=*/2, /*expected_count=*/1);
+
+  histogram_tester().ExpectTotalCount(
+      /*name=*/"Ads.InterestGroup.Auction.NumBidsGeneratedAtOnce", 2);
+
+  // 6/12 are k-Anon
+  histogram_tester().ExpectUniqueSample(
+      /*name=*/"Ads.InterestGroup.Auction.PercentBidsKAnon",
+      /*sample=*/50, /*expected_bucket_count=*/1);
 }
 
 }  // namespace

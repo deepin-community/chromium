@@ -68,13 +68,15 @@ public class ModalDialogProperties {
     @IntDef({
         ModalDialogProperties.ButtonStyles.PRIMARY_OUTLINE_NEGATIVE_OUTLINE,
         ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NEGATIVE_OUTLINE,
-        ModalDialogProperties.ButtonStyles.PRIMARY_OUTLINE_NEGATIVE_FILLED
+        ModalDialogProperties.ButtonStyles.PRIMARY_OUTLINE_NEGATIVE_FILLED,
+        ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NO_NEGATIVE,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface ButtonStyles {
         int PRIMARY_OUTLINE_NEGATIVE_OUTLINE = 0;
         int PRIMARY_FILLED_NEGATIVE_OUTLINE = 1;
         int PRIMARY_OUTLINE_NEGATIVE_FILLED = 2;
+        int PRIMARY_FILLED_NO_NEGATIVE = 3;
     }
 
     /**
@@ -248,11 +250,21 @@ public class ModalDialogProperties {
 
     /**
      * Duration of initial tap protection period after dialog is displayed to user. During this
-     * period, none of dialog buttons will respond to any click event; i.e.:
-     * {@link Controller#onClick(PropertyModel, int)} won't be triggered until it is elapsed.
+     * period, none of dialog buttons will respond to any click event; i.e.: {@link
+     * Controller#onClick(PropertyModel, int)} won't be triggered until it is elapsed.
      */
     public static final WritableLongPropertyKey BUTTON_TAP_PROTECTION_PERIOD_MS =
             new WritableLongPropertyKey();
+
+    /**
+     * Whether a tab modal dialog should be canceled by the escape key. The value is always set to
+     * true in {@link org.chromium.components.browser_ui.modaldialog.TabModalPresenter}.
+     *
+     * <p>Please note that app modal dialogs are canceled by the escape key without the need of
+     * specifying any property.
+     */
+    public static final WritableBooleanPropertyKey TAB_MODAL_DIALOG_CANCEL_ON_ESCAPE =
+            new WritableBooleanPropertyKey();
 
     public static final PropertyKey[] ALL_KEYS =
             new PropertyKey[] {
@@ -282,6 +294,7 @@ public class ModalDialogProperties {
                 DIALOG_STYLES,
                 FOCUS_DIALOG,
                 APP_MODAL_DIALOG_BACK_PRESS_HANDLER,
-                BUTTON_TAP_PROTECTION_PERIOD_MS
+                BUTTON_TAP_PROTECTION_PERIOD_MS,
+                TAB_MODAL_DIALOG_CANCEL_ON_ESCAPE
             };
 }

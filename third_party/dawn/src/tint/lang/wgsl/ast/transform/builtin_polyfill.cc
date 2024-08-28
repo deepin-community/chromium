@@ -71,10 +71,9 @@ struct BuiltinPolyfill::State {
                 node,  //
                 [&](const CallExpression* expr) { Call(expr); },
                 [&](const BinaryExpression* bin_op) {
-                    if (auto* s = src.Sem().Get(bin_op);
-                        !s || s->Stage() == core::EvaluationStage::kConstant ||
-                        s->Stage() == core::EvaluationStage::kNotEvaluated) {
-                        return;  // Don't polyfill @const expressions
+                    auto* s = src.Sem().Get(bin_op);
+                    if (!s || s->Stage() != core::EvaluationStage::kRuntime) {
+                        return;  // Only polyfill runtime expressions
                     }
                     switch (bin_op->op) {
                         case core::BinaryOp::kShiftLeft:
@@ -200,7 +199,6 @@ struct BuiltinPolyfill::State {
             }
             default:
                 TINT_ICE() << "unhandled polyfill level: " << static_cast<int>(cfg.builtins.acosh);
-                return {};
         }
 
         b.Func(name, tint::Vector{b.Param("x", T(ty))}, T(ty), body);
@@ -252,7 +250,6 @@ struct BuiltinPolyfill::State {
                 break;
             default:
                 TINT_ICE() << "unhandled polyfill level: " << static_cast<int>(cfg.builtins.acosh);
-                return {};
         }
 
         b.Func(name, tint::Vector{b.Param("x", T(ty))}, T(ty), body);
@@ -442,7 +439,6 @@ struct BuiltinPolyfill::State {
             default:
                 TINT_ICE() << "unhandled polyfill level: "
                            << static_cast<int>(cfg.builtins.extract_bits);
-                return {};
         }
 
         b.Func(name,
@@ -587,6 +583,27 @@ struct BuiltinPolyfill::State {
         return name;
     }
 
+    /// Builds the polyfill function for the `fwidthFine` builtin
+    /// @param ty the parameter and return type for the function
+    /// @return the polyfill function name
+    Symbol fwidthFine(const core::type::Type* ty) {
+        auto name = b.Symbols().New("tint_fwidth_fine");
+        // WGSL polyfill function:
+        //      fn tint_fwidth_fine(v : T) -> T {
+        //          return abs(dpdxFine(v)) + abs(dpdyFine(v));
+        //      }
+        auto body = tint::Vector{
+            b.Return(b.Add(b.Call("abs", b.Call("dpdxFine", "v")),
+                           b.Call("abs", b.Call("dpdyFine", "v")))),
+        };
+        b.Func(name,
+               tint::Vector{
+                   b.Param("v", T(ty)),
+               },
+               T(ty), body);
+        return name;
+    }
+
     /// Builds the polyfill function for the `insertBits` builtin
     /// @param ty the parameter and return type for the function
     /// @return the polyfill function name
@@ -599,7 +616,6 @@ struct BuiltinPolyfill::State {
             TINT_ICE()
                 << "insertBits polyfill only support i32, u32, and vector of i32 or u32, got "
                 << ty->FriendlyName();
-            return {};
         }
 
         constexpr uint32_t W = 32u;  // 32-bit
@@ -680,7 +696,6 @@ struct BuiltinPolyfill::State {
             default:
                 TINT_ICE() << "unhandled polyfill level: "
                            << static_cast<int>(cfg.builtins.insert_bits);
-                return {};
         }
 
         b.Func(name,
@@ -1285,9 +1300,8 @@ struct BuiltinPolyfill::State {
     /// Examines the call expression @p expr, applying any necessary polyfill transforms
     void Call(const CallExpression* expr) {
         auto* call = src.Sem().Get(expr)->UnwrapMaterialize()->As<sem::Call>();
-        if (!call || call->Stage() == core::EvaluationStage::kConstant ||
-            call->Stage() == core::EvaluationStage::kNotEvaluated) {
-            return;  // Don't polyfill @const expressions
+        if (!call || call->Stage() != core::EvaluationStage::kRuntime) {
+            return;  // Only polyfill runtime expressions
         }
         Symbol fn = Switch(
             call->Target(),  //
@@ -1356,6 +1370,13 @@ struct BuiltinPolyfill::State {
                         if (cfg.builtins.first_trailing_bit) {
                             return builtin_polyfills.GetOrAdd(
                                 builtin, [&] { return firstTrailingBit(builtin->ReturnType()); });
+                        }
+                        return Symbol{};
+
+                    case wgsl::BuiltinFn::kFwidthFine:
+                        if (cfg.builtins.fwidth_fine) {
+                            return builtin_polyfills.GetOrAdd(
+                                builtin, [&] { return fwidthFine(builtin->ReturnType()); });
                         }
                         return Symbol{};
 
@@ -1574,6 +1595,7 @@ Transform::ApplyResult BuiltinPolyfill::Apply(const Program& src,
     return State{src, *cfg}.Run();
 }
 
+BuiltinPolyfill::Config::Config() = default;
 BuiltinPolyfill::Config::Config(const Builtins& b) : builtins(b) {}
 BuiltinPolyfill::Config::Config(const Config&) = default;
 BuiltinPolyfill::Config::~Config() = default;

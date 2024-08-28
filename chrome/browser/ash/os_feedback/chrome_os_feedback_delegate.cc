@@ -297,9 +297,8 @@ void ChromeOsFeedbackDelegate::SendReport(
   }
 
   scoped_refptr<base::RefCountedMemory> png_data = GetScreenshotData();
-  if (report->include_screenshot && png_data && png_data.get()) {
-    feedback_data->set_image(
-        std::string(png_data->front_as<char>(), png_data->size()));
+  if (report->include_screenshot && png_data) {
+    feedback_data->set_image(std::string(base::as_string_view(*png_data)));
   }
 
   // Append consent value to report. For cross platform implementations see:
@@ -433,10 +432,8 @@ void ChromeOsFeedbackDelegate::OpenMetricsDialog() {
 }
 
 void ChromeOsFeedbackDelegate::OpenSystemInfoDialog() {
-  // TODO(http://b/239701119): Make the sys_info.html page a separate WebUI.
-  // For now, use the old Feedback tool's sys_info.html.
-  GURL systemInfoUrl =
-      GURL(base::StrCat({chrome::kChromeUIFeedbackURL, "html/sys_info.html"}));
+  GURL systemInfoUrl = GURL(
+      base::StrCat({chrome::kChromeUIFeedbackURL, "html/system_info.html"}));
   OpenWebDialog(systemInfoUrl, /*args=*/"");
 }
 

@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/scoped_observation_traits.h"
 #include "components/user_manager/include_exclude_account_id_filter.h"
@@ -184,6 +183,9 @@ class USER_MANAGER_EXPORT UserManager {
   // has a policy that prohibits it to be part of multi-profile session.
   virtual UserList GetUsersAllowedForMultiProfile() const = 0;
 
+  // Returns users allowed on login screen in the given `users` list.
+  virtual UserList FindLoginAllowedUsersFrom(const UserList& users) const = 0;
+
   // Returns a list of users who are currently logged in.
   virtual const UserList& GetLoggedInUsers() const = 0;
 
@@ -333,6 +335,11 @@ class USER_MANAGER_EXPORT UserManager {
   // Saves user's type for |user| into local state preferences.
   virtual void SaveUserType(const User* user) = 0;
 
+  // Sets using saml to the user identified by `account_id`.
+  virtual void SetUserUsingSaml(const AccountId& account_id,
+                                bool using_saml,
+                                bool using_saml_principals_api) = 0;
+
   // Returns the email of the owner user stored in local state. Can return
   // nullopt if no user attempted to take ownership so far (e.g. there were
   // only guest sessions or it's a managed device). This is a secondary / backup
@@ -372,10 +379,6 @@ class USER_MANAGER_EXPORT UserManager {
   // user's cryptohome is ephemeral.
   virtual bool IsCurrentUserCryptohomeDataEphemeral() const = 0;
 
-  // Returns true if the current user's session can be locked (i.e. the user has
-  // a password with which to unlock the session).
-  virtual bool CanCurrentUserLock() const = 0;
-
   // Returns true if at least one user has signed in.
   virtual bool IsUserLoggedIn() const = 0;
 
@@ -394,13 +397,10 @@ class USER_MANAGER_EXPORT UserManager {
   // Returns true if we're logged in as a kiosk app.
   virtual bool IsLoggedInAsKioskApp() const = 0;
 
-  // Returns true if we're logged in as an ARC kiosk app.
-  virtual bool IsLoggedInAsArcKioskApp() const = 0;
-
   // Returns true if we're logged in as a Web kiosk app.
   virtual bool IsLoggedInAsWebKioskApp() const = 0;
 
-  // Returns true if we're logged in as chrome, ARC or Web kiosk app.
+  // Returns true if we're logged in as chrome, or Web kiosk app.
   virtual bool IsLoggedInAsAnyKioskApp() const = 0;
 
   // Returns true if we're logged in as the stub user used for testing on Linux.
@@ -415,9 +415,6 @@ class USER_MANAGER_EXPORT UserManager {
 
   virtual bool IsUserCryptohomeDataEphemeral(
       const AccountId& account_id) const = 0;
-
-  // Returns true if device is enterprise managed.
-  virtual bool IsEnterpriseManaged() const = 0;
 
   virtual void AddObserver(Observer* obs) = 0;
   virtual void RemoveObserver(Observer* obs) = 0;
@@ -469,11 +466,8 @@ class USER_MANAGER_EXPORT UserManager {
   // Returns true if this is first exec after boot.
   virtual bool IsFirstExecAfterBoot() const = 0;
 
-  // Actually removes cryptohome.
-  virtual void AsyncRemoveCryptohome(const AccountId& account_id) const = 0;
-
   // Returns true if |account_id| is deprecated supervised.
-  // TODO(crbug/1155729): Check it is not used anymore and remove it.
+  // TODO(crbug.com/40735554): Check it is not used anymore and remove it.
   virtual bool IsDeprecatedSupervisedAccountId(
       const AccountId& account_id) const = 0;
 
@@ -481,24 +475,13 @@ class USER_MANAGER_EXPORT UserManager {
       const AccountId& account_id) const = 0;
 
   // Sets affiliation status for the user identified with `account_id`
-  // judging by `user_affiliation_ids` and device affiliation IDs.
-  virtual void SetUserAffiliation(
-      const AccountId& account_id,
-      const base::flat_set<std::string>& user_affiliation_ids) = 0;
+  // to `is_affiliated`.
+  virtual void SetUserAffiliated(const AccountId& account_id,
+                                 bool is_affiliated) = 0;
 
   // Returns true when the browser has crashed and restarted during the current
   // user's session.
   virtual bool HasBrowserRestarted() const = 0;
-
-  // Schedules CheckAndResolveLocale using given task runner and
-  // |on_resolved_callback| as reply callback.
-  virtual void ScheduleResolveLocale(
-      const std::string& locale,
-      base::OnceClosure on_resolved_callback,
-      std::string* out_resolved_locale) const = 0;
-
-  // Returns true if |image_index| is a valid default user image index.
-  virtual bool IsValidDefaultUserImageId(int image_index) const = 0;
 
   // Returns the instance of multi user sign-in policy controller.
   virtual MultiUserSignInPolicyController*
@@ -508,6 +491,12 @@ class USER_MANAGER_EXPORT UserManager {
                              const User* user,
                              bool browser_restart,
                              bool is_child) const;
+
+  // Returns true if `user` is allowed, according to the given constraints.
+  // Accepted user types: kRegular, kGuest, kChild.
+  static bool IsUserAllowed(const User& user,
+                            bool is_guest_allowed,
+                            bool is_user_allowlisted);
 
  protected:
   // Sets UserManager instance.

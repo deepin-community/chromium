@@ -68,7 +68,6 @@
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
-#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "v8/include/v8.h"
 
@@ -233,11 +232,16 @@ class IDBRequestTest : public testing::Test {
   }
 
   void FinishLoadingResult(IDBRequest* request) {
-    request->queue_item_->OnResultLoadComplete();
+    V8TestingScope scope;
+    Vector<std::unique_ptr<IDBValue>> values;
+    values.push_back(CreateIDBValueForTesting(scope.GetIsolate(),
+                                              /*create_wrapped_value=*/false));
+    request->queue_item_->OnLoadComplete(std::move(values),
+                                         /*error=*/nullptr);
   }
 
   test::TaskEnvironment task_environment_;
-  raw_ptr<URLLoaderMockFactory, ExperimentalRenderer> url_loader_mock_factory_;
+  raw_ptr<URLLoaderMockFactory> url_loader_mock_factory_;
   Persistent<IDBDatabase> db_;
   Persistent<IDBTransaction> transaction_;
   Persistent<IDBObjectStore> store_;

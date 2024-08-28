@@ -85,7 +85,7 @@ void NigoriModelTypeProcessor::GetLocalChanges(
   if (entity_->RequiresCommitData()) {
     // SetCommitData will update EntityData's fields with values from
     // metadata.
-    entity_->SetCommitData(bridge_->GetData());
+    entity_->SetCommitData(bridge_->GetDataForCommit());
   }
 
   auto commit_request_data = std::make_unique<CommitRequestData>();
@@ -131,14 +131,12 @@ void NigoriModelTypeProcessor::OnUpdateReceived(
     return;
   }
 
-  // TODO(crbug.com/1356900): validate incoming updates, e.g. |gc_directive|
+  // TODO(crbug.com/40860698): validate incoming updates, e.g. |gc_directive|
   // must be empty for Nigori.
   std::optional<ModelError> error;
 
   const bool is_initial_sync =
       !IsInitialSyncDone(model_type_state_.initial_sync_state());
-  LogUpdatesReceivedByProcessorHistogram(NIGORI, is_initial_sync,
-                                         updates.size());
 
   model_type_state_ = type_state;
 
@@ -235,7 +233,9 @@ void NigoriModelTypeProcessor::OnSyncStopping(
   // OnSyncStarting() has completed.
   DCHECK(!start_callback_);
 
-  worker_.reset();
+  if (IsConnected()) {
+    DisconnectSync();
+  }
 
   switch (metadata_fate) {
     case syncer::KEEP_METADATA: {
@@ -246,19 +246,23 @@ void NigoriModelTypeProcessor::OnSyncStopping(
       ClearMetadataAndReset();
       model_ready_to_sync_ = false;
 
-      // The model is still ready to sync (with the same |bridge_|) and same
-      // sync metadata.
+      // The model is immediately ready to sync again (with the same |bridge_|).
       ModelReadyToSync(bridge_, NigoriMetadataBatch());
       break;
     }
   }
 }
 
+void NigoriModelTypeProcessor::HasUnsyncedData(
+    base::OnceCallback<void(bool)> callback) {
+  std::move(callback).Run(entity_ && entity_->RequiresCommitRequest());
+}
+
 void NigoriModelTypeProcessor::GetAllNodesForDebugging(
     AllNodesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  std::unique_ptr<EntityData> entity_data = bridge_->GetData();
+  std::unique_ptr<EntityData> entity_data = bridge_->GetDataForDebugging();
   if (!entity_data) {
     std::move(callback).Run(syncer::NIGORI, base::Value::List());
     return;
@@ -322,8 +326,6 @@ void NigoriModelTypeProcessor::ModelReadyToSync(
   if (model_error_) {
     return;
   }
-
-  MigrateLegacyInitialSyncDone(nigori_metadata.model_type_state, NIGORI);
 
   if (IsInitialSyncDone(
           nigori_metadata.model_type_state.initial_sync_state()) &&

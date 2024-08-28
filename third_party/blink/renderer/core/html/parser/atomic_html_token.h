@@ -155,6 +155,13 @@ class CORE_EXPORT AtomicHTMLToken {
     return self_closing_;
   }
 
+  void SetSelfClosingToFalse() {
+    DCHECK(self_closing_);
+    DCHECK_EQ(type_, HTMLToken::kStartTag);
+    DCHECK_EQ(GetHTMLTag(), html_names::HTMLTag::kScript);
+    self_closing_ = false;
+  }
+
   bool HasDuplicateAttribute() const { return duplicate_attribute_; }
 
   Attribute* GetAttributeItem(const QualifiedName& attribute_name) {
@@ -215,7 +222,7 @@ class CORE_EXPORT AtomicHTMLToken {
       : type_(token.GetType()), name_(HTMLTokenNameFromToken(token)) {
     switch (type_) {
       case HTMLToken::kUninitialized:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
       case HTMLToken::DOCTYPE:
         doctype_data_ = token.ReleaseDoctypeData();

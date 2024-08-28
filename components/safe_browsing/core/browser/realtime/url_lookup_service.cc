@@ -10,7 +10,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/prefs/pref_service.h"
@@ -79,11 +78,12 @@ RealTimeUrlLookupService::RealTimeUrlLookupService(
 void RealTimeUrlLookupService::GetAccessToken(
     const GURL& url,
     RTLookupResponseCallback response_callback,
-    scoped_refptr<base::SequencedTaskRunner> callback_task_runner) {
+    scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
+    SessionID tab_id) {
   token_fetcher_->Start(base::BindOnce(
       &RealTimeUrlLookupService::OnGetAccessToken, weak_factory_.GetWeakPtr(),
       url, std::move(response_callback), std::move(callback_task_runner),
-      base::TimeTicks::Now()));
+      base::TimeTicks::Now(), tab_id));
 }
 
 void RealTimeUrlLookupService::OnPrefChanged() {
@@ -97,6 +97,7 @@ void RealTimeUrlLookupService::OnGetAccessToken(
     RTLookupResponseCallback response_callback,
     scoped_refptr<base::SequencedTaskRunner> callback_task_runner,
     base::TimeTicks get_token_start_time,
+    SessionID tab_id,
     const std::string& access_token) {
   if (shutting_down_)
     return;
@@ -105,9 +106,9 @@ void RealTimeUrlLookupService::OnGetAccessToken(
                           base::TimeTicks::Now() - get_token_start_time);
   base::UmaHistogramBoolean("SafeBrowsing.RT.HasTokenFromFetcher",
                             !access_token.empty());
-  SendRequest(url, access_token, std::move(response_callback),
-              std::move(callback_task_runner),
-              /* is_sampled_report */ false);
+  MaybeSendRequest(url, access_token, std::move(response_callback),
+                   std::move(callback_task_runner),
+                   /* is_sampled_report */ false, tab_id);
 }
 
 void RealTimeUrlLookupService::OnResponseUnauthorized(
@@ -158,6 +159,10 @@ bool RealTimeUrlLookupService::CanSendRTSampleRequest() const {
   return IsExtendedReportingEnabled(*pref_service_) &&
          (bypass_protego_probability_for_tests_ ||
           base::RandDouble() <= kProbabilityForSendingSampledRequests);
+}
+
+std::string RealTimeUrlLookupService::GetUserEmail() const {
+  return "";
 }
 
 void RealTimeUrlLookupService::Shutdown() {

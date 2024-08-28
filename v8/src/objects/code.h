@@ -123,7 +123,16 @@ class Code : public ExposedTrustedObject {
   DECL_PRIMITIVE_ACCESSORS(unwinding_info_offset, int32_t)
   // [deoptimization_data]: Array containing data for deopt for non-baseline
   // code.
-  DECL_ACCESSORS(deoptimization_data, Tagged<TrustedFixedArray>)
+  DECL_ACCESSORS(deoptimization_data, Tagged<ProtectedFixedArray>)
+  // [parameter_count]: The number of formal parameters, including the
+  // receiver. Currently only available for optimized functions.
+  // TODO(saelo): make this always available. This is just a matter of figuring
+  // out how to obtain the parameter count during code generation when no
+  // BytecodeArray is available from which it can be copied.
+  DECL_PRIMITIVE_ACCESSORS(parameter_count, uint16_t)
+  inline uint16_t parameter_count_without_receiver() const;
+  DECL_PRIMITIVE_ACCESSORS(wasm_js_tagged_parameter_count, uint16_t)
+  DECL_PRIMITIVE_ACCESSORS(wasm_js_first_tagged_parameter, uint16_t)
 
   // Whether this type of Code uses deoptimization data, in which case the
   // deoptimization_data field will be populated.
@@ -136,17 +145,22 @@ class Code : public ExposedTrustedObject {
 
   // [bytecode_or_interpreter_data]: BytecodeArray or InterpreterData for
   // baseline code.
-  inline Tagged<TrustedObject> bytecode_or_interpreter_data(
-      IsolateForSandbox isolate) const;
+  inline Tagged<TrustedObject> bytecode_or_interpreter_data() const;
   inline void set_bytecode_or_interpreter_data(
       Tagged<TrustedObject> value,
       WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
   // [source_position_table]: ByteArray for the source positions table for
   // non-baseline code.
-  DECL_ACCESSORS(source_position_table, Tagged<ByteArray>)
+  DECL_ACCESSORS(source_position_table, Tagged<TrustedByteArray>)
   // [bytecode_offset_table]: ByteArray for the bytecode offset for baseline
   // code.
-  DECL_ACCESSORS(bytecode_offset_table, Tagged<ByteArray>)
+  DECL_ACCESSORS(bytecode_offset_table, Tagged<TrustedByteArray>)
+
+  inline bool has_source_position_table_or_bytecode_offset_table() const;
+  inline bool has_source_position_table() const;
+  inline bool has_bytecode_offset_table() const;
+  inline void clear_source_position_table_and_bytecode_offset_table();
+
   DECL_PRIMITIVE_ACCESSORS(inlined_bytecode_size, unsigned)
   DECL_PRIMITIVE_ACCESSORS(osr_offset, BytecodeOffset)
   // [code_comments_offset]: Offset of the code comment section.
@@ -162,7 +176,7 @@ class Code : public ExposedTrustedObject {
   DECL_ACCESSORS(wrapper, Tagged<CodeWrapper>)
 
   // Unchecked accessors to be used during GC.
-  inline Tagged<TrustedFixedArray> unchecked_deoptimization_data() const;
+  inline Tagged<ProtectedFixedArray> unchecked_deoptimization_data() const;
 
   DECL_RELAXED_UINT32_ACCESSORS(flags)
 
@@ -203,8 +217,10 @@ class Code : public ExposedTrustedObject {
   // reserved in the code prologue; otherwise 0.
   inline int stack_slots() const;
 
-  inline Tagged<ByteArray> SourcePositionTable(
+  inline Tagged<TrustedByteArray> SourcePositionTable(
       Isolate* isolate, Tagged<SharedFunctionInfo> sfi) const;
+  int SourcePosition(int offset) const;
+  int SourceStatementPosition(int offset) const;
 
   inline Address safepoint_table_address() const;
   inline int safepoint_table_size() const;
@@ -329,46 +345,56 @@ class Code : public ExposedTrustedObject {
                  Address current_pc = kNullAddress);
 #endif
 
-  DECL_CAST(Code)
   DECL_VERIFIER(Code)
 
 // Layout description.
-#define CODE_DATA_FIELDS(V)                                                   \
-  /* The deoptimization_data_or_interpreter_data field contains: */           \
-  /*  - A DeoptimizationData for optimized code (maglev or turbofan) */       \
-  /*  - A BytecodeArray or InterpreterData for baseline code */               \
-  /*  - Smi::zero() for all other types of code (e.g. builtin) */             \
-  V(kDeoptimizationDataOrInterpreterDataOffset, kTaggedSize)                  \
-  /* Strong pointer fields. */                                                \
-  V(kStartOfStrongFieldsOffset, 0)                                            \
-  V(kPositionTableOffset, kTaggedSize)                                        \
-  V(kWrapperOffset, kTaggedSize)                                              \
-  V(kEndOfStrongFieldsWithMainCageBaseOffset, 0)                              \
-  /* The InstructionStream field is special: it uses code_cage_base. */       \
-  V(kInstructionStreamOffset, kTaggedSize)                                    \
-  V(kEndOfStrongFieldsOffset, 0)                                              \
-  /* Untagged data not directly visited by GC starts here. */                 \
-  /* When the sandbox is off, the instruction_start field contains a raw */   \
-  /* pointer to the first instruction of this Code. */                        \
-  /* If the sandbox is on, this field does not exist. Instead, the */         \
-  /* instruction_start is stored in this Code's code pointer table entry */   \
-  /* referenced via the kSelfIndirectPointerOffset field */                   \
-  V(kInstructionStartOffset, V8_ENABLE_SANDBOX_BOOL ? 0 : kSystemPointerSize) \
-  /* The serializer needs to copy bytes starting from here verbatim. */       \
-  V(kFlagsOffset, kUInt32Size)                                                \
-  V(kInstructionSizeOffset, kIntSize)                                         \
-  V(kMetadataSizeOffset, kIntSize)                                            \
-  /* TODO(jgruber): TF-specific fields could be merged with builtin_id. */    \
-  V(kInlinedBytecodeSizeOffset, kIntSize)                                     \
-  V(kOsrOffsetOffset, kInt32Size)                                             \
-  V(kHandlerTableOffsetOffset, kIntSize)                                      \
-  V(kUnwindingInfoOffsetOffset, kInt32Size)                                   \
-  V(kConstantPoolOffsetOffset, V8_EMBEDDED_CONSTANT_POOL_BOOL ? kIntSize : 0) \
-  V(kCodeCommentsOffsetOffset, kIntSize)                                      \
-  /* TODO(jgruber): 12 bits would suffice, steal from here if needed. */      \
-  V(kBuiltinIdOffset, kInt16Size)                                             \
-  V(kUnalignedSize, OBJECT_POINTER_PADDING(kUnalignedSize))                   \
-  /* Total size. */                                                           \
+#define CODE_DATA_FIELDS(V)                                                    \
+  /* The deoptimization_data_or_interpreter_data field contains: */            \
+  /*  - A DeoptimizationData for optimized code (maglev or turbofan) */        \
+  /*  - A BytecodeArray or InterpreterData for baseline code */                \
+  /*  - Smi::zero() for all other types of code (e.g. builtin) */              \
+  V(kDeoptimizationDataOrInterpreterDataOffset, kTaggedSize)                   \
+  /* This field contains: */                                                   \
+  /*  - A bytecode offset table (trusted byte array) for baseline code */      \
+  /*  - A (possibly empty) source position table (trusted byte array) for */   \
+  /*    most other types of code */                                            \
+  /*  - Smi::zero() for embedded builtin code (in RO space) */                 \
+  /*    TODO(saelo) once we have a  trusted RO space, we could instead use */  \
+  /*    empty_trusted_byte_array to avoid using Smi::zero() at all. */         \
+  V(kPositionTableOffset, kTaggedSize)                                         \
+  /* Strong pointer fields. */                                                 \
+  V(kStartOfStrongFieldsOffset, 0)                                             \
+  V(kWrapperOffset, kTaggedSize)                                               \
+  V(kEndOfStrongFieldsWithMainCageBaseOffset, 0)                               \
+  /* The InstructionStream field is special: it uses code_cage_base. */        \
+  V(kInstructionStreamOffset, kTaggedSize)                                     \
+  V(kEndOfStrongFieldsOffset, 0)                                               \
+  /* Untagged data not directly visited by GC starts here. */                  \
+  /* When the sandbox is off, the instruction_start field contains a raw */    \
+  /* pointer to the first instruction of this Code. */                         \
+  /* If the sandbox is on, this field does not exist. Instead, the */          \
+  /* instruction_start is stored in this Code's code pointer table entry */    \
+  /* referenced via the kSelfIndirectPointerOffset field */                    \
+  V(kInstructionStartOffset, V8_ENABLE_SANDBOX_BOOL ? 0 : kSystemPointerSize)  \
+  /* The serializer needs to copy bytes starting from here verbatim. */        \
+  V(kFlagsOffset, kUInt32Size)                                                 \
+  V(kInstructionSizeOffset, kIntSize)                                          \
+  V(kMetadataSizeOffset, kIntSize)                                             \
+  /* TODO(jgruber): TF-specific fields could be merged with builtin_id. */     \
+  V(kInlinedBytecodeSizeOffset, kIntSize)                                      \
+  V(kOsrOffsetOffset, kInt32Size)                                              \
+  V(kHandlerTableOffsetOffset, kIntSize)                                       \
+  V(kUnwindingInfoOffsetOffset, kInt32Size)                                    \
+  V(kConstantPoolOffsetOffset, V8_EMBEDDED_CONSTANT_POOL_BOOL ? kIntSize : 0)  \
+  V(kCodeCommentsOffsetOffset, kIntSize)                                       \
+  /* This field is currently only used during deoptimization. If this space */ \
+  /* is ever needed for other purposes, it would probably be possible to */    \
+  /* obtain the parameter count from the BytecodeArray instead. */             \
+  V(kParameterCountOffset, kUInt16Size)                                        \
+  /* TODO(jgruber): 12 bits would suffice, steal from here if needed. */       \
+  V(kBuiltinIdOffset, kInt16Size)                                              \
+  V(kUnalignedSize, OBJECT_POINTER_PADDING(kUnalignedSize))                    \
+  /* Total size. */                                                            \
   V(kSize, 0)
 
   DEFINE_FIELD_OFFSET_CONSTANTS(ExposedTrustedObject::kHeaderSize,
@@ -417,9 +443,8 @@ class Code : public ExposedTrustedObject {
 
   // TODO(jgruber): These field names are incomplete, we've squashed in more
   // overloaded contents in the meantime. Update the field names.
-  Tagged<Object> raw_deoptimization_data_or_interpreter_data(
-      IsolateForSandbox isolate) const;
-  Tagged<ByteArray> raw_position_table() const;
+  Tagged<Object> raw_deoptimization_data_or_interpreter_data() const;
+  Tagged<Object> raw_position_table() const;
 
   enum BytecodeToPCPosition {
     kPcAtStartOfBytecode,
@@ -461,8 +486,6 @@ class Code : public ExposedTrustedObject {
 // (checked) casts do not work on GcSafeCode.
 class GcSafeCode : public HeapObject {
  public:
-  DECL_CAST(GcSafeCode)
-
   // Use with care, this casts away knowledge that we're dealing with a
   // special-semantics object.
   inline Tagged<Code> UnsafeCastToCode() const;
@@ -492,6 +515,10 @@ class GcSafeCode : public HeapObject {
   inline bool CanDeoptAt(Isolate* isolate, Address pc) const;
   inline Tagged<Object> raw_instruction_stream(
       PtrComprCageBase code_cage_base) const;
+  // The two following accessors repurpose the InlinedBytecodeSize field, see
+  // comment in code-inl.h.
+  inline uint16_t wasm_js_tagged_parameter_count() const;
+  inline uint16_t wasm_js_first_tagged_parameter() const;
 
  private:
   OBJECT_CONSTRUCTORS(GcSafeCode, HeapObject);
@@ -504,7 +531,6 @@ class CodeWrapper : public Struct {
  public:
   DECL_CODE_POINTER_ACCESSORS(code)
 
-  DECL_CAST(CodeWrapper)
   DECL_PRINTER(CodeWrapper)
   DECL_VERIFIER(CodeWrapper)
 

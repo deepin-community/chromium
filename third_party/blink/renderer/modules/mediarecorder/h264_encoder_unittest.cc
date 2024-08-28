@@ -130,12 +130,14 @@ class H264EncoderFixture : public ::testing::Test {
 
     const auto eProfileIdc = params.sSpatialLayers[0].uiProfileIdc;
     if (!kEProfileIdcToProfile.Contains(eProfileIdc)) {
-      NOTREACHED() << "Failed to convert unknown EProfileIdc: " << eProfileIdc;
+      NOTREACHED_IN_MIGRATION()
+          << "Failed to convert unknown EProfileIdc: " << eProfileIdc;
     }
 
     const auto eLevelIdc = params.sSpatialLayers[0].uiLevelIdc;
     if (!kELevelIdcToLevel.Contains(eLevelIdc)) {
-      NOTREACHED() << "Failed to convert unknown ELevelIdc: " << eLevelIdc;
+      NOTREACHED_IN_MIGRATION()
+          << "Failed to convert unknown ELevelIdc: " << eLevelIdc;
     }
     return {kEProfileIdcToProfile.find(eProfileIdc)->value,
             kELevelIdcToLevel.find(eLevelIdc)->value};
@@ -153,7 +155,7 @@ class H264EncoderFixture : public ::testing::Test {
   const std::optional<media::VideoCodecProfile> profile_;
   const std::optional<uint8_t> level_;
   const uint32_t bitrate_;
-  raw_ptr<media::MockVideoEncoderMetricsProvider, ExperimentalRenderer>
+  raw_ptr<media::MockVideoEncoderMetricsProvider, DanglingUntriaged>
       mock_metrics_provider_;
   H264Encoder encoder_;
   bool on_error_called_ = false;

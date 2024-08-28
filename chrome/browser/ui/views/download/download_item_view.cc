@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <numbers>
 #include <numeric>
 #include <vector>
 
@@ -21,7 +22,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
-#include "base/numerics/math_constants.h"
 #include "base/ranges/algorithm.h"
 #include "base/ranges/functional.h"
 #include "base/task/single_thread_task_runner.h"
@@ -156,7 +156,7 @@ class TransparentButton : public views::Button {
         [](views::View* host) {
           // This button will be used like a LabelButton, so use the same
           // foreground base color as a label button.
-          // TODO(crbug.com/1423975): Replace by a `ui::ColorId` and use it in
+          // TODO(crbug.com/40260264): Replace by a `ui::ColorId` and use it in
           // `InkDropHost::SetBaseColorId`.
           return color_utils::DeriveDefaultIconColor(
               host->GetColorProvider()->GetColor(
@@ -230,10 +230,10 @@ bool has_warning_label(download::DownloadItemMode mode) {
 }
 
 float GetDPIScaleForView(views::View* view) {
-  const display::Screen* const screen = display::Screen::GetScreen();
-  DCHECK(screen);
-  return screen->GetDisplayNearestView(view->GetWidget()->GetNativeView())
-      .device_scale_factor();
+  DCHECK(display::Screen::GetScreen());
+  return display::Screen::GetScreen()
+      ->GetPreferredScaleFactorForView(view->GetWidget()->GetNativeView())
+      .value_or(1.0f);
 }
 }  // namespace
 
@@ -247,7 +247,7 @@ class DownloadItemView::ContextMenuButton : public views::ImageButton {
                                 base::Unretained(owner))),
         owner_(owner) {
     views::ConfigureVectorImageButton(this);
-    SetAccessibleName(l10n_util::GetStringUTF16(
+    GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
         IDS_DOWNLOAD_ITEM_DROPDOWN_BUTTON_ACCESSIBLE_TEXT));
     SetBorder(views::CreateEmptyBorder(10));
     SetHasInkDropActionOnClick(false);
@@ -307,7 +307,7 @@ DownloadItemView::DownloadItemView(DownloadUIModel::DownloadUIModelPtr model,
   file_name_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   file_name_label_->SetTextContext(CONTEXT_DOWNLOAD_SHELF);
   file_name_label_->SetAutoColorReadabilityEnabled(false);
-  file_name_label_->GetViewAccessibility().OverrideIsIgnored(true);
+  file_name_label_->GetViewAccessibility().SetIsIgnored(true);
   const std::u16string filename = ElidedFilename(*file_name_label_);
   file_name_label_->SetText(filename);
   file_name_label_->SetCanProcessEventsWithinSubtree(false);
@@ -372,7 +372,7 @@ void DownloadItemView::AddedToWidget() {
 }
 
 void DownloadItemView::Layout(PassKey) {
-  // TODO(crbug.com/1005568): Replace Layout()/CalculatePreferredSize() with a
+  // TODO(crbug.com/40648316): Replace Layout()/CalculatePreferredSize() with a
   // LayoutManager.
 
   LayoutSuperclass<View>(this);
@@ -396,9 +396,10 @@ void DownloadItemView::Layout(PassKey) {
 
     file_name_label_->SetBounds(text_x, CenterY(text_height), text_width,
                                 file_name_height);
-    status_label_->SetBounds(text_x, file_name_label_->bounds().bottom(),
-                             text_width,
-                             status_label_->GetPreferredSize().height());
+    status_label_->SetBounds(
+        text_x, file_name_label_->bounds().bottom(), text_width,
+        status_label_->GetPreferredSize(views::SizeBounds(text_width, {}))
+            .height());
   } else {
     auto* const label = (mode_ == download::DownloadItemMode::kDeepScanning)
                             ? deep_scanning_label_.get()
@@ -410,8 +411,9 @@ void DownloadItemView::Layout(PassKey) {
     gfx::Rect button_bounds(gfx::Point(label->bounds().right() + kLabelPadding,
                                        CenterY(button_size.height())),
                             button_size);
-    for (auto* button : {save_button_, discard_button_, scan_button_,
-                         open_now_button_, review_button_}) {
+    for (const raw_ptr<views::MdTextButton>& button :
+         {save_button_, discard_button_, scan_button_, open_now_button_,
+          review_button_}) {
       button->SetBoundsRect(button_bounds);
       if (button->GetVisible())
         button_bounds.set_x(button_bounds.right() + kSaveDiscardButtonPadding);
@@ -547,14 +549,15 @@ void DownloadItemView::AnimationEnded(const gfx::Animation* animation) {
   AnimationProgressed(animation);
 }
 
-gfx::Size DownloadItemView::CalculatePreferredSize() const {
+gfx::Size DownloadItemView::CalculatePreferredSize(
+    const views::SizeBounds& /*available_size*/) const {
   int height, width = dropdown_button_->GetVisible()
                           ? (dropdown_button_->width() + kEndPadding)
                           : 0;
 
   if (mode_ == download::DownloadItemMode::kNormal) {
     int label_width =
-        std::max(file_name_label_->GetPreferredSize().width(), kTextWidth);
+        std::max(file_name_label_->GetPreferredSize({}).width(), kTextWidth);
     if (model_->GetDangerType() ==
         download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE) {
       label_width =
@@ -639,7 +642,7 @@ void DownloadItemView::OnPaint(gfx::Canvas* canvas) {
       std::swap(start, end);
     const double value = gfx::Tween::DoubleValueBetween(
         complete_animation_.GetCurrentValue(), start, end);
-    const double opacity = std::sin((value + 0.5) * base::kPiDouble) / 2 + 0.5;
+    const double opacity = std::sin((value + 0.5) * std::numbers::pi) / 2 + 0.5;
     canvas->SaveLayerAlpha(
         static_cast<uint8_t>(gfx::Tween::IntValueBetween(opacity, 0, 255)));
     PaintDownloadProgress(canvas, progress_bounds, base::TimeDelta(), 100);
@@ -647,8 +650,8 @@ void DownloadItemView::OnPaint(gfx::Canvas* canvas) {
   } else if (scanning_animation_.is_animating()) {
     DCHECK_EQ(download::DownloadItemMode::kDeepScanning, mode_);
     const double value = gfx::Tween::DoubleValueBetween(
-        scanning_animation_.GetCurrentValue(), 0, 2 * base::kPiDouble);
-    const double opacity = std::sin(value + base::kPiDouble / 2) / 2 + 0.5;
+        scanning_animation_.GetCurrentValue(), 0, 2 * std::numbers::pi);
+    const double opacity = std::sin(value + std::numbers::pi / 2) / 2 + 0.5;
     canvas->SaveLayerAlpha(
         static_cast<uint8_t>(gfx::Tween::IntValueBetween(opacity, 0, 255)));
     PaintDownloadProgress(canvas, GetIconBounds(), base::TimeDelta(), 100);
@@ -720,7 +723,7 @@ void DownloadItemView::SetMode(download::DownloadItemMode mode) {
       has_warning_label(mode_)
           ? warning_label_->GetText()
           : (status_label_->GetText() + u' ' + unelided_filename);
-  open_button_->SetAccessibleName(accessible_name_);
+  open_button_->GetViewAccessibility().SetName(accessible_name_);
   // Do not fire text changed notifications. Screen readers are notified of
   // status changes via the accessible alert notifications, and text change
   // notifications would be redundant.
@@ -801,7 +804,7 @@ void DownloadItemView::UpdateLabels() {
     const auto text_and_style = GetStatusTextAndStyle();
     status_label_->SetText(text_and_style.first);
     status_label_->SetTextStyle(text_and_style.second);
-    status_label_->GetViewAccessibility().OverrideIsIgnored(
+    status_label_->GetViewAccessibility().SetIsIgnored(
         status_label_->GetText().empty());
   }
 
@@ -929,7 +932,7 @@ void DownloadItemView::UpdateAccessibleAlert(
   views::ViewAccessibility& ax = accessible_alert_->GetViewAccessibility();
   ax.SetRole(ax::mojom::Role::kAlert);
   if (!accessible_alert_text.empty())
-    ax.OverrideName(accessible_alert_text);
+    ax.SetName(accessible_alert_text, ax::mojom::NameFrom::kAttribute);
   if (announce_accessible_alert_soon_ || !accessible_alert_timer_.IsRunning()) {
     AnnounceAccessibleAlert();
     accessible_alert_timer_.Reset();
@@ -1032,6 +1035,7 @@ ui::ImageModel DownloadItemView::GetIcon() const {
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
     case download::DOWNLOAD_DANGER_TYPE_DANGEROUS_ACCOUNT_COMPROMISE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_OPENED_DANGEROUS:
+    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED:
       return kError;
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_WARNING:
       return kWarning;
@@ -1040,7 +1044,6 @@ ui::ImageModel DownloadItemView::GetIcon() const {
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_SCANNING:
     case download::DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING:
       return kInfo;
-    case download::DOWNLOAD_DANGER_TYPE_BLOCKED_UNSUPPORTED_FILETYPE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_SAFE:
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
     case download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS:

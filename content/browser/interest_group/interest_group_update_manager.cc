@@ -28,7 +28,6 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/aggregation_service/aggregation_coordinator_utils.h"
-#include "components/aggregation_service/features.h"
 #include "content/browser/interest_group/interest_group_features.h"
 #include "content/browser/interest_group/interest_group_manager_impl.h"
 #include "content/browser/interest_group/interest_group_storage.h"
@@ -119,7 +118,7 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
             "These requests are triggered by a website."
         })");
 
-// TODO(crbug.com/1186444): Report errors to devtools for the TryToCopy*().
+// TODO(crbug.com/40172488): Report errors to devtools for the TryToCopy*().
 // functions.
 
 // Name and owner are optional in `dict` (parsed server JSON response), but
@@ -271,9 +270,7 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
     base::UmaHistogramBoolean(
         "Ads.InterestGroup.EnumNaming.Update.WorkletExecutionMode",
         *maybe_execution_mode == "groupByOrigin");
-  } else if (base::FeatureList::IsEnabled(
-                 features::kEnableUpdatingExecutionModeToFrozenContext) &&
-             *maybe_execution_mode == "frozen-context") {
+  } else if (*maybe_execution_mode == "frozen-context") {
     interest_group_update.execution_mode =
         blink::InterestGroup::ExecutionMode::kFrozenContext;
   } else {
@@ -288,7 +285,7 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   return true;
 }
 
-// Copies the trustedBiddingSignals list JSON field into
+// Copies the trustedBiddingSignalsKeys list JSON field into
 // `interest_group_update`, returns true iff the JSON is valid and the copy
 // completed.
 [[nodiscard]] bool TryToCopyTrustedBiddingSignalsKeys(
@@ -577,15 +574,6 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 [[nodiscard]] bool TryToCopyPrivateAggregationConfig(
     const base::Value::Dict& dict,
     InterestGroupUpdate& interest_group_update) {
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kPrivateAggregationApiMultipleCloudProviders) ||
-      !base::FeatureList::IsEnabled(
-          aggregation_service::kAggregationServiceMultipleCloudProviders)) {
-    // Ignore the specified aggregation coordinator unless the feature is
-    // enabled.
-    return true;
-  }
-
   const base::Value::Dict* maybe_config =
       dict.FindDict("privateAggregationConfig");
   if (!maybe_config) {
@@ -613,7 +601,7 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 std::optional<InterestGroupUpdate> ParseUpdateJson(
     const blink::InterestGroupKey& group_key,
     const data_decoder::DataDecoder::ValueOrError& result) {
-  // TODO(crbug.com/1186444): Report to devtools.
+  // TODO(crbug.com/40172488): Report to devtools.
   if (!result.has_value()) {
     return std::nullopt;
   }
@@ -715,16 +703,13 @@ std::optional<InterestGroupUpdate> ParseUpdateJson(
   }
   if (!TryToCopyMaxTrustedBiddingSignalsURLLength(*dict,
                                                   interest_group_update)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
   if (!TryToCopyTrustedBiddingSignalsKeys(*dict, interest_group_update)) {
     return std::nullopt;
   }
-  if (base::FeatureList::IsEnabled(
-          features::kEnableUpdatingUserBiddingSignals)) {
-    if (!TryToCopyUserBiddingSignals(*dict, interest_group_update)) {
-      return std::nullopt;
-    }
+  if (!TryToCopyUserBiddingSignals(*dict, interest_group_update)) {
+    return std::nullopt;
   }
   if (!TryToCopyAds(*dict, interest_group_update)) {
     return std::nullopt;
@@ -933,7 +918,6 @@ void InterestGroupUpdateManager::UpdateInterestGroupByBatch(
 
   for (auto& [interest_group_key, update_url, joining_origin] :
        update_parameters) {
-    manager_->QueueKAnonymityUpdateForInterestGroup(interest_group_key);
     ++num_in_flight_updates_;
     base::UmaHistogramCounts100000(
         "Ads.InterestGroup.Net.RequestUrlSizeBytes.Update",
@@ -1093,7 +1077,7 @@ void InterestGroupUpdateManager::DidUpdateInterestGroupsOfOwnerNetFetch(
   base::UmaHistogramMediumTimes("Ads.InterestGroup.Net.DownloadTime.Update",
                                 base::TimeTicks::Now() - start_time);
 
-  // TODO(crbug.com/1186444): Report HTTP error info to devtools.
+  // TODO(crbug.com/40172488): Report HTTP error info to devtools.
   if (!fetch_body) {
     ReportUpdateFailed(group_key,
                        /*delay_type=*/simple_url_loader->NetError() ==

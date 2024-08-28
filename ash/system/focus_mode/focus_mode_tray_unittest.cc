@@ -5,8 +5,8 @@
 #include "ash/system/focus_mode/focus_mode_tray.h"
 
 #include "ash/accessibility/accessibility_controller.h"
-#include "ash/api/tasks/tasks_types.h"
 #include "ash/constants/ash_features.h"
+#include "ash/glanceables/common/glanceables_util.h"
 #include "ash/root_window_controller.h"
 #include "ash/screen_util.h"
 #include "ash/shelf/shelf.h"
@@ -16,6 +16,7 @@
 #include "ash/system/focus_mode/focus_mode_controller.h"
 #include "ash/system/focus_mode/focus_mode_countdown_view.h"
 #include "ash/system/focus_mode/focus_mode_ending_moment_view.h"
+#include "ash/system/focus_mode/focus_mode_task_test_utils.h"
 #include "ash/system/focus_mode/focus_mode_util.h"
 #include "ash/system/progress_indicator/progress_indicator.h"
 #include "ash/system/status_area_widget_test_helper.h"
@@ -23,12 +24,15 @@
 #include "ash/system/tray/tray_container.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
+#include "url/gurl.h"
 
 namespace ash {
 
@@ -48,6 +52,16 @@ class FocusModeTrayTest : public AshTestBase {
   // AshTestBase:
   void SetUp() override {
     AshTestBase::SetUp();
+
+    // `g_network_handler` is null in tests, we need to manually set the network
+    // connected state. Also, the button and the label under the task item view
+    // will be enabled only when the user is online.
+    glanceables_util::SetIsNetworkConnectedForTest(true);
+
+    auto& tasks_client =
+        CreateFakeTasksClient(AccountId::FromUserEmail("user0@tray"));
+    AddFakeTaskList(tasks_client, "default");
+    AddFakeTask(tasks_client, "default", "task1", "Task 1");
 
     focus_mode_tray_ =
         StatusAreaWidgetTestHelper::GetStatusAreaWidget()->focus_mode_tray();
@@ -185,15 +199,13 @@ TEST_F(FocusModeTrayTest, MarkTaskAsCompleted) {
   ui::ScopedAnimationDurationScaleMode duration(
       ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
+  FocusModeTask task;
+  task.task_id = {.list_id = "default", .id = "task1"};
+  task.title = "make a travel plan";
+  task.updated = base::Time::Now();
+
   FocusModeController* controller = FocusModeController::Get();
-  controller->SetSelectedTask(
-      std::make_unique<api::Task>(
-          /*id=*/base::NumberToString(0), "make a travel plan",
-          /*due=*/absl::nullopt, /*completed=*/false, /*has_subtasks=*/false,
-          /*has_email_link=*/false,
-          /*has_notes=*/false,
-          /*updated=*/base::Time::Now())
-          .get());
+  controller->SetSelectedTask(task);
 
   //  Start focus mode and click the tray to activate the button.
   controller->ToggleFocusMode();
@@ -209,7 +221,7 @@ TEST_F(FocusModeTrayTest, MarkTaskAsCompleted) {
   // Click the radio button to mark the selected task as completed.
   LeftClickOn(radio_button);
 
-  task_environment()->FastForwardBy(kStartAnimationDelay);
+  AdvanceClock(kStartAnimationDelay);
 
   auto* bubble_view = GetBubbleView();
   ui::Layer* bubble_view_layer = bubble_view->layer();
@@ -289,19 +301,18 @@ TEST_F(FocusModeTrayTest, BubbleTabbingAndAccessibility) {
   EXPECT_TRUE(accessibility_controller->spoken_feedback().enabled());
 
   FocusModeController* controller = FocusModeController::Get();
-  const std::string task_name = "Podcast interview script";
+  const std::string task_name = "Task 1";
   const base::TimeDelta session_duration = base::Minutes(40);
   const std::u16string time_remaining = focus_mode_util::GetDurationString(
       session_duration, /*digital_format=*/false);
   controller->SetInactiveSessionDuration(session_duration);
-  controller->SetSelectedTask(std::make_unique<api::Task>(
-                                  /*id=*/base::NumberToString(1), task_name,
-                                  /*due=*/absl::nullopt, /*completed=*/false,
-                                  /*has_subtasks=*/false,
-                                  /*has_email_link=*/false,
-                                  /*has_notes=*/false,
-                                  /*updated=*/base::Time::Now())
-                                  .get());
+
+  FocusModeTask task;
+  task.task_id = {.list_id = "default", .id = "task1"};
+  task.title = task_name;
+  task.updated = base::Time::Now();
+
+  controller->SetSelectedTask(task);
   controller->ToggleFocusMode();
 
   LeftClickOn(focus_mode_tray_);
@@ -313,20 +324,23 @@ TEST_F(FocusModeTrayTest, BubbleTabbingAndAccessibility) {
   PressAndReleaseKey(ui::VKEY_TAB, ui::EF_NONE);
   views::FocusManager* focus_manager =
       GetBubbleView()->GetWidget()->GetFocusManager();
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_ASH_STATUS_TRAY_FOCUS_MODE_TOGGLE_END_BUTTON),
-            focus_manager->GetFocusedView()->GetAccessibleName());
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(
+          IDS_ASH_STATUS_TRAY_FOCUS_MODE_TOGGLE_END_BUTTON_ACCESSIBLE_NAME),
+      focus_manager->GetFocusedView()->GetViewAccessibility().GetCachedName());
 
   PressAndReleaseKey(ui::VKEY_TAB, ui::EF_NONE);
   EXPECT_EQ(
       l10n_util::GetStringUTF16(
-          IDS_ASH_STATUS_TRAY_FOCUS_MODE_EXTEND_TEN_MINUTES_BUTTON_ACCESSIBLE_NAME),
-      focus_manager->GetFocusedView()->GetAccessibleName());
+          IDS_ASH_STATUS_TRAY_FOCUS_MODE_INCREASE_TEN_MINUTES_BUTTON_ACCESSIBLE_NAME),
+      focus_manager->GetFocusedView()->GetViewAccessibility().GetCachedName());
 
   PressAndReleaseKey(ui::VKEY_TAB, ui::EF_NONE);
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_ASH_STATUS_TRAY_FOCUS_MODE_TASK_RADIO_BUTTON),
-            focus_manager->GetFocusedView()->GetAccessibleName());
+  EXPECT_EQ(
+      l10n_util::GetStringFUTF16(
+          IDS_ASH_STATUS_TRAY_FOCUS_MODE_TRAY_RADIO_BUTTON,
+          base::UTF8ToUTF16(task_name)),
+      focus_manager->GetFocusedView()->GetViewAccessibility().GetCachedName());
 }
 
 // Tests basic ending moment functionality. If the time expires for the ending
@@ -357,6 +371,8 @@ TEST_F(FocusModeTrayTest, EndingMoment) {
 // Tests that if the tray bubble is open during the ending moment, that the
 // bubble will persist until user action terminates it.
 TEST_F(FocusModeTrayTest, EndingMomentPersists) {
+  base::HistogramTester histogram_tester;
+
   // Start a focus session.
   FocusModeController* controller = FocusModeController::Get();
   controller->ToggleFocusMode();
@@ -369,7 +385,7 @@ TEST_F(FocusModeTrayTest, EndingMomentPersists) {
   EXPECT_TRUE(controller->in_ending_moment());
   EXPECT_TRUE(focus_mode_tray_->GetVisible());
 
-  // Open the tray bubble and wait foran arbitrarily long time. Verify that
+  // Open the tray bubble and wait for an arbitrarily long time. Verify that
   // the bubble is not closed automatically.
   LeftClickOn(focus_mode_tray_);
   EXPECT_TRUE(focus_mode_tray_->is_active());
@@ -384,6 +400,13 @@ TEST_F(FocusModeTrayTest, EndingMomentPersists) {
   EXPECT_FALSE(focus_mode_tray_->is_active());
   EXPECT_FALSE(focus_mode_tray_->GetVisible());
   EXPECT_FALSE(controller->in_ending_moment());
+
+  // Verify the histogram.
+  histogram_tester.ExpectBucketCount(
+      /*name=*/focus_mode_histogram_names::kEndingMomentBubbleActionHistogram,
+      /*sample=*/
+      focus_mode_histogram_names::EndingMomentBubbleClosedReason::kOpended,
+      /*expected_count=*/1);
 }
 
 // Verifies that the tray contents are updated between an in-session state and
@@ -481,6 +504,58 @@ TEST_F(FocusModeTrayTest, EndingMomentUpdateSessionDuration) {
   EXPECT_FALSE(button->GetEnabled());
   EXPECT_EQ(focus_mode_util::kMaximumDuration,
             controller->current_session()->session_duration());
+}
+
+// Tests that the ending moment functions correctly on multiple displays and
+// does not terminate unexpectedly.
+// Regression test for b/323982290.
+TEST_F(FocusModeTrayTest, EndingMomentMultiDisplay) {
+  UpdateDisplay("800x600,800x600");
+  FocusModeTray* first_tray = focus_mode_tray_;
+  FocusModeTray* second_tray =
+      StatusAreaWidgetTestHelper::GetSecondaryStatusAreaWidget()
+          ->focus_mode_tray();
+
+  // Start a focus session and verify both trays are visible.
+  FocusModeController* controller = FocusModeController::Get();
+  controller->ToggleFocusMode();
+  EXPECT_TRUE(controller->in_focus_session());
+  EXPECT_TRUE(first_tray->GetVisible());
+  EXPECT_TRUE(second_tray->GetVisible());
+
+  // Trigger the ending moment.
+  AdvanceClock(controller->GetSessionDuration());
+  EXPECT_FALSE(controller->in_focus_session());
+  EXPECT_TRUE(controller->in_ending_moment());
+  EXPECT_TRUE(first_tray->GetVisible());
+  EXPECT_TRUE(second_tray->GetVisible());
+
+  // Click on the tray on the first display to open the associated tray bubble.
+  LeftClickOn(first_tray);
+  EXPECT_TRUE(first_tray->is_active());
+  EXPECT_TRUE(first_tray->GetBubbleView());
+  EXPECT_FALSE(second_tray->is_active());
+  EXPECT_FALSE(second_tray->GetBubbleView());
+
+  // Click on the tray on the second display. The ending moment should persist.
+  // This should also close the bubble on the first display and show the bubble
+  // on the second display.
+  LeftClickOn(second_tray);
+  EXPECT_TRUE(controller->in_ending_moment());
+  EXPECT_TRUE(first_tray->GetVisible());
+  EXPECT_FALSE(first_tray->is_active());
+  EXPECT_FALSE(first_tray->GetBubbleView());
+  EXPECT_TRUE(second_tray->GetVisible());
+  EXPECT_TRUE(second_tray->is_active());
+  EXPECT_TRUE(second_tray->GetBubbleView());
+
+  // Clicking the same (second) tray again should close the bubble and terminate
+  // the ending moment as well.
+  LeftClickOn(second_tray);
+  EXPECT_FALSE(controller->in_ending_moment());
+  EXPECT_FALSE(first_tray->GetVisible());
+  EXPECT_FALSE(second_tray->GetVisible());
+  EXPECT_FALSE(second_tray->GetBubbleView());
 }
 
 }  // namespace ash

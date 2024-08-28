@@ -52,6 +52,7 @@ import {BookmarksApiProxyImpl} from './bookmarks_api_proxy.js';
 import type {PowerBookmarksContextMenuElement} from './power_bookmarks_context_menu.js';
 import {PowerBookmarksDragManager} from './power_bookmarks_drag_manager.js';
 import type {PowerBookmarksEditDialogElement} from './power_bookmarks_edit_dialog.js';
+import {TEMP_FOLDER_ID_PREFIX} from './power_bookmarks_edit_dialog.js';
 import type {PowerBookmarksLabelsElement} from './power_bookmarks_labels.js';
 import {getTemplate} from './power_bookmarks_list.html.js';
 import type {Label} from './power_bookmarks_service.js';
@@ -258,7 +259,7 @@ export class PowerBookmarksListElement extends PolymerElement {
       ShoppingServiceApiProxyImpl.getInstance();
   private shoppingListenerIds_: number[] = [];
   private displayLists_: chrome.bookmarks.BookmarkTreeNode[][];
-  private trackedProductInfos_ = new Map<string, BookmarkProductInfo>();
+  private trackedProductInfos_: {[key: string]: BookmarkProductInfo} = {};
   private availableProductInfos_ = new Map<string, BookmarkProductInfo>();
   private bookmarksService_: PowerBookmarksService =
       new PowerBookmarksService(this);
@@ -322,11 +323,9 @@ export class PowerBookmarksListElement extends PolymerElement {
                 this.onBookmarkPriceUntracked_(product)),
     );
 
-    if (document.documentElement.hasAttribute('chrome-refresh-2023')) {
-      this.shownBookmarksResizeObserver_ =
-          new ResizeObserver(this.onShownBookmarksResize_.bind(this));
-      this.shownBookmarksResizeObserver_.observe(this.$.bookmarks);
-    }
+    this.shownBookmarksResizeObserver_ =
+        new ResizeObserver(this.onShownBookmarksResize_.bind(this));
+    this.shownBookmarksResizeObserver_.observe(this.$.bookmarks);
 
     this.updateListScrollOffset_();
 
@@ -339,10 +338,8 @@ export class PowerBookmarksListElement extends PolymerElement {
     this.shoppingListenerIds_.forEach(
         id => this.shoppingServiceApi_.getCallbackRouter().removeListener(id));
 
-    if (this.shownBookmarksResizeObserver_) {
-      this.shownBookmarksResizeObserver_.disconnect();
-      this.shownBookmarksResizeObserver_ = undefined;
-    }
+    this.shownBookmarksResizeObserver_!.disconnect();
+    this.shownBookmarksResizeObserver_ = undefined;
 
     this.bookmarksDragManager_.stopObserving();
   }
@@ -459,8 +456,12 @@ export class PowerBookmarksListElement extends PolymerElement {
     this.notifyPathIfVisible_(bookmark.parentId!, 'children');
   }
 
-  isPriceTracked(bookmark: chrome.bookmarks.BookmarkTreeNode): boolean {
-    return !!this.get(`trackedProductInfos_.${bookmark.id}`);
+  getTrackedProductInfos(): {[key: string]: BookmarkProductInfo} {
+    return this.trackedProductInfos_;
+  }
+
+  getAvailableProductInfos(): Map<string, BookmarkProductInfo> {
+    return this.availableProductInfos_;
   }
 
   getProductImageUrl(bookmark: chrome.bookmarks.BookmarkTreeNode): string {
@@ -542,11 +543,6 @@ export class PowerBookmarksListElement extends PolymerElement {
     if (bookmarkElement) {
       bookmarkElement.focus();
     }
-  }
-
-  private isPriceTrackingEligible_(bookmark: chrome.bookmarks.BookmarkTreeNode):
-      boolean {
-    return !!this.availableProductInfos_.get(bookmark.id);
   }
 
   private onBookmarkPriceTracked_(product: BookmarkProductInfo) {
@@ -642,20 +638,6 @@ export class PowerBookmarksListElement extends PolymerElement {
     }
   }
 
-  private getBookmarkDescriptionMeta_(bookmark:
-                                          chrome.bookmarks.BookmarkTreeNode) {
-    // If there is a price available for the product and it isn't being
-    // tracked, return the current price which will be added to the description
-    // meta section.
-    const productInfo = this.availableProductInfos_.get(bookmark.id);
-    if (productInfo && productInfo.info.currentPrice &&
-        !this.isPriceTracked(bookmark)) {
-      return productInfo.info.currentPrice;
-    }
-
-    return '';
-  }
-
   private getViewButtonIcon_() {
     return this.compact_ ? 'bookmarks:compact-view' : 'bookmarks:visual-view';
   }
@@ -692,21 +674,6 @@ export class PowerBookmarksListElement extends PolymerElement {
       return loadTimeData.getStringF('openBookmarkLabel', title);
     }
     return loadTimeData.getStringF('openFolderLabel', title);
-  }
-
-  private getBookmarkA11yDescription_(
-      bookmark: chrome.bookmarks.BookmarkTreeNode): string {
-    let description = '';
-    if (this.isPriceTracked(bookmark)) {
-      description += loadTimeData.getStringF(
-          'a11yDescriptionPriceTracking', this.getCurrentPrice_(bookmark));
-      const previousPrice = this.getPreviousPrice_(bookmark);
-      if (previousPrice) {
-        description += loadTimeData.getStringF(
-            'a11yDescriptionPriceChange', previousPrice);
-      }
-    }
-    return description;
   }
 
   private updateShoppingCollectionFolderId_(): void {
@@ -951,6 +918,13 @@ export class PowerBookmarksListElement extends PolymerElement {
       if (folder.id === parentId) {
         parentId = newFolder.id;
       }
+      // Removing folders added in edit menu while editing a bookmark as they
+      // are made with TEMP_FOLDER_ID_PREFIX bookmark-id and are again created
+      // with correct id with createFolder method above
+      const parentFolder =
+          this.bookmarksService_.findBookmarkWithId(folder.parentId)!;
+      parentFolder.children = parentFolder.children?.filter(
+          child => !child.id.startsWith(TEMP_FOLDER_ID_PREFIX));
     }
     this.bookmarksApi_.editBookmarks(
         event.detail.bookmarks.map(bookmark => bookmark.id), event.detail.name,
@@ -1049,9 +1023,10 @@ export class PowerBookmarksListElement extends PolymerElement {
     if (!event.detail.bookmark) {
       return;
     }
-    const priceTracked = this.isPriceTracked(event.detail.bookmark);
+    const priceTracked =
+        !!this.bookmarksService_.getPriceTrackedInfo(event.detail.bookmark);
     const priceTrackingEligible =
-        this.isPriceTrackingEligible_(event.detail.bookmark);
+        !!this.bookmarksService_.getAvailableProductInfo(event.detail.bookmark);
     const bookmark = event.detail.bookmark;
     if (event.detail.event.button === 0) {
       this.$.contextMenu.showAt(
@@ -1297,38 +1272,6 @@ export class PowerBookmarksListElement extends PolymerElement {
           !hasShownBookmarks && (hasSomeActiveFilter || !hasActiveFolder),
       footer: !hasSomeActiveFilter,
     };
-  }
-
-  /**
-   * Whether the given price-tracked bookmark should display as if discounted.
-   */
-  private showDiscountedPrice_(bookmark: chrome.bookmarks.BookmarkTreeNode):
-      boolean {
-    const bookmarkProductInfo = this.get(`trackedProductInfos_.${bookmark.id}`);
-    if (bookmarkProductInfo) {
-      return bookmarkProductInfo.info.previousPrice.length > 0;
-    }
-    return false;
-  }
-
-  private getCurrentPrice_(bookmark: chrome.bookmarks.BookmarkTreeNode):
-      string {
-    const bookmarkProductInfo = this.get(`trackedProductInfos_.${bookmark.id}`);
-    if (bookmarkProductInfo) {
-      return bookmarkProductInfo.info.currentPrice;
-    } else {
-      return '';
-    }
-  }
-
-  private getPreviousPrice_(bookmark: chrome.bookmarks.BookmarkTreeNode):
-      string {
-    const bookmarkProductInfo = this.get(`trackedProductInfos_.${bookmark.id}`);
-    if (bookmarkProductInfo) {
-      return bookmarkProductInfo.info.previousPrice;
-    } else {
-      return '';
-    }
   }
 
   private onShownBookmarksResize_() {

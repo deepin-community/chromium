@@ -7,22 +7,21 @@
 //   Specification: src/enums/operator-type.yaml
 //   Generator: tools/generate-enum.py
 
-
 #include <assert.h>
 #include <stdint.h>
 
-#include <xnnpack/operator-type.h>
+#include "xnnpack/operator-type.h"
 
-
-static const uint16_t offset[155] = {
-  0, 8, 22, 36, 50, 64, 78, 92, 119, 147, 175, 203, 230, 257, 289, 321, 339, 357, 382, 408, 424, 440, 455, 470, 492,
-  515, 538, 561, 584, 607, 630, 653, 676, 694, 717, 740, 764, 782, 805, 829, 853, 877, 901, 936, 971, 995, 1019, 1043,
-  1057, 1072, 1087, 1113, 1139, 1165, 1191, 1223, 1255, 1281, 1308, 1335, 1352, 1369, 1403, 1437, 1451, 1465, 1479,
-  1495, 1511, 1537, 1563, 1595, 1627, 1664, 1701, 1738, 1775, 1801, 1833, 1859, 1893, 1927, 1961, 1995, 2029, 2063,
-  2093, 2123, 2143, 2163, 2184, 2205, 2226, 2247, 2271, 2295, 2318, 2341, 2359, 2377, 2392, 2407, 2425, 2443, 2462,
-  2481, 2500, 2519, 2536, 2553, 2569, 2585, 2613, 2641, 2669, 2697, 2724, 2751, 2768, 2785, 2826, 2867, 2885, 2903,
-  2921, 2939, 2954, 2970, 2986, 3004, 3022, 3040, 3066, 3093, 3120, 3137, 3154, 3176, 3198, 3227, 3256, 3275, 3294,
-  3313, 3332, 3347, 3362, 3377, 3392, 3411, 3431, 3451, 3471, 3492, 3513
+static const uint16_t offset[166] = {
+  0, 8, 22, 36, 50, 64, 78, 92, 119, 147, 175, 203, 230, 257, 289, 321, 364, 382, 400, 425, 451, 467, 483, 498, 513,
+  535, 558, 581, 604, 627, 650, 673, 696, 719, 742, 760, 783, 806, 830, 848, 871, 895, 919, 943, 967, 1002, 1037, 1061,
+  1085, 1109, 1123, 1138, 1153, 1173, 1199, 1225, 1262, 1288, 1318, 1344, 1376, 1408, 1434, 1461, 1488, 1505, 1522,
+  1556, 1590, 1604, 1618, 1632, 1646, 1662, 1678, 1704, 1730, 1762, 1794, 1831, 1868, 1905, 1942, 1979, 2005, 2037,
+  2063, 2078, 2112, 2146, 2180, 2214, 2248, 2282, 2312, 2342, 2362, 2382, 2403, 2424, 2445, 2466, 2480, 2504, 2528,
+  2551, 2574, 2592, 2610, 2625, 2640, 2658, 2676, 2695, 2714, 2733, 2752, 2769, 2786, 2802, 2818, 2851, 2884, 2912,
+  2940, 2968, 2996, 3023, 3050, 3067, 3084, 3125, 3166, 3184, 3202, 3220, 3238, 3253, 3269, 3285, 3303, 3321, 3339,
+  3365, 3392, 3419, 3436, 3453, 3475, 3497, 3526, 3555, 3574, 3593, 3612, 3631, 3646, 3661, 3676, 3691, 3710, 3730,
+  3750, 3770, 3791, 3812
 };
 
 static const char data[] =
@@ -41,6 +40,7 @@ static const char data[] =
   "Bankers Rounding (NC, F32)\0"
   "Batch Matrix Multiply (NC, F16)\0"
   "Batch Matrix Multiply (NC, F32)\0"
+  "Batch Matrix Multiply (NC, QD8, F32, QC8W)\0"
   "Ceiling (NC, F16)\0"
   "Ceiling (NC, F32)\0"
   "Channel Shuffle (NC, X8)\0"
@@ -56,6 +56,7 @@ static const char data[] =
   "Convert (NC, F16, QD8)\0"
   "Convert (NC, F32, F16)\0"
   "Convert (NC, F32, QD8)\0"
+  "Convert (NC, F32, QP8)\0"
   "Convert (NC, F32, QS8)\0"
   "Convert (NC, F32, QU8)\0"
   "Convert (NC, QS8)\0"
@@ -76,9 +77,12 @@ static const char data[] =
   "Copy (NC, X8)\0"
   "Copy (NC, X16)\0"
   "Copy (NC, X32)\0"
+  "Copy Sign (NC, F32)\0"
   "Deconvolution (NHWC, F16)\0"
   "Deconvolution (NHWC, F32)\0"
+  "Deconvolution (NHWC, QD8, F32, QC8W)\0"
   "Deconvolution (NHWC, QS8)\0"
+  "Deconvolution (NC, QS8, QC8W)\0"
   "Deconvolution (NHWC, QU8)\0"
   "Depth To Space (NCHW2NHWC, X16)\0"
   "Depth To Space (NCHW2NHWC, X32)\0"
@@ -92,6 +96,7 @@ static const char data[] =
   "ELU (NC, F16)\0"
   "ELU (NC, F32)\0"
   "ELU (NC, QS8)\0"
+  "Exp (NC, F32)\0"
   "Floor (NC, F16)\0"
   "Floor (NC, F32)\0"
   "Fully Connected (NC, F16)\0"
@@ -102,9 +107,11 @@ static const char data[] =
   "Fully Connected (NC, QD8, F16, QC4W)\0"
   "Fully Connected (NC, QD8, F32, QC4W)\0"
   "Fully Connected (NC, QD8, F32, QC8W)\0"
+  "Fully Connected (NC, QP8, F32, QC4W)\0"
   "Fully Connected (NC, QS8)\0"
   "Fully Connected (NC, QS8, QC8W)\0"
   "Fully Connected (NC, QU8)\0"
+  "GELU (NC, F32)\0"
   "Global Average Pooling (NCW, F16)\0"
   "Global Average Pooling (NCW, F32)\0"
   "Global Average Pooling (NWC, F16)\0"
@@ -119,6 +126,7 @@ static const char data[] =
   "Leaky ReLU (NC, F32)\0"
   "Leaky ReLU (NC, QS8)\0"
   "Leaky ReLU (NC, QU8)\0"
+  "Log (NC, F32)\0"
   "Max Pooling (NHWC, F16)\0"
   "Max Pooling (NHWC, F32)\0"
   "Max Pooling (NHWC, S8)\0"
@@ -137,6 +145,8 @@ static const char data[] =
   "Negate (NC, F32)\0"
   "PReLU (NC, F16)\0"
   "PReLU (NC, F32)\0"
+  "Reciprocal Square Root (NC, F16)\0"
+  "Reciprocal Square Root (NC, F32)\0"
   "Resize Bilinear (NCHW, F16)\0"
   "Resize Bilinear (NCHW, F32)\0"
   "Resize Bilinear (NHWC, F16)\0"

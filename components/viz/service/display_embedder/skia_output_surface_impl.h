@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/circular_deque.h"
@@ -16,7 +17,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/observer_list.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
 #include "base/timer/timer.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
@@ -26,14 +27,18 @@
 #include "components/viz/service/display/render_pass_alpha_type.h"
 #include "components/viz/service/display/skia_output_surface.h"
 #include "components/viz/service/viz_service_export.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "gpu/ipc/common/vulkan_ycbcr_info.h"
 #include "media/gpu/buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "third_party/skia/include/core/SkOverdrawCanvas.h"
+#include "third_party/skia/include/gpu/graphite/GraphiteTypes.h"
 #include "third_party/skia/include/private/chromium/GrDeferredDisplayListRecorder.h"
 #include "third_party/skia/include/private/chromium/GrSurfaceCharacterization.h"
 #include "ui/gfx/presentation_feedback.h"
+
+class SkNoDrawCanvas;
 
 namespace gfx {
 namespace mojom {
@@ -91,8 +96,6 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   // OutputSurface implementation:
   gpu::SurfaceHandle GetSurfaceHandle() const override;
   void BindToClient(OutputSurfaceClient* client) override;
-  void SetDrawRectangle(const gfx::Rect& draw_rectangle) override;
-  void SetEnableDCLayers(bool enable) override;
   void EnsureBackbuffer() override;
   void DiscardBackbuffer() override;
   void Reshape(const ReshapeParams& params) override;
@@ -106,7 +109,9 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   gpu::Mailbox GetOverlayMailbox() const override;
   void SetNeedsSwapSizeNotifications(
       bool needs_swap_size_notifications) override;
+#if BUILDFLAG(IS_ANDROID)
   base::ScopedClosureRunner GetCacheBackBufferCb() override;
+#endif
   gfx::Rect GetCurrentFramebufferDamage() const override;
   void SetFrameRate(float frame_rate) override;
   void SetNeedsMeasureNextDrawLatency() override;
@@ -167,8 +172,8 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
                                  const gfx::Size& size,
                                  const gfx::ColorSpace& color_space,
                                  RenderPassAlphaType alpha_type,
-                                 uint32_t usage,
-                                 base::StringPiece debug_label,
+                                 gpu::SharedImageUsageSet usage,
+                                 std::string_view debug_label,
                                  gpu::SurfaceHandle surface_handle) override;
   gpu::Mailbox CreateSolidColorSharedImage(
       const SkColor4f& color,
@@ -212,7 +217,10 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
                      gpu::Mailbox output,
                      const gfx::RectF& display_rect,
                      const gfx::RectF& crop_rect,
-                     gfx::OverlayTransform transform) override;
+                     gfx::OverlayTransform transform,
+                     bool is_10bit) override;
+
+  void CleanupImageProcessor() override;
 #endif
 
  private:
@@ -280,7 +288,7 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   std::vector<raw_ptr<ImageContextImpl, VectorExperimental>>
       images_in_current_paint_;
 
-  THREAD_CHECKER(thread_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
 
   // Observers for context lost.
   base::ObserverList<ContextLostObserver>::Unchecked observers_;
@@ -303,15 +311,18 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   class ScopedPaint {
    public:
     // Ganesh root surface
-    explicit ScopedPaint(GrDeferredDisplayListRecorder* root_ddl_recorder);
+    ScopedPaint(GrDeferredDisplayListRecorder* root_ddl_recorder,
+                bool skip_draw_for_tests);
     // Ganesh render pass (root or non-root)
     ScopedPaint(const GrSurfaceCharacterization& characterization,
-                const gpu::Mailbox& mailbox);
+                const gpu::Mailbox& mailbox,
+                bool skip_draw_for_tests);
     // Graphite (root or non-root)
     ScopedPaint(skgpu::graphite::Recorder* recorder,
                 const SkImageInfo& image_info,
                 skgpu::graphite::TextureInfo texture_info,
-                const gpu::Mailbox& mailbox = gpu::Mailbox());
+                const gpu::Mailbox& mailbox = gpu::Mailbox(),
+                bool skip_draw_for_tests = false);
     ~ScopedPaint();
 
     // SkCanvas for the current paint, retrieved from the DDL recorder for
@@ -328,6 +339,8 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
     std::unique_ptr<skgpu::graphite::Recording> SnapRecording();
 
    private:
+    void Initialize(bool skip_draw_for_tests);
+
     // This is the DDL recorder being used for current paint when using Ganesh.
     raw_ptr<GrDeferredDisplayListRecorder> ddl_recorder_ = nullptr;
     // If we need new recorder for this Paint (i.e. it's not root render pass),
@@ -335,6 +348,8 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
     std::optional<GrDeferredDisplayListRecorder> ddl_recorder_storage_;
     // Graphite recorder used for current paint.
     raw_ptr<skgpu::graphite::Recorder> graphite_recorder_ = nullptr;
+    // No draw canvas for tests.
+    std::unique_ptr<SkNoDrawCanvas> no_draw_canvas_;
     // SkCanvas for the current paint, retrieved from the DDL recorder for
     // Ganesh, or from the Graphite recorder.
     raw_ptr<SkCanvas> canvas_ = nullptr;
@@ -434,9 +449,8 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
   raw_ptr<skgpu::graphite::Recorder> graphite_recorder_ = nullptr;
   scoped_refptr<gpu::raster::GraphiteCacheController>
       graphite_cache_controller_;
-
-  bool has_set_draw_rectangle_for_frame_ = false;
-  std::optional<gfx::Rect> draw_rectangle_;
+  skgpu::graphite::Volatile graphite_use_volatile_promise_images_ =
+      skgpu::graphite::Volatile::kYes;
 
   bool should_measure_next_post_task_ = false;
 
@@ -468,6 +482,7 @@ class VIZ_SERVICE_EXPORT SkiaOutputSurfaceImpl : public SkiaOutputSurface {
       representation_factory_;
   // The refresh interval from presentation feedback.
   base::TimeDelta refresh_interval_;
+  bool skip_draw_for_tests_;
 
   base::WeakPtr<SkiaOutputSurfaceImpl> weak_ptr_;
   base::WeakPtrFactory<SkiaOutputSurfaceImpl> weak_ptr_factory_{this};

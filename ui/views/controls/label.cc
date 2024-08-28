@@ -16,8 +16,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/cursor/cursor.h"
@@ -114,12 +114,19 @@ void Label::SetText(const std::u16string& new_text) {
   full_text_->SetText(new_text);
   ClearDisplayText();
 
-  if (GetAccessibleName().empty() || GetAccessibleName() == current_text) {
-    SetAccessibleName(new_text);
+  if (GetViewAccessibility().GetCachedName().empty() ||
+      GetViewAccessibility().GetCachedName() == current_text) {
+    if (new_text.empty()) {
+      GetViewAccessibility().SetName(
+          new_text, ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
+    } else {
+      GetViewAccessibility().SetName(new_text);
+    }
   }
 
-  OnPropertyChanged(&full_text_ + kLabelText,
-                    kPropertyEffectsPreferredSizeChanged);
+  OnPropertyChanged(
+      ui::metadata::MakeUniquePropertyKey(&full_text_, kLabelText),
+      kPropertyEffectsPreferredSizeChanged);
   stored_selection_range_ = gfx::Range::InvalidRange();
 }
 
@@ -145,9 +152,9 @@ void Label::SetTextContext(int text_context) {
   if (GetWidget())
     UpdateColorsFromTheme();
 
-  SetAccessibleRole(text_context_ == style::CONTEXT_DIALOG_TITLE
-                        ? ax::mojom::Role::kTitleBar
-                        : ax::mojom::Role::kStaticText);
+  GetViewAccessibility().SetRole(text_context_ == style::CONTEXT_DIALOG_TITLE
+                                     ? ax::mojom::Role::kTitleBar
+                                     : ax::mojom::Role::kStaticText);
 
   OnPropertyChanged(&text_context_, kPropertyEffectsPreferredSizeChanged);
 }
@@ -303,8 +310,9 @@ void Label::SetShadows(const gfx::ShadowValues& shadows) {
     return;
   full_text_->set_shadows(shadows);
   ClearDisplayText();
-  OnPropertyChanged(&full_text_ + kLabelShadows,
-                    kPropertyEffectsPreferredSizeChanged);
+  OnPropertyChanged(
+      ui::metadata::MakeUniquePropertyKey(&full_text_, kLabelShadows),
+      kPropertyEffectsPreferredSizeChanged);
 }
 
 bool Label::GetSubpixelRenderingEnabled() const {
@@ -345,7 +353,8 @@ void Label::SetHorizontalAlignment(gfx::HorizontalAlignment alignment) {
     return;
   full_text_->SetHorizontalAlignment(alignment);
   ClearDisplayText();
-  OnPropertyChanged(&full_text_ + kLabelHorizontalAlignment,
+  OnPropertyChanged(ui::metadata::MakeUniquePropertyKey(
+                        &full_text_, kLabelHorizontalAlignment),
                     kPropertyEffectsPaint);
 }
 
@@ -358,8 +367,9 @@ void Label::SetVerticalAlignment(gfx::VerticalAlignment alignment) {
     return;
   full_text_->SetVerticalAlignment(alignment);
   ClearDisplayText();
-  OnPropertyChanged(&full_text_ + kLabelVerticalAlignment,
-                    kPropertyEffectsPaint);
+  OnPropertyChanged(
+      ui::metadata::MakeUniquePropertyKey(&full_text_, kLabelVerticalAlignment),
+      kPropertyEffectsPaint);
 }
 
 int Label::GetLineHeight() const {
@@ -376,8 +386,9 @@ void Label::SetLineHeight(int line_height) {
   line_height_ = line_height;
   full_text_->SetMinLineHeight(line_height);
   ClearDisplayText();
-  OnPropertyChanged(&full_text_ + kLabelLineHeight,
-                    kPropertyEffectsPreferredSizeChanged);
+  OnPropertyChanged(
+      ui::metadata::MakeUniquePropertyKey(&full_text_, kLabelLineHeight),
+      kPropertyEffectsPreferredSizeChanged);
 }
 
 bool Label::GetMultiLine() const {
@@ -419,19 +430,28 @@ void Label::SetObscured(bool obscured) {
   ClearDisplayText();
   if (obscured)
     SetSelectable(false);
-  OnPropertyChanged(&full_text_ + kLabelObscured,
-                    kPropertyEffectsPreferredSizeChanged);
+  OnPropertyChanged(
+      ui::metadata::MakeUniquePropertyKey(&full_text_, kLabelObscured),
+      kPropertyEffectsPreferredSizeChanged);
 }
 
-bool Label::IsDisplayTextTruncated() const {
+bool Label::IsDisplayTextClipped() const {
   MaybeBuildDisplayText();
   if (!full_text_ || full_text_->text().empty())
     return false;
   auto text_bounds = GetTextBounds();
+  return text_bounds.width() > GetContentsBounds().width() ||
+         text_bounds.height() > GetContentsBounds().height();
+}
+
+bool Label::IsDisplayTextTruncated() const {
+  MaybeBuildDisplayText();
+  if (!full_text_ || full_text_->text().empty()) {
+    return false;
+  }
   return (display_text_ &&
           display_text_->text() != display_text_->GetDisplayText()) ||
-         text_bounds.width() > GetContentsBounds().width() ||
-         text_bounds.height() > GetContentsBounds().height();
+         IsDisplayTextClipped();
 }
 
 bool Label::GetAllowCharacterBreak() const {
@@ -445,7 +465,8 @@ void Label::SetAllowCharacterBreak(bool allow_character_break) {
     return;
   full_text_->SetWordWrapBehavior(behavior);
   ClearDisplayText();
-  OnPropertyChanged(&full_text_ + kLabelAllowCharacterBreak,
+  OnPropertyChanged(ui::metadata::MakeUniquePropertyKey(
+                        &full_text_, kLabelAllowCharacterBreak),
                     kPropertyEffectsPreferredSizeChanged);
 }
 
@@ -626,16 +647,13 @@ std::vector<gfx::Rect> Label::GetSubstringBounds(const gfx::Range& range) {
 
 base::CallbackListSubscription Label::AddTextChangedCallback(
     views::PropertyChangedCallback callback) {
-  return AddPropertyChangedCallback(&full_text_ + kLabelText,
-                                    std::move(callback));
+  return AddPropertyChangedCallback(
+      ui::metadata::MakeUniquePropertyKey(&full_text_, kLabelText),
+      std::move(callback));
 }
 
 int Label::GetBaseline() const {
   return GetInsets().top() + font_list().GetBaseline();
-}
-
-gfx::Size Label::CalculatePreferredSize() const {
-  return CalculatePreferredSize({width(), {}});
 }
 
 gfx::Size Label::CalculatePreferredSize(
@@ -811,7 +829,7 @@ void Label::PaintText(gfx::Canvas* canvas) {
 
 #if DCHECK_IS_ON() && !BUILDFLAG(IS_CHROMEOS_ASH) && \
     !BUILDFLAG(IS_CHROMEOS_LACROS)
-  // TODO(crbug.com/1139395): Enable this DCHECK on ChromeOS and LaCrOS by
+  // TODO(crbug.com/40725997): Enable this DCHECK on ChromeOS and LaCrOS by
   // fixing either this check (to correctly idenfify more paints-on-opaque
   // cases), refactoring parents to use background() or by fixing
   // subpixel-rendering issues that the DCHECK detects.
@@ -995,12 +1013,25 @@ void Label::GetAccessibleNodeData(ui::AXNodeData* node_data) {
 #if BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
   // If the accessible name changed since the last time we computed the text
   // offsets, we need to recompute them.
-  if (::features::IsUiaProviderEnabled() &&
-      ax_name_used_to_compute_offsets_ != GetAccessibleName()) {
+  if (::ui::AXPlatform::GetInstance().IsUiaProviderEnabled() &&
+      ax_name_used_to_compute_offsets_ !=
+          GetViewAccessibility().GetCachedName()) {
     GetViewAccessibility().ClearTextOffsets();
     ax_name_used_to_compute_offsets_.clear();
+
+    // TODO(crbug.com/325137417): When this function is only used to initialize
+    // the cache with these values, refactor this part to not rely on the cache
+    // as it will cause a chicken and egg situation. For now, this is necessary
+    // to keep the text offsets up to date.
     if (RefreshAccessibleTextOffsets()) {
-      ax_name_used_to_compute_offsets_ = GetAccessibleName();
+      ax_name_used_to_compute_offsets_ = GetViewAccessibility().GetCachedName();
+      node_data->AddIntListAttribute(
+          ax::mojom::IntListAttribute::kCharacterOffsets,
+          GetViewAccessibility().GetCharacterOffsets());
+      node_data->AddIntListAttribute(ax::mojom::IntListAttribute::kWordStarts,
+                                     GetViewAccessibility().GetWordStarts());
+      node_data->AddIntListAttribute(ax::mojom::IntListAttribute::kWordEnds,
+                                     GetViewAccessibility().GetWordEnds());
     }
   }
 #endif  // BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
@@ -1009,17 +1040,17 @@ void Label::GetAccessibleNodeData(ui::AXNodeData* node_data) {
 #if BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
 bool Label::RefreshAccessibleTextOffsets() {
   MaybeBuildDisplayText();
-  // TODO(https://crbug.com/1485632): Add support for multiline textfields.
+  // TODO(crbug.com/40933356): Add support for multiline textfields.
   if (!display_text_ || display_text_->multiline()) {
     return false;
   }
 
-  GetViewAccessibility().OverrideCharacterOffsets(
+  GetViewAccessibility().SetCharacterOffsets(
       ComputeTextOffsets(display_text_.get()));
 
   WordBoundaries boundaries = ComputeWordBoundaries(GetText());
-  GetViewAccessibility().OverrideWordStarts(boundaries.starts);
-  GetViewAccessibility().OverrideWordEnds(boundaries.ends);
+  GetViewAccessibility().SetWordStarts(boundaries.starts);
+  GetViewAccessibility().SetWordEnds(boundaries.ends);
 
   return true;
 }
@@ -1082,7 +1113,7 @@ bool Label::IsReadOnly() const {
 }
 
 bool Label::SupportsDrag() const {
-  // TODO(crbug.com/661379): Labels should support dragging selected text.
+  // TODO(crbug.com/40491606): Labels should support dragging selected text.
   return false;
 }
 
@@ -1198,10 +1229,11 @@ void Label::Init(const std::u16string& text,
   UpdateFullTextElideBehavior();
   full_text_->SetDirectionalityMode(directionality_mode);
 
-  SetAccessibilityProperties(text_context_ == style::CONTEXT_DIALOG_TITLE
-                                 ? ax::mojom::Role::kTitleBar
-                                 : ax::mojom::Role::kStaticText,
-                             text);
+  GetViewAccessibility().SetProperties(
+      text_context_ == style::CONTEXT_DIALOG_TITLE
+          ? ax::mojom::Role::kTitleBar
+          : ax::mojom::Role::kStaticText,
+      text);
 
   SetText(text);
 
@@ -1256,7 +1288,7 @@ gfx::Size Label::GetBoundedTextSize(const SizeBounds& available_size) const {
                           : 0;
     // SetDisplayRect() has side-effect. The text height will change to respect
     // width.
-    // TODO(crbug.com/1347330): `width` should respect insets, but doing so
+    // TODO(crbug.com/40232910): `width` should respect insets, but doing so
     // will break LabelTest.MultiLineSizing. Fix that.
     full_text_->SetDisplayRect(gfx::Rect(0, 0, width, 0));
     size = full_text_->GetStringSize();

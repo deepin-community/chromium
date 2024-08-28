@@ -21,6 +21,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/menu/submenu_view.h"
@@ -63,7 +64,11 @@ class SquareView : public views::View {
   ~SquareView() override = default;
 
  private:
-  gfx::Size CalculatePreferredSize() const override { return gfx::Size(1, 1); }
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override {
+    int width = available_size.width().value_or(1);
+    return gfx::Size(width, width);
+  }
   int GetHeightForWidth(int width) const override { return width; }
 };
 
@@ -88,11 +93,11 @@ TEST_F(MenuItemViewUnitTest, TestMenuItemViewWithFlexibleWidthChild) {
 
   // The first item should be the label view.
   ASSERT_EQ(label_view, submenu->GetMenuItemAt(0));
-  gfx::Size label_size = label_view->GetPreferredSize();
+  gfx::Size label_size = label_view->GetPreferredSize({});
 
   // The second item should be the flexible view.
   ASSERT_EQ(flexible_view, submenu->GetMenuItemAt(1));
-  gfx::Size flexible_size = flexible_view->GetPreferredSize();
+  gfx::Size flexible_size = flexible_view->GetPreferredSize({});
 
   EXPECT_EQ(1, flexible_size.width());
 
@@ -103,7 +108,7 @@ TEST_F(MenuItemViewUnitTest, TestMenuItemViewWithFlexibleWidthChild) {
   // The submenu should be tall enough to allow for both menu items at the
   // given width. (It may be taller if there is padding between/around the
   // items.)
-  EXPECT_GE(submenu->GetPreferredSize().height(),
+  EXPECT_GE(submenu->GetPreferredSize({}).height(),
             label_size.height() + flex_height);
 }
 
@@ -176,6 +181,68 @@ TEST_F(MenuItemViewUnitTest, NotifiesSelectedChanged) {
   EXPECT_FALSE(is_selected);
 }
 
+TEST_F(MenuItemViewUnitTest, AccessibleKeyShortcutsTest) {
+  views::TestMenuItemView root_menu;
+
+  // Append MenuItemViews.
+  views::MenuItemView* item1 = root_menu.AppendMenuItem(1, u"&Item 1");
+  views::MenuItemView* item2 = root_menu.AppendMenuItem(2, u"It&em 2");
+  ui::AXNodeData data1, data2;
+
+  if (MenuConfig::instance().use_mnemonics) {
+    item1->GetViewAccessibility().GetAccessibleNodeData(&data1);
+    item2->GetViewAccessibility().GetAccessibleNodeData(&data2);
+    EXPECT_FALSE(
+        data1.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+    EXPECT_FALSE(
+        data2.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+
+    root_menu.set_has_mnemonics(true);
+    data1 = ui::AXNodeData();
+    data2 = ui::AXNodeData();
+    item1->GetViewAccessibility().GetAccessibleNodeData(&data1);
+    item2->GetViewAccessibility().GetAccessibleNodeData(&data2);
+    EXPECT_EQ("i", data1.GetStringAttribute(
+                       ax::mojom::StringAttribute::kKeyShortcuts));
+    EXPECT_EQ("e", data2.GetStringAttribute(
+                       ax::mojom::StringAttribute::kKeyShortcuts));
+
+    item1->set_may_have_mnemonics(false);
+    data1 = ui::AXNodeData();
+    item1->GetViewAccessibility().GetAccessibleNodeData(&data1);
+    EXPECT_FALSE(
+        data1.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+
+    root_menu.set_has_mnemonics(false);
+    item1->set_may_have_mnemonics(true);
+    data1 = ui::AXNodeData();
+    data2 = ui::AXNodeData();
+    item1->GetViewAccessibility().GetAccessibleNodeData(&data1);
+    item2->GetViewAccessibility().GetAccessibleNodeData(&data2);
+    EXPECT_FALSE(
+        data1.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+    EXPECT_FALSE(
+        data2.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+  } else {
+    item1->GetViewAccessibility().GetAccessibleNodeData(&data1);
+    item2->GetViewAccessibility().GetAccessibleNodeData(&data2);
+    EXPECT_FALSE(
+        data1.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+    EXPECT_FALSE(
+        data2.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+
+    root_menu.set_has_mnemonics(true);
+    data1 = ui::AXNodeData();
+    data2 = ui::AXNodeData();
+    item1->GetViewAccessibility().GetAccessibleNodeData(&data1);
+    item2->GetViewAccessibility().GetAccessibleNodeData(&data2);
+    EXPECT_FALSE(
+        data1.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+    EXPECT_FALSE(
+        data2.HasStringAttribute(ax::mojom::StringAttribute::kKeyShortcuts));
+  }
+}
+
 class TouchableMenuItemViewTest : public ViewsTestBase {
  public:
   TouchableMenuItemViewTest() = default;
@@ -183,7 +250,7 @@ class TouchableMenuItemViewTest : public ViewsTestBase {
 
   void SetUp() override {
     ViewsTestBase::SetUp();
-    widget_ = CreateTestWidget();
+    widget_ = CreateTestWidget(Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     widget_->Show();
 
     menu_delegate_ = std::make_unique<test::TestMenuDelegate>();
@@ -203,7 +270,7 @@ class TouchableMenuItemViewTest : public ViewsTestBase {
   }
 
   gfx::Size AppendItemAndGetSize(int i, const std::u16string& title) {
-    return menu_item_view_->AppendMenuItem(i, title)->GetPreferredSize();
+    return menu_item_view_->AppendMenuItem(i, title)->GetPreferredSize({});
   }
 
  private:
@@ -256,7 +323,7 @@ class MenuItemViewLayoutTest : public ViewsTestBase {
     submenu_parent_ = std::make_unique<View>();
     submenu_parent_->AddChildView(submenu);
     submenu_parent_->SetPosition(gfx::Point(0, 0));
-    submenu_parent_->SetSize(submenu->GetPreferredSize());
+    submenu_parent_->SetSize(submenu->GetPreferredSize({}));
   }
 
   void SetUp() override {
@@ -299,55 +366,6 @@ TEST_F(MenuItemViewLayoutTest, ContainerLayoutRespectsMarginsAndPreferredSize) {
   EXPECT_EQ(child_bounds.height(), child_size.height());
 }
 
-namespace {
-
-// A fake View to check if GetHeightForWidth() is called with the appropriate
-// width value.
-class FakeView : public View {
-  METADATA_HEADER(FakeView, View)
-
- public:
-  explicit FakeView(int expected_width) : expected_width_(expected_width) {}
-  ~FakeView() override = default;
-
-  int GetHeightForWidth(int width) const override {
-    // Simply return a height of 1 for the expected width, and 0 otherwise.
-    if (width == expected_width_)
-      return 1;
-    return 0;
-  }
-
- private:
-  const int expected_width_;
-};
-
-BEGIN_METADATA(FakeView)
-END_METADATA
-
-}  // namespace
-
-// Tests that MenuItemView passes the child's true width to
-// GetHeightForWidth. This is related to https://crbug.com/933706 which was
-// partially caused by it passing the full menu width rather than the width of
-// the child view.
-TEST_F(MenuItemViewLayoutTest, ContainerLayoutPassesTrueWidth) {
-  const gfx::Size child_size(2, 3);
-  const gfx::Insets child_margins(1);
-  FakeView* child_view =
-      test_item()->AddChildView(std::make_unique<FakeView>(child_size.width()));
-  child_view->SetPreferredSize(child_size);
-  child_view->SetProperty(kMarginsKey, child_margins);
-
-  PerformLayout();
-
-  // |child_view| should get laid out with width child_size.width, at which
-  // point child_view->GetHeightForWidth() should be called with the correct
-  // width. FakeView::GetHeightForWidth() will return 1 in this case, and 0
-  // otherwise. Our preferred height is also set to 3 to check verify that
-  // GetHeightForWidth() is even used.
-  EXPECT_EQ(child_view->size().height(), 1);
-}
-
 class MenuItemViewPaintUnitTest : public ViewsTestBase {
  public:
   MenuItemViewPaintUnitTest() = default;
@@ -371,8 +389,9 @@ class MenuItemViewPaintUnitTest : public ViewsTestBase {
     menu_item_view_ = menu_item_view_owning.get();
 
     widget_ = std::make_unique<Widget>();
-    Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_POPUP);
-    params.ownership = Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+    Widget::InitParams params =
+        CreateParams(Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+                     Widget::InitParams::TYPE_POPUP);
     widget_->Init(std::move(params));
     widget_->Show();
 

@@ -4,7 +4,10 @@
 
 #include "quiche/quic/core/http/http_decoder.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <string>
+#include <utility>
 
 #include "absl/base/attributes.h"
 #include "absl/strings/string_view.h"
@@ -282,6 +285,12 @@ bool HttpDecoder::ReadFrameLength(QuicDataReader* reader) {
       continue_processing = visitor_->OnAcceptChFrameStart(header_length);
       break;
     default:
+      if (current_frame_type_ ==
+          static_cast<uint64_t>(HttpFrameType::METADATA)) {
+        continue_processing = visitor_->OnMetadataFrameStart(
+            header_length, current_frame_length_);
+        break;
+      }
       continue_processing = visitor_->OnUnknownFrameStart(
           current_frame_type_, header_length, current_frame_length_);
       break;
@@ -376,6 +385,18 @@ bool HttpDecoder::ReadFramePayload(QuicDataReader* reader) {
       break;
     }
     default: {
+      if (current_frame_type_ ==
+          static_cast<uint64_t>(HttpFrameType::METADATA)) {
+        QuicByteCount bytes_to_read = std::min<QuicByteCount>(
+            remaining_frame_length_, reader->BytesRemaining());
+        absl::string_view payload;
+        bool success = reader->ReadStringPiece(&payload, bytes_to_read);
+        QUICHE_DCHECK(success);
+        QUICHE_DCHECK(!payload.empty());
+        continue_processing = visitor_->OnMetadataFramePayload(payload);
+        remaining_frame_length_ -= payload.length();
+        break;
+      }
       continue_processing = HandleUnknownFramePayload(reader);
       break;
     }
@@ -432,6 +453,11 @@ bool HttpDecoder::FinishParsing() {
       break;
     }
     default:
+      if (current_frame_type_ ==
+          static_cast<uint64_t>(HttpFrameType::METADATA)) {
+        continue_processing = visitor_->OnMetadataFrameEnd();
+        break;
+      }
       continue_processing = visitor_->OnUnknownFrameEnd();
   }
 

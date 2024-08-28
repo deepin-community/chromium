@@ -20,7 +20,6 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
@@ -62,9 +61,7 @@ public class AccountTrackerServiceTest {
 
     @Rule public final JniMocker mocker = new JniMocker();
 
-    @Rule public TestRule mProcessor = new Features.JUnitProcessor();
-
-    // TODO(https://crbug.com/1336704): Use mock instead of spy.
+    // TODO(crbug.com/40228999): Use mock instead of spy.
     @Spy
     private final FakeAccountManagerFacade mFakeAccountManagerFacade =
             new FakeAccountManagerFacade();

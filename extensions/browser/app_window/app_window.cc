@@ -50,6 +50,7 @@
 #include "extensions/common/permissions/permissions_data.h"
 #include "ipc/ipc_message_macros.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
+#include "third_party/blink/public/mojom/page/draggable_region.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/display/display.h"
@@ -351,10 +352,13 @@ bool AppWindow::CheckMediaAccessPermission(
                                              type);
 }
 
-WebContents* AppWindow::OpenURLFromTab(WebContents* source,
-                                       const content::OpenURLParams& params) {
+WebContents* AppWindow::OpenURLFromTab(
+    WebContents* source,
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
   DCHECK_EQ(web_contents(), source);
-  return helper_->OpenURLFromTab(params);
+  return helper_->OpenURLFromTab(params, std::move(navigation_handle_callback));
 }
 
 void AppWindow::AddNewContents(
@@ -373,7 +377,7 @@ void AppWindow::AddNewContents(
 
 content::KeyboardEventProcessingResult AppWindow::PreHandleKeyboardEvent(
     content::WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   const Extension* extension = GetExtension();
   if (!extension)
     return content::KeyboardEventProcessingResult::NOT_HANDLED;
@@ -399,7 +403,7 @@ content::KeyboardEventProcessingResult AppWindow::PreHandleKeyboardEvent(
 
 bool AppWindow::HandleKeyboardEvent(
     WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   // If the window is currently fullscreen and not forced, ESC should leave
   // fullscreen.  If this code is being called for ESC, that means that the
   // KeyEvent's default behavior was not prevented by the content.
@@ -438,11 +442,11 @@ void AppWindow::ExitPictureInPicture() {
 }
 
 bool AppWindow::ShouldShowStaleContentOnEviction(content::WebContents* source) {
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS_ASH)
   return true;
 #else
   return false;
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 void AppWindow::RenderFrameCreated(content::RenderFrameHost* frame_host) {
@@ -583,9 +587,14 @@ void AppWindow::UpdateShape(std::unique_ptr<ShapeRects> rects) {
   native_app_window_->UpdateShape(std::move(rects));
 }
 
-void AppWindow::UpdateDraggableRegions(
-    const std::vector<mojom::DraggableRegionPtr>& regions) {
-  native_app_window_->UpdateDraggableRegions(regions);
+void AppWindow::DraggableRegionsChanged(
+    const std::vector<blink::mojom::DraggableRegionPtr>& regions,
+    content::WebContents* contents) {
+  CHECK_EQ(contents, web_contents())
+      << "Received DraggableRegionsChanged() notification for unexpected web "
+         "contents";
+
+  native_app_window_->DraggableRegionsChanged(regions);
 
   if (on_update_draggable_regions_callback_for_testing_) {
     std::move(on_update_draggable_regions_callback_for_testing_).Run();
@@ -1057,7 +1066,7 @@ AppWindow::CreateParams AppWindow::LoadDefaults(CreateParams params) const {
 
 // static
 SkRegion* AppWindow::RawDraggableRegionsToSkRegion(
-    const std::vector<mojom::DraggableRegionPtr>& regions) {
+    const std::vector<blink::mojom::DraggableRegionPtr>& regions) {
   SkRegion* sk_region = new SkRegion;
   for (const auto& region : regions) {
     sk_region->op(

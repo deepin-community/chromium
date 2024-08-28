@@ -17,10 +17,11 @@ import android.widget.TextView;
 import androidx.annotation.Nullable;
 import androidx.appcompat.content.res.AppCompatResources;
 
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ui.signin.MinorModeHelper.ScreenMode;
 import org.chromium.components.browser_ui.widget.DualControlLayout;
-import org.chromium.components.signin.SigninFeatureMap;
-import org.chromium.components.signin.SigninFeatures;
+import org.chromium.components.signin.metrics.SyncButtonClicked;
+import org.chromium.components.signin.metrics.SyncButtonsType;
 import org.chromium.ui.UiUtils;
 import org.chromium.ui.drawable.AnimationLooper;
 
@@ -51,8 +52,11 @@ class SigninView extends LinearLayout {
     private OnClickListener mAcceptOnClickListener;
     private ConsentTextUpdater mAcceptConsentTextUpdater;
 
+    private @ScreenMode int mScreenMode;
+
     public SigninView(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
+        mScreenMode = ScreenMode.PENDING;
     }
 
     @Override
@@ -67,6 +71,10 @@ class SigninView extends LinearLayout {
         mAccountTextSecondary = findViewById(R.id.account_text_secondary);
         mAccountPickerEndImage = findViewById(R.id.account_picker_end_image);
         mSyncTitle = findViewById(R.id.signin_sync_title);
+        if (ChromeFeatureList.isEnabled(
+                ChromeFeatureList.ENABLE_PASSWORDS_ACCOUNT_STORAGE_FOR_NON_SYNCING_USERS)) {
+            mSyncTitle.setText(R.string.signin_sync_title_without_passwords);
+        }
         mSyncDescription = findViewById(R.id.signin_sync_description);
         mDetailsDescription = findViewById(R.id.signin_details_description);
         mMoreButton = findViewById(R.id.more_button);
@@ -153,7 +161,52 @@ class SigninView extends LinearLayout {
         if (this.mAcceptOnClickListener == null) {
             return;
         }
+        switch (mScreenMode) {
+            case ScreenMode.RESTRICTED:
+            case ScreenMode.DEADLINED:
+                MinorModeHelper.recordButtonClicked(SyncButtonClicked.SYNC_OPT_IN_EQUAL_WEIGHTED);
+                break;
+            case ScreenMode.UNRESTRICTED:
+                MinorModeHelper.recordButtonClicked(
+                        SyncButtonClicked.SYNC_OPT_IN_NOT_EQUAL_WEIGHTED);
+                break;
+            default:
+                // Button not present
+        }
+
         this.mAcceptOnClickListener.onClick(view);
+    }
+
+    void refuseButtonClicked() {
+        switch (mScreenMode) {
+            case ScreenMode.RESTRICTED:
+            case ScreenMode.DEADLINED:
+                MinorModeHelper.recordButtonClicked(SyncButtonClicked.SYNC_CANCEL_EQUAL_WEIGHTED);
+                break;
+            case ScreenMode.UNRESTRICTED:
+                MinorModeHelper.recordButtonClicked(
+                        SyncButtonClicked.SYNC_CANCEL_NOT_EQUAL_WEIGHTED);
+                break;
+            default:
+                // Button not present
+        }
+    }
+
+    void settingsClicked() {
+        switch (mScreenMode) {
+            case ScreenMode.PENDING:
+                MinorModeHelper.recordButtonClicked(
+                        SyncButtonClicked.SYNC_SETTINGS_UNKNOWN_WEIGHTED);
+                break;
+            case ScreenMode.RESTRICTED:
+            case ScreenMode.DEADLINED:
+                MinorModeHelper.recordButtonClicked(SyncButtonClicked.SYNC_SETTINGS_EQUAL_WEIGHTED);
+                break;
+            case ScreenMode.UNRESTRICTED:
+                MinorModeHelper.recordButtonClicked(
+                        SyncButtonClicked.SYNC_SETTINGS_NOT_EQUAL_WEIGHTED);
+                break;
+        }
     }
 
     /**
@@ -180,20 +233,17 @@ class SigninView extends LinearLayout {
     private void createButtons() {
         mRefuseButton =
                 DualControlLayout.createButtonForLayout(
-                        getContext(), DualControlLayout.ButtonType.SECONDARY, "", null);
+                        getContext(), DualControlLayout.ButtonType.SECONDARY_TEXT, "", null);
         mRefuseButton.setLayoutParams(
                 new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        @DualControlLayout.ButtonType
-        int acceptButtonType =
-                SigninFeatureMap.isEnabled(
-                                SigninFeatures.MINOR_MODE_RESTRICTIONS_FOR_HISTORY_SYNC_OPT_IN)
-                        ? DualControlLayout.ButtonType.PRIMARY_TEXT
-                        : DualControlLayout.ButtonType.PRIMARY_FILLED;
         mAcceptButton =
                 DualControlLayout.createButtonForLayout(
-                        getContext(), acceptButtonType, "", this::acceptOnClickListenerProxy);
+                        getContext(),
+                        DualControlLayout.ButtonType.PRIMARY_TEXT,
+                        "",
+                        this::acceptOnClickListenerProxy);
         mAcceptButton.setLayoutParams(
                 new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -202,20 +252,59 @@ class SigninView extends LinearLayout {
         addButtonsToButtonBar();
     }
 
-    /**
-     * Removes buttons from button bar and readds them keeping their configuration. Buttons are
-     * themed according to {@link screenMode} param.
-     */
-    void recreateButtons(@ScreenMode int screenMode) {
-        mButtonBar.removeAllViews();
+    /** Recreates buttons for the add account purpose. */
+    void recreateAddAccountButtons() {
+        recreateButtons(DualControlLayout.ButtonType.PRIMARY_FILLED);
+        mScreenMode = ScreenMode.PENDING;
+    }
 
-        Button oldButton = mAcceptButton;
+    /**
+     * Prepares buttons for the sync consent purpose.
+     *
+     * <p>If the buttons are already in the request configuration, this is a no-op. Otherwise,
+     * buttons are removed and re-added in the right configuration.
+     *
+     * Buttons in this mode record click and impression metrics.
+     *
+     * @param screenMode determines the appearance of the buttons.
+     */
+    void recreateSyncConsentButtons(@ScreenMode int screenMode) {
+        if (screenMode == mScreenMode) {
+            return;
+        }
+        mScreenMode = screenMode;
 
         @DualControlLayout.ButtonType
         int acceptButtonType =
                 screenMode == ScreenMode.UNRESTRICTED
                         ? DualControlLayout.ButtonType.PRIMARY_FILLED
                         : DualControlLayout.ButtonType.PRIMARY_TEXT;
+        recreateButtons(acceptButtonType);
+
+        // Only at this point buttons were made visible and added to the button bar, so record the
+        // displayed button type.
+        switch (mScreenMode) {
+            case ScreenMode.RESTRICTED:
+                MinorModeHelper.recordButtonsShown(
+                        SyncButtonsType.SYNC_EQUAL_WEIGHTED_FROM_CAPABILITY);
+                break;
+            case ScreenMode.UNRESTRICTED:
+                MinorModeHelper.recordButtonsShown(SyncButtonsType.SYNC_NOT_EQUAL_WEIGHTED);
+                break;
+            case ScreenMode.DEADLINED:
+                MinorModeHelper.recordButtonsShown(
+                        SyncButtonsType.SYNC_EQUAL_WEIGHTED_FROM_DEADLINE);
+                break;
+        }
+    }
+
+    /**
+     * Removes buttons from button bar and readds them keeping their configuration. The primery
+     * buttons is themed as indicated by the {@link acceptButtonType} param.
+     */
+    private void recreateButtons(@DualControlLayout.ButtonType int acceptButtonType) {
+        mButtonBar.removeAllViews();
+        Button oldButton = mAcceptButton;
 
         mAcceptButton =
                 DualControlLayout.createButtonForLayout(

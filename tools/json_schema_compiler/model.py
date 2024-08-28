@@ -380,7 +380,7 @@ class Function(object):
           namespace,
           Origin(from_client=True),
       )
-      # TODO(https://crbug.com/1143032): Returning a synchronous value is
+      # TODO(crbug.com/40154924): Returning a synchronous value is
       # incompatible with returning a promise. There are APIs that specify this,
       # though, so we make sure they have specified does_not_support_promises if
       # they do.
@@ -558,7 +558,7 @@ class EnumValue(object):
     # Using empty string values as enum key is only allowed in a few namespaces,
     # as an exception to the rule, and we should not add more.
     if (not self.name and
-        namespace.name not in ['enums', 'dashboardPrivate', 'webstorePrivate']):
+        namespace.name not in ['enums', 'webstorePrivate']):
       raise ValueError('Enum value cannot be an empty string')
 
   def CamelName(self):

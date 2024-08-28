@@ -14,6 +14,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "ui/display/manager/util/display_manager_util.h"
 #include "ui/display/types/display_configuration_params.h"
 #include "ui/display/types/display_constants.h"
@@ -78,8 +79,10 @@ void LogIfInvalidRequestForInternalDisplay(
   if (request.mode == nullptr)
     return;
 
-  if (request.mode == request.display->native_mode())
+  if (request.display->native_mode() &&
+      *request.mode == *request.display->native_mode()) {
     return;
+  }
 
   LOG(ERROR) << "A mode other than the preferred mode was requested for the "
                 "internal display: preferred="
@@ -224,18 +227,44 @@ void UpdateFinalStatusUma(
   }
 }
 
+// After a successful configuration, the DisplaySnapshot associated with a
+// request needs to have its state updated to reflect the new configuration.
+void UpdateSnapshotAfterConfiguration(const DisplayConfigureRequest& request) {
+  request.display->set_current_mode(request.mode.get());
+  request.display->set_origin(request.origin);
+  if (request.display->IsVrrCapable()) {
+    request.display->set_variable_refresh_rate_state(
+        request.enable_vrr ? display::kVrrEnabled : display::kVrrDisabled);
+  }
+}
+
 }  // namespace
 
 DisplayConfigureRequest::DisplayConfigureRequest(DisplaySnapshot* display,
                                                  const DisplayMode* mode,
                                                  const gfx::Point& origin,
                                                  bool enable_vrr)
-    : display(display), mode(mode), origin(origin), enable_vrr(enable_vrr) {}
+    : display(display),
+      mode(mode ? mode->Clone() : nullptr),
+      origin(origin),
+      enable_vrr(enable_vrr) {}
 
 DisplayConfigureRequest::DisplayConfigureRequest(DisplaySnapshot* display,
                                                  const DisplayMode* mode,
                                                  const gfx::Point& origin)
-    : DisplayConfigureRequest(display, mode, origin, /*enable_vrr=*/false) {}
+    : DisplayConfigureRequest(display,
+                              mode,
+                              origin,
+                              /*enable_vrr=*/false) {}
+
+DisplayConfigureRequest::DisplayConfigureRequest(
+    const DisplayConfigureRequest& other)
+    : DisplayConfigureRequest(other.display,
+                              other.mode.get(),
+                              other.origin,
+                              other.enable_vrr) {}
+
+DisplayConfigureRequest::~DisplayConfigureRequest() = default;
 
 ConfigureDisplaysTask::ConfigureDisplaysTask(
     NativeDisplayDelegate* delegate,
@@ -253,7 +282,15 @@ ConfigureDisplaysTask::ConfigureDisplaysTask(
 ConfigureDisplaysTask::RequestToOriginalMode::RequestToOriginalMode(
     DisplayConfigureRequest* request,
     const DisplayMode* original_mode)
-    : request(request), original_mode(original_mode) {}
+    : request(request),
+      original_mode(original_mode ? original_mode->Clone() : nullptr) {}
+
+ConfigureDisplaysTask::RequestToOriginalMode::RequestToOriginalMode(
+    const RequestToOriginalMode& other)
+    : RequestToOriginalMode(other.request, other.original_mode.get()) {}
+
+ConfigureDisplaysTask::RequestToOriginalMode::~RequestToOriginalMode() =
+    default;
 
 ConfigureDisplaysTask::~ConfigureDisplaysTask() {
   delegate_->RemoveObserver(this);
@@ -268,7 +305,7 @@ void ConfigureDisplaysTask::Run() {
     LogIfInvalidRequestForInternalDisplay(request);
 
     config_requests.emplace_back(request.display->display_id(), request.origin,
-                                 request.mode, request.enable_vrr);
+                                 request.mode.get(), request.enable_vrr);
 
     if (is_first_attempt) {
       const std::string uma_name_prefix = GetUmaNamePrefixForRequest(request);
@@ -281,9 +318,9 @@ void ConfigureDisplaysTask::Run() {
       is_first_attempt ? &ConfigureDisplaysTask::OnFirstAttemptConfigured
                        : &ConfigureDisplaysTask::OnRetryConfigured;
 
-  uint32_t modeset_flags = display::kTestModeset;
+  display::ModesetFlags modeset_flags{display::ModesetFlag::kTestModeset};
   if (configuration_type_ == kConfigurationTypeSeamless)
-    modeset_flags |= display::kSeamlessModeset;
+    modeset_flags.Put(display::ModesetFlag::kSeamlessModeset);
   delegate_->Configure(
       config_requests,
       base::BindOnce(on_configured, weak_ptr_factory_.GetWeakPtr()),
@@ -310,8 +347,10 @@ void ConfigureDisplaysTask::OnFirstAttemptConfigured(bool config_success) {
     PartitionRequests();
     DCHECK(!pending_display_group_requests_.empty());
     // Prep the first group
-    for (const auto& pair : pending_display_group_requests_.front())
-      pair.request->mode = pair.original_mode;
+    for (const auto& pair : pending_display_group_requests_.front()) {
+      pair.request->mode =
+          pair.original_mode ? pair.original_mode->Clone() : nullptr;
+    }
     task_status_ = PARTIAL_SUCCESS;
     Run();
     return;
@@ -324,12 +363,12 @@ void ConfigureDisplaysTask::OnFirstAttemptConfigured(bool config_success) {
     final_requests_status_.emplace_back(&request, true);
 
     config_requests.emplace_back(request.display->display_id(), request.origin,
-                                 request.mode, request.enable_vrr);
+                                 request.mode.get(), request.enable_vrr);
   }
 
-  uint32_t modeset_flags = display::kCommitModeset;
+  display::ModesetFlags modeset_flags{display::ModesetFlag::kCommitModeset};
   if (configuration_type_ == kConfigurationTypeSeamless)
-    modeset_flags |= display::kSeamlessModeset;
+    modeset_flags.Put(display::ModesetFlag::kSeamlessModeset);
   delegate_->Configure(config_requests,
                        base::BindOnce(&ConfigureDisplaysTask::OnConfigured,
                                       weak_ptr_factory_.GetWeakPtr()),
@@ -351,8 +390,9 @@ void ConfigureDisplaysTask::OnRetryConfigured(bool config_success) {
       // single) pending group fails. There is no point in disabling displays
       // that are already disabled from previous attempts and failed to change
       // mode.
-      for (const auto& pair : pending_display_group_requests_.front())
-        pair.request->mode = nullptr;
+      for (const auto& pair : pending_display_group_requests_.front()) {
+        pair.request->mode.reset();
+      }
       task_status_ = ERROR;
     }
   } else {
@@ -362,7 +402,7 @@ void ConfigureDisplaysTask::OnRetryConfigured(bool config_success) {
     last_successful_config_parameters_.clear();
     for (const auto& request : requests_) {
       last_successful_config_parameters_.emplace_back(
-          request.display->display_id(), request.origin, request.mode,
+          request.display->display_id(), request.origin, request.mode.get(),
           request.enable_vrr);
     }
   }
@@ -377,8 +417,10 @@ void ConfigureDisplaysTask::OnRetryConfigured(bool config_success) {
   pending_display_group_requests_.pop();
   if (!pending_display_group_requests_.empty()) {
     // Prep the next group
-    for (const auto& pair : pending_display_group_requests_.front())
-      pair.request->mode = pair.original_mode;
+    for (const auto& pair : pending_display_group_requests_.front()) {
+      pair.request->mode =
+          pair.original_mode ? pair.original_mode->Clone() : nullptr;
+    }
     Run();
     return;
   }
@@ -398,9 +440,9 @@ void ConfigureDisplaysTask::OnRetryConfigured(bool config_success) {
 
   // Configure the displays using the last successful configuration parameter
   // list.
-  uint32_t modeset_flags = display::kCommitModeset;
+  display::ModesetFlags modeset_flags{display::ModesetFlag::kCommitModeset};
   if (configuration_type_ == kConfigurationTypeSeamless)
-    modeset_flags |= display::kSeamlessModeset;
+    modeset_flags.Put(display::ModesetFlag::kSeamlessModeset);
   delegate_->Configure(last_successful_config_parameters_,
                        base::BindOnce(&ConfigureDisplaysTask::OnConfigured,
                                       weak_ptr_factory_.GetWeakPtr()),
@@ -410,12 +452,7 @@ void ConfigureDisplaysTask::OnRetryConfigured(bool config_success) {
 void ConfigureDisplaysTask::OnConfigured(bool config_success) {
   if (config_success) {
     for (const DisplayConfigureRequest& request : requests_) {
-      request.display->set_current_mode(request.mode);
-      request.display->set_origin(request.origin);
-      if (request.display->IsVrrCapable()) {
-        request.display->set_variable_refresh_rate_state(
-            request.enable_vrr ? display::kVrrEnabled : display::kVrrDisabled);
-      }
+      UpdateSnapshotAfterConfiguration(request);
     }
   }
 
@@ -437,8 +474,8 @@ void ConfigureDisplaysTask::PartitionRequests() {
       if (connector_id == requests_[j].display->base_connector_id()) {
         // Disable all requests in preparation increment connector retries after
         // mapping them to their original request.
-        request_group.emplace_back(&requests_[j], requests_[j].mode);
-        requests_[j].mode = nullptr;
+        request_group.emplace_back(&requests_[j], requests_[j].mode.get());
+        requests_[j].mode.reset();
       }
     }
 
@@ -475,7 +512,7 @@ bool ConfigureDisplaysTask::DowngradeDisplayRequestGroup() {
 
     const DisplayMode* next_mode = FindNextMode(*next_request);
     if (next_mode) {
-      next_request->mode = next_mode;
+      next_request->mode = next_mode->Clone();
       return true;
     }
   }

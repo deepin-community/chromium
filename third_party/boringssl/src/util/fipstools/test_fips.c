@@ -26,6 +26,7 @@
 #include <openssl/dh.h>
 #include <openssl/ec_key.h>
 #include <openssl/ecdsa.h>
+#include <openssl/err.h>
 #include <openssl/hkdf.h>
 #include <openssl/hmac.h>
 #include <openssl/nid.h>
@@ -47,14 +48,31 @@ static void hexdump(const void *a, size_t len) {
 }
 
 int main(int argc, char **argv) {
-  CRYPTO_library_init();
+  // Ensure that the output is line-buffered rather than fully buffered. When
+  // some of the tests fail, some of the output can otherwise be lost.
+  setvbuf(stdout, NULL, _IOLBF, 0);
+  setvbuf(stderr, NULL, _IOLBF, 0);
+
+  if (!FIPS_mode()) {
+    printf("Module not in FIPS mode\n");
+    goto err;
+  }
+  printf("Module is in FIPS mode\n");
 
   const uint32_t module_version = FIPS_version();
   if (module_version == 0) {
     printf("No module version set\n");
     goto err;
   }
-  printf("Module version: %" PRIu32 "\n", module_version);
+  printf("Module: '%s', version: %" PRIu32 " hash:\n", FIPS_module_name(),
+         module_version);
+
+#if !defined(OPENSSL_ASAN)
+  hexdump(FIPS_module_hash(), SHA256_DIGEST_LENGTH);
+#else
+  printf("(not available when compiled for ASAN)");
+#endif
+  printf("\n");
 
   static const uint8_t kAESKey[16] = "BoringCrypto Key";
   static const uint8_t kPlaintext[64] =
@@ -216,6 +234,18 @@ int main(int argc, char **argv) {
 
   RSA_free(rsa_key);
 
+  /* Generating a key with a null output parameter. */
+  printf("About to generate RSA key with null output\n");
+  if (!RSA_generate_key_fips(NULL, 2048, NULL)) {
+    printf("RSA_generate_key_fips failed with null output parameter\n");
+    ERR_clear_error();
+  } else {
+    printf(
+        "RSA_generate_key_fips unexpectedly succeeded with null output "
+        "parameter\n");
+    goto err;
+  }
+
   EC_KEY *ec_key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
   if (ec_key == NULL) {
     printf("invalid ECDSA key\n");
@@ -259,6 +289,30 @@ int main(int argc, char **argv) {
   }
 
   ECDSA_SIG_free(sig);
+  EC_KEY_free(ec_key);
+
+  /* Generating a key with a null output pointer. */
+  printf("About to generate P-256 key with NULL output\n");
+  if (!EC_KEY_generate_key_fips(NULL)) {
+    printf("EC_KEY_generate_key_fips failed with a NULL output pointer.\n");
+    ERR_clear_error();
+  } else {
+    printf(
+        "EC_KEY_generate_key_fips unexpectedly succeeded with a NULL output "
+        "pointer.\n");
+    goto err;
+  }
+
+  /* ECDSA with an invalid public key. */
+  ec_key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+  static const uint8_t kNotValidX926[] = {1,2,3,4,5,6};
+  if (!EC_KEY_oct2key(ec_key, kNotValidX926, sizeof(kNotValidX926),
+                      /*ctx=*/NULL)) {
+    printf("Error while parsing invalid ECDSA public key\n");
+  } else {
+    printf("Unexpected success while parsing invalid ECDSA public key\n");
+    goto err;
+  }
   EC_KEY_free(ec_key);
 
   /* DBRG */

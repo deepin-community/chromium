@@ -844,20 +844,16 @@ TEST_P(PaintAndRasterInvalidationTest, SVGHiddenContainer) {
       ->setAttribute(svg_names::kXAttr, AtomicString("20"));
   UpdateAllLifecyclePhasesForTest();
 
-  const PaintInvalidationReason paint_inv_reason =
-      RuntimeEnabledFeatures::CSSMaskingInteropEnabled()
-          ? PaintInvalidationReason::kImage
-          : PaintInvalidationReason::kSubtree;
-
   // Should invalidate raster for real_rect only.
   EXPECT_THAT(
       GetRasterInvalidationTracking()->Invalidations(),
       UnorderedElementsAre(
           RasterInvalidationInfo{real_rect->Id(), real_rect->DebugName(),
-                                 gfx::Rect(155, 166, 7, 8), paint_inv_reason},
+                                 gfx::Rect(155, 166, 7, 8),
+                                 PaintInvalidationReason::kImage},
           RasterInvalidationInfo{real_rect->Id(), real_rect->DebugName(),
                                  gfx::Rect(154, 165, 9, 10),
-                                 paint_inv_reason}));
+                                 PaintInvalidationReason::kImage}));
 
   GetDocument().View()->SetTracksRasterInvalidations(false);
 }
@@ -1164,6 +1160,12 @@ TEST_P(PaintAndRasterInvalidationTest,
 }
 
 TEST_P(PaintAndRasterInvalidationTest, RepaintScrollbarThumbOnHover) {
+  // In RasterInducingScroll the scrollbar is composited, not using blink
+  // raster invalidation.
+  if (RuntimeEnabledFeatures::RasterInducingScrollEnabled()) {
+    return;
+  }
+
   USE_NON_OVERLAY_SCROLLBARS_OR_QUIT();
   SetBodyInnerHTML(R"HTML(
     <style>body {margin: 0}</style>

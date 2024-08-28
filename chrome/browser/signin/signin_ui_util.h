@@ -16,13 +16,16 @@
 #include "chrome/browser/ui/signin/signin_reauth_view_controller.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_metrics.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 
 struct AccountInfo;
 struct CoreAccountInfo;
 class Profile;
 class ProfileAttributesEntry;
 class ProfileAttributesStorage;
+
+namespace signin {
+class IdentityManager;
+}
 
 // Utility functions to gather status information from the various signed in
 // services and construct messages suitable for showing in UI.
@@ -107,9 +110,16 @@ AccountInfo GetSingleAccountForPromos(
 
 #endif
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+// Returns an existing re-usable Dice signin tab with the given access point.
+content::WebContents* GetSignInTabWithAccessPoint(
+    const Browser& browser,
+    signin_metrics::AccessPoint access_point);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
 // Returns the short user identity to display for |profile|. It is based on the
 // current unconsented primary account (if exists).
-// TODO(crbug.com/1012179): Move this logic into ProfileAttributesEntry once
+// TODO(crbug.com/40102223): Move this logic into ProfileAttributesEntry once
 // AvatarToolbarButton becomes an observer of ProfileAttributesStorage and thus
 // ProfileAttributesEntry is up-to-date when AvatarToolbarButton needs it.
 std::u16string GetShortProfileIdentityToDisplay(

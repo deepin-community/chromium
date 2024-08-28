@@ -31,7 +31,6 @@
 import * as i18n from '../../core/i18n/i18n.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as Buttons from '../../ui/components/buttons/buttons.js';
-import * as ComponentHelpers from '../../ui/components/helpers/helpers.js';
 import * as ReportView from '../../ui/components/report_view/report_view.js';
 import * as DataGrid from '../../ui/legacy/components/data_grid/data_grid.js';
 import * as ObjectUI from '../../ui/legacy/components/object_ui/object_ui.js';
@@ -128,7 +127,7 @@ const UIStrings = {
   /**
    *@description Text in Indexed DBViews of the Application panel
    */
-  startFromKey: 'Start from key',
+  filterByKey: 'Filter by key (show keys greater or equal to)',
   /**
    *@description Text in Context menu for expanding objects in IndexedDB tables
    */
@@ -182,7 +181,7 @@ export class IDBDatabaseView extends ApplicationComponents.StorageMetadataView.S
       <${ReportView.ReportView.ReportSection.litTagName}>
       <${Buttons.Button.Button.litTagName}
           aria-label=${i18nString(UIStrings.deleteDatabase)}
-          .variant=${Buttons.Button.Variant.SECONDARY}
+          .variant=${Buttons.Button.Variant.OUTLINED}
           @click=${this.deleteDatabase}
           jslog=${VisualLogging.action('delete-database').track({
       click: true,
@@ -191,7 +190,7 @@ export class IDBDatabaseView extends ApplicationComponents.StorageMetadataView.S
       </${Buttons.Button.Button.litTagName}>&nbsp;
       <${Buttons.Button.Button.litTagName}
           aria-label=${i18nString(UIStrings.refreshDatabase)}
-          .variant=${Buttons.Button.Variant.SECONDARY}
+          .variant=${Buttons.Button.Variant.OUTLINED}
           @click=${this.refreshDatabaseButtonClicked}
           jslog=${VisualLogging.action('refresh-database').track({
       click: true,
@@ -227,7 +226,8 @@ export class IDBDatabaseView extends ApplicationComponents.StorageMetadataView.S
 
   private async deleteDatabase(): Promise<void> {
     const ok = await UI.UIUtils.ConfirmDialog.show(
-        i18nString(UIStrings.pleaseConfirmDeleteOfSDatabase, {PH1: this.database.databaseId.name}), this);
+        i18nString(UIStrings.pleaseConfirmDeleteOfSDatabase, {PH1: this.database.databaseId.name}), this,
+        {jslogContext: 'delete-database-confirmation'});
     if (ok) {
       void this.model.deleteDatabase(this.database.databaseId);
     }
@@ -237,10 +237,9 @@ export class IDBDatabaseView extends ApplicationComponents.StorageMetadataView.S
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent('devtools-idb-database-view', IDBDatabaseView);
+customElements.define('devtools-idb-database-view', IDBDatabaseView);
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface HTMLElementTagNameMap {
     'devtools-idb-database-view': IDBDatabaseView;
   }
@@ -438,7 +437,7 @@ export class IDBDataView extends UI.View.SimpleView {
     this.pageForwardButton.addEventListener(UI.Toolbar.ToolbarButton.Events.Click, this.pageForwardButtonClicked, this);
     editorToolbar.appendToolbarItem(this.pageForwardButton);
 
-    this.keyInput = new UI.Toolbar.ToolbarInput(i18nString(UIStrings.startFromKey), '', 0.5);
+    this.keyInput = new UI.Toolbar.ToolbarFilter(i18nString(UIStrings.filterByKey), 0.5);
     this.keyInput.addEventListener(UI.Toolbar.ToolbarInput.Event.TextChanged, this.updateData.bind(this, false));
     editorToolbar.appendToolbarItem(this.keyInput);
     editorToolbar.appendToolbarItem(new UI.Toolbar.ToolbarSeparator());
@@ -465,13 +464,13 @@ export class IDBDataView extends UI.View.SimpleView {
           return;
         }
         void node.valueObjectPresentation.objectTreeElement().expandRecursively();
-      });
+      }, {jslogContext: 'expand-recursively'});
       contextMenu.revealSection().appendItem(i18nString(UIStrings.collapse), () => {
         if (!node.valueObjectPresentation) {
           return;
         }
         node.valueObjectPresentation.objectTreeElement().collapse();
-      });
+      }, {jslogContext: 'collapse'});
     }
   }
 

@@ -69,7 +69,6 @@ ReadingListModel* ReadingListModelFactory::GetForBrowserContext(
       GetInstance()->GetServiceForBrowserContext(context, true));
 }
 
-#if BUILDFLAG(IS_ANDROID)
 // static
 reading_list::DualReadingListModel*
 ReadingListModelFactory::GetAsDualReadingListForBrowserContext(
@@ -77,7 +76,6 @@ ReadingListModelFactory::GetAsDualReadingListForBrowserContext(
   return static_cast<reading_list::DualReadingListModel*>(
       GetInstance()->GetServiceForBrowserContext(context, true));
 }
-#endif
 
 // static
 ReadingListModelFactory* ReadingListModelFactory::GetInstance() {
@@ -96,9 +94,12 @@ ReadingListModelFactory::ReadingListModelFactory()
           "ReadingListModel",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kRedirectedToOriginal)
-              // TODO(crbug.com/1418376): Check if this service is needed in
+              // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
               .Build()) {
   DependsOn(ModelTypeStoreServiceFactory::GetInstance());
 }

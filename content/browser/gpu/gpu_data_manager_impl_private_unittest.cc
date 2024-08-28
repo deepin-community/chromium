@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 
 #include "base/command_line.h"
@@ -466,9 +471,9 @@ TEST_F(GpuDataManagerImplPrivateTest, GpuStartsWithGraphiteFeatureFlag) {
   EXPECT_EQ(gpu::GpuMode::HARDWARE_GRAPHITE, manager->GetGpuMode());
 }
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS_ASH)
-// On Android and ChromeOS, Graphite should fall back to Ganesh/GL.
-TEST_F(GpuDataManagerImplPrivateTest, FallbackFromGraphiteToGaneshGL) {
+// On Mac graphite should fallback to Swiftshader immediately. On other
+// platforms graphite should fallback to Ganesh/GL.
+TEST_F(GpuDataManagerImplPrivateTest, FallbackFromGraphite) {
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kEnableSkiaGraphite);
 
@@ -478,7 +483,6 @@ TEST_F(GpuDataManagerImplPrivateTest, FallbackFromGraphiteToGaneshGL) {
   manager->FallBackToNextGpuMode();
   EXPECT_EQ(gpu::GpuMode::HARDWARE_GL, manager->GetGpuMode());
 }
-#endif
 
 // Android and Chrome OS do not support software compositing, while Fuchsia does
 // not support falling back to software from Vulkan.
@@ -503,17 +507,6 @@ TEST_F(GpuDataManagerImplPrivateTest, FallbackWithSwiftShaderDisabled) {
   EXPECT_EQ(expected_mode, manager->GetGpuMode());
 }
 
-TEST_F(GpuDataManagerImplPrivateTest, FallbackFromGraphiteToSwiftShader) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableSkiaGraphite);
-
-  ScopedGpuDataManagerImplPrivate manager;
-  EXPECT_EQ(gpu::GpuMode::HARDWARE_GRAPHITE, manager->GetGpuMode());
-
-  manager->FallBackToNextGpuMode();
-  EXPECT_EQ(gpu::GpuMode::SWIFTSHADER, manager->GetGpuMode());
-}
-
 TEST_F(GpuDataManagerImplPrivateTest,
        FallbackFromGraphiteWithSwiftShaderDisabled) {
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
@@ -525,6 +518,8 @@ TEST_F(GpuDataManagerImplPrivateTest,
   EXPECT_EQ(gpu::GpuMode::HARDWARE_GRAPHITE, manager->GetGpuMode());
 
   manager->FallBackToNextGpuMode();
+  manager->FallBackToNextGpuMode();
+
   gpu::GpuMode expected_mode = gpu::GpuMode::DISPLAY_COMPOSITOR;
   EXPECT_EQ(expected_mode, manager->GetGpuMode());
 }
@@ -550,15 +545,8 @@ TEST_F(GpuDataManagerImplPrivateTest, ChromecastStartsWithGpuDisabled) {
 #endif  // defined(CAST_AUDIO_ONLY)
 
 #if BUILDFLAG(ENABLE_VULKAN)
-// TODO(crbug.com/1155622): enable tests when Vulkan is supported on LaCrOS.
+// TODO(crbug.com/40735511): enable tests when Vulkan is supported on LaCrOS.
 #if !BUILDFLAG(IS_CHROMEOS_LACROS)
-TEST_F(GpuDataManagerImplPrivateTest, GpuStartsWithUseVulkanFlag) {
-  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kUseVulkan, switches::kVulkanImplementationNameNative);
-  ScopedGpuDataManagerImplPrivate manager;
-  EXPECT_EQ(gpu::GpuMode::HARDWARE_VULKAN, manager->GetGpuMode());
-}
-
 TEST_F(GpuDataManagerImplPrivateTest, GpuStartsWithVulkanFeatureFlag) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(features::kVulkan);

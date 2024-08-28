@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_marquee_element.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/block_break_token.h"
@@ -58,11 +59,12 @@
 #include "third_party/blink/renderer/core/layout/mathml/math_token_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/mathml/math_under_over_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/min_max_sizes.h"
-#include "third_party/blink/renderer/core/layout/page_layout_algorithm.h"
+#include "third_party/blink/renderer/core/layout/paginated_root_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/replaced_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/shapes/shape_outside_info.h"
 #include "third_party/blink/renderer/core/layout/simplified_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/space_utils.h"
+#include "third_party/blink/renderer/core/layout/svg/layout_svg_root.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
 #include "third_party/blink/renderer/core/layout/table/table_layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/table/table_row_layout_algorithm.h"
@@ -79,7 +81,6 @@
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/paint/transform_utils.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/writing_mode.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "ui/gfx/geometry/size_f.h"
@@ -194,7 +195,7 @@ NOINLINE void DetermineAlgorithmAndRun(const LayoutAlgorithmParams& params,
   else if (GetFlowThread(box) && style.SpecifiesColumns()) {
     CreateAlgorithmAndRun<ColumnLayoutAlgorithm>(params, callback);
   } else if (UNLIKELY(!box.Parent() && params.node.IsPaginatedRoot())) {
-    CreateAlgorithmAndRun<PageLayoutAlgorithm>(params, callback);
+    CreateAlgorithmAndRun<PaginatedRootLayoutAlgorithm>(params, callback);
   } else {
     CreateAlgorithmAndRun<BlockLayoutAlgorithm>(params, callback);
   }
@@ -204,7 +205,7 @@ inline const LayoutResult* LayoutWithAlgorithm(
     const LayoutAlgorithmParams& params) {
   const LayoutResult* result = nullptr;
   DetermineAlgorithmAndRun(params,
-                           [&result](LayoutAlgorithmOperations* algorithm) {
+                           [&result]<typename Algorithm>(Algorithm* algorithm) {
                              result = algorithm->Layout();
                            });
   return result;
@@ -214,10 +215,10 @@ inline MinMaxSizesResult ComputeMinMaxSizesWithAlgorithm(
     const LayoutAlgorithmParams& params,
     const MinMaxSizesFloatInput& float_input) {
   MinMaxSizesResult result;
-  DetermineAlgorithmAndRun(
-      params, [&result, &float_input](LayoutAlgorithmOperations* algorithm) {
-        result = algorithm->ComputeMinMaxSizes(float_input);
-      });
+  DetermineAlgorithmAndRun(params, [&result, &float_input]<typename Algorithm>(
+                                       Algorithm* algorithm) {
+    result = algorithm->ComputeMinMaxSizes(float_input);
+  });
   return result;
 }
 
@@ -235,16 +236,10 @@ bool CanUseCachedIntrinsicInlineSizes(const ConstraintSpace& constraint_space,
 
   // Check if we have any percentage padding.
   const auto& style = node.Style();
-  if (style.MayHavePadding() && (style.PaddingTop().IsPercentOrCalc() ||
-                                 style.PaddingRight().IsPercentOrCalc() ||
-                                 style.PaddingBottom().IsPercentOrCalc() ||
-                                 style.PaddingLeft().IsPercentOrCalc())) {
-    return false;
-  }
-
-  if (node.HasAspectRatio() &&
-      (style.LogicalMinHeight().IsPercentOrCalcOrStretch() ||
-       style.LogicalMaxHeight().IsPercentOrCalcOrStretch())) {
+  if (style.MayHavePadding() &&
+      (style.PaddingTop().HasPercent() || style.PaddingRight().HasPercent() ||
+       style.PaddingBottom().HasPercent() ||
+       style.PaddingLeft().HasPercent())) {
     return false;
   }
 
@@ -258,9 +253,17 @@ bool CanUseCachedIntrinsicInlineSizes(const ConstraintSpace& constraint_space,
   // "grid-template-columns: repeat(auto-fill, 50px); min-width: 50%;"
   // In this specific case our min/max sizes are now dependent on what
   // "min-width" resolves to - which is unique to grid.
-  if (node.IsGrid() && (style.LogicalMinWidth().IsPercentOrCalcOrStretch() ||
-                        style.LogicalMaxWidth().IsPercentOrCalcOrStretch())) {
-    return false;
+  if (node.IsGrid()) {
+    if (style.LogicalMinWidth().HasPercentOrStretch() ||
+        style.LogicalMaxWidth().HasPercentOrStretch()) {
+      return false;
+    }
+    // Also consider transferred min/max sizes.
+    if (node.HasAspectRatio() &&
+        (style.LogicalMinHeight().HasPercentOrStretch() ||
+         style.LogicalMaxHeight().HasPercentOrStretch())) {
+      return false;
+    }
   }
 
   return true;
@@ -281,8 +284,9 @@ std::optional<LayoutUnit> ContentMinimumInlineSize(
   const auto& style = block_node.Style();
   const auto& main_inline_size = style.LogicalWidth();
 
-  if (!main_inline_size.IsPercentOrCalc())
+  if (!main_inline_size.HasPercent()) {
     return std::nullopt;
+  }
 
   // Manually resolve the main-length against zero. calc() expressions may
   // resolve to something greater than "zero".
@@ -310,6 +314,45 @@ std::optional<LayoutUnit> ContentMinimumInlineSize(
     }
   }
   return std::nullopt;
+}
+
+// Look for scroll markers inside `parent`, and attach them.
+void AttachScrollMarkers(LayoutObject& parent,
+                         Node::AttachContext& context,
+                         bool has_absolute_containment = false,
+                         bool has_fixed_containment = false) {
+  if (parent.CanContainAbsolutePositionObjects()) {
+    has_absolute_containment = true;
+    if (parent.CanContainFixedPositionObjects()) {
+      has_fixed_containment = true;
+    }
+  }
+
+  for (LayoutObject* child = parent.SlowFirstChild(); child;
+       child = child->NextSibling()) {
+    if ((child->IsFixedPositioned() && !has_fixed_containment) ||
+        (child->IsAbsolutePositioned() && !has_absolute_containment)) {
+      continue;
+    }
+    if (auto* element = DynamicTo<Element>(child->GetNode())) {
+      if (PseudoElement* marker =
+              element->GetPseudoElement(kPseudoIdScrollMarker)) {
+        marker->AttachLayoutTree(context);
+      }
+    }
+    // Descend into the subtree of the child unless it is a scroll marker group,
+    // or establishes one.
+    //
+    // TODO(layout-dev): Need to enter nested scrollable containers if an outer
+    // scrollable container has "stronger" containment than the inner one. E.g.
+    // if the outer one is position:relative, and the inner one has a scroll
+    // marker in an absolutely positioned subtree, the marker belongs in the
+    // outermost scroll marker group.
+    if (!child->IsScrollMarkerGroup() && !child->GetScrollMarkerGroup()) {
+      AttachScrollMarkers(*child, context, has_absolute_containment,
+                          has_fixed_containment);
+    }
+  }
 }
 
 }  // namespace
@@ -392,16 +435,29 @@ const LayoutResult* BlockNode::Layout(
         CalculateInitialFragmentGeometry(constraint_space, *this, break_token);
   }
 
-  if (
-      // Only consider the size of the first container fragment.
-      !IsBreakInside(break_token) && CanMatchSizeContainerQueries()) {
+  // Only consider the size of the first container fragment.
+  if (!IsBreakInside(break_token) && CanMatchSizeContainerQueries()) {
     if (auto* element = DynamicTo<Element>(GetDOMNode())) {
-      LogicalSize available_size = CalculateChildAvailableSize(
+      // Consider scrollbars if they are stable (reset any auto scrollbars).
+      BoxStrut scrollbar = fragment_geometry->scrollbar;
+      {
+        const auto& style = Style();
+        if (style.IsScrollbarGutterAuto() &&
+            style.OverflowBlockDirection() == EOverflow::kAuto) {
+          scrollbar.inline_start = LayoutUnit();
+          scrollbar.inline_end = LayoutUnit();
+        }
+        if (style.OverflowInlineDirection() == EOverflow::kAuto) {
+          scrollbar.block_start = LayoutUnit();
+          scrollbar.block_end = LayoutUnit();
+        }
+      }
+
+      const LogicalSize available_size = CalculateChildAvailableSize(
           constraint_space, *this, fragment_geometry->border_box_size,
-          fragment_geometry->border + fragment_geometry->padding);
-      LogicalAxes contained_axes = ContainedAxes();
+          fragment_geometry->border + scrollbar + fragment_geometry->padding);
       GetDocument().GetStyleEngine().UpdateStyleAndLayoutTreeForContainer(
-          *element, available_size, contained_axes);
+          *element, available_size, ContainedAxes());
 
       // Try the cache again. Container query matching may have affected
       // elements in the subtree, so that we need full layout instead of
@@ -708,55 +764,6 @@ void BlockNode::FinishRepeatableRoot() const {
   }
 }
 
-const LayoutResult* BlockNode::CachedLayoutResultForOutOfFlowPositioned(
-    LogicalSize container_content_size) const {
-  DCHECK(IsOutOfFlowPositioned());
-
-  if (box_->NeedsLayout())
-    return nullptr;
-
-  // If there are multiple fragments, we wouldn't know which one to use, since
-  // no break token is passed.
-  if (box_->PhysicalFragmentCount() > 1)
-    return nullptr;
-
-  const LayoutResult* cached_layout_result =
-      box_->GetSingleCachedLayoutResult();
-  if (!cached_layout_result)
-    return nullptr;
-
-  // The containing-block may have borders/scrollbars which might change
-  // between passes affecting the final position.
-  if (!cached_layout_result->CanUseOutOfFlowPositionedFirstTierCache())
-    return nullptr;
-
-  // TODO(layout-dev): There are potentially more cases where we can reuse this
-  // layout result.
-  // E.g. when we have a fixed-length top position constraint (top: 5px), we
-  // are in the correct writing mode (htb-ltr), and we have a fixed width.
-  const ConstraintSpace& space =
-      cached_layout_result->GetConstraintSpaceForCaching();
-  if (space.PercentageResolutionSize() != container_content_size)
-    return nullptr;
-
-  // We currently don't keep the static-position around to determine if it is
-  // the same as the previous layout pass. As such, only reuse the result when
-  // we know it doesn't depend on the static-position.
-  //
-  // TODO(layout-dev): We might be able to determine what the previous
-  // static-position was based on |LayoutResult::OutOfFlowPositionedOffset|.
-  // TODO(crbug.com/1477314): This unnecessarily defeats caching when inset-area
-  // is applied.
-  bool depends_on_static_position =
-      Style().HasAutoLeftAndRightIgnoringInsetArea() ||
-      Style().HasAutoTopAndBottomIgnoringInsetArea();
-
-  if (depends_on_static_position) {
-    return nullptr;
-  }
-  return cached_layout_result;
-}
-
 void BlockNode::PrepareForLayout() const {
   auto* block = DynamicTo<LayoutBlock>(box_.Get());
   if (block && block->IsScrollContainer()) {
@@ -795,19 +802,17 @@ void BlockNode::FinishLayout(
   const auto& physical_fragment =
       To<PhysicalBoxFragment>(layout_result->GetPhysicalFragment());
 
-  if (auto* replaced = DynamicTo<LayoutReplaced>(*box_)) {
+  if (auto* svg_root = DynamicTo<LayoutSVGRoot>(GetLayoutBox())) {
     // Calculate the new content rect for SVG roots.
     PhysicalRect content_rect = physical_fragment.LocalRect();
     content_rect.Contract(physical_fragment.Borders() +
                           physical_fragment.Padding());
 
-    if (!box_->NeedsLayout()) {
-      box_->SetNeedsLayout(layout_invalidation_reason::kSizeChanged,
-                           kMarkOnlyThis);
+    if (!svg_root->NeedsLayout()) {
+      svg_root->SetNeedsLayout(layout_invalidation_reason::kSizeChanged,
+                               kMarkOnlyThis);
     }
-    replaced->SetNewContentRect(&content_rect);
-    box_->LayoutIfNeeded();
-    replaced->SetNewContentRect(nullptr);
+    svg_root->LayoutRoot(content_rect);
   }
 
   // If we miss the cache for one result (fragment), we need to clear the
@@ -896,6 +901,19 @@ MinMaxSizesResult BlockNode::ComputeMinMaxSizes(
   if (IsListItem())
     To<LayoutListItem>(box_.Get())->UpdateMarkerTextIfNeeded();
 
+  // There is a path below for which we don't need to compute the (relatively)
+  // expensive geometry.
+  std::optional<FragmentGeometry> cached_fragment_geometry;
+  auto IntrinsicFragmentGeometry = [&]() -> FragmentGeometry& {
+    if (!cached_fragment_geometry) {
+      cached_fragment_geometry =
+          CalculateInitialFragmentGeometry(constraint_space, *this,
+                                           /* break_token */ nullptr,
+                                           /* is_intrinsic */ true);
+    }
+    return *cached_fragment_geometry;
+  };
+
   const bool is_in_perform_layout = box_->GetFrameView()->IsInPerformLayout();
   // In some scenarios, GridNG and FlexNG will run layout on their items during
   // MinMaxSizes computation. Instead of running (and possible caching incorrect
@@ -903,10 +921,7 @@ MinMaxSizesResult BlockNode::ComputeMinMaxSizes(
   if (!is_in_perform_layout &&
       (IsGrid() ||
        (IsFlexibleBox() && Style().ResolvedIsColumnFlexDirection()))) {
-    const FragmentGeometry fragment_geometry =
-        CalculateInitialFragmentGeometry(constraint_space, *this,
-                                         /* break_token */ nullptr,
-                                         /* is_intrinsic */ true);
+    const FragmentGeometry& fragment_geometry = IntrinsicFragmentGeometry();
     const BoxStrut border_padding =
         fragment_geometry.border + fragment_geometry.padding;
     MinMaxSizes sizes;
@@ -940,28 +955,34 @@ MinMaxSizesResult BlockNode::ComputeMinMaxSizes(
                             layout_result->GetPhysicalFragment())
                 .InlineSize();
     const bool depends_on_block_constraints =
-        Style().LogicalWidth().IsAuto() ||
-        Style().LogicalWidth().IsPercentOrCalcOrStretch() ||
-        Style().LogicalMinWidth().IsPercentOrCalcOrStretch() ||
-        Style().LogicalMaxWidth().IsPercentOrCalcOrStretch();
+        Style().LogicalWidth().HasAuto() ||
+        Style().LogicalWidth().HasPercentOrStretch() ||
+        Style().LogicalMinWidth().HasPercentOrStretch() ||
+        Style().LogicalMaxWidth().HasPercentOrStretch();
     return MinMaxSizesResult(sizes, depends_on_block_constraints);
   }
 
   // Returns if we are (directly) dependent on any block constraints.
   auto DependsOnBlockConstraints = [&]() -> bool {
-    return Style().LogicalHeight().IsPercentOrCalcOrStretch() ||
-           Style().LogicalMinHeight().IsPercentOrCalcOrStretch() ||
-           Style().LogicalMaxHeight().IsPercentOrCalcOrStretch() ||
-           (Style().LogicalHeight().IsAuto() &&
+    return Style().LogicalHeight().HasPercentOrStretch() ||
+           Style().LogicalMinHeight().HasPercentOrStretch() ||
+           Style().LogicalMaxHeight().HasPercentOrStretch() ||
+           (Style().LogicalHeight().HasAuto() &&
             constraint_space.IsBlockAutoBehaviorStretch());
   };
 
-  if (!Style().AspectRatio().IsAuto() && !IsReplaced() &&
-      type == MinMaxSizesType::kContent) {
-    const FragmentGeometry fragment_geometry =
-        CalculateInitialFragmentGeometry(constraint_space, *this,
-                                         /* break_token */ nullptr,
-                                         /* is_intrinsic */ true);
+  // Directly handle replaced elements, caching doesn't have substantial gains
+  // as most layouts are interested in the min/max content contribution which
+  // calls `ComputeReplacedSize` directly. This is mainly used by flex.
+  if (IsReplaced()) {
+    MinMaxSizes sizes;
+    sizes = IntrinsicFragmentGeometry().border_box_size.inline_size;
+    return {sizes, DependsOnBlockConstraints()};
+  }
+
+  const bool has_aspect_ratio = !Style().AspectRatio().IsAuto();
+  if (has_aspect_ratio && type == MinMaxSizesType::kContent) {
+    const FragmentGeometry& fragment_geometry = IntrinsicFragmentGeometry();
     const BoxStrut border_padding =
         fragment_geometry.border + fragment_geometry.padding;
     if (fragment_geometry.border_box_size.block_size != kIndefiniteSize) {
@@ -982,74 +1003,70 @@ MinMaxSizesResult BlockNode::ComputeMinMaxSizes(
     box_->SetIntrinsicLogicalWidthsDirty(kMarkOnlyThis);
   }
 
+  std::optional<MinMaxSizesResult> result;
+
   // Use our cached sizes if we don't have a descendant which depends on our
   // block constraints.
   if (can_use_cached_intrinsic_inline_sizes &&
-      !box_->IntrinsicLogicalWidthsChildDependsOnBlockConstraints()) {
-    return box_->CachedIndefiniteIntrinsicLogicalWidths();
+      !box_->IntrinsicLogicalWidthsDependsOnBlockConstraints()) {
+    result = box_->CachedIndefiniteIntrinsicLogicalWidths();
   }
 
-  const FragmentGeometry fragment_geometry = CalculateInitialFragmentGeometry(
-      constraint_space, *this, /* break_token */ nullptr,
-      /* is_intrinsic */ true);
-  const LayoutUnit initial_block_size =
-      fragment_geometry.border_box_size.block_size;
-
-  // We might still be able to use the cached values if our children don't
-  // depend on the *input* %-block-size.
-  if (can_use_cached_intrinsic_inline_sizes &&
+  // We might still be able to use the cached values for a specific initial
+  // block-size.
+  if (!result && can_use_cached_intrinsic_inline_sizes &&
       !UseParentPercentageResolutionBlockSizeForChildren()) {
-    if (auto result = box_->CachedIntrinsicLogicalWidths(initial_block_size)) {
-      return *result;
+    result = box_->CachedIntrinsicLogicalWidths(
+        IntrinsicFragmentGeometry().border_box_size.block_size);
+  }
+
+  if (!result) {
+    const FragmentGeometry& fragment_geometry = IntrinsicFragmentGeometry();
+    result = ComputeMinMaxSizesWithAlgorithm(
+        LayoutAlgorithmParams(*this, fragment_geometry, constraint_space),
+        float_input);
+
+    const BoxStrut border_padding =
+        fragment_geometry.border + fragment_geometry.padding;
+    if (auto min_size = ContentMinimumInlineSize(*this, border_padding)) {
+      result->sizes.min_size = *min_size;
+    }
+
+    // Update the cache with this intermediate value.
+    box_->SetIntrinsicLogicalWidths(
+        fragment_geometry.border_box_size.block_size, *result);
+    if (IsTableCell()) {
+      To<LayoutTableCell>(box_.Get())
+          ->SetIntrinsicLogicalWidthsBorderSizes(
+              constraint_space.TableCellBorders());
     }
   }
 
-  const BoxStrut border_padding =
-      fragment_geometry.border + fragment_geometry.padding;
-
-  MinMaxSizesResult result = ComputeMinMaxSizesWithAlgorithm(
-      LayoutAlgorithmParams(*this, fragment_geometry, constraint_space),
-      float_input);
-
-  if (auto min_size = ContentMinimumInlineSize(*this, border_padding))
-    result.sizes.min_size = *min_size;
+  if (has_aspect_ratio) {
+    const FragmentGeometry& fragment_geometry = IntrinsicFragmentGeometry();
+    if (fragment_geometry.border_box_size.block_size == kIndefiniteSize) {
+      // If the block size will be computed from the aspect ratio, we need
+      // to take the max-block-size into account.
+      // https://drafts.csswg.org/css-sizing-4/#aspect-ratio
+      const BoxStrut border_padding =
+          fragment_geometry.border + fragment_geometry.padding;
+      const MinMaxSizes min_max = ComputeMinMaxInlineSizesFromAspectRatio(
+          constraint_space, Style(), border_padding);
+      result->sizes.min_size =
+          min_max.ClampSizeToMinAndMax(result->sizes.min_size);
+      result->sizes.max_size =
+          min_max.ClampSizeToMinAndMax(result->sizes.max_size);
+    }
+  }
 
   // Determine if we are dependent on the block-constraints.
-  bool depends_on_block_constraints =
-      (DependsOnBlockConstraints() ||
-       UseParentPercentageResolutionBlockSizeForChildren()) &&
-      result.depends_on_block_constraints;
-
-  if (!Style().AspectRatio().IsAuto() &&
-      BlockLengthUnresolvable(constraint_space, Style().LogicalHeight())) {
-    // If the block size will be computed from the aspect ratio, we need
-    // to take the max-block-size into account.
-    // https://drafts.csswg.org/css-sizing-4/#aspect-ratio
-    MinMaxSizes min_max = ComputeMinMaxInlineSizesFromAspectRatio(
-        constraint_space, Style(), border_padding);
-    result.sizes.min_size = min_max.ClampSizeToMinAndMax(result.sizes.min_size);
-    result.sizes.max_size = min_max.ClampSizeToMinAndMax(result.sizes.max_size);
-    depends_on_block_constraints =
-        depends_on_block_constraints ||
-        Style().LogicalMinHeight().IsPercentOrCalcOrStretch() ||
-        Style().LogicalMaxHeight().IsPercentOrCalcOrStretch();
-  }
-
-  box_->SetIntrinsicLogicalWidths(
-      initial_block_size, depends_on_block_constraints,
-      /* child_depends_on_block_constraints */
-      result.depends_on_block_constraints, result.sizes);
-
-  if (IsTableCell()) {
-    To<LayoutTableCell>(box_.Get())
-        ->SetIntrinsicLogicalWidthsBorderSizes(
-            constraint_space.TableCellBorders());
-  }
-
   // We report to our parent if we depend on the %-block-size if we used the
   // input %-block-size, or one of children said it depended on this.
-  result.depends_on_block_constraints = depends_on_block_constraints;
-  return result;
+  result->depends_on_block_constraints =
+      (DependsOnBlockConstraints() ||
+       UseParentPercentageResolutionBlockSizeForChildren()) &&
+      (result->depends_on_block_constraints || has_aspect_ratio);
+  return *result;
 }
 
 LayoutInputNode BlockNode::NextSibling() const {
@@ -1192,26 +1209,17 @@ void BlockNode::CopyFragmentDataToLayoutBox(
   if (UNLIKELY(!is_last_fragment))
     return;
 
-  LayoutBlock* block = DynamicTo<LayoutBlock>(box_.Get());
-  bool needs_full_invalidation = false;
-  if (LIKELY(block)) {
-    if (UNLIKELY(flow_thread && Style().HasColumnRule())) {
-      // Issue full invalidation, in case the number of column rules have
-      // changed.
-      needs_full_invalidation = true;
-    }
-
-    block->SetNeedsOverflowRecalc(
-        LayoutObject::OverflowRecalcType::kOnlyVisualOverflowRecalc);
-    block->SetScrollableOverflowFromLayoutResults();
-  }
-
+  box_->SetNeedsOverflowRecalc(
+      LayoutObject::OverflowRecalcType::kOnlyVisualOverflowRecalc);
+  box_->SetScrollableOverflowFromLayoutResults();
   box_->UpdateAfterLayout();
 
-  if (needs_full_invalidation)
+  if (UNLIKELY(flow_thread && Style().HasColumnRule())) {
+    // Issue full invalidation, in case the number of column rules have changed.
     box_->ClearNeedsLayoutWithFullPaintInvalidation();
-  else
+  } else {
     box_->ClearNeedsLayout();
+  }
 
   // We should notify the display lock that we've done layout on self, and if
   // it's not blocked, on children.
@@ -1346,6 +1354,14 @@ void BlockNode::CopyChildFragmentPosition(
   if (!layout_box)
     return;
 
+  if (child_fragment.GetBoxType() == PhysicalFragment::kPageContainer ||
+      child_fragment.GetBoxType() == PhysicalFragment::kPageBorderBox) {
+    // These fragment types don't need to write anything back to their
+    // LayoutBox. Furthermore, they have no parent, so the check below would
+    // fail.
+    return;
+  }
+
   DCHECK(layout_box->Parent()) << "Should be called on children only.";
 
   LayoutPoint point = LayoutBoxUtils::ComputeLocation(
@@ -1365,6 +1381,17 @@ void BlockNode::MakeRoomForExtraColumns(LayoutUnit block_size) const {
           ->LastMultiColumnSet()
           ->LastFragmentainerGroup();
   last_group.ExtendLogicalBottomInFlowThread(block_size);
+}
+
+void BlockNode::FinishPageContainerLayout(const LayoutResult* result) const {
+  DCHECK_EQ(result->Status(), LayoutResult::kSuccess);
+  DCHECK(result->GetPhysicalFragment().GetBoxType() ==
+             PhysicalFragment::kPageContainer ||
+         result->GetPhysicalFragment().GetBoxType() ==
+             PhysicalFragment::kPageBorderBox);
+  DCHECK(
+      To<PhysicalBoxFragment>(result->GetPhysicalFragment()).IsOnlyForNode());
+  StoreResultInLayoutBox(result, /*BlockBreakToken=*/nullptr);
 }
 
 void BlockNode::CopyFragmentItemsToLayoutBox(
@@ -1535,6 +1562,72 @@ bool BlockNode::IsCustomLayoutLoaded() const {
   return To<LayoutCustom>(box_.Get())->IsLoaded();
 }
 
+void BlockNode::HandleScrollMarkerGroup() const {
+  BlockNode group_node = GetScrollMarkerGroup();
+  if (!group_node) {
+    return;
+  }
+
+  GetDocument().GetStyleEngine().SetInScrollMarkersAttachment(true);
+
+  // Detach all markers.
+  while (LayoutObject* child = group_node.GetLayoutBox()->SlowFirstChild()) {
+    // Anonymous wrappers may have been inserted. Search for the marker.
+    for (LayoutObject* walker = child; walker;
+         walker = walker->NextInPreOrder(child)) {
+      if (walker->GetNode() &&
+          walker->GetNode()->IsScrollMarkerPseudoElement()) {
+        walker->GetNode()->DetachLayoutTree(/*performing_reattach=*/true);
+        break;
+      }
+    }
+  }
+  DCHECK(!group_node.GetLayoutBox()->SlowFirstChild());
+
+  Node::AttachContext context;
+  context.parent = group_node.GetLayoutBox();
+  DCHECK(context.parent);
+
+  AttachScrollMarkers(*box_, context);
+
+  DCHECK(GetDocument().GetStyleEngine().InScrollMarkersAttachment());
+  GetDocument().GetStyleEngine().SetInScrollMarkersAttachment(false);
+
+  // The ::scroll-marker-group has now been populated with markers. If the group
+  // comes after the principal box, we can return, and let the parent layout
+  // algorithm (whatever that is) handle it as part of normal layout.
+  if (!group_node.GetLayoutBox()->IsScrollMarkerGroupBefore()) {
+    return;
+  }
+
+  // If the group comes before the principal box, it means that we might already
+  // be past it, layout-wise. Lay it out again, and replace the innards of the
+  // fragment from the previous layout. This should be safe, as long as the box
+  // establishes sufficient amounts of containment.
+  const LayoutResult* result =
+      group_node.GetLayoutBox()->GetCachedLayoutResult(nullptr);
+  if (!result) {
+    // This may happen e.g. if the ::scroll-marker-group is out-of-flow
+    // positioned, and hasn't been laid out yet (which is great, because then we
+    // won't have to do the innards-replacement).
+    return;
+  }
+  const auto& fragment = To<PhysicalBoxFragment>(result->GetPhysicalFragment());
+
+  // A ::scroll-marker-group should be monolithic.
+  DCHECK(fragment.IsOnlyForNode());
+
+  const ConstraintSpace& space = result->GetConstraintSpaceForCaching();
+  const LayoutResult* new_result = group_node.Layout(space);
+  // TODO(layout-dev): It's being genetically modified all right, but we're not
+  // really "cloning".
+  fragment.GetMutableForCloning().ReplaceChildren(
+      To<PhysicalBoxFragment>(new_result->GetPhysicalFragment()));
+  // The second layout would have replaced the original layout result with the
+  // new one, but we want to keep the original result.
+  group_node.StoreResultInLayoutBox(result, /*BlockBreakToken=*/nullptr);
+}
+
 MathScriptType BlockNode::ScriptType() const {
   DCHECK(IsA<MathMLScriptsElement>(GetDOMNode()));
   return To<MathMLScriptsElement>(GetDOMNode())->GetScriptType();
@@ -1611,7 +1704,7 @@ void BlockNode::UpdateMarginPaddingInfoIfNeeded(
     const auto* containing_block = box_->ContainingBlock();
     if (UNLIKELY(containing_block && containing_block->IsLayoutGrid())) {
       box_->SetOverrideContainingBlockContentLogicalWidth(
-          space.PercentageResolutionInlineSizeForParentWritingMode());
+          space.MarginPaddingPercentageResolutionSize().inline_size);
     }
   }
 }

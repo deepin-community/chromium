@@ -14,6 +14,8 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/lite/delegates/serialization.h"
 
+#include "tensorflow/lite/logger.h"
+
 #if defined(_WIN32)
 #include <fstream>
 #include <iostream>
@@ -94,7 +96,7 @@ TfLiteStatus SerializationEntry::SetData(TfLiteContext* context,
                             std::to_string(time(nullptr))));
 
 #if defined(_WIN32)
-  std::ofstream out_file(temp_filepath.c_str());
+  std::ofstream out_file(temp_filepath.c_str(), std::ios_base::binary);
   if (!out_file) {
     TFLITE_LOG_PROD(TFLITE_LOG_ERROR, "Could not create file: %s",
                     temp_filepath.c_str());

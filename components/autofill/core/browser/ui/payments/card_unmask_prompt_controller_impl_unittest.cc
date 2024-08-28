@@ -15,11 +15,11 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_client.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_prompt_options.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_prompt_view.h"
 #include "components/autofill/core/common/autofill_features.h"
@@ -30,8 +30,12 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill {
+namespace {
 
 using base::ASCIIToUTF16;
+using PaymentsRpcResult = payments::PaymentsAutofillClient::PaymentsRpcResult;
+
+}  // namespace
 
 class TestCardUnmaskDelegate : public CardUnmaskDelegate {
  public:
@@ -47,7 +51,7 @@ class TestCardUnmaskDelegate : public CardUnmaskDelegate {
       const UserProvidedUnmaskDetails& details) override {
     details_ = details;
   }
-  void OnUnmaskPromptClosed() override {}
+  void OnUnmaskPromptCancelled() override {}
   bool ShouldOfferFidoAuth() const override { return false; }
 
   const UserProvidedUnmaskDetails& details() { return details_; }
@@ -81,9 +85,15 @@ class TestCardUnmaskPromptView : public CardUnmaskPromptView {
 
 class TestCardUnmaskPromptController : public CardUnmaskPromptControllerImpl {
  public:
-  explicit TestCardUnmaskPromptController(
-      TestingPrefServiceSimple* pref_service)
-      : CardUnmaskPromptControllerImpl(pref_service) {}
+  TestCardUnmaskPromptController(
+      TestingPrefServiceSimple* pref_service,
+      const CreditCard& card,
+      const CardUnmaskPromptOptions& card_unmask_prompt_options,
+      base::WeakPtr<CardUnmaskDelegate> delegate)
+      : CardUnmaskPromptControllerImpl(pref_service,
+                                       card,
+                                       card_unmask_prompt_options,
+                                       delegate) {}
 
   TestCardUnmaskPromptController(const TestCardUnmaskPromptController&) =
       delete;
@@ -121,8 +131,6 @@ class CardUnmaskPromptControllerImplGenericTest : public testing::Test {
     pref_service_->registry()->RegisterBooleanPref(
         prefs::kAutofillCreditCardFidoAuthOfferCheckboxState, true);
 #endif
-    controller_ =
-        std::make_unique<TestCardUnmaskPromptController>(pref_service_.get());
     delegate_ = std::make_unique<TestCardUnmaskDelegate>();
   }
 
@@ -135,14 +143,15 @@ class CardUnmaskPromptControllerImplGenericTest : public testing::Test {
                               : CreditCard::RecordType::kMaskedServerCard);
 
     CardUnmaskPromptOptions card_unmask_prompt_options =
-        CardUnmaskPromptOptions(challenge_option,
-                                AutofillClient::UnmaskCardReason::kAutofill);
-
-    controller_->ShowPrompt(
-        base::BindOnce(&CardUnmaskPromptControllerImplGenericTest::
-                           CreateCardUnmaskPromptView,
-                       base::Unretained(this)),
-        card_, card_unmask_prompt_options, delegate_->GetWeakPtr());
+        CardUnmaskPromptOptions(
+            challenge_option,
+            payments::PaymentsAutofillClient::UnmaskCardReason::kAutofill);
+    controller_ = std::make_unique<TestCardUnmaskPromptController>(
+        pref_service_.get(), card_, card_unmask_prompt_options,
+        delegate_->GetWeakPtr());
+    controller_->ShowPrompt(base::BindOnce(
+        &CardUnmaskPromptControllerImplGenericTest::CreateCardUnmaskPromptView,
+        base::Unretained(this)));
   }
 
   void DismissPrompt() {
@@ -221,8 +230,7 @@ TEST_F(CardUnmaskPromptControllerImplGenericTest,
 TEST_F(CardUnmaskPromptControllerImplGenericTest, LogRealPanResultSuccess) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
   base::HistogramTester histogram_tester;
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kSuccess);
+  controller_->OnVerificationResult(PaymentsRpcResult::kSuccess);
 
   histogram_tester.ExpectBucketCount(
       "Autofill.UnmaskPrompt.GetRealPanResult.ServerCard",
@@ -233,8 +241,7 @@ TEST_F(CardUnmaskPromptControllerImplGenericTest, LogRealPanTryAgainFailure) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
   base::HistogramTester histogram_tester;
 
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kTryAgainFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kTryAgainFailure);
 
   histogram_tester.ExpectBucketCount(
       "Autofill.UnmaskPrompt.GetRealPanResult.ServerCard",
@@ -246,8 +253,7 @@ TEST_F(CardUnmaskPromptControllerImplGenericTest,
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
   base::HistogramTester histogram_tester;
 
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kSuccess);
+  controller_->OnVerificationResult(PaymentsRpcResult::kSuccess);
 
   histogram_tester.ExpectTotalCount("Autofill.UnmaskPrompt.UnmaskingDuration",
                                     1);
@@ -260,8 +266,7 @@ TEST_F(CardUnmaskPromptControllerImplGenericTest,
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
   base::HistogramTester histogram_tester;
 
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kTryAgainFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kTryAgainFailure);
 
   histogram_tester.ExpectTotalCount("Autofill.UnmaskPrompt.UnmaskingDuration",
                                     1);
@@ -276,7 +281,7 @@ TEST_F(CardUnmaskPromptControllerImplGenericTest,
   base::HistogramTester histogram_tester;
 
   controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kVcnRetrievalPermanentFailure);
+      PaymentsRpcResult::kVcnRetrievalPermanentFailure);
 
   histogram_tester.ExpectTotalCount("Autofill.UnmaskPrompt.UnmaskingDuration",
                                     1);
@@ -587,16 +592,14 @@ TEST_P(LoggingValidationTestForNickname, LogClosedAbandonUnmasking) {
 
 TEST_P(LoggingValidationTestForNickname, LogClosedFailedToUnmaskRetriable) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kTryAgainFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kTryAgainFailure);
   base::HistogramTester histogram_tester;
 
-  EXPECT_EQ(AutofillClient::PaymentsRpcResult::kTryAgainFailure,
+  EXPECT_EQ(PaymentsRpcResult::kTryAgainFailure,
             controller_->GetVerificationResult());
   DismissPrompt();
   // State should be cleared when the dialog is closed.
-  EXPECT_EQ(AutofillClient::PaymentsRpcResult::kNone,
-            controller_->GetVerificationResult());
+  EXPECT_EQ(PaymentsRpcResult::kNone, controller_->GetVerificationResult());
 
   histogram_tester.ExpectBucketCount(
       "Autofill.UnmaskPrompt.ServerCard.Events",
@@ -610,16 +613,14 @@ TEST_P(LoggingValidationTestForNickname, LogClosedFailedToUnmaskRetriable) {
 
 TEST_P(LoggingValidationTestForNickname, LogClosedFailedToUnmaskNonRetriable) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kPermanentFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kPermanentFailure);
   base::HistogramTester histogram_tester;
 
-  EXPECT_EQ(AutofillClient::PaymentsRpcResult::kPermanentFailure,
+  EXPECT_EQ(PaymentsRpcResult::kPermanentFailure,
             controller_->GetVerificationResult());
   DismissPrompt();
   // State should be cleared when the dialog is closed.
-  EXPECT_EQ(AutofillClient::PaymentsRpcResult::kNone,
-            controller_->GetVerificationResult());
+  EXPECT_EQ(PaymentsRpcResult::kNone, controller_->GetVerificationResult());
 
   histogram_tester.ExpectBucketCount(
       "Autofill.UnmaskPrompt.ServerCard.Events",
@@ -637,15 +638,12 @@ TEST_P(LoggingValidationTestForNickname, LogUnmaskedCardFirstAttempt) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
   base::HistogramTester histogram_tester;
 
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kSuccess);
+  controller_->OnVerificationResult(PaymentsRpcResult::kSuccess);
 
-  EXPECT_EQ(AutofillClient::PaymentsRpcResult::kSuccess,
-            controller_->GetVerificationResult());
+  EXPECT_EQ(PaymentsRpcResult::kSuccess, controller_->GetVerificationResult());
   DismissPrompt();
   // State should be cleared when the dialog is closed.
-  EXPECT_EQ(AutofillClient::PaymentsRpcResult::kNone,
-            controller_->GetVerificationResult());
+  EXPECT_EQ(PaymentsRpcResult::kNone, controller_->GetVerificationResult());
 
   histogram_tester.ExpectBucketCount(
       "Autofill.UnmaskPrompt.ServerCard.Events",
@@ -658,16 +656,14 @@ TEST_P(LoggingValidationTestForNickname, LogUnmaskedCardFirstAttempt) {
 
 TEST_P(LoggingValidationTestForNickname, LogUnmaskedCardAfterFailure) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kTryAgainFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kTryAgainFailure);
   controller_->OnUnmaskPromptAccepted(u"444", u"01", u"2050",
 
                                       /*enable_fido_auth=*/false,
                                       /*was_checkbox_visible=*/true);
   base::HistogramTester histogram_tester;
 
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kSuccess);
+  controller_->OnVerificationResult(PaymentsRpcResult::kSuccess);
   DismissPrompt();
 
   histogram_tester.ExpectBucketCount(
@@ -715,8 +711,7 @@ TEST_P(LoggingValidationTestForNickname, LogDurationAbandonUnmasking) {
 
 TEST_P(LoggingValidationTestForNickname, LogDurationFailedToUnmaskRetriable) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kTryAgainFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kTryAgainFailure);
   base::HistogramTester histogram_tester;
 
   DismissPrompt();
@@ -735,8 +730,7 @@ TEST_P(LoggingValidationTestForNickname, LogDurationFailedToUnmaskRetriable) {
 TEST_P(LoggingValidationTestForNickname,
        LogDurationFailedToUnmaskNonRetriable) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kPermanentFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kPermanentFailure);
   base::HistogramTester histogram_tester;
 
   DismissPrompt();
@@ -756,8 +750,7 @@ TEST_P(LoggingValidationTestForNickname, LogDurationCardFirstAttempt) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
   base::HistogramTester histogram_tester;
 
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kSuccess);
+  controller_->OnVerificationResult(PaymentsRpcResult::kSuccess);
   DismissPrompt();
 
   histogram_tester.ExpectTotalCount("Autofill.UnmaskPrompt.Duration", 1);
@@ -773,15 +766,13 @@ TEST_P(LoggingValidationTestForNickname, LogDurationCardFirstAttempt) {
 
 TEST_P(LoggingValidationTestForNickname, LogDurationUnmaskedCardAfterFailure) {
   ShowPromptAndSimulateResponse(/*enable_fido_auth=*/false);
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kTryAgainFailure);
+  controller_->OnVerificationResult(PaymentsRpcResult::kTryAgainFailure);
   controller_->OnUnmaskPromptAccepted(u"444", u"01", u"2050",
                                       /*enable_fido_auth=*/false,
                                       /*was_checkbox_visible=*/true);
   base::HistogramTester histogram_tester;
 
-  controller_->OnVerificationResult(
-      AutofillClient::PaymentsRpcResult::kSuccess);
+  controller_->OnVerificationResult(PaymentsRpcResult::kSuccess);
   DismissPrompt();
 
   histogram_tester.ExpectTotalCount("Autofill.UnmaskPrompt.Duration", 1);
@@ -929,7 +920,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 class VirtualCardErrorTest
     : public CardUnmaskPromptControllerImplGenericTest,
-      public testing::WithParamInterface<AutofillClient::PaymentsRpcResult> {
+      public testing::WithParamInterface<PaymentsRpcResult> {
  public:
   VirtualCardErrorTest() = default;
 
@@ -948,8 +939,7 @@ TEST_P(VirtualCardErrorTest, VirtualCardFailureDismissesUnmaskPrompt) {
   controller_->OnVerificationResult(GetParam());
 
   // Verify that the dialog is closed by checking the state.
-  EXPECT_EQ(AutofillClient::PaymentsRpcResult::kNone,
-            controller_->GetVerificationResult());
+  EXPECT_EQ(PaymentsRpcResult::kNone, controller_->GetVerificationResult());
   // Verify that prompt closing metrics are logged.
   histogram_tester.ExpectBucketCount(
       "Autofill.UnmaskPrompt.VirtualCard.Events",
@@ -964,9 +954,8 @@ TEST_P(VirtualCardErrorTest, VirtualCardFailureDismissesUnmaskPrompt) {
 INSTANTIATE_TEST_SUITE_P(
     CardUnmaskPromptControllerImplGenericTest,
     VirtualCardErrorTest,
-    testing::Values(
-        AutofillClient::PaymentsRpcResult::kVcnRetrievalPermanentFailure,
-        AutofillClient::PaymentsRpcResult::kVcnRetrievalTryAgainFailure));
+    testing::Values(PaymentsRpcResult::kVcnRetrievalPermanentFailure,
+                    PaymentsRpcResult::kVcnRetrievalTryAgainFailure));
 #endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace autofill

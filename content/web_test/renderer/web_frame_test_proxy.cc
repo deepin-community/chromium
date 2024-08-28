@@ -232,7 +232,7 @@ class TestRenderFrameObserver : public RenderFrameObserver {
     render_frame()->GetWebFrame()->PrintEnd();
   }
 
-  const raw_ptr<TestRunner, ExperimentalRenderer> test_runner_;
+  const raw_ptr<TestRunner> test_runner_;
 };
 
 }  // namespace
@@ -274,9 +274,10 @@ void WebFrameTestProxy::Initialize(blink::WebFrame* parent) {
 }
 
 void WebFrameTestProxy::Reset() {
-  // TODO(crbug.com/936696): The RenderDocument project will cause us to replace
-  // the main frame on each navigation, including to about:blank and then to the
-  // next test. So resetting the frame or RenderWidget won't be meaningful then.
+  // TODO(crbug.com/40615943): The RenderDocument project will cause us to
+  // replace the main frame on each navigation, including to about:blank and
+  // then to the next test. So resetting the frame or RenderWidget won't be
+  // meaningful then.
   CHECK(IsMainFrame());
 
   if (IsMainFrame()) {
@@ -442,8 +443,9 @@ void WebFrameTestProxy::DidDispatchPingLoader(const blink::WebURL& url) {
 }
 
 void WebFrameTestProxy::WillSendRequest(blink::WebURLRequest& request,
-                                        ForRedirect for_redirect) {
-  RenderFrameImpl::WillSendRequest(request, for_redirect);
+                                        ForRedirect for_redirect,
+                                        const blink::WebURL& upstream_url) {
+  RenderFrameImpl::WillSendRequest(request, for_redirect, upstream_url);
 
   // Need to use GURL for host() and SchemeIs()
   GURL url = request.Url();
@@ -647,9 +649,6 @@ void WebFrameTestProxy::HandleWebAccessibilityEventForTest(
     case ax::mojom::Event::kLocationChanged:
       event_name = "LocationChanged";
       break;
-    case ax::mojom::Event::kMenuListValueChanged:
-      event_name = "MenuListValueChanged";
-      break;
     case ax::mojom::Event::kRowCollapsed:
       event_name = "RowCollapsed";
       break;
@@ -695,6 +694,7 @@ void WebFrameTestProxy::HandleWebAccessibilityEventForTest(
     case ax::mojom::Event::kMediaStartedPlaying:
     case ax::mojom::Event::kMediaStoppedPlaying:
     case ax::mojom::Event::kMenuEnd:
+    case ax::mojom::Event::kMenuListValueChangedDeprecated:
     case ax::mojom::Event::kMenuPopupEnd:
     case ax::mojom::Event::kMenuPopupStart:
     case ax::mojom::Event::kMenuStart:
@@ -716,7 +716,8 @@ void WebFrameTestProxy::HandleWebAccessibilityEventForTest(
     case ax::mojom::Event::kWindowDeactivated:
     case ax::mojom::Event::kWindowVisibilityChanged:
       // Never fired from Blink.
-      NOTREACHED() << "Event not expected from Blink: " << event.event_type;
+      NOTREACHED_IN_MIGRATION()
+          << "Event not expected from Blink: " << event.event_type;
   }
 
   blink::WebDocument document = GetWebFrame()->GetDocument();
@@ -787,14 +788,24 @@ void WebFrameTestProxy::BlockTestUntilStart() {
 void WebFrameTestProxy::StartTest() {
   CHECK(!should_block_parsing_in_next_commit_);
   GetWebFrame()->FlushInputForTesting(base::BindOnce(
-      [](base::WeakPtr<RenderFrameImpl> render_frame) {
-        if (!render_frame || !render_frame->GetWebFrame()) {
+      [](base::WeakPtr<RenderFrameImpl> render_frame,
+         const TestRunner* test_runner) {
+        if (!render_frame) {
           return;
         }
 
-        render_frame->GetWebFrame()->ResumeParserForTesting();
+        auto* web_frame = render_frame->GetWebFrame();
+        if (!web_frame) {
+          return;
+        }
+
+        web_frame->ResumeParserForTesting();
+
+        if (test_runner->IsPrinting()) {
+          web_frame->WillPrintSoon();
+        }
       },
-      GetWeakPtr()));
+      GetWeakPtr(), this->test_runner_));
 }
 
 blink::FrameWidgetTestHelper*

@@ -15,13 +15,12 @@
 #include "sharing/text_attachment.h"
 
 #include <stddef.h>
-#include <stdint.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -30,7 +29,6 @@
 #include "sharing/attachment.h"
 #include "sharing/common/nearby_share_enums.h"
 #include "sharing/proto/wire_format.pb.h"
-#include "sharing/share_target.h"
 
 namespace nearby {
 namespace sharing {
@@ -137,9 +135,15 @@ TextAttachment::TextAttachment(int64_t id, Type type, std::string text_title,
       type_(type),
       text_title_(std::move(text_title)) {}
 
-void TextAttachment::MoveToShareTarget(ShareTarget& share_target) {
-  share_target.text_attachments.push_back(std::move(*this));
-}
+TextAttachment::TextAttachment(int64_t id, Type type, std::string text_body,
+                               std::string text_title, int64_t size,
+                               std::string mime_type, int32_t batch_id,
+                               SourceType source_type)
+    : Attachment(id, Attachment::Family::kText, size, batch_id, source_type),
+      type_(type),
+      text_title_(std::move(text_title)),
+      text_body_(std::move(text_body)),
+      mime_type_(std::move(mime_type)) {}
 
 absl::string_view TextAttachment::GetDescription() const { return text_title_; }
 

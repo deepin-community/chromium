@@ -206,7 +206,10 @@ void ChromeRuntimeAPIDelegate::ReloadExtension(
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&extensions::WarningService::NotifyWarningsOnUI,
-                       browser_context_, warnings));
+                       // TODO(crbug.com/40061562): Remove
+                       // `UnsafeDanglingUntriaged`
+                       base::UnsafeDanglingUntriaged(browser_context_),
+                       warnings));
   } else {
     // We can't call ReloadExtension directly, since when this method finishes
     // it tries to decrease the reference count for the extension, which fails
@@ -282,10 +285,8 @@ bool ChromeRuntimeAPIDelegate::GetPlatformInfo(PlatformInfo* info) {
     info->os = extensions::api::runtime::PlatformOs::kLinux;
   } else if (strcmp(os, "openbsd") == 0) {
     info->os = extensions::api::runtime::PlatformOs::kOpenbsd;
-  } else if (strcmp(os, "fuchsia") == 0) {
-    info->os = extensions::api::runtime::PlatformOs::kFuchsia;
   } else {
-    NOTREACHED() << "Platform not supported: " << os;
+    NOTREACHED_IN_MIGRATION() << "Platform not supported: " << os;
     return false;
   }
 
@@ -303,7 +304,7 @@ bool ChromeRuntimeAPIDelegate::GetPlatformInfo(PlatformInfo* info) {
   } else if (strcmp(arch, "mips64el") == 0) {
     info->arch = extensions::api::runtime::PlatformArch::kMips64;
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return false;
   }
 
@@ -319,7 +320,7 @@ bool ChromeRuntimeAPIDelegate::GetPlatformInfo(PlatformInfo* info) {
   } else if (strcmp(nacl_arch, "mips64") == 0) {
     info->nacl_arch = extensions::api::runtime::PlatformNaclArch::kMips64;
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return false;
   }
 

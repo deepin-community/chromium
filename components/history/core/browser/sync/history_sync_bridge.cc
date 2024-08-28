@@ -72,6 +72,7 @@ std::string GetStorageKeyFromVisitRow(const VisitRow& row) {
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(SyncHistoryDatabaseError)
 enum class SyncHistoryDatabaseError {
   kApplyIncrementalSyncChangesAddSyncedVisit = 0,
   kApplyIncrementalSyncChangesWriteMetadata = 1,
@@ -84,6 +85,7 @@ enum class SyncHistoryDatabaseError {
   kGetAllDataReadMetadata = 7,
   kMaxValue = kGetAllDataReadMetadata
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncHistoryDatabaseError)
 
 void RecordDatabaseError(SyncHistoryDatabaseError error) {
   DLOG(ERROR) << "SyncHistoryBridge database error: "
@@ -174,6 +176,11 @@ VisitRow MakeVisitRow(const sync_pb::HistorySpecifics& specifics,
 
   // Definitionally, any visit from Sync is known to sync.
   row.is_known_to_sync = true;
+
+  // Transfer app_id if present.
+  if (specifics.has_app_id()) {
+    row.app_id = specifics.app_id();
+  }
 
   // Reconstruct the page transition - first get the core type.
   int page_transition = syncer::FromSyncPageTransition(
@@ -300,7 +307,8 @@ std::unique_ptr<syncer::EntityData> MakeEntityData(
     const GURL& referrer_url,
     const std::vector<GURL>& favicon_urls,
     int64_t local_cluster_id,
-    std::vector<VisitID>* included_visit_ids) {
+    std::vector<VisitID>* included_visit_ids,
+    std::optional<std::string> app_id) {
   DCHECK(!local_cache_guid.empty());
   DCHECK(!redirect_visits.empty());
 
@@ -442,6 +450,9 @@ std::unique_ptr<syncer::EntityData> MakeEntityData(
   }
 
   history->set_originator_cluster_id(local_cluster_id);
+  if (app_id) {
+    history->set_app_id(*app_id);
+  }
 
   // The entity name is used for debugging purposes; choose something that's a
   // decent tradeoff between "unique" and "readable".
@@ -471,6 +482,7 @@ bool SpecificsContainsOnlyValidURLs(
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(SyncHistorySpecificsError)
 enum class SpecificsError {
   kMissingRequiredFields = 0,
   kTooOld = 1,
@@ -478,6 +490,7 @@ enum class SpecificsError {
   kUnwantedURL = 3,
   kMaxValue = kUnwantedURL
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncHistorySpecificsError)
 
 // Checks the given `specifics` for validity, i.e. whether it passes some basic
 // validation checks, and returns the appropriate error if it doesn't.
@@ -551,7 +564,7 @@ std::optional<syncer::ModelError> HistorySyncBridge::MergeFullSyncData(
     syncer::EntityChangeList entity_data) {
   // Since HISTORY is in ApplyUpdatesImmediatelyTypes(), MergeFullSyncData()
   // should never be called.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -626,7 +639,7 @@ HistorySyncBridge::ApplyIncrementalSyncChanges(
         // entities *is* tracked, but then an incoming tombstone would result in
         // a conflict that'd be resolved as "local edit wins over remote
         // deletion", so still no ACTION_DELETE would arrive here.]
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
     }
   }
@@ -660,8 +673,13 @@ void HistorySyncBridge::ApplyDisableSyncChanges(
       std::move(delete_metadata_change_list));
 }
 
-void HistorySyncBridge::GetData(StorageKeyList storage_keys,
-                                DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> HistorySyncBridge::GetDataForCommit(
+    StorageKeyList storage_keys) {
+  return GetDataImpl(storage_keys);
+}
+
+std::unique_ptr<syncer::DataBatch> HistorySyncBridge::GetDataImpl(
+    StorageKeyList storage_keys) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto batch = std::make_unique<syncer::MutableDataBatch>();
@@ -696,14 +714,14 @@ void HistorySyncBridge::GetData(StorageKeyList storage_keys,
     batch->Put(key, std::move(entity_data));
   }
 
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
-void HistorySyncBridge::GetAllDataForDebugging(DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> HistorySyncBridge::GetAllDataForDebugging() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!sync_metadata_database_) {
-    return;
+    return nullptr;
   }
 
   auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
@@ -717,7 +735,7 @@ void HistorySyncBridge::GetAllDataForDebugging(DataCallback callback) {
   for (const auto& [storage_key, metadata] : metadata_batch->GetAllMetadata()) {
     storage_keys.push_back(storage_key);
   }
-  GetData(std::move(storage_keys), std::move(callback));
+  return GetDataImpl(std::move(storage_keys));
 }
 
 std::string HistorySyncBridge::GetClientTag(
@@ -801,11 +819,11 @@ void HistorySyncBridge::OnURLsModified(HistoryBackend* history_backend,
   }
 }
 
-void HistorySyncBridge::OnURLsDeleted(HistoryBackend* history_backend,
-                                      bool all_history,
-                                      bool expired,
-                                      const URLRows& deleted_rows,
-                                      const std::set<GURL>& favicon_urls) {
+void HistorySyncBridge::OnHistoryDeletions(HistoryBackend* history_backend,
+                                           bool all_history,
+                                           bool expired,
+                                           const URLRows& deleted_rows,
+                                           const std::set<GURL>& favicon_urls) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If individual URLs get deleted, we're notified about their removed visits
@@ -1064,9 +1082,10 @@ HistorySyncBridge::QueryRedirectChainAndMakeEntityData(
     // should be the same (except potentially in unit tests).
     int64_t local_cluster_id = history_backend_->GetClusterIdContainingVisit(
         redirect_visits.front().visit_id);
-    entities.push_back(MakeEntityData(
-        GetLocalCacheGuid(), annotated_visits, chain_middle_trimmed,
-        referrer_url, favicon_urls, local_cluster_id, included_visit_ids));
+    entities.push_back(MakeEntityData(GetLocalCacheGuid(), annotated_visits,
+                                      chain_middle_trimmed, referrer_url,
+                                      favicon_urls, local_cluster_id,
+                                      included_visit_ids, final_visit.app_id));
   }
 
   return entities;
@@ -1153,7 +1172,7 @@ bool HistorySyncBridge::UpdateEntityInBackend(
     const sync_pb::HistorySpecifics& specifics) {
   // Only try updating the final visit in a chain - earlier visits (i.e.
   // redirects) can't get updated anyway.
-  // TODO(crbug.com/1318028): Verify whether only updating the chain end
+  // TODO(crbug.com/40059424): Verify whether only updating the chain end
   // is indeed sufficient.
   int index = specifics.redirect_entries_size() - 1;
   VisitRow final_visit_row = MakeVisitRow(specifics, index);

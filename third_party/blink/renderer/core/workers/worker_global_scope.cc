@@ -28,6 +28,8 @@
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/trace_event/typed_macros.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/metrics/public/cpp/mojo_ukm_recorder.h"
 #include "third_party/blink/public/common/privacy_budget/identifiability_study_settings.h"
@@ -52,6 +54,7 @@
 #include "third_party/blink/renderer/core/inspector/console_message_storage.h"
 #include "third_party/blink/renderer/core/inspector/inspector_audits_issue.h"
 #include "third_party/blink/renderer/core/inspector/inspector_issue_storage.h"
+#include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/inspector/worker_inspector_controller.h"
 #include "third_party/blink/renderer/core/inspector/worker_thread_debugger.h"
 #include "third_party/blink/renderer/core/loader/threadable_loader.h"
@@ -87,6 +90,7 @@
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace blink {
 namespace {
@@ -125,16 +129,25 @@ scoped_refptr<SecurityOrigin> CreateSecurityOrigin(
   DCHECK(!is_service_worker_global_scope ||
          !KURL(creation_params->script_url).ProtocolIsData());
 
-  // TODO(https://crbug.com/1058305) Inherit |agent_cluster_id_| for dedicated
-  // workers. DO NOT inherit for shared workers and service workers.
-  //
-  // Create a new SecurityOrigin via CreateFromUrlOrigin() so that worker's
-  // origin can avoid inheriting unnecessary capabilities from the starter
-  // origin, while the worker's origin inherits url:Origin's internal nonce.
   scoped_refptr<SecurityOrigin> security_origin;
   if (KURL(creation_params->script_url).ProtocolIsData()) {
-    security_origin = SecurityOrigin::CreateUniqueOpaque();
+    // Workers with data: URL should use a new, unique opaque origin per spec:
+    // https://html.spec.whatwg.org/multipage/workers.html#script-settings-for-workers:concept-settings-object-origin-2
+    // We derive the new opaque origin from the starter origin because of a bug
+    // where the browser thinks the worker's origin is the starter origin (see
+    // https://crbug.com/1058759). With `DeriveNewOpaqueOrigin()`, the precursor
+    // origin of the new opaque origin will be the starter origin. This way, if
+    // the browser needs to verify that the browser and renderer origin matches,
+    // it can just compare the browser-side origin with the precursor of the
+    // renderer-side origin.
+    security_origin = creation_params->starter_origin->DeriveNewOpaqueOrigin();
   } else {
+    // TODO(https://crbug.com/1058305) Inherit |agent_cluster_id_| for dedicated
+    // workers. DO NOT inherit for shared workers and service workers.
+    //
+    // Create a new SecurityOrigin via CreateFromUrlOrigin() so that worker's
+    // origin can avoid inheriting unnecessary capabilities from the starter
+    // origin, while the worker's origin inherits url:Origin's internal nonce.
     security_origin = SecurityOrigin::CreateFromUrlOrigin(
         creation_params->starter_origin->ToUrlOrigin());
   }
@@ -421,7 +434,7 @@ CoreProbeSink* WorkerGlobalScope::GetProbeSink() {
   return nullptr;
 }
 
-const BrowserInterfaceBrokerProxy&
+const BrowserInterfaceBrokerProxyImpl&
 WorkerGlobalScope::GetBrowserInterfaceBroker() const {
   return browser_interface_broker_proxy_;
 }
@@ -453,6 +466,7 @@ void WorkerGlobalScope::WorkerScriptFetchFinished(
     Script& worker_script,
     std::optional<v8_inspector::V8StackTraceId> stack_id) {
   DCHECK(IsContextThread());
+  TRACE_EVENT("blink.worker", "WorkerGlobalScope::WorkerScriptFetchFinished");
 
   DCHECK_NE(ScriptEvalState::kEvaluated, script_eval_state_);
   DCHECK(!worker_script_);
@@ -483,12 +497,16 @@ void WorkerGlobalScope::RunWorkerScript() {
   DCHECK(!IsContextPaused());
   CHECK(GetExecutionContext()) << "crbug.com/1045818: attempted to evaluate "
                                   "script but no execution context";
-  CHECK(!GetExecutionContext()->IsContextDestroyed())
-      << "crbug.com/1045818: attempted to evaluate script but worker global "
-         "scope was already destroyed";
+  // If the context has already been destroyed, it should be a orphan worker.
+  // It should be fine to close the worker.
+  if (GetExecutionContext()->IsContextDestroyed()) {
+    close();
+    return;
+  }
 
   DCHECK(worker_script_);
   DCHECK_EQ(script_eval_state_, ScriptEvalState::kReadyToEvaluate);
+  TRACE_EVENT("blink.worker", "WorkerGlobalScope::RunWorkerScript");
 
   WorkerThreadDebugger* debugger =
       WorkerThreadDebugger::From(GetThread()->GetIsolate());
@@ -533,7 +551,7 @@ void WorkerGlobalScope::RunWorkerScript() {
               is_success = false;
               break;
             case v8::Promise::kPending:
-              NOTREACHED();
+              NOTREACHED_IN_MIGRATION();
               is_success = false;
               break;
           }
@@ -550,6 +568,8 @@ void WorkerGlobalScope::RunWorkerScript() {
     debugger->ExternalAsyncTaskFinished(*stack_id_);
 
   script_eval_state_ = ScriptEvalState::kEvaluated;
+  TRACE_EVENT_NESTABLE_ASYNC_END0("blink.worker", "WorkerGlobalScope setup",
+                                  TRACE_ID_LOCAL(this));
 }
 
 void WorkerGlobalScope::ReceiveMessage(BlinkTransferableMessage message) {
@@ -558,9 +578,9 @@ void WorkerGlobalScope::ReceiveMessage(BlinkTransferableMessage message) {
       MessagePort::EntanglePorts(*this, std::move(message.ports));
   WorkerThreadDebugger* debugger =
       WorkerThreadDebugger::From(GetThread()->GetIsolate());
-  if (debugger)
+  if (debugger) {
     debugger->ExternalAsyncTaskStarted(message.sender_stack_trace_id);
-
+  }
   if (message.message->CanDeserializeIn(this)) {
     UserActivation* user_activation = nullptr;
     if (message.user_activation) {
@@ -568,8 +588,17 @@ void WorkerGlobalScope::ReceiveMessage(BlinkTransferableMessage message) {
           message.user_activation->has_been_active,
           message.user_activation->was_active);
     }
-    DispatchEvent(*MessageEvent::Create(ports, std::move(message.message),
-                                        user_activation));
+    MessageEvent* message_event = MessageEvent::Create(
+        ports, std::move(message.message), user_activation);
+    message_event->SetTraceId(message.trace_id);
+    TRACE_EVENT(
+        "devtools.timeline", "HandlePostMessage", "data",
+        [&](perfetto::TracedValue context) {
+          inspector_handle_post_message_event::Data(
+              std::move(context), GetExecutionContext(), *message_event);
+        },
+        perfetto::Flow::Global(message_event->GetTraceId()));
+    DispatchEvent(*message_event);
   } else {
     DispatchEvent(*MessageEvent::CreateError());
   }
@@ -614,12 +643,16 @@ WorkerGlobalScope::WorkerGlobalScope(
           creation_params->agent_group_scheduler_compositor_task_runner)),
       time_origin_(time_origin),
       font_selector_(MakeGarbageCollected<OffscreenFontSelector>(this)),
+      browser_interface_broker_proxy_(this),
       script_eval_state_(ScriptEvalState::kPauseAfterFetch),
       ukm_source_id_(creation_params->ukm_source_id),
       top_level_frame_security_origin_(
           std::move(creation_params->top_level_frame_security_origin)) {
   // Workers should always maintain the default world of an isolate.
   CHECK(creation_params->is_default_world_of_isolate);
+  TRACE_EVENT("blink.worker", "WorkerGlobalScope::WorkerGlobalScope");
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("blink.worker", "WorkerGlobalScope setup",
+                                    TRACE_ID_LOCAL(this));
 
   InstanceCounters::IncrementCounter(
       InstanceCounters::kWorkerGlobalScopeCounter);
@@ -746,6 +779,7 @@ void WorkerGlobalScope::Trace(Visitor* visitor) const {
   visitor->Trace(font_selector_);
   visitor->Trace(trusted_types_);
   visitor->Trace(worker_script_);
+  visitor->Trace(browser_interface_broker_proxy_);
   WorkerOrWorkletGlobalScope::Trace(visitor);
   Supplementable<WorkerGlobalScope>::Trace(visitor);
 }

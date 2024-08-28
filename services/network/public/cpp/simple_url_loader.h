@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
@@ -43,6 +44,9 @@ class URLLoaderFactory;
 }  // namespace network
 
 namespace network {
+
+COMPONENT_EXPORT(NETWORK_CPP)
+BASE_DECLARE_FEATURE(kSimpleURLLoaderUseReadAndDiscardBodyOption);
 
 class SimpleURLLoaderStreamConsumer;
 
@@ -368,9 +372,14 @@ class COMPONENT_EXPORT(NETWORK_CPP) SimpleURLLoader {
   virtual int NetError() const = 0;
 
   // The URLResponseHead for the request. Will be nullptr if ResponseInfo
-  // was never received. May only be called once the loader has informed the
-  // caller of completion.
+  // was never received or if `TakeResponseInfo()` has been called. May only be
+  // called once the loader has informed the caller of completion.
   virtual const mojom::URLResponseHead* ResponseInfo() const = 0;
+
+  // The URLResponseHead for the request. Ownership is transferred to the
+  // caller. Will be nullptr if ResponseInfo was never received. May only be
+  // called once the loader has informed the caller of completion.
+  virtual mojom::URLResponseHeadPtr TakeResponseInfo() = 0;
 
   // The URLLoaderCompletionStatus for the request. Will be nullopt if the
   // response never completed. May only be called once the loader has informed

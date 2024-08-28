@@ -27,7 +27,6 @@
 
 #include "src/tint/lang/core/ir/if.h"
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/core/ir/ir_helper_test.h"
 
 namespace tint::core::ir {
@@ -35,6 +34,7 @@ namespace {
 
 using namespace tint::core::number_suffixes;  // NOLINT
 using IR_IfTest = IRTestHelper;
+using IR_IfDeathTest = IR_IfTest;
 
 TEST_F(IR_IfTest, Usage) {
     auto* cond = b.Constant(true);
@@ -55,24 +55,24 @@ TEST_F(IR_IfTest, Parent) {
     EXPECT_EQ(if_->False()->Parent(), if_);
 }
 
-TEST_F(IR_IfTest, Fail_NullTrueBlock) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(IR_IfDeathTest, Fail_NullTrueBlock) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             Module mod;
             Builder b{mod};
             If if_(b.Constant(false), nullptr, b.Block());
         },
-        "");
+        "internal compiler error");
 }
 
-TEST_F(IR_IfTest, Fail_NullFalseBlock) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(IR_IfDeathTest, Fail_NullFalseBlock) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             Module mod;
             Builder b{mod};
             If if_(b.Constant(false), b.Block(), nullptr);
         },
-        "");
+        "internal compiler error");
 }
 
 TEST_F(IR_IfTest, Clone) {

@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -528,7 +527,7 @@ CastActivity* CastActivityManager::AddMirroringActivity(
 
 void CastActivityManager::OnAppMessage(
     int channel_id,
-    const cast::channel::CastMessage& message) {
+    const openscreen::cast::proto::CastMessage& message) {
   // Note: app messages are received only after session is created.
   DVLOG(2) << "Received app message on cast channel " << channel_id;
   auto it = FindActivityByChannelId(channel_id);
@@ -557,7 +556,7 @@ void CastActivityManager::OnSessionAddedOrUpdated(const MediaSinkInternal& sink,
 
   // If |activity| is null, we have discovered a non-local activity.
   if (activity_it == activities_.end()) {
-    // TODO(crbug.com/954797): Test this case.
+    // TODO(crbug.com/40623998): Test this case.
     AddNonLocalActivity(sink, session);
     NotifyAllOnRoutesUpdated();
     return;
@@ -1053,7 +1052,7 @@ std::string CastActivityManager::ChooseAppId(
     if (sink_capabilities.HasAll(info.required_capabilities))
       return info.app_id;
   }
-  NOTREACHED() << "Can't determine app ID from capabilities.";
+  DUMP_WILL_BE_NOTREACHED() << "Can't determine app ID from capabilities.";
   return source.app_infos()[0].app_id;
 }
 
@@ -1134,7 +1133,7 @@ void CastActivityManager::HandleMissingSessionIdOnJoin(
     mojom::MediaRouteProvider::JoinRouteCallback callback) {
   // This should never happen, but it looks like maybe it does.  See
   // crbug.com/1114067.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   static const char kErrorMessage[] = "Internal error: missing session ID";
   // Checking for |logger_| here is pure paranoia, but this code only exists
   // to fix a crash we can't reproduce, so creating even a tiny possibility of

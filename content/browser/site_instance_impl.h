@@ -11,8 +11,8 @@
 #include "base/check.h"
 #include "base/memory/scoped_refptr.h"
 #include "content/browser/browsing_instance.h"
-#include "content/browser/coop_related_group.h"
 #include "content/browser/isolation_context.h"
+#include "content/browser/security/coop/coop_related_group.h"
 #include "content/browser/site_info.h"
 #include "content/browser/web_exposed_isolation_info.h"
 #include "content/common/content_export.h"
@@ -164,6 +164,7 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   BrowsingInstanceId GetBrowsingInstanceId() override;
   bool HasProcess() override;
   RenderProcessHost* GetProcess() override;
+  SiteInstanceGroupId GetSiteInstanceGroupId() override;
   BrowserContext* GetBrowserContext() override;
   const GURL& GetSiteURL() override;
   const StoragePartitionConfig& GetStoragePartitionConfig() override;
@@ -172,6 +173,7 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   size_t GetRelatedActiveContentsCount() override;
   bool RequiresDedicatedProcess() override;
   bool RequiresOriginKeyedProcess() override;
+  bool IsSandboxed() override;
   bool IsSameSiteWithURL(const GURL& url) override;
   bool IsGuest() override;
   SiteInstanceProcessAssignment GetLastProcessAssignmentOutcome() override;
@@ -461,7 +463,8 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   const WebExposedIsolationInfo& GetWebExposedIsolationInfo() const;
 
   // Simple helper function that returns the is_isolated property of the
-  // WebExposedIsolationInfo of this BrowsingInstance.
+  // WebExposedIsolationInfo of this BrowsingInstance or the
+  // is_cross_origin_isolated property of the AgentClusterKey::IsolationKey.
   bool IsCrossOriginIsolated() const;
 
   // Returns whether the two SiteInstances belong to the same CoopRelatedGroup.
@@ -682,7 +685,7 @@ class CONTENT_EXPORT SiteInstanceImpl final : public SiteInstance {
   // use the same URL-derived SiteInfo. Note that this might be different from
   // `site_info_`. See the comment for `IncrementActiveDocumentCount()` for more
   // details.
-  // TODO(https://crbug.com/1195535): Remove this once SiteInstanceGroup is
+  // TODO(crbug.com/40176090): Remove this once SiteInstanceGroup is
   // fully implemented, as at that point the SiteInstance's SiteInfo will be the
   // same as the URL-derived SiteInfo.
   std::map<SiteInfo, size_t> active_document_counts_;

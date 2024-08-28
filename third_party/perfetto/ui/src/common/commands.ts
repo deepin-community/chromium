@@ -13,18 +13,22 @@
 // limitations under the License.
 
 import {FuzzyFinder, FuzzySegment} from '../base/fuzzy';
+import {Registry} from '../base/registry';
 import {Command} from '../public';
-import {Registry} from './registry';
 
 export interface CommandWithMatchInfo extends Command {
   segments: FuzzySegment[];
 }
 
 export class CommandManager {
-  readonly registry = new Registry<Command>((cmd) => cmd.id);
+  private readonly registry = new Registry<Command>((cmd) => cmd.id);
 
   get commands(): Command[] {
     return Array.from(this.registry.values());
+  }
+
+  registerCommand(cmd: Command): Disposable {
+    return this.registry.register(cmd);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

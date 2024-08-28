@@ -26,7 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/spirv/writer/ast_printer/helper_test.h"
 #include "src/tint/lang/spirv/writer/common/spv_dump_test.h"
 #include "src/tint/lang/wgsl/ast/stage_attribute.h"
@@ -39,6 +38,7 @@ using namespace tint::core::fluent_types;     // NOLINT
 using namespace tint::core::number_suffixes;  // NOLINT
 
 using SpirvASTPrinterTest = TestHelper;
+using SpirvASTPrinterDeathTest = SpirvASTPrinterTest;
 
 TEST_F(SpirvASTPrinterTest, Attribute_Stage) {
     auto* func = Func("main", tint::Empty, ty.void_(), tint::Empty,
@@ -165,8 +165,8 @@ TEST_F(SpirvASTPrinterTest, Decoration_ExecutionMode_WorkgroupSize_Const) {
 )");
 }
 
-TEST_F(SpirvASTPrinterTest, Decoration_ExecutionMode_WorkgroupSize_OverridableConst) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(SpirvASTPrinterDeathTest, Decoration_ExecutionMode_WorkgroupSize_OverridableConst) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder pb;
             pb.Override("width", pb.ty.i32(), pb.Call<i32>(2_i), pb.Id(7_u));
@@ -185,8 +185,8 @@ TEST_F(SpirvASTPrinterTest, Decoration_ExecutionMode_WorkgroupSize_OverridableCo
         "override-expressions should have been removed with the SubstituteOverride transform");
 }
 
-TEST_F(SpirvASTPrinterTest, Decoration_ExecutionMode_WorkgroupSize_LiteralAndConst) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(SpirvASTPrinterDeathTest, Decoration_ExecutionMode_WorkgroupSize_LiteralAndConst) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder pb;
 

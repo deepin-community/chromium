@@ -98,6 +98,7 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
   void SetLastCommittedURL(const GURL& url) override;
   void SetTitle(const std::u16string& new_title) override;
   void SetMainFrameMimeType(const std::string& mime_type) override;
+  void SetMainFrameSize(const gfx::Size& frame_size) override;
   const std::string& GetContentsMimeType() override;
   void SetIsCurrentlyAudible(bool audible) override;
   void TestDidReceiveMouseDownEvent() override;
@@ -177,6 +178,13 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
   void SetSafeAreaInsetsHost(
       std::unique_ptr<SafeAreaInsetsHost> safe_area_insets_host);
 
+  void GetMediaCaptureRawDeviceIdsOpened(
+      blink::mojom::MediaStreamType type,
+      base::OnceCallback<void(std::vector<std::string>)> callback) override;
+
+  void SetMediaCaptureRawDeviceIdsOpened(blink::mojom::MediaStreamType type,
+                                         std::vector<std::string> ids) override;
+
  protected:
   // The deprecated WebContentsTester still needs to subclass this.
   explicit TestWebContents(BrowserContext* browser_context);
@@ -238,6 +246,8 @@ class TestWebContents : public WebContentsImpl, public WebContentsTester {
   std::optional<blink::mojom::PictureInPictureWindowOptions>
       picture_in_picture_options_;
   bool overscroll_enabled_ = true;
+  base::flat_map<blink::mojom::MediaStreamType, std::vector<std::string>>
+      media_capture_raw_device_ids_opened_;
 };
 
 }  // namespace content

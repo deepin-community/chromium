@@ -448,7 +448,7 @@ TEST(PolicyService, MultiplePolicyManagers) {
                                             .Set("source", "group_policy"))
               .Set("DownloadPreference", base::Value::Dict()
                                              .Set("value", "cacheable")
-                                             .Set("source", "group_policy"))
+                                             .Set("source", "imaginary"))
               .Set("PackageCacheSizeLimit", base::Value::Dict()
                                                 .Set("value", 1000)
                                                 .Set("source", "group_policy"))
@@ -731,5 +731,64 @@ TEST(PolicyService, CreatePolicyManagerVector) {
   EXPECT_EQ(managers[2]->source(), "Default");
 }
 #endif
+
+TEST(PolicyService, PolicyServiceProxyConfiguration_Get) {
+  // Test proxy mode "auto_detect".
+  PolicyService::PolicyManagerVector managers;
+  auto manager = base::MakeRefCounted<FakePolicyManager>(true, "manager");
+  manager->SetProxyMode("auto_detect");
+  manager->SetProxyPacUrl("pac://server");
+  manager->SetProxyServer("proxy_server");
+  managers.push_back(std::move(manager));
+  managers.push_back(GetDefaultValuesPolicyManager());
+  auto policy_service =
+      base::MakeRefCounted<PolicyService>(std::move(managers));
+  std::optional<PolicyServiceProxyConfiguration> proxy_configuration =
+      PolicyServiceProxyConfiguration::Get(policy_service);
+  ASSERT_TRUE(proxy_configuration);
+  ASSERT_TRUE(proxy_configuration->proxy_auto_detect);
+  ASSERT_FALSE(proxy_configuration->proxy_pac_url);
+  ASSERT_FALSE(proxy_configuration->proxy_url);
+
+  // Test proxy mode "fixed_servers".
+  manager = base::MakeRefCounted<FakePolicyManager>(true, "manager");
+  manager->SetProxyMode("fixed_servers");
+  manager->SetProxyPacUrl("pac://server");
+  manager->SetProxyServer("proxy_server");
+  managers.push_back(std::move(manager));
+  managers.push_back(GetDefaultValuesPolicyManager());
+  policy_service = base::MakeRefCounted<PolicyService>(std::move(managers));
+  proxy_configuration = PolicyServiceProxyConfiguration::Get(policy_service);
+  ASSERT_TRUE(proxy_configuration);
+  ASSERT_FALSE(proxy_configuration->proxy_auto_detect);
+  ASSERT_FALSE(proxy_configuration->proxy_pac_url);
+  ASSERT_TRUE(proxy_configuration->proxy_url);
+  ASSERT_EQ(*proxy_configuration->proxy_url, "proxy_server");
+
+  // Test proxy mode "pac_script".
+  manager = base::MakeRefCounted<FakePolicyManager>(true, "manager");
+  manager->SetProxyMode("pac_script");
+  manager->SetProxyPacUrl("pac://server");
+  manager->SetProxyServer("proxy_server");
+  managers.push_back(std::move(manager));
+  managers.push_back(GetDefaultValuesPolicyManager());
+  policy_service = base::MakeRefCounted<PolicyService>(std::move(managers));
+  proxy_configuration = PolicyServiceProxyConfiguration::Get(policy_service);
+  ASSERT_TRUE(proxy_configuration);
+  ASSERT_FALSE(proxy_configuration->proxy_auto_detect);
+  ASSERT_TRUE(proxy_configuration->proxy_pac_url);
+  ASSERT_EQ(proxy_configuration->proxy_pac_url, "pac://server");
+  ASSERT_FALSE(proxy_configuration->proxy_url);
+
+  // Test unknown proxy mode.
+  manager = base::MakeRefCounted<FakePolicyManager>(true, "manager");
+  manager->SetProxyMode("unknown");
+  manager->SetProxyPacUrl("pac://server");
+  manager->SetProxyServer("proxy_server");
+  managers.push_back(std::move(manager));
+  managers.push_back(GetDefaultValuesPolicyManager());
+  policy_service = base::MakeRefCounted<PolicyService>(std::move(managers));
+  ASSERT_FALSE(PolicyServiceProxyConfiguration::Get(policy_service));
+}
 
 }  // namespace updater

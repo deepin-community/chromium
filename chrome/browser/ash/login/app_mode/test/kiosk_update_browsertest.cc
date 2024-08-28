@@ -739,8 +739,7 @@ IN_PROC_BROWSER_TEST_F(KioskUpdateTest, PRE_PreserveLocalData) {
   SetTestApp(kTestLocalFsKioskAppId);
 
   extensions::ResultCatcher catcher;
-  StartAppLaunchFromLoginScreen(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
+  StartAppLaunchFromLoginScreen(NetworkStatus::kOnline);
   WaitForAppLaunchWithOptions(/*check_launch_data=*/true,
                               /*terminate_app=*/false);
   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
@@ -753,8 +752,7 @@ IN_PROC_BROWSER_TEST_F(KioskUpdateTest, PreserveLocalData) {
       kTestLocalFsKioskAppId, "2.0.0",
       std::string(kTestLocalFsKioskAppId) + "_v2_read_and_verify_data.crx");
   extensions::ResultCatcher catcher;
-  StartExistingAppLaunchFromLoginScreen(
-      NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
+  StartExistingAppLaunchFromLoginScreen(NetworkStatus::kOnline);
   WaitForAppLaunchWithOptions(/*check_launch_data=*/true,
                               /*terminate_app=*/false);
 
@@ -946,12 +944,6 @@ IN_PROC_BROWSER_TEST_F(KioskUpdateTest,
   // Verify the secondary app is removed.
   EXPECT_TRUE(IsAppInstalled(kTestSharedModuleId, "1.0.0"));
   EXPECT_FALSE(IsAppInstalled(kTestSecondaryApp1Id, "1.0.0"));
-}
-
-// This simulates the stand-alone ARC kiosk app case. The primary app has a
-// shared ARC runtime but no secondary apps.
-IN_PROC_BROWSER_TEST_F(KioskUpdateTest, LaunchAppWithSharedModuleNoSecondary) {
-  LaunchAppWithSharedModule();
 }
 
 IN_PROC_BROWSER_TEST_F(KioskUpdateTest, PRE_LaunchAppWithUpdatedModule) {

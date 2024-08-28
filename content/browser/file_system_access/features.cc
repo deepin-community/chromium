@@ -17,7 +17,7 @@ BASE_FEATURE(kFileSystemAccessBFCache,
              "FileSystemAccessBFCache",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// TODO(crbug.com/1370433): Remove this flag eventually.
+// TODO(crbug.com/40061211): Remove this flag eventually.
 // When enabled, drag-and-dropped files and directories will be checked against
 // the File System Access blocklist. This feature was disabled since it broke
 // some applications.
@@ -25,20 +25,13 @@ BASE_FEATURE(kFileSystemAccessDragAndDropCheckBlocklist,
              "FileSystemAccessDragAndDropCheckBlocklist",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// TODO(crbug.com/1421735): Remove this flag eventually.
+// TODO(crbug.com/40896420): Remove this flag eventually.
+// TODO(b/354661640): Temporarily disable this flag while investigating CrOS
+// file saving issue.
+//
 // When enabled, GetFile() and GetEntries() on a directory handle performs
 // the blocklist check on child file handles.
 BASE_FEATURE(kFileSystemAccessDirectoryIterationBlocklistCheck,
              "FileSystemAccessDirectoryIterationBlocklistCheck",
-#if BUILDFLAG(IS_WIN)
-// On Windows, resolving a symlink by getting an absolute path does not work,
-// and it requires a different implementation approach. Enable it on Windows
-// once available.
              base::FEATURE_DISABLED_BY_DEFAULT);
-#else
-// TODO(crbug.com/328115444): Temporarily disabled due to the bug returning
-// different results.
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_WIN)
-
 }  // namespace content::features

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {loadTimeData} from './i18n_setup.js';
 
 /**
  * Specifies page visibility based on incognito status and Chrome OS guest mode.
@@ -31,7 +31,7 @@ export interface PageVisibility {
 export interface AppearancePageVisibility {
   bookmarksBar: boolean;
   homeButton: boolean;
-  hoverCardImages: boolean;
+  hoverCard: boolean;
   pageZoom: boolean;
   setTheme: boolean;
   sidePanel: boolean;
@@ -42,16 +42,13 @@ export interface PrivacyPageVisibility {
   searchPrediction: boolean;
 }
 
-/**
- * Dictionary defining page visibility.
- */
-export let pageVisibility: PageVisibility;
+function createPageVisibility(): PageVisibility|undefined {
+  if (!loadTimeData.getBoolean('isGuest')) {
+    return undefined;
+  }
 
-if (loadTimeData.getBoolean('isGuest')) {
-  // "if not chromeos" and "if chromeos" in two completely separate blocks
-  // to work around closure compiler.
   // <if expr="not is_chromeos">
-  pageVisibility = {
+  const pageVisibility = {
     a11y: false,
     advancedSettings: false,
     ai: false,
@@ -73,7 +70,7 @@ if (loadTimeData.getBoolean('isGuest')) {
   };
   // </if>
   // <if expr="is_chromeos">
-  pageVisibility = {
+  const pageVisibility = {
     ai: false,
     autofill: false,
     people: false,
@@ -84,7 +81,7 @@ if (loadTimeData.getBoolean('isGuest')) {
     appearance: {
       setTheme: false,
       homeButton: false,
-      hoverCardImages: false,
+      hoverCard: false,
       bookmarksBar: false,
       pageZoom: false,
       sidePanel: false,
@@ -102,8 +99,16 @@ if (loadTimeData.getBoolean('isGuest')) {
     performance: false,
   };
   // </if>
+
+  return pageVisibility;
 }
 
-export function setPageVisibilityForTesting(testVisibility: PageVisibility) {
+/**
+ * Dictionary defining page visibility.
+ */
+export let pageVisibility: PageVisibility|undefined = createPageVisibility();
+
+export function resetPageVisibilityForTesting(
+    testVisibility: PageVisibility|undefined = createPageVisibility()) {
   pageVisibility = testVisibility;
 }

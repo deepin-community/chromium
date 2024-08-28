@@ -14,6 +14,8 @@ TestExtensionsRendererClient::~TestExtensionsRendererClient() {
   ExtensionsRendererClient::Set(nullptr);
 }
 
+void TestExtensionsRendererClient::RenderThreadStarted() {}
+
 bool TestExtensionsRendererClient::IsIncognitoProcess() const {
   return false;
 }
@@ -25,12 +27,6 @@ int TestExtensionsRendererClient::GetLowestIsolatedWorldId() const {
 
 Dispatcher* TestExtensionsRendererClient::GetDispatcher() {
   return nullptr;
-}
-
-bool TestExtensionsRendererClient::ExtensionAPIEnabledForServiceWorkerScript(
-    const GURL& scope,
-    const GURL& script_url) const {
-  return false;
 }
 
 }  // namespace extensions

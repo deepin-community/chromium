@@ -154,7 +154,7 @@ void ResourceLoadObserverForFrame::WillSendRequest(
   }
 
   frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(
-      request, redirect_response, resource);
+      request, redirect_response);
 
   probe::WillSendRequest(
       document_->domWindow(), document_loader_,
@@ -256,8 +256,8 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
         document_loader_->GetContentSecurityNotifier());
   }
 
-  frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(
-      request, response, resource);
+  frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(request,
+                                                                    response);
 
   frame->Loader().Progress().IncrementProgress(identifier, response);
   probe::DidReceiveResourceResponse(GetProbe(), identifier, document_loader_,
@@ -269,12 +269,12 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
 
 void ResourceLoadObserverForFrame::DidReceiveData(
     uint64_t identifier,
-    base::span<const char> chunk) {
+    base::SpanOrSize<const char> chunk) {
   LocalFrame* frame = document_->GetFrame();
   DCHECK(frame);
   frame->Loader().Progress().IncrementProgress(identifier, chunk.size());
-  probe::DidReceiveData(GetProbe(), identifier, document_loader_, chunk.data(),
-                        chunk.size());
+  probe::DidReceiveData(GetProbe(), identifier, document_loader_,
+                        chunk.ptr_or_null_if_no_data(), chunk.size());
 }
 
 void ResourceLoadObserverForFrame::DidReceiveTransferSizeUpdate(

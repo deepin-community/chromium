@@ -21,7 +21,10 @@ class BasePlatformTestCase(unittest.TestCase, metaclass=abc.ABCMeta):
     self.mock_platform = MockPlatform()  # pytype: disable=not-instantiable
 
   def tearDown(self):
-    self.assertFalse(self.mock_platform.expected_sh_cmds)
+    expected_sh_cmds = self.mock_platform.expected_sh_cmds
+    if expected_sh_cmds is not None:
+      self.assertListEqual(expected_sh_cmds, [],
+                           "Got additional unused shell cmds.")
     super().tearDown()
 
   def expect_sh(self, *args, result=""):
@@ -41,6 +44,9 @@ class BasePlatformTestCase(unittest.TestCase, metaclass=abc.ABCMeta):
 
   def test_is_posix(self):
     self.assertFalse(self.platform.is_posix)
+
+  def test_is_remote_ssh(self):
+    self.assertFalse(self.platform.is_remote_ssh)
 
 
 class PosixPlatformTestCase(BasePlatformTestCase):

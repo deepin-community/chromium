@@ -32,6 +32,7 @@ class ModelError;
 // immediately begin locally tracking changes and can start syncing with the
 // server soon afterward. If an error occurs during startup, the processor's
 // ReportError() method should be called instead of ModelReadyToSync().
+// Lives on the model sequence.
 class ModelTypeSyncBridge {
  public:
   using DataCallback = base::OnceCallback<void(std::unique_ptr<DataBatch>)>;
@@ -102,16 +103,17 @@ class ModelTypeSyncBridge {
       std::unique_ptr<MetadataChangeList> metadata_change_list,
       EntityChangeList entity_changes) = 0;
 
-  // Asynchronously retrieve the corresponding sync data for `storage_keys`.
-  // `callback` should be invoked if the operation is successful, otherwise
-  // the processor's ReportError method should be called.
-  virtual void GetData(StorageKeyList storage_keys, DataCallback callback) = 0;
+  // Retrieves the corresponding sync data for `storage_keys`. This must return
+  // a non-null result, except if a model error occurred, in which case the
+  // processor's ReportError() method must be called.
+  // Used only to commit the data.
+  virtual std::unique_ptr<DataBatch> GetDataForCommit(
+      StorageKeyList storage_keys) = 0;
 
-  // Asynchronously retrieve all of the local sync data. `callback` should be
-  // invoked if the operation is successful, otherwise the processor's
-  // ReportError method should be called.
+  // Retrieves all of the local sync data. In case of errors, the processor's
+  // ReportError method should be called, and this should return nullptr.
   // Used for getting all data in Sync Node Browser of chrome://sync-internals.
-  virtual void GetAllDataForDebugging(DataCallback callback) = 0;
+  virtual std::unique_ptr<DataBatch> GetAllDataForDebugging() = 0;
 
   // Must not be called unless SupportsGetClientTag() returns true.
   //
@@ -215,7 +217,7 @@ class ModelTypeSyncBridge {
   // * Known fields that are just defined in the proto and not actively used
   // (e.g. a partially-implemented functionality or a functionality guarded by a
   // feature toggle).
-  // TODO(crbug.com/1408144): Consider changing the default to preserve unknown
+  // TODO(crbug.com/40253395): Consider changing the default to preserve unknown
   // fields at least.
   // By default, empty EntitySpecifics is returned.
   virtual sync_pb::EntitySpecifics TrimAllSupportedFieldsFromRemoteSpecifics(
@@ -224,7 +226,7 @@ class ModelTypeSyncBridge {
   // Returns true if the provided `entity_data` is valid. This method should be
   // implemented by the bridges and can be used to validate the incoming remote
   // updates.
-  // TODO(crbug.com/1057947): Mark this method as pure virtual to force all the
+  // TODO(crbug.com/40677711): Mark this method as pure virtual to force all the
   // bridges to implement this.
   virtual bool IsEntityDataValid(const EntityData& entity_data) const;
 

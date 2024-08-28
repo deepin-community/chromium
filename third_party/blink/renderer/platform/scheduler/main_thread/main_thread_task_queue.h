@@ -147,15 +147,7 @@ class PLATFORM_EXPORT MainThreadTaskQueue
   // the QueueTraits determine which queues should be used to run which task
   // types.
   struct QueueTraits {
-    QueueTraits()
-        : can_be_deferred(false),
-          can_be_throttled(false),
-          can_be_intensively_throttled(false),
-          can_be_paused(false),
-          can_be_frozen(false),
-          can_run_in_background(true),
-          can_run_when_virtual_time_paused(true),
-          can_be_paused_for_android_webview(false) {}
+    QueueTraits() = default;
 
     // Separate enum class for handling prioritisation decisions in task queues.
     enum class PrioritisationType {
@@ -244,20 +236,7 @@ class PLATFORM_EXPORT MainThreadTaskQueue
       return *this;
     }
 
-    bool operator==(const QueueTraits& other) const {
-      return can_be_deferred == other.can_be_deferred &&
-             can_be_throttled == other.can_be_throttled &&
-             can_be_intensively_throttled ==
-                 other.can_be_intensively_throttled &&
-             can_be_paused == other.can_be_paused &&
-             can_be_frozen == other.can_be_frozen &&
-             can_run_in_background == other.can_run_in_background &&
-             can_run_when_virtual_time_paused ==
-                 other.can_run_when_virtual_time_paused &&
-             prioritisation_type == other.prioritisation_type &&
-             can_be_paused_for_android_webview ==
-                 other.can_be_paused_for_android_webview;
-    }
+    bool operator==(const QueueTraits& other) const = default;
 
     // Return a key suitable for WTF::HashMap.
     QueueTraitsKeyType Key() const {
@@ -280,14 +259,14 @@ class PLATFORM_EXPORT MainThreadTaskQueue
 
     void WriteIntoTrace(perfetto::TracedValue context) const;
 
-    bool can_be_deferred : 1;
-    bool can_be_throttled : 1;
-    bool can_be_intensively_throttled : 1;
-    bool can_be_paused : 1;
-    bool can_be_frozen : 1;
-    bool can_run_in_background : 1;
-    bool can_run_when_virtual_time_paused : 1;
-    bool can_be_paused_for_android_webview : 1;
+    bool can_be_deferred : 1 = false;
+    bool can_be_throttled : 1 = false;
+    bool can_be_intensively_throttled : 1 = false;
+    bool can_be_paused : 1 = false;
+    bool can_be_frozen : 1 = false;
+    bool can_run_in_background : 1 = true;
+    bool can_run_when_virtual_time_paused : 1 = true;
+    bool can_be_paused_for_android_webview : 1 = false;
     PrioritisationType prioritisation_type = PrioritisationType::kRegular;
   };
 
@@ -389,7 +368,7 @@ class PLATFORM_EXPORT MainThreadTaskQueue
     QueueType queue_type;
     TaskQueue::Spec spec;
     WeakPersistent<AgentGroupSchedulerImpl> agent_group_scheduler;
-    raw_ptr<FrameSchedulerImpl, ExperimentalRenderer> frame_scheduler = nullptr;
+    raw_ptr<FrameSchedulerImpl> frame_scheduler = nullptr;
     QueueTraits queue_traits;
     std::optional<WebSchedulingQueueType> web_scheduling_queue_type;
     std::optional<WebSchedulingPriority> web_scheduling_priority;
@@ -584,8 +563,7 @@ class PLATFORM_EXPORT MainThreadTaskQueue
   std::optional<WebSchedulingPriority> web_scheduling_priority_;
 
   // Needed to notify renderer scheduler about completed tasks.
-  raw_ptr<MainThreadSchedulerImpl, ExperimentalRenderer>
-      main_thread_scheduler_;  // NOT OWNED
+  raw_ptr<MainThreadSchedulerImpl> main_thread_scheduler_;  // NOT OWNED
 
   WeakPersistent<AgentGroupSchedulerImpl> agent_group_scheduler_;
 
@@ -595,8 +573,7 @@ class PLATFORM_EXPORT MainThreadTaskQueue
   raw_ptr<FrameSchedulerImpl, DanglingUntriaged> frame_scheduler_;  // NOT OWNED
 
   // The WakeUpBudgetPool for this TaskQueue, if any.
-  raw_ptr<WakeUpBudgetPool, ExperimentalRenderer> wake_up_budget_pool_{
-      nullptr};  // NOT OWNED
+  raw_ptr<WakeUpBudgetPool> wake_up_budget_pool_{nullptr};  // NOT OWNED
 
   std::unique_ptr<TaskQueue::OnTaskPostedCallbackHandle>
       on_ipc_task_posted_callback_handle_;

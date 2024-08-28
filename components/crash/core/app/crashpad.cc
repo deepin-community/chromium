@@ -10,16 +10,16 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "base/auto_reset.h"
 #include "base/base_paths.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
-#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -29,7 +29,6 @@
 #include "build/chromeos_buildflags.h"
 #include "components/crash/core/app/crash_reporter_client.h"
 #include "components/crash/core/common/crash_key.h"
-#include "third_party/abseil-cpp/absl/base/internal/raw_logging.h"
 #include "third_party/crashpad/crashpad/client/annotation.h"
 #include "third_party/crashpad/crashpad/client/annotation_list.h"
 #include "third_party/crashpad/crashpad/client/crash_report_database.h"
@@ -48,19 +47,14 @@
 
 namespace crash_reporter {
 
-namespace {
-
-void AbslAbortHook(const char* file,
-                   int line,
-                   const char* buf_start,
-                   const char* prefix_end,
-                   const char* buf_end) {
-  // This simulates that a CHECK(false) was done at file:line instead of here.
-  // This is used instead of base::ImmediateCrash() to give better error
-  // messages locally (printed stack for one).
-  logging::LogMessageFatal check_failure(file, line, logging::LOGGING_FATAL);
-  check_failure.stream() << "Check failed: false. " << prefix_end;
+#if BUILDFLAG(IS_IOS)
+crashpad::StringAnnotation<24>& PlatformStorage() {
+  static crashpad::StringAnnotation<24> platform("platform");
+  return platform;
 }
+#endif  // BUILDFLAG(IS_IOS)
+
+namespace {
 
 base::FilePath* g_database_path;
 
@@ -97,6 +91,7 @@ bool InitializeCrashpadImpl(bool initial_client,
     // as processed by the backend.
     DCHECK(browser_process || process_type == "Chrome Installer" ||
            process_type == "notification-helper" ||
+           process_type == "platform-experience-helper" ||
            process_type == "GCPW Installer" || process_type == "GCPW DLL");
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
     DCHECK(browser_process);
@@ -138,8 +133,8 @@ bool InitializeCrashpadImpl(bool initial_client,
   InitializeCrashKeys();
 #if !BUILDFLAG(IS_IOS)
   static crashpad::StringAnnotation<24> ptype_key("ptype");
-  ptype_key.Set(browser_process ? base::StringPiece("browser")
-                                : base::StringPiece(process_type));
+  ptype_key.Set(browser_process ? std::string_view("browser")
+                                : std::string_view(process_type));
 
   static crashpad::StringAnnotation<12> pid_key("pid");
 #if BUILDFLAG(IS_POSIX)
@@ -152,8 +147,7 @@ bool InitializeCrashpadImpl(bool initial_client,
   osarch_key.Set(base::SysInfo::OperatingSystemArchitecture());
 #else
   // "platform" is used to determine device_model on the crash server.
-  static crashpad::StringAnnotation<24> platform("platform");
-  platform.Set(base::SysInfo::HardwareModelName());
+  PlatformStorage().Set(base::SysInfo::HardwareModelName());
 #endif  // !BUILDFLAG(IS_IOS)
 
   // If clients called CRASHPAD_SIMULATE_CRASH() instead of
@@ -162,12 +156,6 @@ bool InitializeCrashpadImpl(bool initial_client,
   // preferable to having all occurrences show up in DumpWithoutCrashing() at
   // the same file and line.
   base::debug::SetDumpWithoutCrashingFunction(DumpWithoutCrashing);
-
-  // TODO(pbos): Update this to not rely on a _internal namespace once there's
-  // a public API in absl::.
-  // Note: If this fails to compile because of an absl roll, this is fair to
-  // remove if you file a crbug.com/new and assign it to pbos@.
-  absl::raw_log_internal::RegisterAbortHook(&AbslAbortHook);
 
 #if BUILDFLAG(IS_APPLE)
   // On Mac, we only want the browser to initialize the database, but not the
@@ -228,10 +216,22 @@ bool InitializeCrashpadWithDllEmbeddedHandler(
 }
 #endif  // BUILDFLAG(IS_WIN)
 
+namespace {
+crashpad::CrashpadClient* crashpad_client = nullptr;
+} // namespace
+
 crashpad::CrashpadClient& GetCrashpadClient() {
-  static crashpad::CrashpadClient* const client =
-      new crashpad::CrashpadClient();
-  return *client;
+  if (!crashpad_client) {
+    crashpad_client = new crashpad::CrashpadClient();
+  }
+  return *crashpad_client;
+}
+
+void DestroyCrashpadClient() {
+  if (crashpad_client) {
+    delete crashpad_client;
+    crashpad_client = nullptr;
+  }
 }
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -271,7 +271,11 @@ void DumpWithoutCrashAndDeferProcessingAtPath(const base::FilePath& path) {
   CRASHPAD_SIMULATE_CRASH_AND_DEFER_PROCESSING_AT_PATH(path);
 }
 
-#endif
+void OverridePlatformValue(const std::string& platform_value) {
+  // "platform" is used to determine device_model on the crash server.
+  PlatformStorage().Set(platform_value);
+}
+#endif  // BUILDFLAG(IS_IOS)
 
 #endif
 

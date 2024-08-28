@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/files/file_path.h"
@@ -16,6 +17,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -94,7 +96,7 @@ GCMClient::Result ToGCMClientResult(MCSClient::MessageSendStatus status) {
       return GCMClient::NETWORK_ERROR;
     case MCSClient::SENT:
     case MCSClient::SEND_STATUS_COUNT:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return GCMClientImpl::UNKNOWN_ERROR;
@@ -169,12 +171,12 @@ int ConstructGCMVersion(const std::string& chrome_version) {
   // Major Chrome version is passed as GCM version.
   size_t pos = chrome_version.find('.');
   if (pos == std::string::npos) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return 0;
   }
 
   int gcm_version = 0;
-  base::StringToInt(base::StringPiece(chrome_version.c_str(), pos),
+  base::StringToInt(std::string_view(chrome_version.c_str(), pos),
                     &gcm_version);
   return gcm_version;
 }
@@ -605,7 +607,7 @@ void GCMClientImpl::AddInstanceIDData(const std::string& app_id,
                                       const std::string& extra_data) {
   DCHECK(io_task_runner_->RunsTasksInCurrentSequence());
   instance_id_data_[app_id] = std::make_pair(instance_id, extra_data);
-  // TODO(crbug/1028761): If this call fails, we likely leak a registration
+  // TODO(crbug.com/40109289): If this call fails, we likely leak a registration
   // (the one stored in instance_id_data_ would be used for a registration but
   // not persisted).
   gcm_store_->AddInstanceIDData(
@@ -777,7 +779,7 @@ void GCMClientImpl::DefaultStoreCallback(bool success) {
 void GCMClientImpl::IgnoreWriteResultCallback(
     const std::string& operation_suffix_for_uma,
     bool success) {
-  // TODO(crbug.com/1081149): Implement proper error handling.
+  // TODO(crbug.com/40691191): Implement proper error handling.
   // TODO(fgorski): Ignoring the write result for now to make sure
   // sync_intergration_tests are not broken.
 }
@@ -919,7 +921,8 @@ void GCMClientImpl::Register(
       InstanceIDTokenInfo::FromRegistrationInfo(registration_info.get());
   if (instance_id_token_info) {
     auto instance_id_iter = instance_id_data_.find(registration_info->app_id);
-    DCHECK(instance_id_iter != instance_id_data_.end());
+    CHECK(instance_id_iter != instance_id_data_.end(),
+          base::NotFatalUntil::M130);
 
     request_handler = std::make_unique<InstanceIDGetTokenRequestHandler>(
         instance_id_iter->second.first,
@@ -1058,7 +1061,7 @@ void GCMClientImpl::Unregister(
     if (instance_id_iter == instance_id_data_.end()) {
       // This should not be reached since we should not delete tokens when
       // an InstanceID has not been created yet.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
     }
 
@@ -1208,7 +1211,7 @@ std::string GCMClientImpl::GetStateString() const {
     case GCMClientImpl::READY:
       return "READY";
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return std::string();
 }
 
@@ -1282,7 +1285,8 @@ void GCMClientImpl::OnMessageReceivedFromMCS(const gcm::MCSMessage& message) {
       HandleIncomingMessage(message);
       return;
     default:
-      NOTREACHED() << "Message with unexpected tag received by GCMClient";
+      NOTREACHED_IN_MIGRATION()
+          << "Message with unexpected tag received by GCMClient";
       return;
   }
 }

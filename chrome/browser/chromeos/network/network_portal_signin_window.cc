@@ -21,9 +21,11 @@
 #include "content/public/browser/web_contents_observer.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/ash/components/network/portal_detector/network_portal_detector.h"
+#include "chromeos/ash/components/network/network_handler.h"
+#include "chromeos/ash/components/network/network_state_handler.h"
 #elif BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(b/261727502): Add crosapi call for portal detection.
+#include "chromeos/crosapi/mojom/network_change.mojom.h"
+#include "chromeos/lacros/lacros_service.h"
 #endif
 
 namespace chromeos {
@@ -84,6 +86,12 @@ void NetworkPortalSigninWindow::Show(const GURL& url) {
   params.disposition = WindowOpenDisposition::NEW_POPUP;
   params.user_gesture = true;
   params.trusted_source = false;
+  // `captive_portal_window_type = kPopup` is used on desktop Chrome to identify
+  // captive portal signin popup windows. This affects the following behaviors:
+  // * Secure DNS is disabled in ChromeContentBrowserClient
+  // * The window title is customized in Browser
+  params.captive_portal_window_type =
+      captive_portal::CaptivePortalWindowType::kPopup;
   auto handle = ::Navigate(&params);
   if (!handle) {
     NET_LOG(ERROR) << "Failed to navigate to captive portal url: " << url;
@@ -117,16 +125,27 @@ class NetworkPortalSigninWindow::WindowObserver
  private:
   void RequestPortalDetection() {
     NET_LOG(EVENT) << "Request portal detection";
+    controller_->portal_detection_requested_for_testing_++;
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-    ash::network_portal_detector::GetInstance()
-        ->RequestCaptivePortalDetection();
+    ash::NetworkHandler::Get()
+        ->network_state_handler()
+        ->RequestPortalDetection();
 #elif BUILDFLAG(IS_CHROMEOS_LACROS)
-    // TODO(b/261727502): Add crosapi call for portal detection.
+    chromeos::LacrosService::Get()
+        ->GetRemote<crosapi::mojom::NetworkChange>()
+        ->RequestPortalDetection();
 #endif
   }
 
  private:
   raw_ptr<NetworkPortalSigninWindow> controller_;
 };
+
+content::WebContents* NetworkPortalSigninWindow::GetWebContentsForTesting() {
+  if (!window_observer_.get()) {
+    return nullptr;
+  }
+  return window_observer_->web_contents();
+}
 
 }  // namespace chromeos

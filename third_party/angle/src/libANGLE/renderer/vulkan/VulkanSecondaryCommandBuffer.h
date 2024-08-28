@@ -49,7 +49,9 @@ class VulkanSecondaryCommandBuffer : public priv::CommandBuffer
         ContextVk *contextVk,
         const Framebuffer &framebuffer,
         const RenderPassDesc &renderPassDesc,
-        VkCommandBufferInheritanceInfo *inheritanceInfoOut);
+        VkCommandBufferInheritanceInfo *inheritanceInfoOut,
+        VkCommandBufferInheritanceRenderingInfo *renderingInfoOut,
+        gl::DrawBuffersArray<VkFormat> *colorFormatStorageOut);
 
     angle::Result initialize(Context *context,
                              SecondaryCommandPool *pool,
@@ -170,6 +172,11 @@ class VulkanSecondaryCommandBuffer : public priv::CommandBuffer
     void imageBarrier(VkPipelineStageFlags srcStageMask,
                       VkPipelineStageFlags dstStageMask,
                       const VkImageMemoryBarrier &imageMemoryBarrier);
+
+    void imageWaitEvent(const VkEvent &event,
+                        VkPipelineStageFlags srcStageMask,
+                        VkPipelineStageFlags dstStageMask,
+                        const VkImageMemoryBarrier &imageMemoryBarrier);
 
     void memoryBarrier(VkPipelineStageFlags srcStageMask,
                        VkPipelineStageFlags dstStageMask,
@@ -546,6 +553,17 @@ ANGLE_INLINE void VulkanSecondaryCommandBuffer::imageBarrier(
 {
     onRecordCommand();
     CommandBuffer::imageBarrier(srcStageMask, dstStageMask, imageMemoryBarrier);
+}
+
+ANGLE_INLINE void VulkanSecondaryCommandBuffer::imageWaitEvent(
+    const VkEvent &event,
+    VkPipelineStageFlags srcStageMask,
+    VkPipelineStageFlags dstStageMask,
+    const VkImageMemoryBarrier &imageMemoryBarrier)
+{
+    onRecordCommand();
+    CommandBuffer::waitEvents(1, &event, srcStageMask, dstStageMask, 0, nullptr, 0, nullptr, 1,
+                              &imageMemoryBarrier);
 }
 
 ANGLE_INLINE void VulkanSecondaryCommandBuffer::nextSubpass(VkSubpassContents subpassContents)

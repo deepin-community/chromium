@@ -6,14 +6,14 @@
 
 #include "core/fxge/cfx_cliprgn.h"
 
-#include <string.h>
+#include <stdint.h>
 
 #include <utility>
 
-#include "core/fxcrt/span_util.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/notreached.h"
+#include "core/fxcrt/stl_util.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/notreached.h"
 
 CFX_ClipRgn::CFX_ClipRgn(int width, int height) : m_Box(0, 0, width, height) {}
 
@@ -44,23 +44,27 @@ void CFX_ClipRgn::IntersectMaskRect(FX_RECT rect,
     return;
   }
   m_Mask = pdfium::MakeRetain<CFX_DIBitmap>();
-  m_Mask->Create(m_Box.Width(), m_Box.Height(), FXDIB_Format::k8bppMask);
+  CHECK(m_Mask->Create(m_Box.Width(), m_Box.Height(), FXDIB_Format::k8bppMask));
   const int offset = m_Box.left - mask_rect.left;
   for (int row = m_Box.top; row < m_Box.bottom; row++) {
     pdfium::span<uint8_t> dest_scan =
         m_Mask->GetWritableScanline(row - m_Box.top);
     pdfium::span<const uint8_t> src_scan =
         pOldMask->GetScanline(row - mask_rect.top);
-    fxcrt::spancpy(dest_scan, src_scan.subspan(offset, m_Box.Width()));
+    fxcrt::Copy(src_scan.subspan(offset, m_Box.Width()), dest_scan);
   }
 }
 
 void CFX_ClipRgn::IntersectMaskF(int left,
                                  int top,
                                  RetainPtr<CFX_DIBitmap> pMask) {
-  DCHECK_EQ(pMask->GetFormat(), FXDIB_Format::k8bppMask);
   FX_RECT mask_box(left, top, left + pMask->GetWidth(),
                    top + pMask->GetHeight());
+  if (!mask_box.IsEmpty()) {
+    // Make sure non-empty masks have the right format. If the mask is empty,
+    // then the format does not matter as it will not get used.
+    CHECK_EQ(pMask->GetFormat(), FXDIB_Format::k8bppMask);
+  }
   if (m_Type == kRectI) {
     IntersectMaskRect(m_Box, mask_box, std::move(pMask));
     return;
@@ -75,11 +79,12 @@ void CFX_ClipRgn::IntersectMaskF(int left,
     return;
   }
   auto new_dib = pdfium::MakeRetain<CFX_DIBitmap>();
-  new_dib->Create(new_box.Width(), new_box.Height(), FXDIB_Format::k8bppMask);
+  CHECK(new_dib->Create(new_box.Width(), new_box.Height(),
+                        FXDIB_Format::k8bppMask));
   for (int row = new_box.top; row < new_box.bottom; row++) {
     pdfium::span<const uint8_t> old_scan = m_Mask->GetScanline(row - m_Box.top);
     pdfium::span<const uint8_t> mask_scan = pMask->GetScanline(row - top);
-    uint8_t* new_scan = new_dib->GetWritableScanline(row - new_box.top).data();
+    auto new_scan = new_dib->GetWritableScanline(row - new_box.top);
     for (int col = new_box.left; col < new_box.right; col++) {
       new_scan[col - new_box.left] =
           old_scan[col - m_Box.left] * mask_scan[col - left] / 255;

@@ -12,7 +12,6 @@
 
 #include "base/auto_reset.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/observer_list.h"
@@ -89,13 +88,13 @@ struct AnimatingLayoutManager::LayoutFadeInfo {
   // How the child view is fading.
   LayoutFadeType fade_type;
   // The child view which is fading.
-  raw_ptr<View, DanglingUntriaged> child_view = nullptr;
+  raw_ptr<View> child_view = nullptr;
   // The view previous (leading side) to the fading view which is in both the
   // starting and target layout, or null if none.
-  raw_ptr<View, DanglingUntriaged> prev_view = nullptr;
+  raw_ptr<View> prev_view = nullptr;
   // The view next (trailing side) to the fading view which is in both the
   // starting and target layout, or null if none.
-  raw_ptr<View, DanglingUntriaged> next_view = nullptr;
+  raw_ptr<View> next_view = nullptr;
   // The full-size bounds, normalized to the orientation of the layout manager,
   // that |child_view| starts with, if fading out, or ends with, if fading in.
   NormalizedRect reference_bounds;
@@ -394,6 +393,36 @@ gfx::Size AnimatingLayoutManager::GetPreferredSize(const View* host) const {
   }
 }
 
+gfx::Size AnimatingLayoutManager::GetPreferredSize(
+    const View* host,
+    const SizeBounds& available_size) const {
+  if (!target_layout_manager()) {
+    return gfx::Size();
+  }
+
+  // If animation is disabled, preferred size does not change with current
+  // animation state.
+  if (!gfx::Animation::ShouldRenderRichAnimation()) {
+    return target_layout_manager()->GetPreferredSize(host, available_size);
+  }
+
+  switch (bounds_animation_mode_) {
+    case BoundsAnimationMode::kUseHostBounds:
+      return target_layout_manager()->GetPreferredSize(host, available_size);
+    case BoundsAnimationMode::kAnimateMainAxis: {
+      // Animating only main axis, so cross axis is preferred size.
+      gfx::Size result = current_layout_.host_size;
+      SetCrossAxis(
+          &result, orientation(),
+          GetCrossAxis(orientation(), target_layout_manager()->GetPreferredSize(
+                                          host, available_size)));
+      return result;
+    }
+    case BoundsAnimationMode::kAnimateBothAxes:
+      return current_layout_.host_size;
+  }
+}
+
 gfx::Size AnimatingLayoutManager::GetMinimumSize(const View* host) const {
   if (!target_layout_manager())
     return gfx::Size();
@@ -458,13 +487,24 @@ AnimatingLayoutManager::GetChildViewsInPaintOrder(const View* host) const {
 
 bool AnimatingLayoutManager::OnViewRemoved(View* host, View* view) {
   // Remove any fade infos corresponding to the removed view.
-  base::EraseIf(fade_infos_, [view](const LayoutFadeInfo& fade_info) {
+  std::erase_if(fade_infos_, [view](const LayoutFadeInfo& fade_info) {
     return fade_info.child_view == view;
   });
 
+  // Also delete any references from other fade infos. This prevents dangling
+  // partition pointers when the layout is invariably invalidated later.
+  for (auto& fade_info : fade_infos_) {
+    if (fade_info.next_view == view) {
+      fade_info.next_view = nullptr;
+    }
+    if (fade_info.prev_view == view) {
+      fade_info.prev_view = nullptr;
+    }
+  }
+
   // Remove any elements in the current layout corresponding to the removed
   // view.
-  base::EraseIf(current_layout_.child_layouts,
+  std::erase_if(current_layout_.child_layouts,
                 [view](const ChildLayout& child_layout) {
                   return child_layout.child_view == view;
                 });

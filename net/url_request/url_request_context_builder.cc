@@ -45,6 +45,7 @@
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/quic/quic_context.h"
 #include "net/quic/quic_session_pool.h"
+#include "net/shared_dictionary/shared_dictionary_network_transaction_factory.h"
 #include "net/socket/network_binding_client_socket_factory.h"
 #include "net/ssl/ssl_config_service_defaults.h"
 #include "net/url_request/static_http_user_agent_settings.h"
@@ -62,6 +63,10 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/build_info.h"
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+#include "net/device_bound_sessions/session_service.h"
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 
 namespace net {
 
@@ -242,6 +247,14 @@ void URLRequestContextBuilder::SetCreateHttpTransactionFactoryCallback(
   create_http_network_transaction_factory_ =
       std::move(create_http_network_transaction_factory);
 }
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+void URLRequestContextBuilder::set_device_bound_session_service(
+    std::unique_ptr<device_bound_sessions::SessionService>
+        device_bound_session_service) {
+  device_bound_session_service_ = std::move(device_bound_session_service);
+}
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 
 void URLRequestContextBuilder::BindToNetwork(
     handles::NetworkHandle network,
@@ -492,6 +505,18 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
   }
 #endif  // BUILDFLAG(ENABLE_REPORTING)
 
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+  if (has_device_bound_session_service_) {
+    context->set_device_bound_session_service(
+        device_bound_sessions::SessionService::Create(context.get()));
+  } else {
+    if (device_bound_session_service_) {
+      context->set_device_bound_session_service(
+          std::move(device_bound_session_service_));
+    }
+  }
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+
   HttpNetworkSessionContext network_session_context;
   // Unlike the other fields of HttpNetworkSession::Context,
   // |client_socket_factory| is not mirrored in URLRequestContext.
@@ -515,6 +540,12 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
         std::make_unique<HttpNetworkLayer>(context->http_network_session());
   }
 
+  if (enable_shared_dictionary_) {
+    http_transaction_factory =
+        std::make_unique<SharedDictionaryNetworkTransactionFactory>(
+            std::move(http_transaction_factory), enable_shared_zstd_);
+  }
+
   if (http_cache_enabled_) {
     std::unique_ptr<HttpCache::BackendFactory> http_cache_backend;
     if (http_cache_params_.type != HttpCacheParams::IN_MEMORY) {
@@ -532,7 +563,7 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
           backend_type = CACHE_BACKEND_SIMPLE;
           break;
         case HttpCacheParams::IN_MEMORY:
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           break;
       }
       http_cache_backend = std::make_unique<HttpCache::DefaultBackend>(

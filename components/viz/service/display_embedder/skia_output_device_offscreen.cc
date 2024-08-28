@@ -8,6 +8,7 @@
 
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
+#include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "gpu/command_buffer/service/skia_utils.h"
 #include "third_party/skia/include/core/SkSurface.h"
@@ -40,15 +41,15 @@ SkiaOutputDeviceOffscreen::SkiaOutputDeviceOffscreen(
   // Some Vulkan drivers do not support kRGB_888x_SkColorType. Always use
   // kRGBA/BGRA_8888_SkColorType instead and initialize surface to opaque as
   // necessary.
-  // TODO(https://crbug.com/1108406): use the right color types base on GPU
+  // TODO(crbug.com/40141277): use the right color types base on GPU
   // capabilities.
-  capabilities_.sk_color_types[static_cast<int>(gfx::BufferFormat::RGBA_8888)] =
+  capabilities_.sk_color_type_map[SinglePlaneFormat::kRGBA_8888] =
       kRGBA_8888_SkColorType;
-  capabilities_.sk_color_types[static_cast<int>(gfx::BufferFormat::RGBX_8888)] =
+  capabilities_.sk_color_type_map[SinglePlaneFormat::kRGBX_8888] =
       kRGBA_8888_SkColorType;
-  capabilities_.sk_color_types[static_cast<int>(gfx::BufferFormat::BGRA_8888)] =
+  capabilities_.sk_color_type_map[SinglePlaneFormat::kBGRA_8888] =
       kBGRA_8888_SkColorType;
-  capabilities_.sk_color_types[static_cast<int>(gfx::BufferFormat::BGRX_8888)] =
+  capabilities_.sk_color_type_map[SinglePlaneFormat::kBGRX_8888] =
       kBGRA_8888_SkColorType;
 }
 
@@ -56,17 +57,13 @@ SkiaOutputDeviceOffscreen::~SkiaOutputDeviceOffscreen() {
   DiscardBackbuffer();
 }
 
-bool SkiaOutputDeviceOffscreen::Reshape(const SkImageInfo& image_info,
-                                        const gfx::ColorSpace& color_space,
-                                        int sample_count,
-                                        float device_scale_factor,
-                                        gfx::OverlayTransform transform) {
-  DCHECK_EQ(transform, gfx::OVERLAY_TRANSFORM_NONE);
+bool SkiaOutputDeviceOffscreen::Reshape(const ReshapeParams& params) {
+  DCHECK_EQ(params.transform, gfx::OVERLAY_TRANSFORM_NONE);
   DiscardBackbuffer();
-  size_ = gfx::SkISizeToSize(image_info.dimensions());
-  sk_color_type_ = image_info.colorType();
-  sk_color_space_ = image_info.refColorSpace();
-  sample_count_ = sample_count;
+  size_ = params.GfxSize();
+  sk_color_type_ = params.image_info.colorType();
+  sk_color_space_ = params.image_info.refColorSpace();
+  sample_count_ = params.sample_count;
   EnsureBackbuffer();
   return true;
 }
@@ -95,12 +92,13 @@ void SkiaOutputDeviceOffscreen::EnsureBackbuffer() {
         sk_color_type_, GrRenderable::kYes);
 #if BUILDFLAG(IS_MAC)
     DCHECK_EQ(context_state_->gr_context_type(), gpu::GrContextType::kGL);
-    // Because SkiaOutputSurface may use IOSurface, we also need using
-    // GL_TEXTURE_RECTANGLE_ARB here, otherwise the validateSurface
-    // will fail because of the textureType mismatch
+    // Because SkiaOutputSurface may use IOSurface, we need to ensure that we
+    // are using the correct texture target for IOSurfaces (which depends on the
+    // GL implementation). Otherwise the validateSurface will fail because of
+    // the textureType mismatch.
     backend_format = GrBackendFormats::MakeGL(
         GrBackendFormats::AsGLFormatEnum(backend_format),
-        gpu::GetPlatformSpecificTextureTarget());
+        gpu::GetTextureTargetForIOSurfaces());
 #endif
     DCHECK(backend_format.isValid())
         << "GrBackendFormat is invalid for color_type: " << sk_color_type_;

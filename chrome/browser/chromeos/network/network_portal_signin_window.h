@@ -12,6 +12,12 @@
 #include "url/gurl.h"
 
 class Browser;
+class NetworkPortalSigninWindowLacrosBrowserTest;
+class NetworkPortalSigninWindowAshBrowserTest;
+
+namespace content {
+class WebContents;
+}
 
 namespace chromeos {
 
@@ -31,16 +37,24 @@ class NetworkPortalSigninWindow {
   void Show(const GURL& url);
 
   Browser* GetBrowserForTesting();
+  content::WebContents* GetWebContentsForTesting();
 
  protected:
   friend class base::NoDestructor<NetworkPortalSigninWindow>;
+  friend class NetworkPortalSigninWindowLacrosBrowserTest;
+  friend class NetworkPortalSigninWindowAshBrowserTest;
   NetworkPortalSigninWindow();
+
+  int portal_detection_requested_for_testing() const {
+    return portal_detection_requested_for_testing_;
+  }
 
  private:
   class WindowObserver;
 
   SessionID window_session_id_{SessionID::InvalidValue()};
   std::unique_ptr<WindowObserver> window_observer_;
+  int portal_detection_requested_for_testing_ = 0;
 };
 
 }  // namespace chromeos

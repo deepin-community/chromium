@@ -100,7 +100,7 @@ void PerfettoTaskRunner::AddFileDescriptorWatch(
           base::Unretained(this), fd, std::move(callback)));
   task_runner_->PostTask(FROM_HERE, fd_controllers_[fd].callback.callback());
 #else   // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL)) || BUILDFLAG(IS_FUCHSIA)
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #endif  // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL)) || BUILDFLAG(IS_FUCHSIA)
 }
 
@@ -113,18 +113,12 @@ void PerfettoTaskRunner::RemoveFileDescriptorWatch(
   // it's pending.
   fd_controllers_.erase(fd);
 #else   // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL)) || BUILDFLAG(IS_FUCHSIA)
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 #endif  // (BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_NACL)) || BUILDFLAG(IS_FUCHSIA)
 }
 
 void PerfettoTaskRunner::ResetTaskRunnerForTesting(
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
-  task_runner_ = std::move(task_runner);
-}
-
-void PerfettoTaskRunner::SetTaskRunner(
-    scoped_refptr<base::SequencedTaskRunner> task_runner) {
-  DCHECK(!task_runner_);
   task_runner_ = std::move(task_runner);
 }
 
@@ -139,7 +133,6 @@ PerfettoTaskRunner::GetOrCreateTaskRunner() {
     task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
         {base::MayBlock(), base::TaskPriority::USER_BLOCKING});
   }
-
   return task_runner_;
 }
 

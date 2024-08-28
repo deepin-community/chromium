@@ -3,10 +3,11 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
-#include "depth-to-space-operator-tester.h"
+#include <cstddef>
+#include <cstdint>
 
 #include <gtest/gtest.h>
-
+#include "depth-to-space-operator-tester.h"
 
 TEST(DEPTH_TO_SPACE_NCHW2NHWC_X16, one_pixel) {
   DepthToSpaceOperatorTester()

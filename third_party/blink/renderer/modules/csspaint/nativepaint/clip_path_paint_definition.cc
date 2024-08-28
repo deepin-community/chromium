@@ -11,7 +11,12 @@
 #include "third_party/blink/renderer/core/animation/path_interpolation_functions.h"
 #include "third_party/blink/renderer/core/css/basic_shape_functions.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
+#include "third_party/blink/renderer/core/css/css_inherited_value.h"
+#include "third_party/blink/renderer/core/css/css_initial_value.h"
+#include "third_party/blink/renderer/core/css/css_revert_layer_value.h"
+#include "third_party/blink/renderer/core/css/css_revert_value.h"
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
+#include "third_party/blink/renderer/core/css/css_unset_value.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
 #include "third_party/blink/renderer/core/css/cssom/paint_worklet_deferred_image.h"
 #include "third_party/blink/renderer/core/css/cssom/paint_worklet_input.h"
@@ -108,9 +113,13 @@ class ClipPathPaintWorkletInput : public PaintWorkletInput {
         (progress - offsets_[result_index]) /
         (offsets_[result_index + 1] - offsets_[result_index]);
     // Adjust for that keyframe's timing function
+    // TODO(crbug.com/347958668): Correct limit direction for phase and
+    // direction in order to make the correct evaluation at the boundary of a
+    // step-timing function.
     return AnimationProgress(
         result_index,
-        timing_functions_[result_index]->GetValue(local_progress));
+        timing_functions_[result_index]->GetValue(
+            local_progress, TimingFunction::LimitDirection::RIGHT));
   }
 
   bool ValueChangeShouldCauseRepaint(const PropertyValue& val1,
@@ -150,6 +159,14 @@ scoped_refptr<BasicShape> CreateBasicShape(
       interpolable_value, untyped_non_interpolable_value, conversion_data);
 }
 
+bool CanExtractShapeOrPath(const CSSValue* computed_value) {
+  // TODO(pdr): Support <geometry-box> (alone, or with a shape).
+  if (const auto* list = DynamicTo<CSSValueList>(computed_value)) {
+    return list->First().IsBasicShapeValue() || list->First().IsPathValue();
+  }
+  return false;
+}
+
 scoped_refptr<BasicShape> GetAnimatedShapeFromKeyframe(
     const PropertySpecificKeyframe* frame,
     const KeyframeEffectModelBase* model,
@@ -167,10 +184,9 @@ scoped_refptr<BasicShape> GetAnimatedShapeFromKeyframe(
                              *const_cast<Element*>(element));
 
     // TODO(pdr): Support <geometry-box> (alone, or with a shape).
-    if (const auto* list = DynamicTo<CSSValueList>(computed_value)) {
-      if (list->First().IsBasicShapeValue() || list->First().IsPathValue()) {
-        basic_shape = BasicShapeForValue(state, list->First());
-      }
+    if (CanExtractShapeOrPath(computed_value)) {
+      basic_shape = BasicShapeForValue(
+          state, DynamicTo<CSSValueList>(computed_value)->First());
     }
   } else {
     DCHECK(frame->IsTransitionPropertySpecificKeyframe());
@@ -198,17 +214,12 @@ bool ValidateClipPathValue(const Element* element,
                            const CSSValue* value,
                            const InterpolableValue* interpolable_value) {
   if (value) {
-    auto* identifier_value = DynamicTo<CSSIdentifierValue>(value);
-    // Don't try to composite animations with clip-path: none, as this is not
-    // compatible with the method used to paint composite clip path animations:
-    // A mask image would potentially clip content unless if it was the size of
-    // the entire viewport.
-    if (identifier_value &&
-        identifier_value->GetValueID() == CSSValueID::kNone) {
-      return false;
+    // Don't try to composite animations where we can't extract a shape or path
+    if (CanExtractShapeOrPath(value)) {
+      return true;
     }
 
-    return true;
+    return false;
   } else if (interpolable_value) {
     // There is no need to check for clip-path: none here, as transitions are
     // not defined for this non-interpolable value. See
@@ -313,16 +324,6 @@ PaintRecord ClipPathPaintDefinition::Paint(
   return paint_recorder.finishRecordingAsPicture();
 }
 
-// TODO(crbug.com/325517328): Reorganize this to simplify or eliminate clip path
-// paint definition
-scoped_refptr<Image> ClipPathPaintDefinition::Paint(
-    float zoom,
-    const gfx::RectF& reference_box,
-    const gfx::SizeF& clip_area_size,
-    const Node& node) {
-  return Paint(zoom, reference_box, clip_area_size, node, worklet_id_);
-}
-
 // Creates a deferred image of size clip_area_size that will be painted via
 // paint worklet. The clip paths will be scaled and translated according to
 // reference_box.
@@ -342,7 +343,7 @@ scoped_refptr<Image> ClipPathPaintDefinition::Paint(
 
   Animation* animation = GetAnimationIfCompositable(element);
   // If we are here the animation must be compositable.
-  DCHECK(animation);
+  CHECK(animation);
 
   const AnimationEffect* effect = animation->effect();
   DCHECK(effect->IsKeyframeEffect());

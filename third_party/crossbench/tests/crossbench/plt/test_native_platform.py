@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 from crossbench import compat, plt
+from crossbench.plt.posix import PosixPlatform
 from tests import test_helper
 
 
@@ -86,7 +87,7 @@ class PlatformTestCase(unittest.TestCase):
   def test_mkdir(self):
     with tempfile.TemporaryDirectory() as tmp_dirname:
       path = pathlib.Path(tmp_dirname) / "foo" / "bar"
-      self.assertFalse(path.exists())
+      self.assertFalse(self.platform.exists(path))
       self.platform.mkdir(path)
       self.assertTrue(path.is_dir())
 
@@ -96,7 +97,7 @@ class PlatformTestCase(unittest.TestCase):
       path.touch()
       self.assertTrue(path.is_file())
       self.platform.rm(path)
-      self.assertFalse(path.exists())
+      self.assertFalse(self.platform.exists(path))
 
   def test_rm_dir(self):
     with tempfile.TemporaryDirectory() as tmp_dirname:
@@ -106,38 +107,38 @@ class PlatformTestCase(unittest.TestCase):
       with self.assertRaises(Exception):
         self.platform.rm(path.parent)
       self.platform.rm(path.parent, dir=True)
-      self.assertFalse(path.exists())
+      self.assertFalse(self.platform.exists(path))
       self.assertFalse(path.parent.exists())
 
   def test_mkdtemp(self):
     result = self.platform.mkdtemp(prefix="a_custom_prefix")
-    self.assertTrue(result.is_dir())
+    self.assertTrue(self.platform.is_dir(result))
     self.assertIn("a_custom_prefix", result.name)
     self.platform.rm(result, dir=True)
-    self.assertFalse(result.exists())
+    self.assertFalse(self.platform.exists(result))
 
   def test_mkdtemp_dir(self):
     with tempfile.TemporaryDirectory() as tmp_dirname:
       tmp_dir = pathlib.Path(tmp_dirname)
       result = self.platform.mkdtemp(dir=tmp_dir)
-      self.assertTrue(result.is_dir())
+      self.assertTrue(self.platform.is_dir(result))
       self.assertTrue(compat.is_relative_to(result, tmp_dir))
-    self.assertFalse(result.exists())
+    self.assertFalse(self.platform.exists(result))
 
   def test_mktemp(self):
     result = self.platform.mktemp(prefix="a_custom_prefix")
-    self.assertTrue(result.is_file())
+    self.assertTrue(self.platform.is_file(result))
     self.assertIn("a_custom_prefix", result.name)
     self.platform.rm(result)
-    self.assertFalse(result.exists())
+    self.assertFalse(self.platform.exists(result))
 
   def test_mktemp_dir(self):
     with tempfile.TemporaryDirectory() as tmp_dirname:
       tmp_dir = pathlib.Path(tmp_dirname)
       result = self.platform.mktemp(dir=tmp_dir)
-      self.assertTrue(result.is_file())
+      self.assertTrue(self.platform.is_file(result))
       self.assertTrue(compat.is_relative_to(result, tmp_dir))
-    self.assertFalse(result.exists())
+    self.assertFalse(self.platform.exists(result))
 
   def test_exists(self):
     with tempfile.TemporaryDirectory() as tmp_dirname:
@@ -145,7 +146,57 @@ class PlatformTestCase(unittest.TestCase):
       self.assertTrue(self.platform.exists(tmp_dir))
       self.assertFalse(self.platform.exists(tmp_dir / "foo"))
 
-  def test_set_filecontents(self):
+  def test_touch(self):
+    with tempfile.TemporaryDirectory() as tmp_dirname:
+      tmp_file = pathlib.Path(tmp_dirname) / "test.txt"
+      self.assertFalse(tmp_file.exists())
+      self.assertFalse(self.platform.exists(tmp_file))
+      self.platform.touch(tmp_file)
+      self.assertTrue(tmp_file.exists())
+      self.assertTrue(self.platform.exists(tmp_file))
+      self.assertEqual(tmp_file.stat().st_size, 0)
+
+  def test_rename(self):
+    with tempfile.TemporaryDirectory() as tmp_dirname:
+      tmp_file = pathlib.Path(tmp_dirname) / "test.txt"
+      tmp_file_renamed = tmp_file.with_name("test_renamed.txt")
+      self.platform.touch(tmp_file)
+      self.assertTrue(tmp_file.exists())
+      self.assertFalse(tmp_file_renamed.exists())
+      result = self.platform.rename(tmp_file, tmp_file_renamed)
+      self.assertEqual(result, tmp_file_renamed)
+      self.assertFalse(tmp_file.exists())
+      self.assertTrue(tmp_file_renamed.exists())
+
+  def test_home(self):
+    self.assertEqual(self.platform.home(), pathlib.Path.home())
+
+  def test_absolute_absolut(self):
+    absolute_path = pathlib.Path("/foo")
+    self.assertTrue(absolute_path.is_absolute())
+    self.assertEqual(self.platform.absolute(absolute_path), absolute_path)
+
+  def test_absolute_relative(self):
+    if self.platform.is_remote:
+      self.skipTest("Not supported yet on remote platforms.")
+    relative_path = pathlib.Path("../../foo")
+    self.assertFalse(relative_path.is_absolute())
+    self.assertEqual(
+        self.platform.absolute(relative_path), relative_path.absolute())
+
+  def test_glob(self):
+    if self.platform.is_remote:
+      self.skipTest("Not supported yet on remote platforms.")
+    with tempfile.TemporaryDirectory() as tmp_dirname:
+      tmp_dir = pathlib.Path(tmp_dirname)
+      self.assertFalse(list(self.platform.glob(tmp_dir, "*")))
+      a = tmp_dir / "a"
+      b = tmp_dir / "b"
+      self.platform.touch(a)
+      self.platform.touch(b)
+      self.assertListEqual(sorted(self.platform.glob(tmp_dir, "*")), [a, b])
+
+  def test_set_file_contents(self):
     if self.platform.is_remote:
       self.skipTest("Not supported yet on remote platforms.")
     with tempfile.TemporaryDirectory() as tmp_dirname:
@@ -155,7 +206,7 @@ class PlatformTestCase(unittest.TestCase):
       self.platform.touch(tmp_file)
       self.assertFalse(self.platform.cat(tmp_file))
 
-      self.platform.set_filecontents(tmp_file, "custom data")
+      self.platform.set_file_contents(tmp_file, "custom data")
       self.assertTrue(self.platform.exists(tmp_file))
       self.assertEqual(self.platform.cat(tmp_file), "custom data")
 
@@ -184,15 +235,31 @@ class PlatformTestCase(unittest.TestCase):
       self.assertFalse(self.platform.is_dir(bar_file))
       self.assertTrue(self.platform.is_file(bar_file))
 
+  def test_binary_lookup_override(self):
+    test_binary = "crossbench-non-existing-test-binary"
+    self.assertIsNone(self.platform.lookup_binary_override(test_binary))
+    self.assertIsNone(self.platform.which(test_binary))
+    # Use an arbitrary existing binary for testing.
+    override_binary = self.platform.which("python3")
+    self.assertTrue(override_binary)
+    with self.platform.override_binary(test_binary, override_binary):
+      self.assertEqual(self.platform.which(test_binary), override_binary)
+      with self.platform.override_binary(test_binary, None):
+        self.assertIsNone(self.platform.lookup_binary_override(test_binary))
+        self.assertIsNone(self.platform.which(test_binary))
+      self.assertEqual(self.platform.which(test_binary), override_binary)
+    self.assertIsNone(self.platform.lookup_binary_override(test_binary))
+    self.assertIsNone(self.platform.which(test_binary))
+
 
 @unittest.skipIf(not plt.PLATFORM.is_posix, "Incompatible platform")
 class PosixPlatformTestCase(PlatformTestCase):
-  platform: plt.PosixPlatform
+  platform: PosixPlatform
 
   def setUp(self):
     super().setUp()
-    assert isinstance(plt.PLATFORM, plt.PosixPlatform)
-    self.platform: plt.PosixPlatform = plt.PLATFORM
+    assert isinstance(plt.PLATFORM, PosixPlatform)
+    self.platform: PosixPlatform = plt.PLATFORM
 
   def test_sh(self):
     ls = self.platform.sh_stdout("ls")
@@ -218,6 +285,20 @@ class PosixPlatformTestCase(PlatformTestCase):
     result_path = self.platform.search_binary(pathlib.Path("ls"))
     self.assertIsNotNone(result_path)
     self.assertIn("ls", result_path.parts)
+    self.assertTrue(self.platform.exists(result_path))
+
+  def test_search_binary_posix_lookup_override(self):
+    path = pathlib.Path("ls")
+    override = self.platform.which("python3")
+    with self.platform.override_binary(path, override):
+      result_path = self.platform.search_binary(path)
+      self.assertEqual(result_path, override)
+      self.assertTrue(self.platform.exists(result_path))
+
+    result_path_2 = self.platform.search_binary(path)
+    self.assertNotEqual(result_path_2, result_path)
+    self.assertTrue(self.platform.exists(result_path_2))
+    self.assertIsNone(self.platform.lookup_binary_override(path))
 
   def test_environ(self):
     env = self.platform.environ
@@ -280,15 +361,29 @@ class MacOSPlatformTestCase(PosixPlatformTestCase):
     assert isinstance(plt.PLATFORM, plt.MacOSPlatform)
     self.platform = plt.PLATFORM
 
-  def test_search_binary_not_found(self):
+  def test_search_app_binary_not_found(self):
     binary = self.platform.search_binary(pathlib.Path("Invalid App Name"))
     self.assertIsNone(binary)
     binary = self.platform.search_binary(pathlib.Path("Non-existent App.app"))
     self.assertIsNone(binary)
 
-  def test_search_binary(self):
+  def test_search_app_binary(self):
     binary = self.platform.search_binary(pathlib.Path("Safari.app"))
-    self.assertTrue(binary and binary.is_file())
+    self.assertIsNotNone(binary)
+    self.assertTrue(self.platform.is_file(binary))
+    # We should get the binary not the app bundle
+    self.assertFalse(binary.suffix, ".app")
+    self.assertEqual(binary.name, "Safari")
+
+  def test_search_app_binary_override(self):
+    override = pathlib.Path("/System/Applications/Calendar.app")
+    with self.platform.override_binary("Safari.app", override):
+      binary = self.platform.search_binary(pathlib.Path("Safari.app"))
+      self.assertIsNotNone(binary)
+      self.assertTrue(self.platform.is_file(binary))
+      # We should get the binary not the app bundle
+      self.assertFalse(binary.suffix, ".app")
+    self.assertEqual(binary.name, "Calendar")
 
   def test_search_app_invalid(self):
     with self.assertRaises(ValueError):
@@ -299,8 +394,18 @@ class MacOSPlatformTestCase(PosixPlatformTestCase):
 
   def test_search_app(self):
     binary = self.platform.search_app(pathlib.Path("Safari.app"))
-    self.assertTrue(binary and binary.exists())
-    self.assertTrue(binary and binary.is_dir())
+    self.assertIsNotNone(binary)
+    self.assertTrue(self.platform.exists(binary))
+    self.assertTrue(self.platform.is_dir(binary))
+
+  def test_search_app_override(self):
+    override = pathlib.Path("/System/Applications/Calendar.app")
+    with self.platform.override_binary("Safari.app", override):
+      binary = self.platform.search_app(pathlib.Path("Safari.app"))
+      self.assertIsNotNone(binary)
+      self.assertTrue(self.platform.exists(binary))
+      self.assertTrue(self.platform.is_dir(binary))
+      self.assertEqual(binary.name, "Calendar.app")
 
   def test_app_version_app(self):
     app = self.platform.search_app(pathlib.Path("Safari.app"))

@@ -152,6 +152,7 @@ void DrmThread::CreateBuffer(gfx::AcceleratedWidget widget,
   std::vector<uint64_t> modifiers;
   if (window && window->GetController() && !(flags & GBM_BO_USE_LINEAR) &&
       !(flags & GBM_BO_USE_HW_VIDEO_DECODER) &&
+      !(flags & GBM_BO_USE_PROTECTED) &&
       !(client_flags & GbmPixmap::kFlagNoModifiers)) {
     modifiers = window->GetController()->GetSupportedModifiers(fourcc_format);
   }
@@ -164,6 +165,7 @@ void DrmThread::CreateBuffer(gfx::AcceleratedWidget widget,
   // allocation should fail if it's not possible to allocate a BO_USE_SCANOUT
   // buffer in that case.
   if (!*buffer && usage != gfx::BufferUsage::SCANOUT &&
+      usage != gfx::BufferUsage::PROTECTED_SCANOUT &&
       usage != gfx::BufferUsage::PROTECTED_SCANOUT_VDA_WRITE &&
       usage != gfx::BufferUsage::SCANOUT_FRONT_RENDERING) {
     flags &= ~GBM_BO_USE_SCANOUT;
@@ -323,8 +325,6 @@ void DrmThread::CheckOverlayCapabilitiesSync(
     const OverlaySurfaceCandidateList& overlays,
     std::vector<OverlayStatus>* result) {
   TRACE_EVENT0("drm,hwoverlays", "DrmThread::CheckOverlayCapabilitiesSync");
-  base::ElapsedTimer timer;
-
   DrmWindow* window = screen_manager_->GetWindow(widget);
   if (!window) {
     result->clear();
@@ -332,14 +332,6 @@ void DrmThread::CheckOverlayCapabilitiesSync(
     return;
   }
   *result = window->TestPageFlip(overlays);
-
-  base::TimeDelta time = timer.Elapsed();
-  static constexpr base::TimeDelta kMinTime = base::Microseconds(1);
-  static constexpr base::TimeDelta kMaxTime = base::Milliseconds(10);
-  static constexpr int kTimeBuckets = 50;
-  UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
-      "Compositing.Display.DrmThread.CheckOverlayCapabilitiesSyncUs", time,
-      kMinTime, kMaxTime, kTimeBuckets);
 }
 
 void DrmThread::GetHardwareCapabilities(
@@ -354,7 +346,8 @@ void DrmThread::GetHardwareCapabilities(
       device_manager_->GetDrmDevice(widget)->plane_manager();
 
   if (!hdc || !plane_manager) {
-    HardwareCapabilities hardware_capabilities{.is_valid = false};
+    HardwareCapabilities hardware_capabilities;
+    hardware_capabilities.is_valid = false;
     std::move(receive_callback).Run(hardware_capabilities);
     return;
   }
@@ -369,7 +362,8 @@ void DrmThread::GetHardwareCapabilities(
   } else {
     // If there are multiple CRTCs for this widget we shouldn't rely on overlays
     // working.
-    HardwareCapabilities hardware_capabilities{.is_valid = false};
+    HardwareCapabilities hardware_capabilities;
+    hardware_capabilities.is_valid = false;
     std::move(receive_callback).Run(hardware_capabilities);
   }
 }
@@ -387,12 +381,12 @@ void DrmThread::RefreshNativeDisplays(
 
 void DrmThread::ConfigureNativeDisplays(
     const std::vector<display::DisplayConfigurationParams>& config_requests,
-    uint32_t modeset_flag,
+    display::ModesetFlags modeset_flags,
     base::OnceCallback<void(bool)> callback) {
   TRACE_EVENT0("drm", "DrmThread::ConfigureNativeDisplays");
 
   bool config_success =
-      display_manager_->ConfigureDisplays(config_requests, modeset_flag);
+      display_manager_->ConfigureDisplays(config_requests, modeset_flags);
   std::move(callback).Run(config_success);
 }
 
@@ -471,6 +465,12 @@ void DrmThread::SetColorTemperatureAdjustment(
   display_manager_->SetColorTemperatureAdjustment(display_id, cta);
 }
 
+void DrmThread::SetColorCalibration(
+    int64_t display_id,
+    const display::ColorCalibration& calibration) {
+  display_manager_->SetColorCalibration(display_id, calibration);
+}
+
 void DrmThread::SetGammaAdjustment(int64_t display_id,
                                    const display::GammaAdjustment& adjustment) {
   display_manager_->SetGammaAdjustment(display_id, adjustment);
@@ -481,6 +481,14 @@ void DrmThread::SetPrivacyScreen(int64_t display_id,
                                  base::OnceCallback<void(bool)> callback) {
   bool success = display_manager_->SetPrivacyScreen(display_id, enabled);
   std::move(callback).Run(success);
+}
+
+void DrmThread::GetSeamlessRefreshRates(
+    int64_t display_id,
+    GetSeamlessRefreshRatesCallback callback) {
+  std::optional<std::vector<float>> ranges =
+      display_manager_->GetSeamlessRefreshRates(display_id);
+  std::move(callback).Run(std::move(ranges));
 }
 
 void DrmThread::AddDrmDeviceReceiver(

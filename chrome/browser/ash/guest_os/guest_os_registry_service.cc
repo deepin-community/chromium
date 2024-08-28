@@ -77,7 +77,8 @@ void Launch(vm_tools::apps::VmType vm_type,
 
     case VmType::BOREALIS:
       borealis::BorealisService::GetForProfile(profile)->AppLauncher().Launch(
-          app_id, {url.spec()}, base::DoNothing());
+          app_id, {url.spec()}, borealis::BorealisLaunchSource::kAppUrlHandler,
+          base::DoNothing());
       break;
 
     default:
@@ -677,7 +678,7 @@ base::FilePath GuestOsRegistryService::GetIconPath(
     case ui::kScaleFactorNone:
       return app_path.AppendASCII("icon.svg");
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return base::FilePath();
   }
 }

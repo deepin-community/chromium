@@ -4,23 +4,21 @@
 
 #include "chrome/browser/ui/ash/app_access_notifier.h"
 
-#include <list>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "app_access_notifier.h"
 #include "ash/constants/ash_features.h"
-#include "ash/shell.h"
 #include "ash/system/privacy/privacy_indicators_controller.h"
 #include "ash/system/privacy_hub/camera_privacy_switch_controller.h"
-#include "ash/system/privacy_hub/privacy_hub_controller.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/browser_process.h"
@@ -33,7 +31,6 @@
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
-#include "ui/base/l10n/l10n_util.h"
 
 namespace {
 
@@ -71,11 +68,9 @@ std::optional<std::u16string> MapAppIdToShortName(
 // when the application starts using the camera and false when the application
 // stops using the camera.
 void SendActiveCameraApplicationsChangedNotification(bool application_added) {
-  if (ash::features::IsCrosPrivacyHubEnabled()) {
-    auto* camera_controller = ash::CameraPrivacySwitchController::Get();
-    CHECK(camera_controller);
-    camera_controller->ActiveApplicationsChanged(application_added);
-  }
+  auto* camera_controller = ash::CameraPrivacySwitchController::Get();
+  CHECK(camera_controller);
+  camera_controller->ActiveApplicationsChanged(application_added);
 }
 
 }  // namespace
@@ -184,10 +179,8 @@ void AppAccessNotifier::OnCapabilityAccessUpdate(
     std::erase(mic_using_app_ids_[active_user_account_id_], update.AppId());
   }
 
-  if (ash::features::IsPrivacyIndicatorsEnabled()) {
-    // TODO(b/251686202): Finish Launch App functionality.
-    auto launch_app_callback = std::nullopt;
-
+  // Privacy indicators is only enabled when Video Conference is disabled.
+  if (!ash::features::IsVideoConferenceEnabled()) {
     auto* registry_cache = GetActiveUserAppRegistryCache();
     if (!registry_cache) {
       return;
@@ -208,7 +201,7 @@ void AppAccessNotifier::OnCapabilityAccessUpdate(
         app_id, /*app_name=*/GetAppShortNameFromAppId(app_id), is_camera_used,
         is_microphone_used, /*delegate=*/
         base::MakeRefCounted<ash::PrivacyIndicatorsNotificationDelegate>(
-            launch_app_callback, launch_settings_callback),
+            launch_settings_callback),
         ash::PrivacyIndicatorsSource::kApps);
 
     base::UmaHistogramEnumeration("Ash.PrivacyIndicators.AppAccessUpdate.Type",

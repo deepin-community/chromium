@@ -53,11 +53,11 @@ class DawnNativeTest : public ::testing::Test {
     void SetUp() override;
 
     virtual std::unique_ptr<dawn::platform::Platform> CreateTestPlatform();
-    virtual WGPUDevice CreateTestDevice();
+    WGPUDevice CreateTestDevice();
 
   protected:
-    std::unique_ptr<dawn::native::Instance> instance;
     std::unique_ptr<dawn::platform::Platform> platform;
+    std::unique_ptr<dawn::native::Instance> instance;
     dawn::native::Adapter adapter;
     wgpu::Device device;
 

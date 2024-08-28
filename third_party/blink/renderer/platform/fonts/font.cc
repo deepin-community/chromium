@@ -22,6 +22,11 @@
  *
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/fonts/font.h"
 
 #include "cc/paint/paint_canvas.h"
@@ -333,6 +338,48 @@ float Font::Width(const TextRun& run, gfx::RectF* glyph_bounds) const {
   return shaper.Width(run, glyph_bounds);
 }
 
+float Font::BidiWidth(const TextRun& run, gfx::RectF* glyph_bounds) const {
+  FontCachePurgePreventer purge_preventer;
+  CachingWordShaper shaper(*this);
+
+  if (run.length() == 0) {
+    return 0;
+  }
+
+  // Run bidi algorithm on the given text. Step 5 of:
+  // https://html.spec.whatwg.org/multipage/canvas.html#text-preparation-algorithm
+  String text16 = run.ToStringView().ToString();
+  text16.Ensure16Bit();
+  BidiParagraph bidi;
+  bidi.SetParagraph(text16, run.Direction());
+  BidiParagraph::Runs runs;
+  bidi.GetLogicalRuns(text16, &runs);
+
+  if (runs.size() == 1 && run.Direction() == runs[0].Direction()) {
+    return shaper.Width(run, glyph_bounds);
+  }
+
+  float width = 0;
+  for (const BidiParagraph::Run& logical_run : runs) {
+    // Measure each run.
+    TextRun text_run(
+        StringView(run.ToStringView(), logical_run.start, logical_run.Length()),
+        logical_run.Direction(), /* directional_override */ false);
+    text_run.SetNormalizeSpace(true);
+    gfx::RectF run_glyph_bounds;
+    float run_width = shaper.Width(text_run, &run_glyph_bounds);
+
+    // Accumulate the position and the glyph bounding box.
+    if (glyph_bounds) {
+      run_glyph_bounds.Offset(width, 0);
+      glyph_bounds->Union(run_glyph_bounds);
+    }
+    width += run_width;
+  }
+
+  return width;
+}
+
 namespace {  // anonymous namespace
 
 unsigned InterceptsFromBlobs(const ShapeResultBloberizer::BlobBuffer& blobs,
@@ -531,12 +578,6 @@ int Font::EmphasisMarkHeight(const AtomicString& mark) const {
     return 0;
 
   return mark_font_data->GetFontMetrics().Height();
-}
-
-Vector<double> Font::IndividualCharacterAdvances(const TextRun& run) const {
-  FontCachePurgePreventer purge_preventer;
-  CachingWordShaper shaper(*this);
-  return shaper.IndividualCharacterAdvances(run);
 }
 
 float Font::TabWidth(const SimpleFontData* font_data,

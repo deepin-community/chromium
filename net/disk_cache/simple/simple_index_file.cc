@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/341324165): Fix and remove.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/disk_cache/simple/simple_index_file.h"
 
 #include <utility>
@@ -101,8 +106,8 @@ struct PickleHeader : public base::Pickle::Header {
 class SimpleIndexPickle : public base::Pickle {
  public:
   SimpleIndexPickle() : base::Pickle(sizeof(PickleHeader)) {}
-  SimpleIndexPickle(const char* data, int data_len)
-      : base::Pickle(data, data_len) {}
+  explicit SimpleIndexPickle(base::span<const uint8_t> data)
+      : base::Pickle(base::Pickle::kUnownedData, data) {}
 
   bool HeaderValid() const { return header_size() == sizeof(PickleHeader); }
 };
@@ -536,7 +541,8 @@ void SimpleIndexFile::Deserialize(net::CacheType cache_type,
   out_result->Reset();
   SimpleIndex::EntrySet* entries = &out_result->entries;
 
-  SimpleIndexPickle pickle(data, data_len);
+  SimpleIndexPickle pickle(
+      base::as_bytes(base::span(data, base::checked_cast<size_t>(data_len))));
   if (!pickle.data() || !pickle.HeaderValid()) {
     LOG(WARNING) << "Corrupt Simple Index File.";
     return;

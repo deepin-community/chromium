@@ -1,5 +1,5 @@
 ##
-## Copyright (c) 2017, Alliance for Open Media. All rights reserved
+## Copyright (c) 2017, Alliance for Open Media. All rights reserved.
 ##
 ## This source code is subject to the terms of the BSD 2 Clause License and
 ## the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -502,7 +502,7 @@ specialize qw/aom_convolve8_horiz     neon neon_dotprod neon_i8mm ssse3/, "$avx2
 specialize qw/aom_convolve8_vert      neon neon_dotprod neon_i8mm ssse3/, "$avx2_ssse3";
 
 add_proto qw/void aom_scaled_2d/, "const uint8_t *src, ptrdiff_t src_stride, uint8_t *dst, ptrdiff_t dst_stride, const InterpKernel *filter, int x0_q4, int x_step_q4, int y0_q4, int y_step_q4, int w, int h";
-specialize qw/aom_scaled_2d ssse3 neon/;
+specialize qw/aom_scaled_2d ssse3 neon neon_dotprod neon_i8mm/;
 
 if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
   add_proto qw/void aom_highbd_convolve_copy/, "const uint16_t *src, ptrdiff_t src_stride, uint16_t *dst, ptrdiff_t dst_stride, int w, int h";
@@ -1087,7 +1087,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_sad_skip_16x32x4d   avx2 sse2 neon neon_dotprod/;
   specialize qw/aom_sad_skip_16x16x4d   avx2 sse2 neon neon_dotprod/;
   specialize qw/aom_sad_skip_16x8x4d    avx2 sse2 neon neon_dotprod/;
-  specialize qw/aom_sad_skip_16x4x4d              neon neon_dotprod/;
+  specialize qw/aom_sad_skip_16x4x4d    avx2      neon neon_dotprod/;
   specialize qw/aom_sad_skip_8x32x4d         sse2 neon/;
   specialize qw/aom_sad_skip_8x16x4d         sse2 neon/;
   specialize qw/aom_sad_skip_8x8x4d          sse2 neon/;
@@ -1116,7 +1116,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_sad64x16x3d   avx2 neon neon_dotprod/;
   specialize qw/aom_sad32x8x3d    avx2 neon neon_dotprod/;
   specialize qw/aom_sad16x64x3d   avx2 neon neon_dotprod/;
-  specialize qw/aom_sad16x4x3d         neon neon_dotprod/;
+  specialize qw/aom_sad16x4x3d    avx2 neon neon_dotprod/;
   specialize qw/aom_sad8x32x3d         neon/;
   specialize qw/aom_sad4x16x3d         neon/;
 
@@ -1264,8 +1264,6 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
 
   add_proto qw/int aom_vector_var/, "const int16_t *ref, const int16_t *src, int bwl";
   specialize qw/aom_vector_var avx2 sse4_1 neon sve/;
-  # TODO(kyslov@) bring back SSE2 by extending it to 128 block size
-  #specialize qw/aom_vector_var neon sse2/;
 
   #
   # hamadard transform and satd for implmenting temporal dependency model
@@ -1357,6 +1355,11 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
         specialize "aom_highbd_${bd}_mse16x8", qw/neon neon_dotprod/;
         specialize "aom_highbd_${bd}_mse8x16", qw/neon neon_dotprod/;
         specialize "aom_highbd_${bd}_mse8x8", qw/sse2 neon neon_dotprod/;
+      } elsif ($bd eq 10) {
+        specialize "aom_highbd_${bd}_mse16x16", qw/avx2 sse2 neon sve/;
+        specialize "aom_highbd_${bd}_mse16x8", qw/neon sve/;
+        specialize "aom_highbd_${bd}_mse8x16", qw/neon sve/;
+        specialize "aom_highbd_${bd}_mse8x8", qw/sse2 neon sve/;
       } else {
         specialize "aom_highbd_${bd}_mse16x16", qw/sse2 neon sve/;
         specialize "aom_highbd_${bd}_mse16x8", qw/neon sve/;
@@ -1796,7 +1799,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
     specialize qw/aom_compute_correlation sse4_1 avx2/;
 
     add_proto qw/void aom_compute_flow_at_point/, "const uint8_t *src, const uint8_t *ref, int x, int y, int width, int height, int stride, double *u, double *v";
-    specialize qw/aom_compute_flow_at_point sse4_1 avx2 neon/;
+    specialize qw/aom_compute_flow_at_point sse4_1 avx2 neon sve/;
   }
 
 }  # CONFIG_AV1_ENCODER

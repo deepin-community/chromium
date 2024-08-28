@@ -33,6 +33,7 @@ OptionButtonBase::OptionButtonBase(int button_width,
   StyleUtil::SetUpInkDropForButton(this, gfx::Insets(),
                                    /*highlight_on_hover=*/false,
                                    /*highlight_on_focus=*/false);
+  SetImageLabelSpacing(image_label_spacing_);
   views::InstallRectHighlightPathGenerator(this);
   auto* focus_ring = views::FocusRing::Get(this);
   focus_ring->SetOutsetFocusRingDisabled(true);
@@ -61,15 +62,23 @@ void OptionButtonBase::SetLabelStyle(TypographyToken token) {
   TypographyProvider::Get()->StyleLabel(token, *label());
 }
 
-gfx::Size OptionButtonBase::CalculatePreferredSize() const {
-  int preferred_width = kIconSize + image_label_spacing_ +
-                        label()->GetPreferredSize().width() +
-                        GetInsets().width();
+gfx::Size OptionButtonBase::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  int preferred_width =
+      kIconSize + image_label_spacing_ +
+      label()
+          ->GetPreferredSize(views::SizeBounds(label()->width(), {}))
+          .width() +
+      GetInsets().width();
   return gfx::Size(std::max(preferred_width, min_width_), kButtonHeight);
 }
 
 gfx::Size OptionButtonBase::GetMinimumSize() const {
   return gfx::Size(min_width_, kButtonHeight);
+}
+
+int OptionButtonBase::GetHeightForWidth(int width) const {
+  return kButtonHeight;
 }
 
 void OptionButtonBase::SetLabelColorId(ui::ColorId color_id) {
@@ -86,7 +95,7 @@ void OptionButtonBase::Layout(PassKey) {
   views::Label* label = this->label();
   gfx::Size label_size(
       local_content_bounds.width() - image_label_spacing_ - kIconSize,
-      label->GetPreferredSize().height());
+      label->GetPreferredSize(views::SizeBounds(label->width(), {})).height());
 
   gfx::Point image_origin = local_content_bounds.origin();
   image_origin.Offset(0, (local_content_bounds.height() - kIconSize) / 2);
@@ -95,7 +104,7 @@ void OptionButtonBase::Layout(PassKey) {
       0, (local_content_bounds.height() - label_size.height()) / 2);
 
   if (IsIconOnTheLeftSide()) {
-    label_origin.Offset(kIconSize + kImageLabelSpacingDP, 0);
+    label_origin.Offset(kIconSize + image_label_spacing_, 0);
   } else {
     image_origin.Offset(local_content_bounds.width() - kIconSize, 0);
   }
@@ -143,12 +152,12 @@ SkColor OptionButtonBase::GetIconImageColor() const {
 }
 
 void OptionButtonBase::UpdateTextColor() {
-  const auto* color_provider = GetColorProvider();
-  const SkColor text_color =
-      color_provider->GetColor(cros_tokens::kCrosSysOnSurface);
-  SetEnabledTextColors(text_color);
-  SetTextColor(ButtonState::STATE_DISABLED,
-               color_provider->GetColor(KColorAshTextDisabledColor));
+  SetEnabledTextColorIds(cros_tokens::kCrosSysOnSurface);
+  SetTextColorId(ButtonState::STATE_DISABLED, KColorAshTextDisabledColor);
+}
+
+void OptionButtonBase::SetLabelFontList(const gfx::FontList& font_list) {
+  label()->SetFontList(font_list);
 }
 
 BEGIN_METADATA(OptionButtonBase)

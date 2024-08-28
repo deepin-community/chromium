@@ -21,6 +21,7 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/geolocation/geolocation_controller.h"
 #include "ash/system/model/system_tray_model.h"
+#include "ash/system/night_light/night_light_metrics_recorder.h"
 #include "base/functional/bind.h"
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
@@ -59,7 +60,7 @@ namespace {
 // These values are logged to UMA. Entries should not be renumbered and
 // numeric values should never be reused. Please keep in sync with
 // "AshAutoNightLightNotificationState" in
-// src/tools/metrics/histograms/enums.xml.
+// src/tools/metrics/histograms/metadata/ash/enums.xml.
 enum class AutoNightLightNotificationState {
   kClosedByUser = 0,
   kBodyClicked = 1,
@@ -328,15 +329,17 @@ NightLightControllerImpl::NightLightControllerImpl()
                        prefs::kNightLightCustomStartTime,
                        prefs::kNightLightCustomEndTime),
       temperature_animation_(std::make_unique<ColorTemperatureAnimation>()),
+      night_light_metrics_recorder_(
+          std::make_unique<NightLightMetricsRecorder>()),
       ambient_temperature_(kNeutralColorTemperatureInKelvin),
       weak_ptr_factory_(this) {
-  Shell::Get()->window_tree_host_manager()->AddObserver(this);
+  Shell::Get()->display_manager()->AddDisplayManagerObserver(this);
   aura::Env::GetInstance()->AddObserver(this);
 }
 
 NightLightControllerImpl::~NightLightControllerImpl() {
   aura::Env::GetInstance()->RemoveObserver(this);
-  Shell::Get()->window_tree_host_manager()->RemoveObserver(this);
+  Shell::Get()->display_manager()->RemoveDisplayManagerObserver(this);
 }
 
 // static
@@ -408,7 +411,7 @@ float NightLightControllerImpl::RemapAmbientColorTemperature(
                   kTable[i].output_temperature);
     }
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -484,7 +487,7 @@ void NightLightControllerImpl::Toggle() {
   SetEnabled(!IsNightLightEnabled());
 }
 
-void NightLightControllerImpl::OnDisplayConfigurationChanged() {
+void NightLightControllerImpl::OnDidApplyDisplayChanges() {
   ReapplyColorTemperatures();
 }
 
@@ -637,7 +640,7 @@ void NightLightControllerImpl::ReapplyColorTemperatures() {
     if (temperature_animation_->target_temperature() == target_temperature)
       return;
 
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     temperature_animation_->Stop();
   }
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/common/input/synthetic_pointer_action.h"
 
 #include "base/functional/bind.h"
@@ -38,11 +43,12 @@ WebTouchPoint::State ToWebTouchPointState(
       return WebTouchPoint::State::kStateStationary;
     case SyntheticPointerActionParams::PointerActionType::LEAVE:
     case SyntheticPointerActionParams::PointerActionType::NOT_INITIALIZED:
-      NOTREACHED()
+      NOTREACHED_IN_MIGRATION()
           << "Invalid SyntheticPointerActionParams::PointerActionType.";
       return WebTouchPoint::State::kStateUndefined;
   }
-  NOTREACHED() << "Invalid SyntheticPointerActionParams::PointerActionType.";
+  NOTREACHED_IN_MIGRATION()
+      << "Invalid SyntheticPointerActionParams::PointerActionType.";
   return WebTouchPoint::State::kStateUndefined;
 }
 
@@ -60,11 +66,12 @@ WebInputEvent::Type ToWebMouseEventType(
     case SyntheticPointerActionParams::PointerActionType::CANCEL:
     case SyntheticPointerActionParams::PointerActionType::IDLE:
     case SyntheticPointerActionParams::PointerActionType::NOT_INITIALIZED:
-      NOTREACHED()
+      NOTREACHED_IN_MIGRATION()
           << "Invalid SyntheticPointerActionParams::PointerActionType.";
       return WebInputEvent::Type::kUndefined;
   }
-  NOTREACHED() << "Invalid SyntheticPointerActionParams::PointerActionType.";
+  NOTREACHED_IN_MIGRATION()
+      << "Invalid SyntheticPointerActionParams::PointerActionType.";
   return WebInputEvent::Type::kUndefined;
 }
 
@@ -118,6 +125,12 @@ class MockSyntheticPointerActionTarget : public SyntheticGestureTarget {
                         content::mojom::GestureSourceType source,
                         base::OnceClosure callback) const override {
     std::move(callback).Run();
+  }
+
+  void GetVSyncParameters(base::TimeTicks& timebase,
+                          base::TimeDelta& interval) const override {
+    timebase = base::TimeTicks();
+    interval = base::Microseconds(16667);
   }
 
   WebInputEvent::Type type() const { return type_; }

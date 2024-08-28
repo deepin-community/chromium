@@ -23,7 +23,6 @@
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_util.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/strings/grit/components_strings.h"
@@ -94,7 +93,7 @@ class PortalNetworkMessageHandler : public content::WebUIMessageHandler {
  private:
   void ShowPortalSignin(const base::Value::List& args) {
     if (args.size() < 1 || !args[0].is_string()) {
-      NOTREACHED() << "Invalid args for: ShowPortalSignin";
+      NOTREACHED_IN_MIGRATION() << "Invalid args for: ShowPortalSignin";
       return;
     }
     const std::string& guid = args[0].GetString();
@@ -176,7 +175,6 @@ InternetDetailDialogUI::InternetDetailDialogUI(content::WebUI* web_ui)
   source->AddBoolean("showTechnologyBadge",
                      !features::IsSeparateNetworkIconsEnabled());
   source->AddBoolean("apnRevamp", features::IsApnRevampEnabled());
-  source->AddBoolean("isJellyEnabled", chromeos::features::IsJellyEnabled());
   cellular_setup::AddNonStringLoadTimeData(source);
   AddInternetStrings(source);
   source->AddLocalizedString("title", IDS_SETTINGS_INTERNET_DETAIL);

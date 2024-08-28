@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <set>
+#include <string_view>
 #include <utility>
 
 #include "base/feature_list.h"
@@ -16,13 +17,11 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/user_metrics.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "components/prefs/json_pref_store.h"
 #include "components/prefs/pref_filter.h"
-#include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/sync/model/sync_change.h"
 #include "components/sync/model/sync_change_processor.h"
@@ -81,7 +80,7 @@ bool SyncChangeIsNewWebsiteApproval(const std::string& name,
       return !old_value->GetIfBool().value_or(true);
     }
     default: {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return false;
     }
   }
@@ -162,12 +161,8 @@ void SupervisedUserSettingsService::SetActive(bool active) {
   if (active_) {
     // Child account supervised users must be signed in.
     SetLocalSetting(supervised_user::kSigninAllowed, base::Value(true));
-
-    if (base::FeatureList::IsEnabled(
-            supervised_user::kSupervisedPrefsControlledBySupervisedStore)) {
-      SetLocalSetting(supervised_user::kSigninAllowedOnNextStartup,
-                      base::Value(true));
-    }
+    SetLocalSetting(supervised_user::kSigninAllowedOnNextStartup,
+                    base::Value(true));
 
     // Always allow cookies, to avoid website compatibility issues.
     SetLocalSetting(supervised_user::kCookiesAlwaysAllowed, base::Value(true));
@@ -177,7 +172,6 @@ void SupervisedUserSettingsService::SetActive(bool active) {
   } else {
     RemoveLocalSetting(supervised_user::kSigninAllowed);
     RemoveLocalSetting(supervised_user::kCookiesAlwaysAllowed);
-    RemoveLocalSetting(supervised_user::kForceSafeSearch);
     RemoveLocalSetting(supervised_user::kGeolocationDisabled);
   }
 
@@ -241,19 +235,19 @@ void SupervisedUserSettingsService::SaveItem(
   InformSubscribers();
 }
 
-void SupervisedUserSettingsService::SetLocalSetting(base::StringPiece key,
+void SupervisedUserSettingsService::SetLocalSetting(std::string_view key,
                                                     base::Value value) {
   local_settings_.Set(key, std::move(value));
   InformSubscribers();
 }
 
-void SupervisedUserSettingsService::SetLocalSetting(base::StringPiece key,
+void SupervisedUserSettingsService::SetLocalSetting(std::string_view key,
                                                     base::Value::Dict dict) {
   local_settings_.Set(key, std::move(dict));
   InformSubscribers();
 }
 
-void SupervisedUserSettingsService::RemoveLocalSetting(base::StringPiece key) {
+void SupervisedUserSettingsService::RemoveLocalSetting(std::string_view key) {
   local_settings_.Remove(key);
   InformSubscribers();
 }
@@ -463,9 +457,6 @@ SupervisedUserSettingsService::ProcessSyncChanges(
 base::WeakPtr<syncer::SyncableService>
 SupervisedUserSettingsService::AsWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
-}
-
-void SupervisedUserSettingsService::OnPrefValueChanged(const std::string& key) {
 }
 
 void SupervisedUserSettingsService::OnInitializationCompleted(bool success) {

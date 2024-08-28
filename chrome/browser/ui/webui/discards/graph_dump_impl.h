@@ -7,7 +7,6 @@
 
 #include "base/containers/flat_map.h"
 #include "base/functional/callback_forward.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -81,6 +80,10 @@ class DiscardsGraphDumpImpl : public discards::mojom::GraphDump,
       const performance_manager::FrameNode* frame_node) override {}
   void OnURLChanged(const performance_manager::FrameNode* frame_node,
                     const GURL& previous_value) override;
+  // Ignored.
+  void OnOriginChanged(
+      const performance_manager::FrameNode* frame_node,
+      const std::optional<url::Origin>& previous_value) override {}
   // Ignored.
   void OnIsAdFrameChanged(
       const performance_manager::FrameNode* frame_node) override {}
@@ -179,14 +182,6 @@ class DiscardsGraphDumpImpl : public discards::mojom::GraphDump,
   void OnFaviconUpdated(
       const performance_manager::PageNode* page_node) override;
   // Ignored.
-  void OnFreezingVoteChanged(
-      const performance_manager::PageNode* page_node,
-      std::optional<performance_manager::freezing::FreezingVote>) override {}
-  // Ignored.
-  void OnPageStateChanged(
-      const performance_manager::PageNode* page_node,
-      performance_manager::PageNode::PageState old_state) override {}
-  // Ignored.
   void OnAboutToBeDiscarded(
       const performance_manager::PageNode* page_node,
       const performance_manager::PageNode* new_page_node) override {}
@@ -214,12 +209,18 @@ class DiscardsGraphDumpImpl : public discards::mojom::GraphDump,
       const performance_manager::WorkerNode* worker_node) override;
   void OnFinalResponseURLDetermined(
       const performance_manager::WorkerNode* worker_node) override;
+  void OnBeforeClientFrameAdded(
+      const performance_manager::WorkerNode* worker_node,
+      const performance_manager::FrameNode* client_frame_node) override;
   void OnClientFrameAdded(
       const performance_manager::WorkerNode* worker_node,
       const performance_manager::FrameNode* client_frame_node) override;
   void OnBeforeClientFrameRemoved(
       const performance_manager::WorkerNode* worker_node,
       const performance_manager::FrameNode* client_frame_node) override;
+  void OnBeforeClientWorkerAdded(
+      const performance_manager::WorkerNode* worker_node,
+      const performance_manager::WorkerNode* client_worker_node) override;
   void OnClientWorkerAdded(
       const performance_manager::WorkerNode* worker_node,
       const performance_manager::WorkerNode* client_worker_node) override;
@@ -272,8 +273,6 @@ class DiscardsGraphDumpImpl : public discards::mojom::GraphDump,
 
   static void OnConnectionError(DiscardsGraphDumpImpl* impl);
 
-  raw_ptr<performance_manager::Graph> graph_ = nullptr;
-
   // Helper that requests favicons on the UI thread. Initialized to null to
   // avoid posting an initialization task to the UI thread during startup.
   // Access this through EnsureFaviconRequestHelper to initialize it on first
@@ -286,7 +285,7 @@ class DiscardsGraphDumpImpl : public discards::mojom::GraphDump,
   NodeId::Generator node_id_generator_;
 
   // The current change subscriber to this dumper. This instance is subscribed
-  // to every node in |graph_| save for the system node, so long as there is a
+  // to every node in the graph save for the system node, so long as there is a
   // subscriber.
   mojo::Remote<discards::mojom::GraphChangeStream> change_subscriber_;
   mojo::Receiver<discards::mojom::GraphDump> receiver_{this};

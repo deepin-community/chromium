@@ -73,7 +73,7 @@ keyboard::ContainerType ConvertKeyboardModeToContainerType(
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return keyboard::ContainerType::kFullWidth;
 }
 
@@ -112,9 +112,9 @@ bool SendKeyEventImpl(const std::string& type,
                       aura::WindowTreeHost* host) {
   ui::EventType event_type;
   if (type == kKeyDown)
-    event_type = ui::ET_KEY_PRESSED;
+    event_type = ui::EventType::kKeyPressed;
   else if (type == kKeyUp)
-    event_type = ui::ET_KEY_RELEASED;
+    event_type = ui::EventType::kKeyReleased;
   else
     return false;
 
@@ -123,17 +123,17 @@ bool SendKeyEventImpl(const std::string& type,
   if (code == ui::VKEY_UNKNOWN) {
     // Handling of special printable characters (e.g. accented characters) for
     // which there is no key code.
-    if (event_type == ui::ET_KEY_RELEASED) {
+    if (event_type == ui::EventType::kKeyReleased) {
       // This can be null if no text input field is focused.
       ui::TextInputClient* tic = GetFocusedTextInputClient();
 
-      SendProcessKeyEvent(ui::ET_KEY_PRESSED, host);
+      SendProcessKeyEvent(ui::EventType::kKeyPressed, host);
 
       ui::KeyEvent char_event = ui::KeyEvent::FromCharacter(
           key_value, code, ui::DomCode::NONE, ui::EF_NONE);
       if (tic)
         tic->InsertChar(char_event);
-      SendProcessKeyEvent(ui::ET_KEY_RELEASED, host);
+      SendProcessKeyEvent(ui::EventType::kKeyReleased, host);
     }
     return true;
   }
@@ -186,21 +186,6 @@ bool IsOndeviceHandwritingEnabledViaCommandLine() {
   return command_line->HasSwitch(::switches::kOndeviceHandwritingSwitch) &&
          command_line->GetSwitchValueASCII(
              ::switches::kOndeviceHandwritingSwitch) == "use_rootfs";
-}
-
-bool IsHandwritingLegacyRecognitionEnabled() {
-  // Disable handwriting DLC flags if device does not have on-device handwriting
-  // (see b/316981973).
-  return IsOndeviceHandwritingEnabledViaCommandLine() &&
-         base::FeatureList::IsEnabled(
-             ash::features::kHandwritingLegacyRecognition);
-}
-
-bool IsHandwritingLibraryDlcEnabled() {
-  // Disable handwriting DLC flags if device does not have on-device handwriting
-  // (see b/316981973).
-  return IsOndeviceHandwritingEnabledViaCommandLine() &&
-         base::FeatureList::IsEnabled(ash::features::kHandwritingLibraryDlc);
 }
 
 }  // namespace
@@ -525,11 +510,6 @@ void ChromeVirtualKeyboardDelegate::OnHasInputDevices(
   features.Append(GenerateFeatureFlag("spellcheck", config.spell_check));
   features.Append(GenerateFeatureFlag("handwriting", config.handwriting));
   features.Append(GenerateFeatureFlag(
-      "handwritinggesture",
-      base::FeatureList::IsEnabled(features::kHandwritingGesture)));
-  features.Append(GenerateFeatureFlag("handwritinglegacyrecognition",
-                                      IsHandwritingLegacyRecognitionEnabled()));
-  features.Append(GenerateFeatureFlag(
       "hindiinscriptlayout",
       base::FeatureList::IsEnabled(ash::features::kHindiInscriptLayout)));
   features.Append(GenerateFeatureFlag(
@@ -539,9 +519,6 @@ void ChromeVirtualKeyboardDelegate::OnHasInputDevices(
       "stylushandwriting",
       base::FeatureList::IsEnabled(ash::features::kImeStylusHandwriting)));
   features.Append(GenerateFeatureFlag(
-      "newheader",
-      base::FeatureList::IsEnabled(ash::features::kVirtualKeyboardNewHeader)));
-  features.Append(GenerateFeatureFlag(
       "roundCorners", base::FeatureList::IsEnabled(
                           ash::features::kVirtualKeyboardRoundCorners)));
   features.Append(
@@ -549,18 +526,18 @@ void ChromeVirtualKeyboardDelegate::OnHasInputDevices(
                           base::FeatureList::IsEnabled(
                               ash::features::kSystemJapanesePhysicalTyping)));
   features.Append(GenerateFeatureFlag(
-      "multilingualtyping",
-      base::FeatureList::IsEnabled(ash::features::kMultilingualTyping)));
-  features.Append(GenerateFeatureFlag(
       "autocorrectparamstuning",
       base::FeatureList::IsEnabled(ash::features::kAutocorrectParamsTuning)));
-  features.Append(GenerateFeatureFlag("handwritinglibrarydlc",
-                                      IsHandwritingLibraryDlcEnabled()));
   features.Append(
       GenerateFeatureFlag("jelly", chromeos::features::IsJellyEnabled()));
   features.Append(GenerateFeatureFlag(
       "japanesefunctionrow",
       base::FeatureList::IsEnabled(ash::features::kJapaneseFunctionRow)));
+  features.Append(GenerateFeatureFlag(
+      "usemlservicefornonlongformhandwriting",
+      base::FeatureList::IsEnabled(
+          ash::features::kUseMlServiceForNonLongformHandwritingOnAllBoards) ||
+          IsOndeviceHandwritingEnabledViaCommandLine()));
 
   results.Set("features", std::move(features));
 

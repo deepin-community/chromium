@@ -90,7 +90,7 @@ export interface ExtensionsManagerElement {
   };
 }
 
-// TODO(crbug.com/1450101): Always show a top shadow for the DETAILS, ERRORS and
+// TODO(crbug.com/40270029): Always show a top shadow for the DETAILS, ERRORS and
 // SITE_PERMISSIONS_ALL_SITES pages.
 const ExtensionsManagerElementBase = CrContainerShadowMixin(PolymerElement);
 
@@ -120,6 +120,11 @@ export class ExtensionsManagerElement extends ExtensionsManagerElementBase {
       inDevMode: {
         type: Boolean,
         value: () => loadTimeData.getBoolean('inDevMode'),
+      },
+
+      isMv2DeprecationNoticeDismissed: {
+        type: Boolean,
+        value: () => loadTimeData.getBoolean('MV2DeprecationNoticeDismissed'),
       },
 
       showActivityLog: {
@@ -223,6 +228,7 @@ export class ExtensionsManagerElement extends ExtensionsManagerElementBase {
   canLoadUnpacked: boolean;
   delegate: Service;
   inDevMode: boolean;
+  isMv2DeprecationNoticeDismissed: boolean;
   showActivityLog: boolean;
   enableEnhancedSiteControls: boolean;
   devModeControlledByPolicy: boolean;
@@ -293,6 +299,8 @@ export class ExtensionsManagerElement extends ExtensionsManagerElementBase {
               profileInfo.isDeveloperModeControlledByPolicy;
           this.inDevMode = profileInfo.inDeveloperMode;
           this.canLoadUnpacked = profileInfo.canLoadUnpacked;
+          this.isMv2DeprecationNoticeDismissed =
+              profileInfo.isMv2DeprecationNoticeDismissed;
         };
     service.getProfileStateChangedTarget().addListener(onProfileStateChanged);
     service.getProfileConfiguration().then(onProfileStateChanged);
@@ -409,8 +417,9 @@ export class ExtensionsManagerElement extends ExtensionsManagerElementBase {
         this.updateItem_(
             'extensions_', index,
             Object.assign({}, this.getData_(eventData.item_id), {
-              acknowledgeSafetyCheckWarning:
-                  eventData.extensionInfo?.acknowledgeSafetyCheckWarning,
+              didAcknowledgeMV2DeprecationNotice:
+                  eventData.extensionInfo?.didAcknowledgeMV2DeprecationNotice,
+              safetyCheckText: eventData.extensionInfo?.safetyCheckText,
             }));
         break;
       default:

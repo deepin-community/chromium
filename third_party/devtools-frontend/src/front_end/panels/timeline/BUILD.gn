@@ -7,6 +7,7 @@ import("../../../scripts/build/ninja/devtools_module.gni")
 import("../../../scripts/build/ninja/devtools_pre_built.gni")
 import("../../../scripts/build/ninja/generate_css.gni")
 import("../../../scripts/build/ninja/node.gni")
+import("../../../third_party/typescript/typescript.gni")
 import("../visibility.gni")
 
 node_action("generate_easter_egg_file") {
@@ -19,6 +20,7 @@ node_action("generate_easter_egg_file") {
   }
 
   outputs = [ "$target_gen_dir/EasterEgg.js" ]
+  data = outputs
   if (is_debug) {
     metadata = {
       grd_files = outputs
@@ -38,6 +40,7 @@ devtools_pre_built("easter-egg") {
 generate_css("css_files") {
   sources = [
     "historyToolbarButton.css",
+    "timelineFlameChartView.css",
     "timelineFlamechartPopover.css",
     "timelineHistoryManager.css",
     "timelineMiniMap.css",
@@ -57,16 +60,21 @@ devtools_module("timeline") {
     "CompatibilityTracksAppender.ts",
     "CountersGraph.ts",
     "EventUICategory.ts",
+    "EventsSerializer.ts",
     "EventsTimelineTreeView.ts",
+    "ExtensionDataGatherer.ts",
+    "ExtensionTrackAppender.ts",
+    "FreshRecording.ts",
     "GPUTrackAppender.ts",
     "Initiators.ts",
     "InteractionsTrackAppender.ts",
     "IsolateSelector.ts",
     "LayoutShiftsTrackAppender.ts",
+    "ModificationsManager.ts",
     "NetworkTrackAppender.ts",
-    "PerformanceModel.ts",
     "SaveFileFormatter.ts",
     "SourceMapsResolver.ts",
+    "TargetForEvent.ts",
     "ThreadAppender.ts",
     "TimelineController.ts",
     "TimelineDetailsView.ts",
@@ -76,12 +84,14 @@ devtools_module("timeline") {
     "TimelineFlameChartNetworkDataProvider.ts",
     "TimelineFlameChartView.ts",
     "TimelineHistoryManager.ts",
+    "TimelineLandingPage.ts",
     "TimelineLayersView.ts",
     "TimelineLoader.ts",
     "TimelineMiniMap.ts",
     "TimelinePaintProfilerView.ts",
     "TimelinePanel.ts",
     "TimelineSelection.ts",
+    "TimelineSelectorStatsView.ts",
     "TimelineTreeView.ts",
     "TimelineUIUtils.ts",
     "TimingsTrackAppender.ts",
@@ -105,6 +115,11 @@ devtools_module("timeline") {
     "../../panels/mobile_throttling:bundle",
     "../../panels/profiler:bundle",
     "../../services/trace_bounds:bundle",
+    "../../ui/components/buttons:bundle",
+    "../../ui/components/code_highlighter:bundle",  # trace event highlighting
+    "../../ui/components/data_grid:bundle",
+    "../../ui/components/icon_button:bundle",
+    "../../ui/components/linkifier:bundle",
     "../../ui/components/menus:bundle",
     "../../ui/components/panel_feedback:bundle",
     "../../ui/legacy/components/data_grid:bundle",
@@ -113,6 +128,9 @@ devtools_module("timeline") {
     "../../ui/legacy/theme_support:bundle",
     "../../ui/lit-html:bundle",
     "./components:bundle",
+    "./extensions:bundle",
+    "./overlays:bundle",
+    "./utils:bundle",
   ]
 
   visibility = [ "../../component_docs/*" ]
@@ -130,16 +148,16 @@ devtools_entrypoint("bundle") {
     ":*",
     "../../../test/interactions/panels/performance/timeline/*",
     "../../../test/perf/*",
-    "../../../test/unittests/front_end/entrypoints/missing_entrypoints/*",
-    "../../../test/unittests/front_end/helpers",
-    "../../../test/unittests/front_end/models/trace/*",
-    "../../../test/unittests/front_end/panels/timeline/*",
     "../../entrypoints/*",
+    "../../models/trace/handlers:unittests",
+    "../../testing",
+    "../../testing/*",
     "../../ui/components/docs/performance_panel/*",
     "../input/*",
-    "../js_profiler/*",
+    "../js_timeline/*",
     "../lighthouse/*",
     "../recorder/*",
+    "./track_appenders:unittests",
   ]
 
   visibility += devtools_panels_visibility
@@ -159,4 +177,43 @@ devtools_entrypoint("meta") {
   ]
 
   visibility = [ "../../entrypoints/*" ]
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "Breadcrumbs.test.ts",
+    "EventsSerializer.test.ts",
+    "FreshRecording.test.ts",
+    "Initiators.test.ts",
+    "ModificationsManager.test.ts",
+    "SaveFileFormatter.test.ts",
+    "SourceMapsResolver.test.ts",
+    "TimelineController.test.ts",
+    "TimelineDetailsView.test.ts",
+    "TimelineFilters.test.ts",
+    "TimelineFlameChartDataProvider.test.ts",
+    "TimelineFlameChartNetworkDataProvider.test.ts",
+    "TimelineFlameChartView.test.ts",
+    "TimelineHistoryManager.test.ts",
+    "TimelineLoader.test.ts",
+    "TimelineMiniMap.test.ts",
+    "TimelineSelection.test.ts",
+    "TimelineTreeView.test.ts",
+    "TimelineUIUtils.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../core/platform:bundle",
+    "../../core/root:bundle",
+    "../../core/sdk:bundle",
+    "../../models/bindings:bundle",
+    "../../models/timeline_model:bundle",
+    "../../models/trace:bundle",
+    "../../models/workspace:bundle",
+    "../../testing",
+    "./components:bundle",
+  ]
 }

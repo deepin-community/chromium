@@ -25,14 +25,14 @@ const char* JobTypeToRequestType(
     DeviceManagementService::JobConfiguration::JobType type) {
   switch (type) {
     case DeviceManagementService::JobConfiguration::TYPE_INVALID:
-      NOTREACHED() << "Not a DMServer request type" << type;
+      NOTREACHED_IN_MIGRATION() << "Not a DMServer request type" << type;
       return "Invalid";
     case DeviceManagementService::JobConfiguration::TYPE_AUTO_ENROLLMENT:
       return dm_protocol::kValueRequestAutoEnrollment;
     case DeviceManagementService::JobConfiguration::TYPE_REGISTRATION:
       return dm_protocol::kValueRequestRegister;
     case DeviceManagementService::JobConfiguration::TYPE_OIDC_REGISTRATION:
-      return dm_protocol::kValueRequestOidcRegister;
+      return dm_protocol::kValueRequestRegisterProfile;
     case DeviceManagementService::JobConfiguration::TYPE_POLICY_FETCH:
       return dm_protocol::kValueRequestPolicy;
     case DeviceManagementService::JobConfiguration::TYPE_API_AUTH_CODE_FETCH:
@@ -61,13 +61,16 @@ const char* JobTypeToRequestType(
         TYPE_CERT_BASED_REGISTRATION:
       return dm_protocol::kValueRequestCertBasedRegister;
     case DeviceManagementService::JobConfiguration::
+        TYPE_TOKEN_BASED_DEVICE_REGISTRATION:
+      return dm_protocol::kValueRequestTokenBasedRegister;
+    case DeviceManagementService::JobConfiguration::
         TYPE_ACTIVE_DIRECTORY_ENROLL_PLAY_USER:
       return dm_protocol::kValueRequestActiveDirectoryEnrollPlayUser;
     case DeviceManagementService::JobConfiguration::
         TYPE_ACTIVE_DIRECTORY_PLAY_ACTIVITY:
       return dm_protocol::kValueRequestActiveDirectoryPlayActivity;
-    case DeviceManagementService::JobConfiguration::TYPE_TOKEN_ENROLLMENT:
-      return dm_protocol::kValueRequestTokenEnrollment;
+    case DeviceManagementService::JobConfiguration::TYPE_BROWSER_REGISTRATION:
+      return dm_protocol::kValueRequestRegisterBrowser;
     case DeviceManagementService::JobConfiguration::TYPE_CHROME_DESKTOP_REPORT:
       return dm_protocol::kValueRequestChromeDesktopReport;
     case DeviceManagementService::JobConfiguration::
@@ -80,7 +83,7 @@ const char* JobTypeToRequestType(
       return dm_protocol::kValueRequestPublicSamlUser;
     case DeviceManagementService::JobConfiguration::
         TYPE_UPLOAD_REAL_TIME_REPORT:
-      NOTREACHED() << "Not a DMServer request type " << type;
+      NOTREACHED_IN_MIGRATION() << "Not a DMServer request type " << type;
       break;
     case DeviceManagementService::JobConfiguration::TYPE_CHROME_OS_USER_REPORT:
       return dm_protocol::kValueRequestChromeOsUserReport;
@@ -97,14 +100,17 @@ const char* JobTypeToRequestType(
       return dm_protocol::kValueBrowserUploadPublicKey;
     case DeviceManagementService::JobConfiguration::
         TYPE_UPLOAD_ENCRYPTED_REPORT:
-      NOTREACHED() << "Not a DMServer request type " << type;
+      NOTREACHED_IN_MIGRATION() << "Not a DMServer request type " << type;
       break;
     case DeviceManagementService::JobConfiguration::TYPE_UPLOAD_EUICC_INFO:
       return dm_protocol::kValueRequestUploadEuiccInfo;
     case DeviceManagementService::JobConfiguration::TYPE_CHROME_PROFILE_REPORT:
       return dm_protocol::kValueRequestChromeProfileReport;
+    case DeviceManagementService::JobConfiguration::
+        TYPE_UPLOAD_FM_REGISTRATION_TOKEN:
+      return dm_protocol::kValueRequestFmRegistrationTokenUpload;
   }
-  NOTREACHED() << "Invalid job type " << type;
+  NOTREACHED_IN_MIGRATION() << "Invalid job type " << type;
   return "";
 }
 
@@ -339,8 +345,8 @@ void DMServerJobConfiguration::OnURLLoadComplete(
   }
 
   if (callback_) {
-    std::move(callback_).Run(
-        DMServerJobResult{job, net_error, code, std::move(response)});
+    std::move(callback_).Run(DMServerJobResult{
+        job, net_error, code, response_code, std::move(response)});
   }
 }
 

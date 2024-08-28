@@ -412,9 +412,9 @@ bool TlsServerHandshaker::ExportKeyingMaterial(absl::string_view label,
   return ExportKeyingMaterialForLabel(label, context, result_len, result);
 }
 
-void TlsServerHandshaker::OnConnectionClosed(QuicErrorCode error,
-                                             ConnectionCloseSource source) {
-  TlsHandshaker::OnConnectionClosed(error, source);
+void TlsServerHandshaker::OnConnectionClosed(
+    const QuicConnectionCloseFrame& frame, ConnectionCloseSource source) {
+  TlsHandshaker::OnConnectionClosed(frame.quic_error_code, source);
 }
 
 ssl_early_data_reason_t TlsServerHandshaker::EarlyDataReason() const {
@@ -531,7 +531,10 @@ bool TlsServerHandshaker::ProcessTransportParameters(
     return false;
   }
 
-  ProcessAdditionalTransportParameters(client_params);
+  if (!ProcessAdditionalTransportParameters(client_params)) {
+    *error_details = "Failed to process additional transport parameters";
+    return false;
+  }
 
   return true;
 }
@@ -925,6 +928,8 @@ ssl_select_cert_result_t TlsServerHandshaker::EarlySelectCertCallback(
         client_hello, TLSEXT_TYPE_early_data, &unused_extension_bytes,
         &unused_extension_len);
 
+    int use_alps_new_codepoint = 0;
+
 #if BORINGSSL_API_VERSION >= 27
     if (GetQuicReloadableFlag(quic_gfe_allow_alps_new_codepoint)) {
       QUIC_RELOADABLE_FLAG_COUNT(quic_gfe_allow_alps_new_codepoint);
@@ -933,7 +938,6 @@ ssl_select_cert_result_t TlsServerHandshaker::EarlySelectCertCallback(
           client_hello, TLSEXT_TYPE_application_settings,
           &unused_extension_bytes, &unused_extension_len);
       // Make sure we use the right ALPS codepoint.
-      int use_alps_new_codepoint = 0;
       if (alps_new_codepoint_received_) {
         QUIC_CODE_COUNT(quic_gfe_alps_use_new_codepoint);
         use_alps_new_codepoint = 1;
@@ -942,6 +946,10 @@ ssl_select_cert_result_t TlsServerHandshaker::EarlySelectCertCallback(
       SSL_set_alps_use_new_codepoint(ssl(), use_alps_new_codepoint);
     }
 #endif  // BORINGSSL_API_VERSION
+
+    if (use_alps_new_codepoint == 0) {
+      QUIC_CODE_COUNT(quic_gfe_alps_use_old_codepoint);
+    }
   }
 
   // This callback is called very early by Boring SSL, most of the SSL_get_foo

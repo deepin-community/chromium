@@ -237,7 +237,7 @@ std::optional<TypographyToken> GetTypographyToken(
 views::ImageView* SetupChildImageView(views::FlexLayoutView* parent) {
   views::ImageView* image_view =
       parent->AddChildView(std::make_unique<views::ImageView>());
-  image_view->GetViewAccessibility().OverrideIsIgnored(true);
+  image_view->GetViewAccessibility().SetIsIgnored(true);
   image_view->SetCanProcessEventsWithinSubtree(false);
   image_view->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
   image_view->SetVisible(false);
@@ -259,7 +259,7 @@ views::Label* SetupChildLabelView(
   // Ignore labels for accessibility - the result accessible name is defined on
   // the whole result view.
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  label->GetViewAccessibility().OverrideIsIgnored(true);
+  label->GetViewAccessibility().SetIsIgnored(true);
   label->SetBackgroundColor(SK_ColorTRANSPARENT);
   label->SetAutoColorReadabilityEnabled(false);
   label->SetEnabledColorId(color_id);
@@ -331,7 +331,7 @@ views::ProgressBar* SetupChildProgressBarView(
     std::optional<double> lower_warning_limit) {
   views::ProgressBar* progress_bar_view =
       parent->AddChildView(std::make_unique<views::ProgressBar>());
-  progress_bar_view->GetViewAccessibility().OverrideIsIgnored(true);
+  progress_bar_view->GetViewAccessibility().SetIsIgnored(true);
   progress_bar_view->SetCanProcessEventsWithinSubtree(false);
   progress_bar_view->SetPreferredSize(
       gfx::Size(kProgressBarWidth, kProgressBarHeight));
@@ -363,7 +363,7 @@ SearchResultInlineIconView* SetupChildInlineIconView(
       parent->AddChildView(std::make_unique<SearchResultInlineIconView>(
           alterante_icon_and_text_styling));
   inline_icon_view->SetCanProcessEventsWithinSubtree(false);
-  inline_icon_view->GetViewAccessibility().OverrideIsIgnored(true);
+  inline_icon_view->GetViewAccessibility().SetIsIgnored(true);
   inline_icon_view->SetVisible(false);
   inline_icon_view->SetProperty(
       views::kFlexBehaviorKey,
@@ -464,11 +464,11 @@ SearchResultView::SearchResultView(
 
   icon_view_ = AddChildView(std::make_unique<MaskedImageView>());
   icon_view_->SetCanProcessEventsWithinSubtree(false);
-  icon_view_->GetViewAccessibility().OverrideIsIgnored(true);
+  icon_view_->GetViewAccessibility().SetIsIgnored(true);
 
   badge_icon_view_ = AddChildView(std::make_unique<views::ImageView>());
   badge_icon_view_->SetCanProcessEventsWithinSubtree(false);
-  badge_icon_view_->GetViewAccessibility().OverrideIsIgnored(true);
+  badge_icon_view_->GetViewAccessibility().SetIsIgnored(true);
 
   auto* actions_view =
       AddChildView(std::make_unique<SearchResultActionsView>(this));
@@ -511,6 +511,9 @@ SearchResultView::SearchResultView(
       views::kFlexBehaviorKey,
       views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToMinimum,
                                views::MaximumFlexSizeRule::kPreferred));
+
+  // TODO(crbug.com/40232718): See View::SetLayoutManagerUseConstrainedSpace
+  body_text_container_->SetLayoutManagerUseConstrainedSpace(false);
 
   title_and_details_container_ = body_text_container_->AddChildView(
       std::make_unique<views::FlexLayoutView>());
@@ -596,7 +599,7 @@ SearchResultView::SearchResultView(
       SearchResultTextItem::OverflowBehavior::kNoElide);
   result_text_separator_label_->SetText(
       l10n_util::GetStringUTF16(IDS_ASH_SEARCH_RESULT_SEPARATOR));
-  result_text_separator_label_->GetViewAccessibility().OverrideIsIgnored(true);
+  result_text_separator_label_->GetViewAccessibility().SetIsIgnored(true);
 
   details_container_ = title_and_details_container_->AddChildView(
       std::make_unique<views::FlexLayoutView>());
@@ -620,7 +623,7 @@ SearchResultView::SearchResultView(
       SearchResultTextItem::OverflowBehavior::kNoElide);
   rating_separator_label_->SetText(
       l10n_util::GetStringUTF16(IDS_ASH_SEARCH_RESULT_SEPARATOR));
-  rating_separator_label_->GetViewAccessibility().OverrideIsIgnored(true);
+  rating_separator_label_->GetViewAccessibility().SetIsIgnored(true);
 
   rating_ = SetupChildLabelView(
       title_and_details_container_, view_type_, LabelType::kDetails,
@@ -1301,7 +1304,8 @@ void SearchResultView::OnSelectedResultChanged() {
   }
 }
 
-gfx::Size SearchResultView::CalculatePreferredSize() const {
+gfx::Size SearchResultView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kPreferredWidth, PreferredHeight());
 }
 
@@ -1329,7 +1333,7 @@ gfx::Rect SearchResultView::GetIconBadgeViewBounds(
 }
 
 void SearchResultView::Layout(PassKey) {
-  // TODO(crbug/1311101) add test coverage for search result view layout.
+  // TODO(crbug.com/40220083) add test coverage for search result view layout.
   gfx::Rect rect(GetContentsBounds());
   if (rect.IsEmpty()) {
     return;
@@ -1387,7 +1391,10 @@ void SearchResultView::Layout(PassKey) {
 
         SetFlexBehaviorForTextContents(
             centered_text_bounds.width(),
-            result_text_separator_label_->GetPreferredSize().width(),
+            result_text_separator_label_
+                ->GetPreferredSize(views::SizeBounds(
+                    result_text_separator_label_->width(), {}))
+                .width(),
             non_elided_details_label_width_, title_container_,
             details_container_);
         break;
@@ -1444,6 +1451,11 @@ bool SearchResultView::OnKeyPressed(const ui::KeyEvent& event) {
       return true;
     case ui::VKEY_DELETE:
     case ui::VKEY_BROWSER_BACK:
+      if (!actions_view()->IsValidActionIndex(
+              SearchResultActionType::kRemove)) {
+        return false;
+      }
+
       // Allows alt+(back or delete) to trigger the 'remove result' dialog.
       OnSearchResultActionActivated(SearchResultActionType::kRemove);
       return true;
@@ -1507,10 +1519,6 @@ void SearchResultView::OnMouseExited(const ui::MouseEvent& event) {
   actions_view()->UpdateButtonsOnStateChanged();
 }
 
-void SearchResultView::VisibilityChanged(View* starting_from, bool is_visible) {
-  NotifyAccessibilityEvent(ax::mojom::Event::kLayoutComplete, true);
-}
-
 void SearchResultView::OnThemeChanged() {
   views::View::OnThemeChanged();
   UpdateIconAndBadgeIcon();
@@ -1522,7 +1530,7 @@ void SearchResultView::OnThemeChanged() {
 
 void SearchResultView::OnGestureEvent(ui::GestureEvent* event) {
   switch (event->type()) {
-    case ui::ET_GESTURE_LONG_PRESS:
+    case ui::EventType::kGestureLongPress:
       if (actions_view()->IsValidActionIndex(SearchResultActionType::kRemove)) {
         ScrollRectToVisible(GetLocalBounds());
         SetSelected(true, std::nullopt);

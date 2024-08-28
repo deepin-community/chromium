@@ -13,10 +13,10 @@
 #include "chrome/browser/screen_ai/screen_ai_install_state.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/crx_file/id_util.h"
-#include "components/services/screen_ai/public/cpp/utilities.h"
 #include "components/update_client/update_client_errors.h"
 #include "content/public/browser/browser_thread.h"
 #include "crypto/sha2.h"
+#include "services/screen_ai/public/cpp/utilities.h"
 
 using content::BrowserThread;
 
@@ -69,23 +69,8 @@ void ScreenAIComponentInstallerPolicy::ComponentReady(
   VLOG(1) << "Screen AI Component ready, version " << version.GetString()
           << " in " << install_dir.value();
 
-  // Verifying library availability requires I/O and hence a blocking thread.
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE,
-      {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce(&screen_ai::ScreenAIInstallState::VerifyLibraryAvailablity,
-                     install_dir),
-      base::BindOnce(
-          [](base::FilePath install_dir, bool library_available) {
-            auto* state = screen_ai::ScreenAIInstallState::GetInstance();
-            if (library_available) {
-              state->SetComponentFolder(install_dir);
-            } else {
-              state->SetState(
-                  screen_ai::ScreenAIInstallState::State::kDownloadFailed);
-            }
-          },
-          install_dir));
+  screen_ai::ScreenAIInstallState::GetInstance()->SetComponentFolder(
+      install_dir);
 }
 
 bool ScreenAIComponentInstallerPolicy::VerifyInstallation(
@@ -130,10 +115,6 @@ ScreenAIComponentInstallerPolicy::GetInstallerAttributes() const {
 
 // static
 void ScreenAIComponentInstallerPolicy::DeleteComponent() {
-  if (screen_ai::GetLatestComponentBinaryPath().empty()) {
-    return;
-  }
-
   base::DeletePathRecursively(screen_ai::GetComponentDir());
   screen_ai::ScreenAIInstallState::RecordComponentInstallationResult(
       /*install=*/false,
@@ -148,7 +129,7 @@ void ManageScreenAIComponentRegistration(ComponentUpdateService* cus,
   }
 
   // Clean up.
-  if (!screen_ai::GetLatestComponentBinaryPath().empty()) {
+  if (base::PathExists(screen_ai::GetComponentDir())) {
     ScreenAIComponentInstallerPolicy::DeleteComponent();
   }
 }

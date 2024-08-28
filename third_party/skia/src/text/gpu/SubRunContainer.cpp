@@ -24,6 +24,7 @@
 #include "include/core/SkTypes.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/private/SkColorData.h"
+#include "include/private/base/SkFloatingPoint.h"
 #include "include/private/base/SkOnce.h"
 #include "include/private/base/SkTArray.h"
 #include "include/private/base/SkTLogic.h"
@@ -509,7 +510,10 @@ std::optional<DrawableOpSubmitter> DrawableOpSubmitter::MakeFromBuffer(
         idsOrDrawables[i].fGlyphID = SkTo<SkGlyphID>(buffer.readInt());
     }
 
-    SkASSERT(buffer.isValid());
+    if (!buffer.isValid()) {
+        return std::nullopt;
+    }
+
     return DrawableOpSubmitter{strikeToSourceScale,
                                positions,
                                SkSpan(idsOrDrawables, glyphCount),
@@ -725,7 +729,7 @@ public:
               sk_sp<SkRefCnt> subRunStorage,
               const AtlasDrawDelegate& drawAtlas) const override {
         drawAtlas(this, drawOrigin, paint, std::move(subRunStorage),
-                  {/* isSDF = */false, fVertexFiller.isLCD()});
+                  {/* isSDF = */false, fVertexFiller.isLCD(), fVertexFiller.grMaskType()});
     }
 
     int unflattenSize() const override {
@@ -965,7 +969,7 @@ public:
               sk_sp<SkRefCnt> subRunStorage,
               const AtlasDrawDelegate& drawAtlas) const override {
         drawAtlas(this, drawOrigin, paint, std::move(subRunStorage),
-                  {/* isSDF = */false, fVertexFiller.isLCD()});
+                  {/* isSDF = */false, fVertexFiller.isLCD(), fVertexFiller.grMaskType()});
     }
 
 #if defined(SK_GANESH) || defined(SK_USE_LEGACY_GANESH_TEXT_APIS)
@@ -1075,13 +1079,11 @@ static std::tuple<AtlasTextOp::MaskType, uint32_t, bool> calculate_sdf_parameter
         bool isAntiAliased) {
     const GrColorInfo& colorInfo = sdc.colorInfo();
     const SkSurfaceProps& props = sdc.surfaceProps();
-    bool isBGR = SkPixelGeometryIsBGR(props.pixelGeometry());
-    bool isLCD = useLCDText && SkPixelGeometryIsH(props.pixelGeometry());
     using MT = AtlasTextOp::MaskType;
+    bool isLCD = useLCDText && props.pixelGeometry() != kUnknown_SkPixelGeometry;
     MT maskType = !isAntiAliased ? MT::kAliasedDistanceField
-                  : isLCD ? (isBGR ? MT::kLCDBGRDistanceField
-                                          : MT::kLCDDistanceField)
-                                 : MT::kGrayscaleDistanceField;
+                                 : isLCD ? MT::kLCDDistanceField
+                                         : MT::kGrayscaleDistanceField;
 
     bool useGammaCorrectDistanceTable = colorInfo.isLinearlyBlended();
     uint32_t DFGPFlags = drawMatrix.isSimilarity() ? kSimilarity_DistanceFieldEffectFlag : 0;
@@ -1091,8 +1093,11 @@ static std::tuple<AtlasTextOp::MaskType, uint32_t, bool> calculate_sdf_parameter
     DFGPFlags |= drawMatrix.hasPerspective() ? kPerspective_DistanceFieldEffectFlag : 0;
 
     if (isLCD) {
+        bool isBGR = SkPixelGeometryIsBGR(props.pixelGeometry());
+        bool isVertical = SkPixelGeometryIsV(props.pixelGeometry());
         DFGPFlags |= kUseLCD_DistanceFieldEffectFlag;
-        DFGPFlags |= MT::kLCDBGRDistanceField == maskType ? kBGR_DistanceFieldEffectFlag : 0;
+        DFGPFlags |= isBGR ? kBGR_DistanceFieldEffectFlag : 0;
+        DFGPFlags |= isVertical ? kPortrait_DistanceFieldEffectFlag : 0;
     }
     return {maskType, DFGPFlags, useGammaCorrectDistanceTable};
 }
@@ -1195,7 +1200,7 @@ public:
               sk_sp<SkRefCnt> subRunStorage,
               const AtlasDrawDelegate& drawAtlas) const override {
         drawAtlas(this, drawOrigin, paint, std::move(subRunStorage),
-                  {/* isSDF = */true, /* isLCD = */fUseLCDText});
+                  {/* isSDF = */true, /* isLCD = */fUseLCDText, skgpu::MaskFormat::kA8});
     }
 
 #if defined(SK_GANESH) || defined(SK_USE_LEGACY_GANESH_TEXT_APIS)
@@ -1349,7 +1354,6 @@ SubRunOwner SubRun::MakeFromBuffer(SkReadBuffer& buffer,
             DrawableSubRun::MakeFromBuffer,
     };
     int subRunTypeInt = buffer.readInt();
-    SkASSERT(kBad < subRunTypeInt && subRunTypeInt < kSubRunStreamTagCount);
     if (!buffer.validate(kBad < subRunTypeInt && subRunTypeInt < kSubRunStreamTagCount)) {
         return nullptr;
     }
@@ -1402,7 +1406,6 @@ SubRunContainerOwner SubRunContainer::MakeFromBufferInAlloc(SkReadBuffer& buffer
     SubRunContainerOwner container = alloc->makeUnique<SubRunContainer>(positionMatrix);
 
     int subRunCount = buffer.readInt();
-    SkASSERT(subRunCount > 0);
     if (!buffer.validate(subRunCount > 0)) { return nullptr; }
     for (int i = 0; i < subRunCount; ++i) {
         auto subRunOwner = SubRun::MakeFromBuffer(buffer, alloc, client);
@@ -1449,7 +1452,7 @@ prepare_for_SDFT_drawing(StrikeForGPU* strike,
     SkGlyphRect boundingRect = skglyph::empty_rect();
     StrikeMutationMonitor m{strike};
     for (const auto [glyphID, pos] : source) {
-        if (!SkScalarsAreFinite(pos.x(), pos.y())) {
+        if (!SkIsFinite(pos.x(), pos.y())) {
             continue;
         }
 
@@ -1503,7 +1506,7 @@ prepare_for_direct_mask_drawing(StrikeForGPU* strike,
     SkGlyphRect boundingRect = skglyph::empty_rect();
     StrikeMutationMonitor m{strike};
     for (auto [glyphID, pos] : source) {
-        if (!SkScalarsAreFinite(pos.x(), pos.y())) {
+        if (!SkIsFinite(pos.x(), pos.y())) {
             continue;
         }
 
@@ -1546,7 +1549,7 @@ prepare_for_mask_drawing(StrikeForGPU* strike,
     SkGlyphRect boundingRect = skglyph::empty_rect();
     StrikeMutationMonitor m{strike};
     for (auto [glyphID, pos] : source) {
-        if (!SkScalarsAreFinite(pos.x(), pos.y())) {
+        if (!SkIsFinite(pos.x(), pos.y())) {
             continue;
         }
 
@@ -1583,7 +1586,7 @@ prepare_for_path_drawing(StrikeForGPU* strike,
     int rejectedSize = 0;
     StrikeMutationMonitor m{strike};
     for (const auto [glyphID, pos] : source) {
-        if (!SkScalarsAreFinite(pos.x(), pos.y())) {
+        if (!SkIsFinite(pos.x(), pos.y())) {
             continue;
         }
 
@@ -1611,7 +1614,7 @@ std::tuple<SkZip<const SkGlyphID, const SkPoint>, SkZip<SkGlyphID, SkPoint>>
     int rejectedSize = 0;
     StrikeMutationMonitor m{strike};
     for (const auto [glyphID, pos] : source) {
-        if (!SkScalarsAreFinite(pos.x(), pos.y())) {
+        if (!SkIsFinite(pos.x(), pos.y())) {
             continue;
         }
 
@@ -1888,7 +1891,7 @@ SubRunContainerOwner SubRunContainer::MakeInAlloc(
                 SkPoint center = glyphRunList.sourceBounds().center();
                 SkScalar maxAreaScale = SkMatrixPriv::DifferentialAreaScale(creationMatrix, center);
                 SkScalar perspectiveFactor = 1;
-                if (SkScalarIsFinite(maxAreaScale) && !SkScalarNearlyZero(maxAreaScale)) {
+                if (SkIsFinite(maxAreaScale) && !SkScalarNearlyZero(maxAreaScale)) {
                     perspectiveFactor = SkScalarSqrt(maxAreaScale);
                 }
 

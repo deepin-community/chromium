@@ -67,7 +67,7 @@ class FakeConnectionToClient : public ConnectionToClient {
   void SetEventHandler(EventHandler* event_handler) override;
 
   std::unique_ptr<VideoStream> StartVideoStream(
-      const std::string& stream_name,
+      webrtc::ScreenId screen_id,
       std::unique_ptr<DesktopCapturer> desktop_capturer) override;
   std::unique_ptr<AudioStream> StartAudioStream(
       std::unique_ptr<AudioSource> audio_source) override;
@@ -106,7 +106,7 @@ class FakeConnectionToClient : public ConnectionToClient {
   ErrorCode disconnect_error() { return disconnect_error_; }
 
  private:
-  // TODO(crbug.com/1043325): Remove the requirement that ConnectionToClient
+  // TODO(crbug.com/40115219): Remove the requirement that ConnectionToClient
   // retains a pointer to the capturer if the relative pointer experiment is
   // a success.
   std::unique_ptr<DesktopCapturer> desktop_capturer_;
@@ -126,7 +126,7 @@ class FakeConnectionToClient : public ConnectionToClient {
   scoped_refptr<base::SingleThreadTaskRunner> video_encode_task_runner_;
 
   bool is_connected_ = true;
-  ErrorCode disconnect_error_ = OK;
+  ErrorCode disconnect_error_ = ErrorCode::OK;
 };
 
 }  // namespace remoting::protocol

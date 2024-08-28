@@ -33,11 +33,13 @@ class CORE_EXPORT ResponsivenessMetrics
 
     // The event creation time.
     base::TimeTicks start_time;
+    // The time when the original WebInputEvent was queued on main thread.
+    base::TimeTicks main_thread_queued_time;
+    // The time when commit was finished on compositor thread.
+    base::TimeTicks commit_finish_time;
     // The time when the first display update caused by the input event was
     // performed.
     base::TimeTicks end_time;
-    // The time when the original WebInputEvent was queued on main thread.
-    base::TimeTicks main_thread_queued_time;
   };
 
   // Wrapper class to store interactionId, interaction offset, and timestamps
@@ -144,6 +146,8 @@ class CORE_EXPORT ResponsivenessMetrics
 
   explicit ResponsivenessMetrics(WindowPerformance*);
   ~ResponsivenessMetrics();
+
+  void FlushAllEventsAtPageHidden();
 
   // Flush UKM timestamps of composition events for testing.
   void FlushAllEventsForTesting();
@@ -299,6 +303,12 @@ class CORE_EXPORT ResponsivenessMetrics
   // remove this attribute once PointerId for clicks correctly points to the
   // same value as its corresponding pointerdown and pointerup.
   std::optional<PointerId> last_pointer_id_;
+
+  // Indicate whether the last pointerup event had a paired pointerdown event
+  // or otherwise its related pointerdown event was optimized out. This is
+  // added only for the purpose of analyzing how often an orphan pointerup can
+  // come with click, and should be removed once the experiment is done.
+  bool is_last_pointerup_orphan_ = false;
 
   // Queued timestamp of current event being dispatched.
   base::TimeTicks current_interaction_event_queued_timestamp_;

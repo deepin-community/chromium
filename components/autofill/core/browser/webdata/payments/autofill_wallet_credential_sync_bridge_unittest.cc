@@ -437,7 +437,7 @@ TEST_F(AutofillWalletCredentialSyncBridgeTest,
 
 // Test to get all the server cvc data for a user which is filtered on the list
 // of `instrument_id` provided.
-TEST_F(AutofillWalletCredentialSyncBridgeTest, GetData) {
+TEST_F(AutofillWalletCredentialSyncBridgeTest, GetDataForCommit) {
   const ServerCvc server_cvc1 =
       ServerCvc(1, u"123", base::Time::UnixEpoch() + base::Milliseconds(25000));
   const ServerCvc server_cvc2 =
@@ -446,16 +446,9 @@ TEST_F(AutofillWalletCredentialSyncBridgeTest, GetData) {
   table()->AddServerCvc(server_cvc2);
 
   // Synchronously get data of `server_cvc1`.
-  std::vector<ServerCvc> server_cvc_from_get_data;
-  base::RunLoop loop;
-  bridge()->GetData(
-      {base::NumberToString(server_cvc1.instrument_id)},
-      base::BindLambdaForTesting([&](std::unique_ptr<syncer::DataBatch> batch) {
-        server_cvc_from_get_data =
-            ExtractServerCvcDataFromDataBatch(std::move(batch));
-        loop.Quit();
-      }));
-  loop.Run();
+  std::vector<ServerCvc> server_cvc_from_get_data =
+      ExtractServerCvcDataFromDataBatch(bridge()->GetDataForCommit(
+          {base::NumberToString(server_cvc1.instrument_id)}));
 
   EXPECT_THAT(server_cvc_from_get_data, testing::ElementsAre(server_cvc1));
 }
@@ -469,47 +462,11 @@ TEST_F(AutofillWalletCredentialSyncBridgeTest, GetAllDataForDebugging) {
   table()->AddServerCvc(server_cvc1);
   table()->AddServerCvc(server_cvc2);
 
-  std::vector<ServerCvc> server_cvc_from_get_all;
-  base::RunLoop loop;
-  bridge()->GetAllDataForDebugging(
-      base::BindLambdaForTesting([&](std::unique_ptr<syncer::DataBatch> batch) {
-        server_cvc_from_get_all =
-            ExtractServerCvcDataFromDataBatch(std::move(batch));
-        loop.Quit();
-      }));
-  loop.Run();
+  std::vector<ServerCvc> server_cvc_from_get_all =
+      ExtractServerCvcDataFromDataBatch(bridge()->GetAllDataForDebugging());
 
   EXPECT_THAT(server_cvc_from_get_all,
               testing::UnorderedElementsAre(server_cvc1, server_cvc2));
-}
-
-// Test to verify the deletion of the server cvc for the card with the `REMOVE`
-// change tag.
-TEST_F(AutofillWalletCredentialSyncBridgeTest,
-       DeletesServerCvcWhenCardDeleted) {
-  const CreditCard card1 = test::GetMaskedServerCard();
-  const CreditCard card2 = test::GetMaskedServerCard2();
-  const ServerCvc server_cvc1 =
-      ServerCvc{card1.instrument_id(), u"123",
-                base::Time::UnixEpoch() + base::Milliseconds(25000)};
-  const ServerCvc server_cvc2 =
-      ServerCvc{card2.instrument_id(), u"890",
-                base::Time::UnixEpoch() + base::Milliseconds(50000)};
-  table()->AddServerCvc(server_cvc1);
-  table()->AddServerCvc(server_cvc2);
-
-  EXPECT_CALL(mock_processor(), Delete).Times(1);
-  EXPECT_CALL(mock_processor(), Put).Times(0);
-  EXPECT_CALL(backend(), CommitChanges()).Times(0);
-  EXPECT_CALL(backend(),
-              NotifyOnAutofillChangedBySync(syncer::AUTOFILL_WALLET_CREDENTIAL))
-      .Times(0);
-
-  bridge()->CreditCardChanged(
-      CreditCardChange(CreditCardChange::REMOVE, card1.server_id(), card1));
-
-  EXPECT_THAT(GetAllServerCvcDataFromTable(),
-              testing::UnorderedElementsAre(server_cvc2));
 }
 
 // Test to verify the non deletion/updation of the server cvc for the card with

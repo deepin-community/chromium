@@ -4,31 +4,33 @@
 
 #include "content/browser/accessibility/browser_accessibility.h"
 
-#include <cstddef>
+#include <stddef.h>
+
 #include <iterator>
 
 #include "base/check.h"
 #include "base/containers/contains.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
-#include "content/browser/accessibility/web_ax_platform_tree_manager_delegate.h"
 #include "content/public/common/content_client.h"
-#include "third_party/blink/public/strings/grit/blink_accessibility_strings.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/ax_role_properties.h"
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/ax_tree_id.h"
-#include "ui/accessibility/platform/ax_unique_id.h"
+#include "ui/accessibility/platform/ax_platform.h"
+#include "ui/accessibility/platform/ax_platform_tree_manager_delegate.h"
 #include "ui/base/buildflags.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/strings/grit/auto_image_annotation_strings.h"
 #include "ui/strings/grit/ax_strings.h"
 
 namespace content {
@@ -46,10 +48,12 @@ constexpr int kDumpBrowserAccessibilityLeakNumObjects = 10000000;
 std::unique_ptr<BrowserAccessibility> BrowserAccessibility::Create(
     BrowserAccessibilityManager* manager,
     ui::AXNode* node) {
-  return std::unique_ptr<BrowserAccessibility>(
-      new BrowserAccessibility(manager, node));
+  return base::WrapUnique(new BrowserAccessibility(manager, node));
 }
 #endif  // !BUILDFLAG(HAS_PLATFORM_ACCESSIBILITY_SUPPORT)
+
+// static
+bool BrowserAccessibility::ignore_hovered_state_for_testing_ = false;
 
 // static
 BrowserAccessibility* BrowserAccessibility::FromAXPlatformNodeDelegate(
@@ -68,7 +72,7 @@ BrowserAccessibility::BrowserAccessibility(BrowserAccessibilityManager* manager,
 #if DCHECK_IS_ON()
   if (++browser_accessibility_count > kDumpBrowserAccessibilityLeakNumObjects &&
       !has_dumped_possible_leak) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     has_dumped_possible_leak = true;
   }
 #endif
@@ -250,8 +254,9 @@ BrowserAccessibility* BrowserAccessibility::PlatformDeepestFirstChild() const {
   if (IsLeaf())
     return nullptr;
   BrowserAccessibility* deepest_child = PlatformGetFirstChild();
-  while (!deepest_child->IsLeaf())
+  while (deepest_child && !deepest_child->IsLeaf()) {
     deepest_child = deepest_child->PlatformGetFirstChild();
+  }
   return deepest_child;
 }
 
@@ -261,8 +266,9 @@ BrowserAccessibility* BrowserAccessibility::PlatformDeepestLastChild() const {
   if (IsLeaf())
     return nullptr;
   BrowserAccessibility* deepest_child = PlatformGetLastChild();
-  while (!deepest_child->IsLeaf())
+  while (deepest_child && !deepest_child->IsLeaf()) {
     deepest_child = deepest_child->PlatformGetLastChild();
+  }
   return deepest_child;
 }
 
@@ -587,7 +593,7 @@ gfx::Rect BrowserAccessibility::GetInnerTextRangeBoundsRect(
     const ui::AXCoordinateSystem coordinate_system,
     const ui::AXClippingBehavior clipping_behavior,
     ui::AXOffscreenResult* offscreen_result) const {
-  const int text_length = GetTextContentUTF16().length();
+  const int text_length = GetTextContentLengthUTF16();
   if (start_offset < 0 || end_offset > text_length || start_offset > end_offset)
     return gfx::Rect();
 
@@ -616,7 +622,7 @@ gfx::Rect BrowserAccessibility::GetInnerTextRangeBoundsRectInSubtree(
        it != InternalChildrenEnd(); ++it) {
     const BrowserAccessibility* browser_accessibility_child = it.get();
     const int child_text_length =
-        browser_accessibility_child->GetTextContentUTF16().length();
+        browser_accessibility_child->GetTextContentLengthUTF16();
 
     // The text bounds queried are not in this subtree; skip it and continue.
     const int child_start_offset =
@@ -656,9 +662,9 @@ gfx::RectF BrowserAccessibility::GetTextContentRangeBoundsUTF16(
 
 BrowserAccessibility* BrowserAccessibility::ApproximateHitTest(
     const gfx::Point& blink_screen_point) {
-  // TODO(crbug.com/1049261): This is one of the few methods that won't be moved
-  // to `AXNode` in the foreseeable future because the functionality it provides
-  // is not immediately needed in Views.
+  // TODO(crbug.com/40672441): This is one of the few methods that won't be
+  // moved to `AXNode` in the foreseeable future because the functionality it
+  // provides is not immediately needed in Views.
 
   // The best result found that's a child of this object.
   BrowserAccessibility* child_result = nullptr;
@@ -747,9 +753,9 @@ gfx::Rect BrowserAccessibility::RelativeToAbsoluteBounds(
     const ui::AXCoordinateSystem coordinate_system,
     const ui::AXClippingBehavior clipping_behavior,
     ui::AXOffscreenResult* offscreen_result) const {
-  // TODO(crbug.com/1049261): This is one of the few methods that won't be moved
-  // to `AXNode` in the foreseeable future because the functionality it provides
-  // is not immediately needed in Views.
+  // TODO(crbug.com/40672441): This is one of the few methods that won't be
+  // moved to `AXNode` in the foreseeable future because the functionality it
+  // provides is not immediately needed in Views.
 
   const bool clip_bounds =
       clipping_behavior == ui::AXClippingBehavior::kClipped;
@@ -792,7 +798,7 @@ gfx::Rect BrowserAccessibility::RelativeToAbsoluteBounds(
     // node of the AXTree. That transform gets applied by the call to
     // RelativeToTreeBounds() in the loop above. However, if the root transform
     // did not include page scale factor, we need to apply it now.
-    // TODO(crbug.com/1074116): this should probably apply visual viewport
+    // TODO(crbug.com/40686662): this should probably apply visual viewport
     // offset as well.
     bool should_include_page_scale_factor_in_root = false;
     #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC)
@@ -830,10 +836,11 @@ bool BrowserAccessibility::IsWebContent() const {
 bool BrowserAccessibility::HasVisibleCaretOrSelection() const {
   // The caret should be visible if Caret Browsing is enabled.
   //
-  // TODO(crbug.com/1052091): Caret Browsing should be looking at leaf text
+  // TODO(crbug.com/40674120): Caret Browsing should be looking at leaf text
   // nodes so it might not return expected results in this method.
-  if (BrowserAccessibilityStateImpl::GetInstance()->IsCaretBrowsingEnabled())
+  if (ui::AXPlatform::GetInstance().IsCaretBrowsingEnabled()) {
     return true;
+  }
   return node()->HasVisibleCaretOrSelection();
 }
 
@@ -855,10 +862,13 @@ BrowserAccessibility::GetSourceNodesForReverseRelations(
       manager_->ax_tree()->GetReverseRelations(attr, GetData().id));
 }
 
-const ui::AXUniqueId& BrowserAccessibility::GetUniqueId() const {
+ui::AXPlatformNodeId BrowserAccessibility::GetUniqueId() const {
   // This is not the same as GetData().id which comes from Blink, because
   // those ids are only unique within the Blink process. We need one that is
-  // unique for the browser process.
+  // unique per OS window.
+  // For example, Windows ATs use this to retrieve IA2 event targets for events
+  // that are fired on an OS-level window with an id. They also use it to
+  // save positions via IAccessible2::get_uniqueID().
   return unique_id_;
 }
 
@@ -877,9 +887,14 @@ std::string BrowserAccessibility::SubtreeToStringHelper(size_t level) {
   return result;
 }
 
+// TODO(crbug.com/337737555): This extra hop seems redundant, but
+// unintuitively, this is the only override of NotifyAccessibilityApiUsage, so
+// the the other inheritors of AXPlatformNodeDelegate don't actually ever send
+// this notification. But, if this was refactored to be directly called, we end
+// up failing bots due to the fact that this can be called by our own API usage,
+// which is tracked by the linked bug.
 void BrowserAccessibility::NotifyAccessibilityApiUsage() const {
-  content::BrowserAccessibilityStateImpl::GetInstance()
-      ->OnAccessibilityApiUsage();
+  ui::AXPlatform::GetInstance().NotifyAccessibilityApiUsage();
 }
 
 const std::vector<gfx::NativeViewAccessible>
@@ -888,7 +903,7 @@ BrowserAccessibility::GetUIADirectChildrenInRange(
     ui::AXPlatformNodeDelegate* end) {
   // This method is only called on Windows. Other platforms should not call it.
   // The BrowserAccessibilityWin subclass overrides this method.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -901,7 +916,7 @@ gfx::NativeViewAccessible BrowserAccessibility::GetParent() const {
   if (parent)
     return parent->GetNativeViewAccessible();
 
-  WebAXPlatformTreeManagerDelegate* delegate =
+  ui::AXPlatformTreeManagerDelegate* delegate =
       manager_->GetDelegateFromRootManager();
   if (!delegate)
     return nullptr;
@@ -1140,7 +1155,7 @@ std::optional<size_t> BrowserAccessibility::GetIndexInParent() const {
 
 gfx::AcceleratedWidget
 BrowserAccessibility::GetTargetForNativeAccessibilityEvent() {
-  WebAXPlatformTreeManagerDelegate* root_delegate =
+  ui::AXPlatformTreeManagerDelegate* root_delegate =
       manager()->GetDelegateFromRootManager();
   if (!root_delegate)
     return gfx::kNullAcceleratedWidget;
@@ -1158,7 +1173,7 @@ ui::AXPlatformNode* BrowserAccessibility::GetTableCaption() const {
 
 bool BrowserAccessibility::AccessibilityPerformAction(
     const ui::AXActionData& data) {
-  // TODO(crbug.com/1049261): Move the ability to perform actions to
+  // TODO(crbug.com/40672441): Move the ability to perform actions to
   // `AXTreeManager`.
   switch (data.action) {
     case ax::mojom::Action::kDoDefault:
@@ -1264,7 +1279,6 @@ bool BrowserAccessibility::AccessibilityPerformAction(
     case ax::mojom::Action::kStitchChildTree:
       CHECK_NE(data.target_tree_id, ui::AXTreeIDUnknown());
       CHECK_EQ(data.target_tree_id, manager()->GetTreeID());
-      CHECK_NE(data.target_node_id, ui::kInvalidAXNodeID);
       CHECK_EQ(data.target_node_id, node()->id());
       CHECK_NE(data.child_tree_id, ui::AXTreeIDUnknown());
       CHECK_NE(data.child_tree_id, manager()->GetTreeID())
@@ -1299,11 +1313,11 @@ bool BrowserAccessibility::AccessibilityPerformAction(
 
 std::u16string BrowserAccessibility::GetLocalizedStringForImageAnnotationStatus(
     ax::mojom::ImageAnnotationStatus status) const {
-  // TODO(crbug.com/1049261): This is one of the few methods that won't be moved
-  // to `AXNode` in the foreseeable future because the functionality it provides
-  // is not immediately needed in Views.
+  // TODO(crbug.com/40672441): This is one of the few methods that won't be
+  // moved to `AXNode` in the foreseeable future because the functionality it
+  // provides is not immediately needed in Views.
 
-  ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   int message_id = 0;
   switch (status) {
@@ -1335,11 +1349,11 @@ std::u16string BrowserAccessibility::GetLocalizedStringForImageAnnotationStatus(
 
 std::u16string
 BrowserAccessibility::GetLocalizedRoleDescriptionForUnlabeledImage() const {
-  // TODO(crbug.com/1049261): This is one of the few methods that won't be moved
-  // to `AXNode` in the foreseeable future because the functionality it provides
-  // is not immediately needed in Views.
+  // TODO(crbug.com/40672441): This is one of the few methods that won't be
+  // moved to `AXNode` in the foreseeable future because the functionality it
+  // provides is not immediately needed in Views.
 
-  ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
   return content_client->GetLocalizedString(
       IDS_AX_UNLABELED_IMAGE_ROLE_DESCRIPTION);
 }
@@ -1347,7 +1361,7 @@ BrowserAccessibility::GetLocalizedRoleDescriptionForUnlabeledImage() const {
 std::u16string BrowserAccessibility::GetLocalizedStringForLandmarkType() const {
   // This method is Web specific and thus cannot be move to `AXNode`.
 
-  ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   switch (GetRole()) {
     case ax::mojom::Role::kBanner:
@@ -1374,7 +1388,7 @@ std::u16string BrowserAccessibility::GetLocalizedStringForRoleDescription()
   // TODO(nektar): Move this method to `AXNode` if possible.
 
   // Localized role description strings live in ui/strings/ax_strings.grd
-  ContentClient* content_client = content::GetContentClient();
+  ContentClient* content_client = GetContentClient();
 
   switch (GetRole()) {
     // Things which should never have a role description.
@@ -1406,6 +1420,7 @@ std::u16string BrowserAccessibility::GetLocalizedStringForRoleDescription()
     case ax::mojom::Role::kComboBoxMenuButton:
     case ax::mojom::Role::kDesktop:
     case ax::mojom::Role::kFigcaption:
+    case ax::mojom::Role::kGridCell:
     case ax::mojom::Role::kGroup:
     case ax::mojom::Role::kIframe:
     case ax::mojom::Role::kLegend:
@@ -1574,7 +1589,7 @@ std::u16string BrowserAccessibility::GetLocalizedStringForRoleDescription()
     case ax::mojom::Role::kColumnHeader:
       return content_client->GetLocalizedString(IDS_AX_ROLE_COLUMN_HEADER);
     case ax::mojom::Role::kComboBoxSelect:
-      // TODO(crbug.com/1362834): This is used for Mac AXRoleDescription. This
+      // TODO(crbug.com/40864556): This is used for Mac AXRoleDescription. This
       // should be changed at the same time we map this role to
       // NSAccessibilityComboBoxRole.
       return content_client->GetLocalizedString(IDS_AX_ROLE_POP_UP_BUTTON);
@@ -1609,16 +1624,10 @@ std::u16string BrowserAccessibility::GetLocalizedStringForRoleDescription()
       return content_client->GetLocalizedString(IDS_AX_ROLE_DEFINITION);
     case ax::mojom::Role::kDescriptionList:
       return content_client->GetLocalizedString(IDS_AX_ROLE_DESCRIPTION_LIST);
-    case ax::mojom::Role::kDescriptionListDetail:
-      return content_client->GetLocalizedString(IDS_AX_ROLE_DEFINITION);
-    case ax::mojom::Role::kDescriptionListTerm:
-      return content_client->GetLocalizedString(IDS_AX_ROLE_DESCRIPTION_TERM);
     case ax::mojom::Role::kDetails:
       return content_client->GetLocalizedString(IDS_AX_ROLE_DETAILS);
     case ax::mojom::Role::kDialog:
       return content_client->GetLocalizedString(IDS_AX_ROLE_DIALOG);
-    case ax::mojom::Role::kDirectory:
-      return content_client->GetLocalizedString(IDS_AX_ROLE_DIRECTORY);
     case ax::mojom::Role::kDisclosureTriangle:
     case ax::mojom::Role::kDisclosureTriangleGrouped:
       return content_client->GetLocalizedString(
@@ -1689,8 +1698,6 @@ std::u16string BrowserAccessibility::GetLocalizedStringForRoleDescription()
       return content_client->GetLocalizedString(IDS_AX_ROLE_EMBEDDED_OBJECT);
     case ax::mojom::Role::kPopUpButton:
       return content_client->GetLocalizedString(IDS_AX_ROLE_POP_UP_BUTTON);
-    case ax::mojom::Role::kPortal:
-      return {};
     case ax::mojom::Role::kProgressIndicator:
       return content_client->GetLocalizedString(IDS_AX_ROLE_PROGRESS_INDICATOR);
     case ax::mojom::Role::kRadioButton:
@@ -1713,6 +1720,7 @@ std::u16string BrowserAccessibility::GetLocalizedStringForRoleDescription()
     case ax::mojom::Role::kSearchBox:
       return content_client->GetLocalizedString(IDS_AX_ROLE_SEARCH_BOX);
     case ax::mojom::Role::kSection:
+    case ax::mojom::Role::kSectionWithoutName:
       // While there is an IDS_AX_ROLE_SECTION, no one seems to be using it.
       return {};
     case ax::mojom::Role::kSlider:
@@ -1778,7 +1786,11 @@ std::u16string BrowserAccessibility::GetLocalizedStringForRoleDescription()
     case ax::mojom::Role::kVideo:
       // Android returns IDS_AX_MEDIA_VIDEO_ELEMENT.
       return {};
+    case ax::mojom::Role::kDescriptionListTermDeprecated:
     case ax::mojom::Role::kPreDeprecated:
+    case ax::mojom::Role::kPortalDeprecated:
+    case ax::mojom::Role::kDescriptionListDetailDeprecated:
+    case ax::mojom::Role::kDirectoryDeprecated:
       NOTREACHED_NORETURN();
   }
 }
@@ -1789,7 +1801,7 @@ std::u16string BrowserAccessibility::GetStyleNameAttributeAsLocalizedString()
   const BrowserAccessibility* current_node = this;
   while (current_node) {
     if (current_node->GetRole() == ax::mojom::Role::kMark) {
-      ContentClient* content_client = content::GetContentClient();
+      ContentClient* content_client = GetContentClient();
       return content_client->GetLocalizedString(IDS_AX_ROLE_MARK);
     }
     current_node = current_node->PlatformGetParent();
@@ -1798,9 +1810,7 @@ std::u16string BrowserAccessibility::GetStyleNameAttributeAsLocalizedString()
 }
 
 bool BrowserAccessibility::ShouldIgnoreHoveredStateForTesting() {
-  BrowserAccessibilityStateImpl* accessibility_state =
-      BrowserAccessibilityStateImpl::GetInstance();
-  return accessibility_state->disable_hot_tracking_for_testing();
+  return ignore_hovered_state_for_testing_;
 }
 
 std::optional<int> BrowserAccessibility::GetPosInSet() const {
@@ -1859,9 +1869,9 @@ ui::TextAttributeList BrowserAccessibility::ComputeTextAttributes() const {
 
 ui::TextAttributeMap BrowserAccessibility::GetSpellingAndGrammarAttributes()
     const {
-  // TODO(crbug.com/1049261): This is one of the few methods that won't be moved
-  // to `AXNode` in the foreseeable future because the functionality it provides
-  // is not immediately needed in Views.
+  // TODO(crbug.com/40672441): This is one of the few methods that won't be
+  // moved to `AXNode` in the foreseeable future because the functionality it
+  // provides is not immediately needed in Views.
 
   ui::TextAttributeMap spelling_attributes;
   if (IsText()) {
@@ -1945,7 +1955,7 @@ void BrowserAccessibility::MergeSpellingAndGrammarIntoTextAttributes(
     int start_offset,
     ui::TextAttributeMap* text_attributes) {
   if (!text_attributes) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 
@@ -1976,9 +1986,9 @@ void BrowserAccessibility::MergeSpellingAndGrammarIntoTextAttributes(
 
 ui::TextAttributeMap BrowserAccessibility::ComputeTextAttributeMap(
     const ui::TextAttributeList& default_attributes) const {
-  // TODO(crbug.com/1049261): This is one of the few methods that won't be moved
-  // to `AXNode` in the foreseeable future because the functionality it provides
-  // is not immediately needed in Views.
+  // TODO(crbug.com/40672441): This is one of the few methods that won't be
+  // moved to `AXNode` in the foreseeable future because the functionality it
+  // provides is not immediately needed in Views.
 
   ui::TextAttributeMap attributes_map;
   if (IsLeaf()) {

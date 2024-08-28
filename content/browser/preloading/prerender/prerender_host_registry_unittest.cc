@@ -9,6 +9,7 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "content/browser/preloading/preloading.h"
+#include "content/browser/preloading/preloading_confidence.h"
 #include "content/browser/preloading/preloading_config.h"
 #include "content/browser/preloading/prerender/prerender_features.h"
 #include "content/browser/preloading/prerender/prerender_final_status.h"
@@ -146,15 +147,15 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
     std::move(setup_callback).Run(navigation.get());
     navigation->Start();
     NavigationRequest* navigation_request = navigation->GetNavigationHandle();
-    // Use is_potentially_prerendered_page_activation_for_testing() instead of
+    // Use is_running_potential_prerender_activation_checks() instead of
     // IsPrerenderedPageActivation() because the NavigationSimulator does not
     // proceed past CommitDeferringConditions on potential activations,
     // so IsPrerenderedPageActivation() will fail with a CHECK because
     // prerender_frame_tree_node_id_ is not populated.
-    // TODO(https://crbug.com/1239220): Fix NavigationSimulator to wait for
+    // TODO(crbug.com/40784651): Fix NavigationSimulator to wait for
     // commit deferring conditions as it does throttles.
     return navigation_request
-        ->is_potentially_prerendered_page_activation_for_testing();
+        ->is_running_potential_prerender_activation_checks();
   }
 
   // Helper method to perform a prerender activation that includes specialized
@@ -198,17 +199,21 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
         return PrerenderAttributes(
             url, trigger_type, embedder_histogram_suffix,
             blink::mojom::SpeculationTargetHint::kNoHint, Referrer(), eagerness,
+            /*no_vary_search_expected=*/std::nullopt,
             rfh->GetLastCommittedOrigin(), rfh->GetProcess()->GetID(),
             contents()->GetWeakPtr(), rfh->GetFrameToken(),
             rfh->GetFrameTreeNodeId(), rfh->GetPageUkmSourceId(),
             ui::PAGE_TRANSITION_LINK,
-            /*url_match_predicate=*/std::nullopt,
-            /*prerender_navigation_handle_callback=*/std::nullopt);
+            /*should_warm_up_compositor=*/false,
+            /*url_match_predicate=*/{},
+            /*prerender_navigation_handle_callback=*/{});
       case PreloadingTriggerType::kEmbedder:
         return PrerenderAttributes(
             url, trigger_type, embedder_histogram_suffix,
             /*target_hint=*/std::nullopt, Referrer(),
-            /*eagerness=*/std::nullopt, /*initiator_origin=*/std::nullopt,
+            /*eagerness=*/std::nullopt,
+            /*no_vary_search_expected=*/std::nullopt,
+            /*initiator_origin=*/std::nullopt,
             /*initiator_process_id=*/ChildProcessHost::kInvalidUniqueID,
             contents()->GetWeakPtr(),
             /*initiator_frame_token=*/std::nullopt,
@@ -217,8 +222,9 @@ class PrerenderHostRegistryTest : public RenderViewHostImplTestHarness {
             /*initiator_ukm_id=*/ukm::kInvalidSourceId,
             ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
                                       ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
-            /*url_match_predicate=*/std::nullopt,
-            /*prerender_navigation_handle_callback=*/std::nullopt);
+            /*should_warm_up_compositor=*/false,
+            /*url_match_predicate=*/{},
+            /*prerender_navigation_handle_callback=*/{});
     }
   }
 
@@ -340,6 +346,7 @@ TEST_F(PrerenderHostRegistryTest, CreateAndStartHost_PreloadingConfigHoldback) {
   PreloadingAttempt* preloading_attempt = preloading_data->AddPreloadingAttempt(
       content_preloading_predictor::kSpeculationRules,
       PreloadingType::kPrerender, std::move(same_url_matcher),
+      /*planned_max_preloading_type=*/std::nullopt,
       contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
   const int prerender_frame_tree_node_id = registry().CreateAndStartHost(
       GeneratePrerenderAttributes(kPrerenderingUrl,
@@ -359,6 +366,7 @@ TEST_F(PrerenderHostRegistryTest,
   PreloadingAttempt* preloading_attempt = preloading_data->AddPreloadingAttempt(
       content_preloading_predictor::kSpeculationRules,
       PreloadingType::kPrerender, std::move(same_url_matcher),
+      /*planned_max_preloading_type=*/std::nullopt,
       contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
 
   auto attributes = GeneratePrerenderAttributes(
@@ -385,6 +393,7 @@ TEST_F(PrerenderHostRegistryTest, CreateAndStartHost_HoldbackOverride_Allowed) {
   PreloadingAttempt* preloading_attempt = preloading_data->AddPreloadingAttempt(
       content_preloading_predictor::kSpeculationRules,
       PreloadingType::kPrerender, std::move(same_url_matcher),
+      /*planned_max_preloading_type=*/std::nullopt,
       contents()->GetPrimaryMainFrame()->GetPageUkmSourceId());
 
   auto attributes = GeneratePrerenderAttributes(
@@ -664,10 +673,33 @@ class PrerenderHostRegistryNewLimitAndSchedulerTest
       }
     }();
 
+    PreloadingPredictor embedder_predictor(100, "Embedder");
+
+    PreloadingPredictor creating_predictor = [&] {
+      switch (limit_group) {
+        case PrerenderLimitGroup::kSpeculationRulesEager:
+        case PrerenderLimitGroup::kSpeculationRulesNonEager:
+          return content_preloading_predictor::kSpeculationRules;
+        case PrerenderLimitGroup::kEmbedder:
+          return embedder_predictor;
+      }
+    }();
+    PreloadingPredictor enacting_predictor = [&] {
+      switch (limit_group) {
+        case PrerenderLimitGroup::kSpeculationRulesEager:
+          return content_preloading_predictor::kSpeculationRules;
+        case PrerenderLimitGroup::kSpeculationRulesNonEager:
+          // Arbitrarily chosen non-eager predictor.
+          return preloading_predictor::kUrlPointerDownOnAnchor;
+        case PrerenderLimitGroup::kEmbedder:
+          return embedder_predictor;
+      }
+    }();
+
     return IsNewTabTrigger(limit_group)
                ? registry().CreateAndStartHostForNewTab(
-                     prerender_attributes,
-                     content_preloading_predictor::kSpeculationRules)
+                     prerender_attributes, creating_predictor,
+                     enacting_predictor, PreloadingConfidence{100})
                : registry().CreateAndStartHost(prerender_attributes);
   }
 

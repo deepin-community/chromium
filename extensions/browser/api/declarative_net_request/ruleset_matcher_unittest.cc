@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "extensions/browser/api/declarative_net_request/ruleset_matcher.h"
 
 #include <limits>
@@ -12,10 +17,12 @@
 #include "base/check.h"
 #include "base/files/file_util.h"
 #include "base/format_macros.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/url_pattern_index/flat/url_pattern_index_generated.h"
+#include "components/version_info/channel.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_navigation_handle.h"
@@ -33,6 +40,7 @@
 #include "extensions/common/api/declarative_net_request/constants.h"
 #include "extensions/common/api/declarative_net_request/test_utils.h"
 #include "extensions/common/extension_features.h"
+#include "extensions/common/features/feature_channel.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -46,13 +54,6 @@ namespace {
 namespace dnr_api = api::declarative_net_request;
 
 using RulesetMatcherTest = ExtensionsTest;
-
-RequestParams CreateRequestWithResponseHeaders(
-    const GURL& url,
-    const net::HttpResponseHeaders* headers) {
-  return RequestParams(url, url::Origin(), dnr_api::ResourceType::kSubFrame,
-                       dnr_api::RequestMethod::kGet, -1, headers);
-}
 
 // Tests a simple blocking rule.
 TEST_F(RulesetMatcherTest, BlockingRule) {
@@ -235,7 +236,8 @@ TEST_F(RulesetMatcherTest, ModifyHeaders) {
   params.is_third_party = true;
 
   std::vector<RequestAction> modify_header_actions =
-      matcher->GetModifyHeadersActions(params, 0u /* min_priority */);
+      matcher->GetModifyHeadersActions(
+          params, RulesetMatchingStage::kOnBeforeRequest, /*min_priority=*/0u);
 
   RequestAction expected_rule_1_action = CreateRequestActionForTesting(
       RequestAction::Type::MODIFY_HEADERS, *rule_1.id, *rule_1.priority);
@@ -609,7 +611,9 @@ TEST_F(RulesetMatcherTest, RegexRules) {
         matcher->GetAction(params, RulesetMatchingStage::kOnBeforeRequest));
 
     std::vector<RequestAction> modify_header_actions =
-        matcher->GetModifyHeadersActions(params, 0u /* min_priority */);
+        matcher->GetModifyHeadersActions(params,
+                                         RulesetMatchingStage::kOnBeforeRequest,
+                                         /*min_priority=*/0u);
 
     if (test_case.expected_modify_header_action) {
       EXPECT_THAT(modify_header_actions,
@@ -998,7 +1002,10 @@ TEST_F(RulesetMatcherTest, RegexAndFilterListRules_ModifyHeaders) {
     RequestParams params;
     params.url = &url;
 
-    EXPECT_TRUE(matcher->GetModifyHeadersActions(params, 0u /* min_priority */)
+    EXPECT_TRUE(matcher
+                    ->GetModifyHeadersActions(
+                        params, RulesetMatchingStage::kOnBeforeRequest,
+                        /*min_priority=*/0u)
                     .empty());
   }
 
@@ -1008,8 +1015,8 @@ TEST_F(RulesetMatcherTest, RegexAndFilterListRules_ModifyHeaders) {
     RequestParams params;
     params.url = &url;
 
-    std::vector<RequestAction> actions =
-        matcher->GetModifyHeadersActions(params, 0u /* min_priority */);
+    std::vector<RequestAction> actions = matcher->GetModifyHeadersActions(
+        params, RulesetMatchingStage::kOnBeforeRequest, /*min_priority=*/0u);
     EXPECT_THAT(actions, testing::UnorderedElementsAre(
                              testing::Eq(testing::ByRef(action_1))));
   }
@@ -1020,8 +1027,8 @@ TEST_F(RulesetMatcherTest, RegexAndFilterListRules_ModifyHeaders) {
     RequestParams params;
     params.url = &url;
 
-    std::vector<RequestAction> actions =
-        matcher->GetModifyHeadersActions(params, 0u /* min_priority */);
+    std::vector<RequestAction> actions = matcher->GetModifyHeadersActions(
+        params, RulesetMatchingStage::kOnBeforeRequest, /*min_priority=*/0u);
     EXPECT_THAT(actions, testing::UnorderedElementsAre(
                              testing::Eq(testing::ByRef(action_2))));
   }
@@ -1033,19 +1040,19 @@ TEST_F(RulesetMatcherTest, RegexAndFilterListRules_ModifyHeaders) {
     RequestParams params;
     params.url = &url;
 
-    std::vector<RequestAction> actions =
-        matcher->GetModifyHeadersActions(params, 0u /* min_priority */);
+    std::vector<RequestAction> actions = matcher->GetModifyHeadersActions(
+        params, RulesetMatchingStage::kOnBeforeRequest, /*min_priority=*/0u);
     EXPECT_THAT(actions, testing::UnorderedElementsAre(
                              testing::Eq(testing::ByRef(action_1)),
                              testing::Eq(testing::ByRef(action_2))));
 
     // GetModifyHeadersActions specifies a minimum priority greater than the
     // rules' priority, so no actions should be returned.
-    EXPECT_TRUE(
-        matcher
-            ->GetModifyHeadersActions(
-                params, std::numeric_limits<uint64_t>::max() /* min_priority */)
-            .empty());
+    EXPECT_TRUE(matcher
+                    ->GetModifyHeadersActions(
+                        params, RulesetMatchingStage::kOnBeforeRequest,
+                        /*min_priority=*/std::numeric_limits<uint64_t>::max())
+                    .empty());
   }
 }
 
@@ -1138,7 +1145,7 @@ TEST_F(RulesetMatcherTest, RulesCount) {
   for (size_t i = 0; i < kNumNonRegexRules; ++i, ++id) {
     TestRule rule = CreateGenericRule();
     rule.id = id;
-    rule.condition->url_filter = std::to_string(id);
+    rule.condition->url_filter = base::NumberToString(id);
     if (i < kNumUnsafeNonRegexRules) {
       rule.action->type = "redirect";
       rule.action->redirect.emplace();
@@ -1151,7 +1158,7 @@ TEST_F(RulesetMatcherTest, RulesCount) {
     TestRule rule = CreateGenericRule();
     rule.id = id;
     rule.condition->url_filter.reset();
-    rule.condition->regex_filter = std::to_string(id);
+    rule.condition->regex_filter = base::NumberToString(id);
     if (i < kNumUnsafeRegexRules) {
       rule.action->type = std::string("modifyHeaders");
       rule.action->response_headers = std::vector<TestHeaderInfo>(
@@ -1503,7 +1510,11 @@ class RulesetMatcherResponseHeadersTest : public RulesetMatcherTest {
   }
 
  private:
+  // TODO(crbug.com/40727004): Once feature is launched to stable and feature
+  // flag can be removed, replace usages of this test class with just
+  // DeclarativeNetRequestBrowserTest.
   base::test::ScopedFeatureList scoped_feature_list_;
+  ScopedCurrentChannel current_channel_override_{version_info::Channel::DEV};
 };
 
 // Test that GetOnHeadersReceivedAction only matches rules with response header
@@ -1539,6 +1550,11 @@ TEST_F(RulesetMatcherResponseHeadersTest, OnHeadersReceivedAction) {
       CreateVerifiedMatcher({before_request_rule, response_headers_rule},
                             CreateTemporarySource(), &matcher));
   ASSERT_TRUE(matcher);
+
+  EXPECT_EQ(2u, matcher->GetRulesCount());
+  EXPECT_EQ(1u, matcher->GetRulesCount(RulesetMatchingStage::kOnBeforeRequest));
+  EXPECT_EQ(1u,
+            matcher->GetRulesCount(RulesetMatchingStage::kOnHeadersReceived));
 
   // The request should be blocked if matched with `before_request_rule`.
   RequestAction expected_before_request_action =
@@ -1675,7 +1691,7 @@ TEST_F(RulesetMatcherResponseHeadersTest, OnHeadersReceivedAction_Regex) {
 TEST_F(RulesetMatcherResponseHeadersTest, MatchOnResponseHeaders) {
   std::vector<TestHeaderCondition> header_condition(
       {TestHeaderCondition("key1", {}, {}),
-       TestHeaderCondition("key2", {"value1", "value2"}, {"excludedValue"})});
+       TestHeaderCondition("key2", {"Value1", "value2"}, {"excludedValue"})});
 
   // `rule_1` will match if:
   //   - the key1 header is present, or:
@@ -1702,9 +1718,17 @@ TEST_F(RulesetMatcherResponseHeadersTest, MatchOnResponseHeaders) {
           {TestHeaderCondition("key3", {"excludedValue"}, {}),
            TestHeaderCondition("key4", {}, {"allowlistedValue"})});
 
+  // `rule_3` will match if
+  //   - the content-type header specifies a PDF
+  TestRule rule_3 = CreateGenericRule(kMinValidID + 2);
+  rule_3.action->type = std::string("block");
+  rule_3.condition->url_filter = std::string("nopdf.com");
+  rule_3.condition->response_headers = std::vector<TestHeaderCondition>(
+      {TestHeaderCondition("content-type", {"*application/pdf*"}, {})});
+
   std::unique_ptr<RulesetMatcher> matcher;
-  ASSERT_TRUE(CreateVerifiedMatcher({rule_1, rule_2}, CreateTemporarySource(),
-                                    &matcher));
+  ASSERT_TRUE(CreateVerifiedMatcher({rule_1, rule_2, rule_3},
+                                    CreateTemporarySource(), &matcher));
   ASSERT_TRUE(matcher);
 
   struct {
@@ -1725,8 +1749,8 @@ TEST_F(RulesetMatcherResponseHeadersTest, MatchOnResponseHeaders) {
        CreateRequestActionForTesting(RequestAction::Type::COLLAPSE,
                                      kMinValidID)},
 
-      // Test matching the key2 header by its value.
-      {"http://google.com", "HTTP/1.0 200 OK\r\nkey2: value1\r\n",
+      // Test matching the key2 header by its value (case-insensitive).
+      {"http://google.com", "HTTP/1.0 200 OK\r\nkey2: VALUE1\r\n",
        CreateRequestActionForTesting(RequestAction::Type::COLLAPSE,
                                      kMinValidID)},
 
@@ -1774,6 +1798,12 @@ TEST_F(RulesetMatcherResponseHeadersTest, MatchOnResponseHeaders) {
       {"http://example.com", "HTTP/1.0 200 OK\r\nkey4: allowlistedValue\r\n",
        CreateRequestActionForTesting(RequestAction::Type::COLLAPSE,
                                      kMinValidID + 1)},
+
+      // Test wildcard support for header value matching.
+      {"http://nopdf.com",
+       "HTTP/1.0 200 OK\r\ncontent-type: application/pdf; charset=utf-8\r\n",
+       CreateRequestActionForTesting(RequestAction::Type::COLLAPSE,
+                                     kMinValidID + 2)},
   };
 
   for (size_t i = 0; i < std::size(cases); ++i) {

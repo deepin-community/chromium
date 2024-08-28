@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_WEB_APPLICATIONS_WEB_APP_LAUNCH_UTILS_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,6 +34,14 @@ namespace web_app {
 
 class AppBrowserController;
 class WithAppResources;
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class LaunchedAppType {
+  kDiy = 0,
+  kCrafted = 1,
+  kMaxValue = kCrafted,
+};
 
 std::optional<webapps::AppId> GetWebAppForActiveTab(const Browser* browser);
 

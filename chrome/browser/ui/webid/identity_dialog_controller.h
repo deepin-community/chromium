@@ -35,13 +35,12 @@ class IdentityDialogController
   ~IdentityDialogController() override;
 
   // content::IdentityRequestDelegate
-  int GetBrandIconMinimumSize() override;
-  int GetBrandIconIdealSize() override;
+  int GetBrandIconMinimumSize(blink::mojom::RpMode rp_mode) override;
+  int GetBrandIconIdealSize(blink::mojom::RpMode rp_mode) override;
 
   // content::IdentityRequestDialogController
-  void ShowAccountsDialog(
-      const std::string& top_frame_for_display,
-      const std::optional<std::string>& iframe_for_display,
+  bool ShowAccountsDialog(
+      const std::string& rp_for_display,
       const std::vector<content::IdentityProviderData>& identity_provider_data,
       content::IdentityRequestAccount::SignInMode sign_in_mode,
       blink::mojom::RpMode rp_mode,
@@ -50,16 +49,14 @@ class IdentityDialogController
       LoginToIdPCallback on_add_account,
       DismissCallback dismiss_callback,
       AccountsDisplayedCallback accounts_displayed_callback) override;
-  void ShowFailureDialog(const std::string& top_frame_for_display,
-                         const std::optional<std::string>& iframe_for_display,
+  bool ShowFailureDialog(const std::string& rp_for_display,
                          const std::string& idp_for_display,
                          blink::mojom::RpContext rp_context,
                          blink::mojom::RpMode rp_mode,
                          const content::IdentityProviderMetadata& idp_metadata,
                          DismissCallback dismiss_callback,
                          LoginToIdPCallback login_callback) override;
-  void ShowErrorDialog(const std::string& top_frame_for_display,
-                       const std::optional<std::string>& iframe_for_display,
+  bool ShowErrorDialog(const std::string& rp_for_display,
                        const std::string& idp_for_display,
                        blink::mojom::RpContext rp_context,
                        blink::mojom::RpMode rp_mode,
@@ -67,7 +64,11 @@ class IdentityDialogController
                        const std::optional<TokenError>& error,
                        DismissCallback dismiss_callback,
                        MoreDetailsCallback more_details_callback) override;
-  void ShowIdpSigninFailureDialog(base::OnceClosure dismiss_callback) override;
+  bool ShowLoadingDialog(const std::string& rp_for_display,
+                         const std::string& idp_for_display,
+                         blink::mojom::RpContext rp_context,
+                         blink::mojom::RpMode rp_mode,
+                         DismissCallback dismiss_callback) override;
 
   std::string GetTitle() const override;
   std::optional<std::string> GetSubtitle() const override;
@@ -76,8 +77,10 @@ class IdentityDialogController
   // Show a modal dialog that loads content from the IdP in a WebView.
   content::WebContents* ShowModalDialog(
       const GURL& url,
+      blink::mojom::RpMode rp_mode,
       DismissCallback dismiss_callback) override;
   void CloseModalDialog() override;
+  content::WebContents* GetRpWebContents() override;
 
   // AccountSelectionView::Delegate:
   void OnAccountSelected(const GURL& idp_config_url,
@@ -90,6 +93,15 @@ class IdentityDialogController
   gfx::NativeView GetNativeView() override;
   content::WebContents* GetWebContents() override;
 
+  // Request the IdP Registration permission.
+  void RequestIdPRegistrationPermision(
+      const url::Origin& origin,
+      base::OnceCallback<void(bool accepted)> callback) override;
+
+  // Allows setting a mock AccountSelectionView for testing purposes.
+  void SetAccountSelectionViewForTesting(
+      std::unique_ptr<AccountSelectionView> account_view);
+
  private:
   std::unique_ptr<AccountSelectionView> account_view_{nullptr};
   AccountSelectionCallback on_account_selection_;
@@ -98,6 +110,7 @@ class IdentityDialogController
   MoreDetailsCallback on_more_details_;
   AccountsDisplayedCallback on_accounts_displayed_;
   raw_ptr<content::WebContents> rp_web_contents_;
+  blink::mojom::RpMode rp_mode_;
 };
 
 #endif  // CHROME_BROWSER_UI_WEBID_IDENTITY_DIALOG_CONTROLLER_H_

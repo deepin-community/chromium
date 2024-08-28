@@ -13,6 +13,7 @@
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "gpu/command_buffer/service/texture_manager.h"
+#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/native_pixmap.h"
 #include "ui/gl/gl_bindings.h"
@@ -42,7 +43,7 @@ gfx::BufferFormat GetBufferFormatForPlane(viz::SharedImageFormat format,
       return num_channels == 2 ? gfx::BufferFormat::RG_1616
                                : gfx::BufferFormat::R_16;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return gfx::BufferFormat::RGBA_8888;
 }
 
@@ -88,7 +89,7 @@ gfx::BufferPlane GetBufferPlane(viz::SharedImageFormat format,
           return gfx::BufferPlane::A;
       }
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return gfx::BufferPlane::DEFAULT;
 }
 
@@ -109,10 +110,17 @@ std::unique_ptr<ui::NativePixmapGLBinding> GetBinding(
     LOG(FATAL) << "Failed to get GLOzone.";
   }
 
-  target = !NativeBufferNeedsPlatformSpecificTextureTarget(buffer_format,
-                                                           buffer_plane)
-               ? GL_TEXTURE_2D
-               : gpu::GetPlatformSpecificTextureTarget();
+  // The target should be GL_TEXTURE_2D unless external sampling is being
+  // used, which in this context is equivalent to the passed-in buffer format
+  // being multiplanar (if using per-plane sampling of a multiplanar texture,
+  // the buffer format passed in here must be the single-planar format of the
+  // plane).
+  if (gfx::BufferFormatIsMultiplanar(buffer_format)) {
+    CHECK_EQ(buffer_plane, gfx::BufferPlane::DEFAULT);
+    target = GL_TEXTURE_EXTERNAL_OES;
+  } else {
+    target = GL_TEXTURE_2D;
+  }
 
   gl::GLApi* api = gl::g_current_gl_context;
   DCHECK(api);
@@ -142,11 +150,10 @@ std::unique_ptr<ui::NativePixmapGLBinding> GetBinding(
 scoped_refptr<OzoneImageGLTexturesHolder>
 OzoneImageGLTexturesHolder::CreateAndInitTexturesHolder(
     SharedImageBacking* backing,
-    scoped_refptr<gfx::NativePixmap> pixmap,
-    gfx::BufferPlane plane) {
+    scoped_refptr<gfx::NativePixmap> pixmap) {
   scoped_refptr<OzoneImageGLTexturesHolder> holder =
       base::WrapRefCounted(new OzoneImageGLTexturesHolder());
-  if (!holder->Initialize(backing, std::move(pixmap), plane)) {
+  if (!holder->Initialize(backing, std::move(pixmap))) {
     holder.reset();
   }
   return holder;
@@ -194,35 +201,20 @@ size_t OzoneImageGLTexturesHolder::GetNumberOfTextures() const {
 
 bool OzoneImageGLTexturesHolder::Initialize(
     SharedImageBacking* backing,
-    scoped_refptr<gfx::NativePixmap> pixmap,
-    gfx::BufferPlane plane) {
+    scoped_refptr<gfx::NativePixmap> pixmap) {
   DCHECK(backing && pixmap);
   const viz::SharedImageFormat format = backing->format();
-  if (format.is_single_plane()) {
-    // Initialize the holder with a single texture with format and size of the
-    // backing. For legacy multiplanar formats, the plane must be DEFAULT.
-    auto size = backing->size();
-    auto buffer_format = ToBufferFormat(format);
-    if (format.IsLegacyMultiplanar()) {
-      DCHECK_EQ(plane, gfx::BufferPlane::DEFAULT);
-    }
-    auto buffer_plane = plane;
-    return CreateAndStoreTexture(backing, std::move(pixmap), buffer_format,
-                                 buffer_plane, size);
-  } else if (format.PrefersExternalSampler()) {
+  if (format.is_single_plane() || format.PrefersExternalSampler()) {
     // Initialize the holder with a single texture with format of the
     // NativePixmap, size of the backing and DEFAULT plane.
     auto size = backing->size();
     auto buffer_format = pixmap->GetBufferFormat();
-    DCHECK_EQ(plane, gfx::BufferPlane::DEFAULT);
-    auto buffer_plane = plane;
     return CreateAndStoreTexture(backing, std::move(pixmap), buffer_format,
-                                 buffer_plane, size);
+                                 gfx::BufferPlane::DEFAULT, size);
   } else {
     // Initialize the holder with N textures with format using
     // GetBufferFormatForPlane(), size using GetPlaneSize() and plane using
     // GetBufferPlane()
-    DCHECK_EQ(plane, gfx::BufferPlane::DEFAULT);
     for (int plane_index = 0; plane_index < format.NumberOfPlanes();
          plane_index++) {
       auto size = format.GetPlaneSize(plane_index, backing->size());

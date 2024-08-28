@@ -40,7 +40,7 @@ gfx::ImageSkia CreateNotificationAppIcon(
       cros_tokens::kCrosSysOnPrimary);
   SkColor icon_background_color = CalculateIconBackgroundColor(notification);
 
-  // TODO(crbug.com/768748): figure out if this has a performance impact and
+  // TODO(crbug.com/40541732): figure out if this has a performance impact and
   // cache images if so.
   gfx::Image masked_small_icon = notification->GenerateMaskedSmallIcon(
       kNotificationAppIconImageSize, icon_color, icon_background_color,
@@ -84,7 +84,7 @@ SkColor CalculateIconBackgroundColor(
   }
 
   auto color_id = notification->accent_color_id();
-  absl::optional<SkColor> accent_color = notification->accent_color();
+  std::optional<SkColor> accent_color = notification->accent_color();
 
   if (!color_id || !accent_color.has_value()) {
     return default_color;
@@ -113,7 +113,7 @@ SkColor CalculateIconBackgroundColor(
                      : gfx::kPlaceholderColor;
   return color_utils::BlendForMinContrast(
              fg_color, bg_color,
-             /*high_contrast_foreground=*/absl::nullopt, minContrastRatio)
+             /*high_contrast_foreground=*/std::nullopt, minContrastRatio)
       .color;
 }
 

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "components/privacy_sandbox/privacy_sandbox_settings_impl.h"
+
 #include <cstddef>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/pref_names.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/privacy_sandbox/canonical_topic.h"
@@ -190,6 +192,17 @@ PrivacySandboxSettingsImpl::PrivacySandboxSettingsImpl(
 }
 
 PrivacySandboxSettingsImpl::~PrivacySandboxSettingsImpl() = default;
+
+void PrivacySandboxSettingsImpl::Shutdown() {
+  observers_.Clear();
+  delegate_.reset();
+  host_content_settings_map_ = nullptr;
+  cookie_settings_.reset();
+  tracking_protection_settings_ = nullptr;
+  pref_service_ = nullptr;
+  pref_change_registrar_.Reset();
+  tracking_protection_settings_observation_.Reset();
+}
 
 PrivacySandboxSettingsImpl::Status
 PrivacySandboxSettingsImpl::GetM1TopicAllowedStatus() const {
@@ -490,7 +503,8 @@ void PrivacySandboxSettingsImpl::SetFledgeJoiningAllowed(
   // case where the eTLD+1 was not even a host, as GURL will have canonicalised
   // it to empty.
   if (effective_top_frame_etld_plus1.length() == 0) {
-    NOTREACHED() << "Cannot control FLEDGE joining for empty eTLD+1";
+    NOTREACHED_IN_MIGRATION()
+        << "Cannot control FLEDGE joining for empty eTLD+1";
     return;
   }
 
@@ -617,12 +631,15 @@ bool PrivacySandboxSettingsImpl::IsSharedStorageAllowed(
     const url::Origin& top_frame_origin,
     const url::Origin& accessing_origin,
     std::string* out_debug_message,
-    content::RenderFrameHost* console_frame) const {
+    content::RenderFrameHost* console_frame,
+    bool* out_block_is_site_setting_specific) const {
   // Check for attestation on the caller's site.
   Status attestation_status =
       PrivacySandboxAttestations::GetInstance()->IsSiteAttested(
           net::SchemefulSite(accessing_origin),
           PrivacySandboxAttestationsGatedAPI::kSharedStorage);
+  SetOutBlockIsSiteSettingSpecificFromStatus(
+      attestation_status, out_block_is_site_setting_specific);
   if (!IsAllowed(attestation_status)) {
     JoinHistogram(kIsSharedStorageAllowedHistogram, attestation_status);
     std::string error_message =
@@ -644,9 +661,13 @@ bool PrivacySandboxSettingsImpl::IsSharedStorageAllowed(
   }
 
   Status status = GetPrivacySandboxAllowedStatus();
+  SetOutBlockIsSiteSettingSpecificFromStatus(
+      status, out_block_is_site_setting_specific);
   if (IsAllowed(status)) {
     status =
         GetSiteAccessAllowedStatus(top_frame_origin, accessing_origin.GetURL());
+    SetOutBlockIsSiteSettingSpecificFromStatus(
+        status, out_block_is_site_setting_specific);
     if (out_debug_message) {
       *out_debug_message = base::StrCat(
           {"Site access settings returned status ",
@@ -672,8 +693,11 @@ bool PrivacySandboxSettingsImpl::IsSharedStorageAllowed(
 bool PrivacySandboxSettingsImpl::IsSharedStorageSelectURLAllowed(
     const url::Origin& top_frame_origin,
     const url::Origin& accessing_origin,
-    std::string* out_debug_message) const {
+    std::string* out_debug_message,
+    bool* out_block_is_site_setting_specific) const {
   Status status = GetM1FledgeAllowedStatus(top_frame_origin, accessing_origin);
+  SetOutBlockIsSiteSettingSpecificFromStatus(
+      status, out_block_is_site_setting_specific);
   JoinHistogram(kIsSharedStorageSelectURLAllowedHistogram, status);
   if (out_debug_message) {
     *out_debug_message = base::StrCat(
@@ -690,12 +714,15 @@ bool PrivacySandboxSettingsImpl::IsSharedStorageSelectURLAllowed(
 
 bool PrivacySandboxSettingsImpl::IsPrivateAggregationAllowed(
     const url::Origin& top_frame_origin,
-    const url::Origin& reporting_origin) const {
+    const url::Origin& reporting_origin,
+    bool* out_block_is_site_setting_specific) const {
   // Check for attestation on the worklet's site.
   Status attestation_status =
       PrivacySandboxAttestations::GetInstance()->IsSiteAttested(
           net::SchemefulSite(reporting_origin),
           PrivacySandboxAttestationsGatedAPI::kPrivateAggregation);
+  SetOutBlockIsSiteSettingSpecificFromStatus(
+      attestation_status, out_block_is_site_setting_specific);
   if (!IsAllowed(attestation_status)) {
     JoinHistogram(kIsPrivateAggregationAllowedHistogram, attestation_status);
     return false;
@@ -703,6 +730,8 @@ bool PrivacySandboxSettingsImpl::IsPrivateAggregationAllowed(
 
   Status status =
       GetM1AdMeasurementAllowedStatus(top_frame_origin, reporting_origin);
+  SetOutBlockIsSiteSettingSpecificFromStatus(
+      status, out_block_is_site_setting_specific);
   JoinHistogram(kIsPrivateAggregationAllowedHistogram, status);
   return IsAllowed(status);
 }
@@ -710,7 +739,9 @@ bool PrivacySandboxSettingsImpl::IsPrivateAggregationAllowed(
 bool PrivacySandboxSettingsImpl::IsPrivateAggregationDebugModeAllowed(
     const url::Origin& top_frame_origin,
     const url::Origin& reporting_origin) const {
-  if (!IsPrivateAggregationAllowed(top_frame_origin, reporting_origin)) {
+  if (!IsPrivateAggregationAllowed(
+          top_frame_origin, reporting_origin,
+          /*out_block_is_site_setting_specific=*/nullptr)) {
     return false;
   }
 
@@ -756,7 +787,7 @@ bool PrivacySandboxSettingsImpl::IsSubjectToM1NoticeRestricted() const {
 }
 
 bool PrivacySandboxSettingsImpl::IsRestrictedNoticeEnabled() const {
-  return privacy_sandbox::kPrivacySandboxSettings4RestrictedNotice.Get();
+  return delegate_->IsRestrictedNoticeEnabled();
 }
 
 void PrivacySandboxSettingsImpl::OnCookiesCleared() {
@@ -887,6 +918,15 @@ bool PrivacySandboxSettingsImpl::AreRelatedWebsiteSetsEnabled() const {
   }
   return pref_service_->GetBoolean(
       prefs::kPrivacySandboxRelatedWebsiteSetsEnabled);
+}
+
+void PrivacySandboxSettingsImpl::SetOutBlockIsSiteSettingSpecificFromStatus(
+    Status status,
+    bool* out_block_is_site_setting_specific) const {
+  if (out_block_is_site_setting_specific != nullptr) {
+    *out_block_is_site_setting_specific =
+        status == Status::kSiteDataAccessBlocked;
+  }
 }
 
 }  // namespace privacy_sandbox

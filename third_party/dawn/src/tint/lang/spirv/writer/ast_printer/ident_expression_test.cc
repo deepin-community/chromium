@@ -25,7 +25,6 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/spirv/writer/ast_printer/helper_test.h"
 #include "src/tint/lang/spirv/writer/common/spv_dump_test.h"
 
@@ -36,9 +35,10 @@ using namespace tint::core::fluent_types;     // NOLINT
 using namespace tint::core::number_suffixes;  // NOLINT
 
 using SpirvASTPrinterTest = TestHelper;
+using SpirvASTPrinterDeathTest = SpirvASTPrinterTest;
 
-TEST_F(SpirvASTPrinterTest, IdentifierExpression_GlobalConst) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(SpirvASTPrinterDeathTest, IdentifierExpression_GlobalConst) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder pb;
 

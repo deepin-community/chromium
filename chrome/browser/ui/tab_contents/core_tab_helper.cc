@@ -22,7 +22,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/lens/lens_core_tab_side_panel_helper.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "chrome/common/chrome_switches.h"
@@ -56,14 +55,13 @@
 #include "ui/gfx/codec/webp_codec.h"
 #include "ui/gfx/image/image_util.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/android/tab_android.h"
-#else
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/side_panel/companion/companion_tab_helper.h"
-#include "chrome/browser/ui/side_panel/companion/companion_utils.h"
+#include "chrome/browser/ui/views/side_panel/companion/companion_tab_helper.h"
+#include "chrome/browser/ui/views/side_panel/companion/companion_utils.h"
+#include "chrome/browser/ui/views/side_panel/lens/lens_core_tab_side_panel_helper.h"
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -71,7 +69,7 @@
 #endif
 
 #if BUILDFLAG(ENABLE_LENS_DESKTOP_GOOGLE_BRANDED_FEATURES)
-#include "chrome/browser/ui/lens/lens_side_panel_helper.h"
+#include "chrome/browser/ui/views/lens/lens_side_panel_helper.h"
 #endif
 
 using content::WebContents;
@@ -98,6 +96,22 @@ gfx::Image DownscaleImage(const gfx::Image& image) {
       lens::features::GetMaxPixelsForImageSearch(),
       lens::features::GetMaxAreaForImageSearch());
 }
+
+#if BUILDFLAG(IS_ANDROID)
+bool IsSidePanelEnabledForLens(content::WebContents* contents) {
+  return false;
+}
+bool IsSidePanelEnabledFor3PDse(content::WebContents* contents) {
+  return false;
+}
+#else
+bool IsSidePanelEnabledForLens(content::WebContents* contents) {
+  return lens::IsSidePanelEnabledForLens(contents);
+}
+bool IsSidePanelEnabledFor3PDse(content::WebContents* contents) {
+  return lens::IsSidePanelEnabledFor3PDse(contents);
+}
+#endif
 
 }  // namespace
 
@@ -143,12 +157,10 @@ std::vector<unsigned char> CoreTabHelper::EncodeImage(
 
   // Get the front and end of the image bytes in order to store them in the
   // search_args to be sent as part of the PostContent in the request
-  size_t image_bytes_size = image.As1xPNGBytes()->size();
-  const unsigned char* image_bytes_begin = image.As1xPNGBytes()->front();
-  const unsigned char* image_bytes_end = image_bytes_begin + image_bytes_size;
   content_type = "image/png";
   image_format = lens::mojom::ImageFormat::PNG;
-  data.assign(image_bytes_begin, image_bytes_end);
+  auto bytes = image.As1xPNGBytes();
+  data.assign(bytes->begin(), bytes->end());
   return data;
 }
 
@@ -249,9 +261,10 @@ lens::mojom::ImageFormat CoreTabHelper::EncodeImageIntoSearchArgs(
 void CoreTabHelper::SearchWithLens(content::RenderFrameHost* render_frame_host,
                                    const GURL& src_url,
                                    lens::EntryPoint entry_point,
-                                   bool is_image_translate) {
-  bool use_side_panel = lens::IsSidePanelEnabledForLens(web_contents());
-
+                                   bool is_image_translate,
+                                   bool force_open_in_new_tab) {
+  bool use_side_panel =
+      !force_open_in_new_tab && IsSidePanelEnabledForLens(web_contents());
   SearchByImageImpl(render_frame_host, src_url, kImageSearchThumbnailMinSize,
                     lens::features::GetMaxPixelsForImageSearch(),
                     lens::features::GetMaxPixelsForImageSearch(),
@@ -263,7 +276,8 @@ void CoreTabHelper::SearchWithLens(content::RenderFrameHost* render_frame_host,
 }
 
 void CoreTabHelper::SearchWithLens(const gfx::Image& image,
-                                   lens::EntryPoint entry_point) {
+                                   lens::EntryPoint entry_point,
+                                   bool force_open_in_new_tab) {
   // Do not show the side panel on searches and modify the entry point if Lens
   // fullscreen search features are enabled.
   bool is_full_screen_request = lens::features::IsLensFullscreenSearchEnabled();
@@ -271,7 +285,8 @@ void CoreTabHelper::SearchWithLens(const gfx::Image& image,
       is_full_screen_request
           ? lens::EntryPoint::CHROME_FULLSCREEN_SEARCH_MENU_ITEM
           : entry_point;
-  bool use_side_panel = lens::IsSidePanelEnabledForLens(web_contents());
+  bool use_side_panel =
+      !force_open_in_new_tab && IsSidePanelEnabledForLens(web_contents());
   bool is_companion_enabled = IsImageSearchSupportedForCompanion();
 
   auto lens_query_params = lens::GetQueryParametersForLensRequest(
@@ -292,14 +307,14 @@ void CoreTabHelper::SearchByImage(content::RenderFrameHost* render_frame_host,
   SearchByImageImpl(render_frame_host, src_url, kImageSearchThumbnailMinSize,
                     kImageSearchThumbnailMaxWidth,
                     kImageSearchThumbnailMaxHeight, std::string(),
-                    lens::IsSidePanelEnabledFor3PDse(web_contents()),
+                    IsSidePanelEnabledFor3PDse(web_contents()),
                     is_image_translate);
 }
 
 void CoreTabHelper::SearchByImage(const gfx::Image& image) {
   SearchByImageImpl(image,
                     /*additional_query_params=*/std::string(),
-                    lens::IsSidePanelEnabledFor3PDse(web_contents()));
+                    IsSidePanelEnabledFor3PDse(web_contents()));
 }
 
 void CoreTabHelper::SearchByImageImpl(
@@ -420,26 +435,13 @@ void CoreTabHelper::SearchByImageImpl(
       thumbnail_max_width, thumbnail_max_height));
 }
 
-std::unique_ptr<content::WebContents> CoreTabHelper::SwapWebContents(
-    std::unique_ptr<content::WebContents> new_contents,
-    bool did_start_load,
-    bool did_finish_load) {
-#if BUILDFLAG(IS_ANDROID)
-  TabAndroid* tab = TabAndroid::FromWebContents(web_contents());
-  return tab->SwapWebContents(std::move(new_contents), did_start_load,
-                              did_finish_load);
-#else
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
-  return browser->SwapWebContents(web_contents(), std::move(new_contents));
-#endif
-}
-
 // static
 bool CoreTabHelper::GetStatusTextForWebContents(std::u16string* status_text,
                                                 content::WebContents* source) {
 #if BUILDFLAG(IS_ANDROID)
-  NOTREACHED() << "If this ends up being used on Android update "
-               << "ChromeContentBrowserClient::OverrideURLLoaderFactoryParams.";
+  NOTREACHED_IN_MIGRATION()
+      << "If this ends up being used on Android update "
+      << "ChromeContentBrowserClient::OverrideURLLoaderFactoryParams.";
   return false;
 #else
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -736,10 +738,10 @@ void CoreTabHelper::PostContentToURL(TemplateURLRef::PostContent post_content,
     lens::OpenLensSidePanel(chrome::FindBrowserWithTab(web_contents()),
                             open_url_params);
 #else
-    web_contents()->OpenURL(open_url_params);
+    web_contents()->OpenURL(open_url_params, /*navigation_handle_callback=*/{});
 #endif  // BUILDFLAG(ENABLE_LENS_DESKTOP_GOOGLE_BRANDED_FEATURES)
   } else {
-    web_contents()->OpenURL(open_url_params);
+    web_contents()->OpenURL(open_url_params, /*navigation_handle_callback=*/{});
   }
 }
 

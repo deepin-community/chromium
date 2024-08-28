@@ -48,9 +48,13 @@ namespace gfx {
 class Size;
 }  // namespace gfx
 
-namespace ui::mojom {
+namespace ui {
+struct AXUpdatesAndEvents;
+struct AXLocationChanges;
+namespace mojom {
 enum class VirtualKeyboardMode;
-}  // namespace ui::mojom
+}  // namespace mojom
+}  // namespace ui
 
 namespace network::mojom {
 class SharedDictionaryAccessDetails;
@@ -67,8 +71,6 @@ class RenderViewHost;
 class RenderWidgetHost;
 class Page;
 class WebContents;
-struct AXEventNotificationDetails;
-struct AXLocationChangeNotificationDetails;
 struct CookieAccessDetails;
 struct EntryChangedDetails;
 struct FocusedNodeDetails;
@@ -227,6 +229,16 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   virtual void OnCaptureHandleConfigUpdate(
       const blink::mojom::CaptureHandleConfig& config) {}
 
+  // This method is invoked when a write-access Captured Surface Control API is
+  // successfully invoked by a tab-capturing Web application. These include:
+  // * CaptureController.sendWheel()
+  // * CaptureController.setZoomLevel()
+  //
+  // Observing this occurrence allows us to update the UX accordingly; for
+  // example, show the user an indicator that the capturing tab is being
+  // controlled by the capturing tab.
+  virtual void OnCapturedSurfaceControl() {}
+
   // This method is invoked when the `blink::WebView` of the current
   // RenderViewHost is ready, e.g. because we recreated it after a crash.
   virtual void RenderViewReady() {}
@@ -358,6 +370,16 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   // back-forward cache instead of being deleted. See comments in PageUserData /
   // DocumentUserData for more details).
   virtual void DidFinishNavigation(NavigationHandle* navigation_handle) {}
+
+  // Called when the NavigationHandleTiming associated with `navigation_handle`
+  // has been updated, which can be triggered by any of these events:
+  // - The URLLoader for the network request had started (if the navigation
+  //   needs a URLLoader)
+  // - A network response has been received (including redirect responses)
+  // - The navigation got blocked, and will commit an error page.
+  // - The Commit IPC has been sent
+  virtual void DidUpdateNavigationHandleTiming(
+      NavigationHandle* navigation_handle) {}
 
   // Called after the WebContents completes the previewed page activation steps.
   // `activation_time` is the time the activation happened.
@@ -495,6 +517,14 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   virtual void OnSharedDictionaryAccessed(
       NavigationHandle* navigation_handle,
       const network::mojom::SharedDictionaryAccessDetails& details) {}
+
+  // Called when the renderer requests access to storage.
+  // Observers will be notified about the type of storage access requested
+  // as well as whether access was blocked or not.
+  virtual void NotifyStorageAccessed(
+      RenderFrameHost* render_frame_host,
+      blink::mojom::StorageTypeAccessed storage_type,
+      bool blocked) {}
 
   // This method is invoked when a new non-pending navigation entry is created.
   // This corresponds to one NavigationController entry being created
@@ -652,13 +682,6 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
                                         RenderFrameHost* render_frame_host,
                                         bool is_full_page) {}
 
-  // Notifies that an |inner_web_contents| instance has been detached from this
-  // WebContents. InnerWebContentsAttached() will already have been called for
-  // the |inner_web_contents|. By the time this is called the
-  // |inner_web_contents| will have been removed from the WebContents tree, but
-  // will still be alive and is safe to observe.
-  virtual void InnerWebContentsDetached(WebContents* inner_web_contents) {}
-
   // Invoked when WebContents::Clone() was used to clone a WebContents.
   virtual void DidCloneToNewWebContents(WebContents* old_web_contents,
                                         WebContents* new_web_contents) {}
@@ -742,6 +765,10 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
 
   // Invoked when the beforeunload handler fires. |proceed| is set to true if
   // the beforeunload can safely proceed, otherwise it should be interrupted.
+  //
+  // Note: this is used to observe when the window/tab is being closed, or a
+  // GuestView is being attached to the current frame, and NOT used to observe
+  // the BeforeUnload events triggered by navigations.
   virtual void BeforeUnloadFired(bool proceed) {}
 
   // Invoked when a user cancels a before unload dialog.
@@ -754,9 +781,9 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   // from a render frame, but only when the accessibility mode has the
   // ui::AXMode::kWebContents flag set.
   virtual void AccessibilityEventReceived(
-      const AXEventNotificationDetails& details) {}
+      const ui::AXUpdatesAndEvents& details) {}
   virtual void AccessibilityLocationChangesReceived(
-      const std::vector<AXLocationChangeNotificationDetails>& details) {}
+      const std::vector<ui::AXLocationChanges>& details) {}
 
   // Invoked when theme color is changed.
   virtual void DidChangeThemeColor() {}
@@ -828,6 +855,16 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   // Invoked when a paste event occurs.
   virtual void OnPaste() {}
 
+  // Called when `copied_text` was copied to the clipboard from a given
+  // `render_frame_host` within this WebContents. Use this observer instead of
+  // ui::ClipboardObserver if you care about the source RenderFrameHost where
+  // the copy operation took place.
+  // Note: If clipboard copy events for other types of data are later needed by
+  // other WebContentsObservers, it'd be okay to generalize this method to
+  // support content::ClipboardPasteData directly.
+  virtual void OnTextCopiedToClipboard(RenderFrameHost* render_frame_host,
+                                       const std::u16string& copied_text) {}
+
   // Invoked if an IPC message is coming from a specific RenderFrameHost.
   virtual bool OnMessageReceived(const IPC::Message& message,
                                  RenderFrameHost* render_frame_host);
@@ -888,6 +925,15 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
   // before its `WasDiscarded` is set to true and before it's attached to a tab
   // strip.
   virtual void AboutToBeDiscarded(WebContents* new_contents) {}
+
+  // Called when WebContents received a request to lock the keyboard.
+  virtual void KeyboardLockRequested() {}
+
+  // Called when WebContents received a request to lock the pointer.
+  virtual void PointerLockRequested() {}
+
+  // Called when WebContents received a request to vibrate the page.
+  virtual void VibrationRequested() {}
 
   WebContents* web_contents() const;
 

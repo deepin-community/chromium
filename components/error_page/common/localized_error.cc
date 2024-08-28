@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
@@ -263,8 +264,32 @@ const LocalizedErrorMap net_error_options[] = {
    SHOW_BUTTON_RELOAD,
   },
   {net::ERR_BAD_SSL_CLIENT_AUTH_CERT,
-   IDS_ERRORPAGES_HEADING_INSECURE_CONNECTION,
+   IDS_ERRORPAGES_HEADING_ACCESS_DENIED,
    IDS_ERRORPAGES_SUMMARY_BAD_SSL_CLIENT_AUTH_CERT,
+   SUGGEST_CONTACT_ADMINISTRATOR,
+   SHOW_NO_BUTTONS,
+  },
+  {net::ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED,
+   IDS_ERRORPAGES_HEADING_ACCESS_DENIED,
+   IDS_ERRORPAGES_SUMMARY_SSL_CLIENT_AUTH_SIGNATURE_FAILED,
+   SUGGEST_CONTACT_ADMINISTRATOR,
+   SHOW_NO_BUTTONS,
+  },
+  {net::ERR_SSL_CLIENT_AUTH_CERT_NO_PRIVATE_KEY,
+   IDS_ERRORPAGES_HEADING_ACCESS_DENIED,
+   IDS_ERRORPAGES_SUMMARY_SSL_CLIENT_AUTH_SIGNATURE_FAILED,
+   SUGGEST_CONTACT_ADMINISTRATOR,
+   SHOW_NO_BUTTONS,
+  },
+  {net::ERR_SSL_CLIENT_AUTH_NO_COMMON_ALGORITHMS,
+   IDS_ERRORPAGES_HEADING_ACCESS_DENIED,
+   IDS_ERRORPAGES_SUMMARY_SSL_CLIENT_AUTH_SIGNATURE_FAILED,
+   SUGGEST_CONTACT_ADMINISTRATOR,
+   SHOW_NO_BUTTONS,
+  },
+  {net::ERR_SSL_CLIENT_AUTH_CERT_BAD_FORMAT,
+   IDS_ERRORPAGES_HEADING_ACCESS_DENIED,
+   IDS_ERRORPAGES_SUMMARY_SSL_CLIENT_AUTH_SIGNATURE_FAILED,
    SUGGEST_CONTACT_ADMINISTRATOR,
    SHOW_NO_BUTTONS,
   },
@@ -554,8 +579,7 @@ const char* GetIconClassForError(const std::string& error_domain,
                                                            : "icon-generic";
 }
 
-base::Value::Dict SingleEntryDictionary(base::StringPiece path,
-                                        int message_id) {
+base::Value::Dict SingleEntryDictionary(std::string_view path, int message_id) {
   base::Value::Dict result;
   result.Set(path, l10n_util::GetStringUTF16(message_id));
   return result;
@@ -581,7 +605,7 @@ void AddLinkedSuggestionToList(const int error_code,
           IDS_ERRORPAGES_SUGGESTION_DELETE_COOKIES_SUMMARY);
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
@@ -848,7 +872,7 @@ void AddSuggestionsDetails(int error_code,
         IDS_ERRORPAGES_SUGGESTION_FIREWALL_CONFIG_BODY, false);
   }
 
-  // TODO(https://crbug.com/1254714): Provide meaningful strings for Fuchsia.
+  // TODO(crbug.com/40199702): Provide meaningful strings for Fuchsia.
 #if !BUILDFLAG(IS_FUCHSIA)
   if (suggestions & SUGGEST_PROXY_CONFIG) {
     AddSuggestionDetailDictionaryToList(

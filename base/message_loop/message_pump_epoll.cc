@@ -4,26 +4,38 @@
 
 #include "base/message_loop/message_pump_epoll.h"
 
-#include <errno.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 
 #include "base/auto_reset.h"
 #include "base/check_op.h"
-#include "base/logging.h"
+#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/ranges/algorithm.h"
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "base/trace_event/base_tracing.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
+
+namespace {
+// Under this feature native work is batched.
+BASE_FEATURE(kBatchNativeEventsInMessagePumpEpoll,
+             "BatchNativeEventsInMessagePumpEpoll",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Caches the state of the "BatchNativeEventsInMessagePumpEpoll".
+std::atomic_bool g_use_batched_version = false;
+}  // namespace
 
 MessagePumpEpoll::MessagePumpEpoll() {
   epoll_.reset(epoll_create1(/*flags=*/0));
@@ -38,6 +50,13 @@ MessagePumpEpoll::MessagePumpEpoll() {
 }
 
 MessagePumpEpoll::~MessagePumpEpoll() = default;
+
+void MessagePumpEpoll::InitializeFeatures() {
+  // Relaxed memory order since no memory access depends on value.
+  g_use_batched_version.store(
+      base::FeatureList::IsEnabled(kBatchNativeEventsInMessagePumpEpoll),
+      std::memory_order_relaxed);
+}
 
 bool MessagePumpEpoll::WatchFileDescriptor(int fd,
                                            bool persistent,
@@ -101,26 +120,35 @@ void MessagePumpEpoll::Run(Delegate* delegate) {
     // Reset the native work flag before processing IO events.
     native_work_started_ = false;
 
-    // Process any immediately ready IO event, but don't wait for more yet.
-    WaitForEpollEvents(TimeDelta());
+    // Process any immediately ready IO event, but don't sleep yet.
+    // Process epoll events until none is available without blocking or
+    // the maximum number of iterations is reached. The maximum number of
+    // iterations when `g_use_batched_version` is true was chosen so that
+    // all available events are dispatched 95% of the time in local tests.
+    // The maximum is not infinite because we want to yield to application
+    // tasks at some point.
+    bool did_native_work = false;
+    const int max_iterations =
+        g_use_batched_version.load(std::memory_order_relaxed) ? 16 : 1;
+    for (int i = 0; i < max_iterations; ++i) {
+      if (!WaitForEpollEvents(TimeDelta())) {
+        break;
+      }
+      did_native_work = true;
+    }
 
-    bool attempt_more_work = immediate_work_available || processed_io_events_;
-    processed_io_events_ = false;
+    bool attempt_more_work = immediate_work_available || did_native_work;
 
     if (run_state.should_quit) {
       break;
     }
-
     if (attempt_more_work) {
       continue;
     }
 
-    const bool did_idle_work = delegate->DoIdleWork();
+    delegate->DoIdleWork();
     if (run_state.should_quit) {
       break;
-    }
-    if (did_idle_work) {
-      continue;
     }
 
     TimeDelta timeout = TimeDelta::Max();
@@ -166,22 +194,26 @@ void MessagePumpEpoll::AddEpollEvent(EpollEventEntry& entry) {
   const uint32_t events = entry.ComputeActiveEvents();
   epoll_event event{.events = events, .data = {.ptr = &entry}};
   int rv = epoll_ctl(epoll_.get(), EPOLL_CTL_ADD, entry.fd, &event);
-  if (rv != 0) {
-    // TODO(crbug.com/1519703): Certain tests use regular files to simulate
-    // devices, which does not support epoll. Adding a fake entry for testing
-    // purposes as a temporary workaround. Tests need to be fixed and this
-    // workaround removed.
-    DLOG(WARNING) << "Can not register file descriptor for epoll event";
-    DPCHECK(errno == EPERM);
-    entry.stopped = true;
-  }
+  DPCHECK(rv == 0);
   entry.registered_events = events;
 }
 
 void MessagePumpEpoll::UpdateEpollEvent(EpollEventEntry& entry) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  const uint32_t events = entry.ComputeActiveEvents();
   if (!entry.stopped) {
-    const uint32_t events = entry.ComputeActiveEvents();
+    if (events == 0) {
+      // There is no active interest now.
+      // We don't have to call epoll_ctl() if the last event was registered as
+      // one-shot since the fd has already been disabled.
+      if (!(entry.registered_events & EPOLLONESHOT)) {
+        // The fd is still enabled. We need to disable it but don't remove the
+        // entry from `entries_` to keep the reference alive because handling
+        // the entry isn't finished yet.
+        StopEpollEvent(entry);
+      }
+      return;
+    }
     if (events == entry.registered_events && !(events & EPOLLONESHOT)) {
       // Persistent events don't need to be modified if no bits are changing.
       return;
@@ -190,6 +222,10 @@ void MessagePumpEpoll::UpdateEpollEvent(EpollEventEntry& entry) {
     int rv = epoll_ctl(epoll_.get(), EPOLL_CTL_MOD, entry.fd, &event);
     DPCHECK(rv == 0);
     entry.registered_events = events;
+  } else if (events != 0) {
+    // An interest for the fd has been reactivated. Re-enable the fd.
+    entry.stopped = false;
+    AddEpollEvent(entry);
   }
 }
 
@@ -199,6 +235,7 @@ void MessagePumpEpoll::StopEpollEvent(EpollEventEntry& entry) {
     int rv = epoll_ctl(epoll_.get(), EPOLL_CTL_DEL, entry.fd, nullptr);
     DPCHECK(rv == 0);
     entry.stopped = true;
+    entry.registered_events = 0;
   }
 }
 
@@ -229,7 +266,7 @@ bool MessagePumpEpoll::WaitForEpollEvents(TimeDelta timeout) {
 
   // `timeout` has microsecond resolution, but timeouts accepted by epoll_wait()
   // are integral milliseconds. Round up to the next millisecond.
-  // TODO(https://crbug.com/1382894): Consider higher-resolution timeouts.
+  // TODO(crbug.com/40245876): Consider higher-resolution timeouts.
   const int epoll_timeout =
       timeout.is_max() ? -1
                        : saturated_cast<int>(timeout.InMillisecondsRoundedUp());
@@ -245,8 +282,8 @@ bool MessagePumpEpoll::WaitForEpollEvents(TimeDelta timeout) {
     return false;
   }
 
-  const base::span<epoll_event> ready_events(events,
-                                             static_cast<size_t>(epoll_result));
+  const span<epoll_event> ready_events =
+      span(events).first(base::checked_cast<size_t>(epoll_result));
   for (auto& e : ready_events) {
     if (e.data.ptr == &wake_event_) {
       // Wake-up events are always safe to handle immediately. Unlike other
@@ -351,7 +388,6 @@ void MessagePumpEpoll::HandleEvent(int fd,
                                    FdWatchController* controller) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   BeginNativeWorkBatch();
-  processed_io_events_ = true;
   // Make the MessagePumpDelegate aware of this other form of "DoWork". Skip if
   // HandleNotification() is called outside of Run() (e.g. in unit tests).
   Delegate::ScopedDoWorkItem scoped_do_work_item;
@@ -391,7 +427,6 @@ void MessagePumpEpoll::HandleEvent(int fd,
 void MessagePumpEpoll::HandleWakeUp() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   BeginNativeWorkBatch();
-  processed_io_events_ = true;
   uint64_t value;
   ssize_t n = HANDLE_EINTR(read(wake_event_.get(), &value, sizeof(value)));
   DPCHECK(n == sizeof(value));

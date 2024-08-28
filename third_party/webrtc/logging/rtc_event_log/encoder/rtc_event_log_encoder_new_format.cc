@@ -10,12 +10,27 @@
 
 #include "logging/rtc_event_log/encoder/rtc_event_log_encoder_new_format.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <map>
+#include <memory>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 #include "absl/types/optional.h"
 #include "api/array_view.h"
+#include "api/candidate.h"
+#include "api/dtls_transport_interface.h"
 #include "api/field_trials_view.h"
-#include "api/network_state_predictor.h"
+#include "api/rtc_event_log/rtc_event.h"
+#include "api/rtp_headers.h"
+#include "api/rtp_parameters.h"
+#include "api/transport/bandwidth_usage.h"
+#include "api/video/video_codec_type.h"
+#include "api/video/video_rotation.h"
 #include "logging/rtc_event_log/dependency_descriptor_encoder_decoder.h"
 #include "logging/rtc_event_log/encoder/blob_encoding.h"
 #include "logging/rtc_event_log/encoder/delta_encoding.h"
@@ -50,7 +65,6 @@
 #include "logging/rtc_event_log/rtc_stream_config.h"
 #include "modules/audio_coding/audio_network_adaptor/include/audio_network_adaptor_config.h"
 #include "modules/rtp_rtcp/include/rtp_cvo.h"
-#include "modules/rtp_rtcp/include/rtp_rtcp_defines.h"
 #include "modules/rtp_rtcp/source/rtcp_packet/app.h"
 #include "modules/rtp_rtcp/source/rtcp_packet/bye.h"
 #include "modules/rtp_rtcp/source/rtcp_packet/common_header.h"
@@ -62,9 +76,8 @@
 #include "modules/rtp_rtcp/source/rtcp_packet/sender_report.h"
 #include "modules/rtp_rtcp/source/rtp_dependency_descriptor_extension.h"
 #include "modules/rtp_rtcp/source/rtp_header_extensions.h"
-#include "modules/rtp_rtcp/source/rtp_packet.h"
+#include "rtc_base/buffer.h"
 #include "rtc_base/checks.h"
-#include "rtc_base/logging.h"
 
 // *.pb.h files are generated at build-time by the protobuf compiler.
 #ifdef WEBRTC_ANDROID_PLATFORM_BUILD
@@ -106,9 +119,6 @@ rtclog2::FrameDecodedEvents::Codec ConvertToProtoFormat(VideoCodecType codec) {
       return rtclog2::FrameDecodedEvents::CODEC_AV1;
     case VideoCodecType::kVideoCodecH264:
       return rtclog2::FrameDecodedEvents::CODEC_H264;
-    case VideoCodecType::kVideoCodecMultiplex:
-      // This codec type is afaik not used.
-      return rtclog2::FrameDecodedEvents::CODEC_UNKNOWN;
     case VideoCodecType::kVideoCodecH265:
       return rtclog2::FrameDecodedEvents::CODEC_H265;
   }
@@ -447,16 +457,14 @@ void RtcEventLogEncoderNewFormat::EncodeRtpPacket(const Batch& batch,
   absl::optional<uint64_t> base_audio_level;
   absl::optional<uint64_t> base_voice_activity;
   {
-    bool voice_activity;
-    uint8_t audio_level;
-    if (base_event->template GetExtension<AudioLevel>(&voice_activity,
-                                                      &audio_level)) {
-      RTC_DCHECK_LE(audio_level, 0x7Fu);
-      base_audio_level = audio_level;
-      proto_batch->set_audio_level(audio_level);
+    AudioLevel audio_level;
+    if (base_event->template GetExtension<AudioLevelExtension>(&audio_level)) {
+      RTC_DCHECK_LE(audio_level.level(), 0x7Fu);
+      base_audio_level = audio_level.level();
+      proto_batch->set_audio_level(audio_level.level());
 
-      base_voice_activity = voice_activity;
-      proto_batch->set_voice_activity(voice_activity);
+      base_voice_activity = audio_level.voice_activity();
+      proto_batch->set_voice_activity(audio_level.voice_activity());
     }
   }
 
@@ -644,12 +652,10 @@ void RtcEventLogEncoderNewFormat::EncodeRtpPacket(const Batch& batch,
   // audio_level (RTP extension)
   for (size_t i = 0; i < values.size(); ++i) {
     const EventType* event = batch[i + 1];
-    bool voice_activity;
-    uint8_t audio_level;
-    if (event->template GetExtension<AudioLevel>(&voice_activity,
-                                                 &audio_level)) {
-      RTC_DCHECK_LE(audio_level, 0x7Fu);
-      values[i] = audio_level;
+    AudioLevel audio_level;
+    if (event->template GetExtension<AudioLevelExtension>(&audio_level)) {
+      RTC_DCHECK_LE(audio_level.level(), 0x7F);
+      values[i] = audio_level.level();
     } else {
       values[i].reset();
     }
@@ -662,12 +668,10 @@ void RtcEventLogEncoderNewFormat::EncodeRtpPacket(const Batch& batch,
   // voice_activity (RTP extension)
   for (size_t i = 0; i < values.size(); ++i) {
     const EventType* event = batch[i + 1];
-    bool voice_activity;
-    uint8_t audio_level;
-    if (event->template GetExtension<AudioLevel>(&voice_activity,
-                                                 &audio_level)) {
-      RTC_DCHECK_LE(audio_level, 0x7Fu);
-      values[i] = voice_activity;
+    AudioLevel audio_level;
+    if (event->template GetExtension<AudioLevelExtension>(&audio_level)) {
+      RTC_DCHECK_LE(audio_level.level(), 0x7F);
+      values[i] = audio_level.voice_activity();
     } else {
       values[i].reset();
     }

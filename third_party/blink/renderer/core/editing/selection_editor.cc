@@ -344,7 +344,7 @@ static Position UpdatePostionAfterAdoptingTextNodesMerged(
       return position;
     }
   }
-  NOTREACHED() << position;
+  NOTREACHED_IN_MIGRATION() << position;
   return position;
 }
 
@@ -415,8 +415,8 @@ void SelectionEditor::UpdateCachedVisibleSelectionIfNeeded() const {
   // Note: Since we |FrameCaret::updateApperance()| is called from
   // |FrameView::performPostLayoutTasks()|, we check lifecycle against
   // |AfterPerformLayout| instead of |LayoutClean|.
-  DCHECK_GE(GetDocument().Lifecycle().GetState(),
-            DocumentLifecycle::kAfterPerformLayout);
+  CHECK_GE(GetDocument().Lifecycle().GetState(),
+           DocumentLifecycle::kAfterPerformLayout);
   AssertSelectionValid();
   if (!NeedsUpdateVisibleSelection())
     return;

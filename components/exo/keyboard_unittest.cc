@@ -4,9 +4,10 @@
 
 #include "components/exo/keyboard.h"
 
+#include <string_view>
+
 #include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/accessibility/accessibility_controller.h"
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/keyboard/keyboard_controller_impl.h"
@@ -21,6 +22,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/exo/buffer.h"
 #include "components/exo/keyboard_delegate.h"
 #include "components/exo/keyboard_device_configuration_delegate.h"
@@ -56,7 +59,6 @@ constexpr uint32_t kShiftMask = 1 << 0;
 constexpr uint32_t kControlMask = 1 << 2;
 constexpr uint32_t kAltMask = 1 << 3;
 constexpr uint32_t kNumLockMask = 1 << 4;
-constexpr uint32_t kCommandMask = 1 << 6;
 
 class KeyboardTest : public test::ExoTestBase {
  public:
@@ -82,7 +84,7 @@ class MockKeyboardDelegate : public KeyboardDelegate {
   MOCK_METHOD(void,
               OnKeyRepeatSettingsChanged,
               (bool, base::TimeDelta, base::TimeDelta));
-  MOCK_METHOD(void, OnKeyboardLayoutUpdated, (base::StringPiece));
+  MOCK_METHOD(void, OnKeyboardLayoutUpdated, (std::string_view));
 };
 using NiceMockKeyboardDelegate = ::testing::NiceMock<MockKeyboardDelegate>;
 
@@ -159,20 +161,24 @@ TEST_F(KeyboardTest, CorrectSeatPressedKeysOnSwitchingDesks) {
     seat.WillProcessEvent(&key_event);
     GetEventGenerator()->Dispatch(&key_event);
 
-    EXPECT_EQ(type != ui::ET_KEY_RELEASED,
+    EXPECT_EQ(type != ui::EventType::kKeyReleased,
               seat.pressed_keys().count(PhysicalCode(code)));
 
     seat.DidProcessEvent(&key_event);
   };
 
   ash::DeskSwitchAnimationWaiter waiter;
-  displatch_key_event(ui::ET_KEY_PRESSED, ui::VKEY_MENU, ui::DomCode::ALT_LEFT,
+  displatch_key_event(ui::EventType::kKeyPressed, ui::VKEY_MENU,
+                      ui::DomCode::ALT_LEFT,
                       /*flags=*/0);
-  displatch_key_event(ui::ET_KEY_PRESSED, ui::VKEY_TAB, ui::DomCode::TAB,
+  displatch_key_event(ui::EventType::kKeyPressed, ui::VKEY_TAB,
+                      ui::DomCode::TAB,
                       /*flags=*/ui::EF_ALT_DOWN);
-  displatch_key_event(ui::ET_KEY_RELEASED, ui::VKEY_MENU, ui::DomCode::ALT_LEFT,
+  displatch_key_event(ui::EventType::kKeyReleased, ui::VKEY_MENU,
+                      ui::DomCode::ALT_LEFT,
                       /*flags=*/0);
-  displatch_key_event(ui::ET_KEY_RELEASED, ui::VKEY_TAB, ui::DomCode::TAB,
+  displatch_key_event(ui::EventType::kKeyReleased, ui::VKEY_TAB,
+                      ui::DomCode::TAB,
                       /*flags=*/0);
 
   EXPECT_TRUE(seat.pressed_keys().empty());
@@ -736,7 +742,7 @@ TEST_F(KeyboardTest, OnKeyboardKey_NotSendKeyIfConsumedByIme) {
       ui::DomCode::US_A);
 
   {
-    ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_A, 0);
+    ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_A, 0);
     ui::SetKeyboardImeFlags(&event, ui::kPropertyKeyboardImeHandledFlag);
     event.set_source_device_id(0);
     generator.Dispatch(&event);
@@ -785,8 +791,8 @@ TEST_F(KeyboardTest, OnKeyboardKey_KeyboardInhibit) {
 
   // Set lacros attribute now for testing. This can be removed, when
   // all clients are migrated into this model.
-  surface->window()->SetProperty(aura::client::kAppType,
-                                 static_cast<int>(ash::AppType::LACROS));
+  surface->window()->SetProperty(chromeos::kAppTypeKey,
+                                 chromeos::AppType::LACROS);
 
   aura::client::FocusClient* focus_client =
       aura::client::GetFocusClient(ash::Shell::GetPrimaryRootWindow());
@@ -860,8 +866,8 @@ TEST_F(KeyboardTest, KeyboardKey_SuppressAutoRepeat) {
 
   // Set lacros attribute now for testing. This can be removed, when
   // all clients are migrated into this model.
-  surface->window()->SetProperty(aura::client::kAppType,
-                                 static_cast<int>(ash::AppType::LACROS));
+  surface->window()->SetProperty(chromeos::kAppTypeKey,
+                                 chromeos::AppType::LACROS);
 
   aura::client::FocusClient* focus_client =
       aura::client::GetFocusClient(ash::Shell::GetPrimaryRootWindow());
@@ -898,7 +904,7 @@ TEST_F(KeyboardTest, KeyboardKey_SuppressAutoRepeat) {
   seat.set_physical_code_for_currently_processing_event_for_testing(
       ui::DomCode::US_X);
   {
-    ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_X, 0);
+    ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_X, 0);
     event.set_source_device_id(ui::ED_UNKNOWN_DEVICE);
     {
       ui::Event::Properties properties;
@@ -929,7 +935,7 @@ TEST_F(KeyboardTest, KeyboardKey_SuppressAutoRepeat) {
   seat.set_physical_code_for_currently_processing_event_for_testing(
       ui::DomCode::US_Y);
   {
-    ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_Y, 0);
+    ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_Y, 0);
     event.set_source_device_id(ui::ED_UNKNOWN_DEVICE);
     {
       ui::Event::Properties properties;
@@ -959,8 +965,8 @@ TEST_F(KeyboardTest, FocusWithArcOverlay) {
     void PopulateProperties(
         const Params& params,
         ui::PropertyHandler& out_properties_container) override {
-      out_properties_container.SetProperty(
-          aura::client::kAppType, static_cast<int>(ash::AppType::ARC_APP));
+      out_properties_container.SetProperty(chromeos::kAppTypeKey,
+                                           chromeos::AppType::ARC_APP);
     }
   };
   WMHelper::GetInstance()->RegisterAppPropertyResolver(
@@ -985,8 +991,7 @@ TEST_F(KeyboardTest, FocusWithArcOverlay) {
   auto surface = std::make_unique<Surface>();
   auto shell_surface = std::make_unique<ShellSurface>(surface.get());
   gfx::Size buffer_size(10, 10);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   surface->SetClientSurfaceId("billing_id:test");
   surface->Attach(buffer.get());
   surface->Commit();
@@ -1369,8 +1374,7 @@ TEST_F(KeyboardTest, AckKeyboardKey) {
   auto surface = std::make_unique<Surface>();
   auto shell_surface = std::make_unique<TestShellSurface>(surface.get());
   gfx::Size buffer_size(10, 10);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   surface->Attach(buffer.get());
   surface->Commit();
 
@@ -1530,8 +1534,7 @@ TEST_F(KeyboardTest, AckKeyboardKeyExpired) {
   std::unique_ptr<Surface> surface(new Surface);
   auto shell_surface = std::make_unique<TestShellSurface>(surface.get());
   gfx::Size buffer_size(10, 10);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   surface->Attach(buffer.get());
   surface->Commit();
 
@@ -1602,13 +1605,13 @@ TEST_F(KeyboardTest, AckKeyboardKeyAcceleratorOnRelease) {
 
   // Set lacros attribute now for testing. This can be removed, when
   // all clients are migrated into this model.
-  surface->window()->SetProperty(aura::client::kAppType,
-                                 static_cast<int>(ash::AppType::LACROS));
+  surface->window()->SetProperty(chromeos::kAppTypeKey,
+                                 chromeos::AppType::LACROS);
 
   // Register accelerator to be triggered.
   ui::TestAcceleratorTarget accelerator_target;
   {
-    ui::Accelerator accelerator(ui::VKEY_LWIN, 0,
+    ui::Accelerator accelerator(ui::VKEY_CONTROL, 0,
                                 ui::Accelerator::KeyState::RELEASED);
     ash::AcceleratorControllerImpl* controller =
         ash::Shell::Get()->accelerator_controller();
@@ -1638,16 +1641,16 @@ TEST_F(KeyboardTest, AckKeyboardKeyAcceleratorOnRelease) {
   ui::test::EventGenerator generator(ash::Shell::GetPrimaryRootWindow());
   keyboard.SetNeedKeyboardKeyAcks(true);
 
-  // Press SEARCH key.
+  // Press CONTROL key.
   EXPECT_CALL(*delegate_ptr, OnKeyboardModifiers(KeyboardModifiers{
-                                 kCommandMask | kNumLockMask, 0, 0, 0}));
+                                 kControlMask | kNumLockMask, 0, 0, 0}));
   EXPECT_CALL(*delegate_ptr,
-              OnKeyboardKey(testing::_, ui::DomCode::META_LEFT, true))
+              OnKeyboardKey(testing::_, ui::DomCode::CONTROL_LEFT, true))
       .WillOnce(testing::Return(1));
 
   seat.set_physical_code_for_currently_processing_event_for_testing(
-      ui::DomCode::META_LEFT);
-  generator.PressKey(ui::VKEY_LWIN, ui::EF_COMMAND_DOWN);
+      ui::DomCode::CONTROL_LEFT);
+  generator.PressKey(ui::VKEY_CONTROL, ui::EF_CONTROL_DOWN);
   // SEARCH key can be used as a modifier, so it is handled in release event.
   // Thus accelerator handler should not be triggered.
   EXPECT_EQ(0, accelerator_target.accelerator_count());
@@ -1663,9 +1666,9 @@ TEST_F(KeyboardTest, AckKeyboardKeyAcceleratorOnRelease) {
   EXPECT_CALL(*delegate_ptr,
               OnKeyboardModifiers(KeyboardModifiers{kNumLockMask, 0, 0, 0}));
   EXPECT_CALL(*delegate_ptr,
-              OnKeyboardKey(testing::_, ui::DomCode::META_LEFT, false))
+              OnKeyboardKey(testing::_, ui::DomCode::CONTROL_LEFT, false))
       .WillOnce(testing::Return(2));
-  generator.ReleaseKey(ui::VKEY_LWIN, 0);
+  generator.ReleaseKey(ui::VKEY_CONTROL, 0);
   testing::Mock::VerifyAndClearExpectations(delegate_ptr);
   // Now the accelerator should be handled.
   EXPECT_EQ(1, accelerator_target.accelerator_count());
@@ -1703,8 +1706,7 @@ TEST_F(KeyboardTest, AckKeyboardKeyExpiredWithMovingFocusAccelerator) {
       std::make_unique<TestShellSurfaceWithMovingFocusAccelerator>(
           surface.get());
   gfx::Size buffer_size(10, 10);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   surface->Attach(buffer.get());
   surface->Commit();
 

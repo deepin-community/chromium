@@ -5,6 +5,7 @@
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 
 #include <memory>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -44,15 +45,16 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registrar_observer.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/crx_file/id_util.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/webapps/browser/install_result_code.h"
+#include "components/webapps/common/web_app_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -243,7 +245,7 @@ class MockAppRegistrarObserver : public WebAppRegistrarObserver {
     return on_policy_changed_call_count;
   }
 
-  void OnAppRegistrarDestroyed() override { NOTREACHED(); }
+  void OnAppRegistrarDestroyed() override { NOTREACHED_IN_MIGRATION(); }
 
  private:
   int on_policy_changed_call_count = 0;
@@ -320,7 +322,7 @@ ExternalInstallOptions GetCustomAppIconInstallOptions(
   return options;
 }
 
-void SetWebAppSettingsListPref(Profile* profile, const base::StringPiece pref) {
+void SetWebAppSettingsListPref(Profile* profile, const std::string_view pref) {
   ASSERT_OK_AND_ASSIGN(
       auto result,
       base::JSONReader::ReadAndReturnValueWithError(
@@ -330,7 +332,7 @@ void SetWebAppSettingsListPref(Profile* profile, const base::StringPiece pref) {
 }
 
 void SetWebAppInstallForceListPref(Profile* profile,
-                                   const base::StringPiece pref) {
+                                   const std::string_view pref) {
   ASSERT_OK_AND_ASSIGN(
       auto result,
       base::JSONReader::ReadAndReturnValueWithError(
@@ -356,7 +358,7 @@ class WebAppPolicyManagerTestBase : public ChromeRenderViewHostTestHarness {
     // Need to run the ChromeRenderViewHostTestHarness::SetUp() after the fake
     // user manager set up so that the scoped_user_manager can be destructed in
     // the correct order.
-    // TODO(crbug.com/1463865): Consider setting up a fake user in all Ash web
+    // TODO(crbug.com/40275387): Consider setting up a fake user in all Ash web
     // app tests.
     auto user_manager = std::make_unique<ash::FakeChromeUserManager>();
     auto* fake_user_manager = user_manager.get();
@@ -415,14 +417,14 @@ class WebAppPolicyManagerTestBase : public ChromeRenderViewHostTestHarness {
             }));
     fake_externally_managed_app_manager_->SetHandleUninstallRequestCallback(
         base::BindLambdaForTesting(
-            [this](const GURL& app_url,
-                   ExternalInstallSource install_source) -> bool {
+            [this](const GURL& app_url, ExternalInstallSource install_source)
+                -> webapps::UninstallResultCode {
               std::optional<webapps::AppId> app_id =
                   app_registrar().LookupExternalAppId(app_url);
               if (app_id) {
                 UnregisterApp(*app_id);
               }
-              return true;
+              return webapps::UninstallResultCode::kAppRemoved;
             }));
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -461,9 +463,7 @@ class WebAppPolicyManagerTestBase : public ChromeRenderViewHostTestHarness {
  protected:
   void InstallPwa(const std::string& url) {
     std::unique_ptr<WebAppInstallInfo> web_app_info =
-        std::make_unique<WebAppInstallInfo>(
-            GenerateManifestIdFromStartUrlOnly(GURL(url)));
-    web_app_info->start_url = GURL(url);
+        WebAppInstallInfo::CreateWithStartUrlForTesting(GURL(url));
     web_app::test::InstallWebApp(profile(), std::move(web_app_info));
   }
 
@@ -1688,16 +1688,11 @@ class WebAppPolicyForceUnregistrationTest : public WebAppTest {
 
   void SetUp() override {
     WebAppTest::SetUp();
-    scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{features::kOsIntegrationSubManagers,
-          {{"stage", "execute_and_write_config"}}},
-         {web_app::kDesktopPWAsForceUnregisterOSIntegration, {}}},
-        /*disabled_features=*/{});
-
+    scoped_feature_list_.InitAndEnableFeature(
+        web_app::kDesktopPWAsForceUnregisterOSIntegration);
     {
       base::ScopedAllowBlockingForTesting allow_blocking;
-      test_override_ =
-          OsIntegrationTestOverrideImpl::OverrideForTesting(base::GetHomeDir());
+      test_override_ = OsIntegrationTestOverrideImpl::OverrideForTesting();
     }
     provider_ = FakeWebAppProvider::Get(profile());
 
@@ -1705,11 +1700,9 @@ class WebAppPolicyForceUnregistrationTest : public WebAppTest {
         std::make_unique<WebAppFileHandlerManager>(profile());
     auto protocol_handler_manager =
         std::make_unique<WebAppProtocolHandlerManager>(profile());
-    auto shortcut_manager = std::make_unique<WebAppShortcutManager>(
-        profile(), file_handler_manager.get(), protocol_handler_manager.get());
     auto os_integration_manager = std::make_unique<OsIntegrationManager>(
-        profile(), std::move(shortcut_manager), std::move(file_handler_manager),
-        std::move(protocol_handler_manager), /*url_handler_manager=*/nullptr);
+        profile(), std::move(file_handler_manager),
+        std::move(protocol_handler_manager));
 
     provider_->SetOsIntegrationManager(std::move(os_integration_manager));
     test::AwaitStartWebAppProviderAndSubsystems(profile());
@@ -1741,14 +1734,13 @@ class WebAppPolicyForceUnregistrationTest : public WebAppTest {
       std::map<SquareSizePx, SkBitmap> icon_map,
       const GURL manifest_id) {
     std::unique_ptr<WebAppInstallInfo> info =
-        std::make_unique<WebAppInstallInfo>();
-    info->start_url = manifest_id;
+        std::make_unique<WebAppInstallInfo>(webapps::ManifestId(manifest_id),
+                                            /*start_url=*/manifest_id);
     // The name of the app should also change, otherwise on Mac and Windows, the
     // shortcuts are stored as name(1) and gets wiped out with name.
     info->title = base::UTF8ToUTF16(manifest_id.host());
     info->user_display_mode = web_app::mojom::UserDisplayMode::kStandalone;
     info->icon_bitmaps.any = std::move(icon_map);
-    info->manifest_id = manifest_id;
     base::test::TestFuture<const webapps::AppId&, webapps::InstallResultCode>
         result;
     provider().scheduler().InstallFromInfoWithParams(

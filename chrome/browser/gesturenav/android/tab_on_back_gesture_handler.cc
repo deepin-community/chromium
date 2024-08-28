@@ -4,18 +4,21 @@
 
 #include "chrome/browser/gesturenav/android/tab_on_back_gesture_handler.h"
 
-#include "chrome/browser/gesturenav/android/jni_headers/TabOnBackGestureHandler_jni.h"
 #include "content/public/browser/back_forward_transition_animation_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
 #include "ui/gfx/geometry/point_f.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/gesturenav/android/jni_headers/TabOnBackGestureHandler_jni.h"
+
 namespace gesturenav {
 
 namespace {
 
-using NavType = content::BackForwardTransitionAnimationManager::NavigationType;
+using NavDirection =
+    content::BackForwardTransitionAnimationManager::NavigationDirection;
 
 void AssertHasWindowAndCompositor(content::WebContents* web_contents) {
   CHECK(web_contents);
@@ -47,7 +50,7 @@ void TabOnBackGestureHandler::OnBackStarted(JNIEnv* env,
 
   web_contents->GetBackForwardTransitionAnimationManager()->OnGestureStarted(
       back_gesture, static_cast<ui::BackGestureEventSwipeEdge>(edge),
-      forward ? NavType::kForward : NavType::kBackward);
+      forward ? NavDirection::kForward : NavDirection::kBackward);
 }
 
 void TabOnBackGestureHandler::OnBackProgressed(JNIEnv* env,
@@ -63,7 +66,7 @@ void TabOnBackGestureHandler::OnBackProgressed(JNIEnv* env,
   CHECK_EQ(started_edge_, static_cast<ui::BackGestureEventSwipeEdge>(edge));
 
   if (progress > 1.f) {
-    // TODO(https://crbug.com/1510932): Happens in fling. Should figure out why
+    // TODO(crbug.com/41483519): Happens in fling. Should figure out why
     // before launch. Cap the progress at 1.f for now.
     LOG(ERROR) << "TabOnBackGestureHandler::OnBackProgressed " << progress;
     progress = 1.f;

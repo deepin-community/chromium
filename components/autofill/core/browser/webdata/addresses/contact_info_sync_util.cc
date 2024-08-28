@@ -112,10 +112,6 @@ class ContactInfoEntryDataSetter {
                    FieldType type) const {
     metadata->set_status(ConvertProfileToSpecificsVerificationStatus(
         profile_->GetVerificationStatus(type)));
-    if (!base::FeatureList::IsEnabled(
-            features::kAutofillTrackProfileTokenQuality)) {
-      return;
-    }
     if (auto observations = profile_->token_quality().observations_.find(type);
         observations != profile_->token_quality().observations_.end()) {
       for (const ProfileTokenQuality::Observation& observation :
@@ -150,9 +146,7 @@ class ContactInfoProfileSetter {
  private:
   void SetObservations(const ContactInfoSpecifics::TokenMetadata& metadata,
                        FieldType type) const {
-    if (metadata.observations().empty() ||
-        !base::FeatureList::IsEnabled(
-            features::kAutofillTrackProfileTokenQuality)) {
+    if (metadata.observations().empty()) {
       return;
     }
     // If the value of the `type` was changed by an external integrator, the
@@ -220,6 +214,8 @@ sync_pb::ContactInfoSpecifics ContactInfoSpecificsFromAutofillProfile(
         ADDRESS_HOME_STREET_NAME);
   s.Set(specifics.mutable_address_thoroughfare_number(),
         ADDRESS_HOME_HOUSE_NUMBER);
+  s.Set(specifics.mutable_address_thoroughfare_number_and_apt(),
+        ADDRESS_HOME_HOUSE_NUMBER_AND_APT);
   s.Set(specifics.mutable_address_street_location(),
         ADDRESS_HOME_STREET_LOCATION);
   s.Set(specifics.mutable_address_subpremise_name(), ADDRESS_HOME_SUBPREMISE);
@@ -355,6 +351,8 @@ std::unique_ptr<AutofillProfile> CreateAutofillProfileFromContactInfoSpecifics(
         ADDRESS_HOME_DEPENDENT_LOCALITY);
   s.Set(specifics.address_thoroughfare_name(), ADDRESS_HOME_STREET_NAME);
   s.Set(specifics.address_thoroughfare_number(), ADDRESS_HOME_HOUSE_NUMBER);
+  s.Set(specifics.address_thoroughfare_number_and_apt(),
+        ADDRESS_HOME_HOUSE_NUMBER_AND_APT);
   s.Set(specifics.address_street_location(), ADDRESS_HOME_STREET_LOCATION);
   s.Set(specifics.address_subpremise_name(), ADDRESS_HOME_SUBPREMISE);
   if (base::FeatureList::IsEnabled(
@@ -524,6 +522,10 @@ sync_pb::ContactInfoSpecifics TrimContactInfoSpecificsDataForCaching(
   if (d.Delete(
           trimmed_specifics.mutable_address_street_location_and_locality())) {
     trimmed_specifics.clear_address_street_location_and_locality();
+  }
+  if (d.Delete(
+          trimmed_specifics.mutable_address_thoroughfare_number_and_apt())) {
+    trimmed_specifics.clear_address_thoroughfare_number_and_apt();
   }
   // Delete email, phone and company values and statuses.
   if (d.Delete(trimmed_specifics.mutable_email_address())) {

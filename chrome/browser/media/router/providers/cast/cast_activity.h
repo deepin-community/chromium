@@ -97,7 +97,8 @@ class CastActivity {
                                         std::optional<int> request_id);
 
   // Handles a message forwarded by CastActivityManager.
-  virtual void OnAppMessage(const cast::channel::CastMessage& message) = 0;
+  virtual void OnAppMessage(
+      const openscreen::cast::proto::CastMessage& message) = 0;
   virtual void OnInternalMessage(
       const cast_channel::InternalMessage& message) = 0;
 
@@ -184,7 +185,7 @@ class CastActivity {
   MediaRoute route_;
   std::string app_id_;
 
-  // TODO(https://crbug.com/809249): Consider wrapping CastMessageHandler with
+  // TODO(crbug.com/40561499): Consider wrapping CastMessageHandler with
   // known parameters (sink, client ID, session transport ID) and passing them
   // to objects that need to send messages to the receiver.
   const raw_ptr<cast_channel::CastMessageHandler> message_handler_;

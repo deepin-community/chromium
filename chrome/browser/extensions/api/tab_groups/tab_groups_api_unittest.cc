@@ -82,7 +82,7 @@ base::Value::Dict RunTabGroupsGetFunction(
 // Creates an extension with "tabGroups" permission.
 scoped_refptr<const Extension> CreateTabGroupsExtension() {
   return ExtensionBuilder("Extension with tabGroups permission")
-      .AddPermission("tabGroups")
+      .AddAPIPermission("tabGroups")
       .Build();
 }
 
@@ -134,8 +134,6 @@ void TabGroupsApiUnitTest::SetUp() {
 
   // Create a browser window.
   browser_window_ = std::make_unique<TestBrowserWindow>();
-  // TestBrowserWindowOwner handles its own lifetime, and also cleans up
-  // |window2|.
   Browser::CreateParams params(profile(), /* user_gesture */ true);
   params.type = Browser::TYPE_NORMAL;
   params.window = browser_window_.get();
@@ -174,15 +172,17 @@ void TabGroupsApiUnitTest::TearDown() {
 // tests querying on a TabStripModel that doesnt support tab groups
 TEST_F(TabGroupsApiUnitTest, TabStripModelWithNoTabGroupFails) {
   // Create a new window that doesnt support groups and add a few tabs.
-  TestBrowserWindow* window2 = new TestBrowserWindow;
+  auto window2 = std::make_unique<TestBrowserWindow>();
+
+  Browser::CreateParams params(profile(), /* user_gesture */ true);
+  params.type = Browser::TYPE_NORMAL;
+  params.window = window2.get();
+  params.are_tab_groups_enabled = false;
 
   // TestBrowserWindowOwner handles its own lifetime, and also cleans up
   // |window2|.
-  new TestBrowserWindowOwner(window2);
-  Browser::CreateParams params(profile(), /* user_gesture */ true);
-  params.type = Browser::TYPE_NORMAL;
-  params.window = window2;
-  params.are_tab_groups_enabled = false;
+  new TestBrowserWindowOwner(std::move(window2));
+
   std::unique_ptr<Browser> browser2(Browser::Create(params));
   BrowserList::SetLastActive(browser2.get());
 
@@ -374,10 +374,8 @@ TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateError) {
             error);
 }
 
-// Test that tabGroups.update() fails on a saved group.
-TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTabGroupsError) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures({features::kTabGroupsSave}, {});
+// Test that tabGroups.update() passes on a saved group.
+TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTab) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
   ASSERT_TRUE(tab_strip_model->SupportsTabGroups());
 
@@ -389,8 +387,8 @@ TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTabGroupsError) {
       u"Initial title", tab_groups::TabGroupColorId::kBlue);
   tab_group_model->GetTabGroup(group)->SetVisualData(visual_data);
 
-  SavedTabGroupKeyedService* saved_service =
-      SavedTabGroupServiceFactory::GetInstance()->GetForProfile(
+  tab_groups::SavedTabGroupKeyedService* saved_service =
+      tab_groups::SavedTabGroupServiceFactory::GetInstance()->GetForProfile(
           browser()->profile());
   ASSERT_NE(saved_service, nullptr);
   saved_service->SaveGroup(group);
@@ -399,15 +397,18 @@ TEST_F(TabGroupsApiUnitTest, TabGroupsUpdateSavedTabGroupsError) {
 
   scoped_refptr<const Extension> extension = CreateTabGroupsExtension();
 
-  // Try to update a non-existent group and expect an error.
+  // Update the group, visual metadata, it should pass.
   auto function = base::MakeRefCounted<TabGroupsUpdateFunction>();
   function->set_extension(extension);
   constexpr char kFormatArgs[] =
       R"([%d, {"title": "another title", "color": "red"}])";
   const std::string args = base::StringPrintf(kFormatArgs, group_id);
-  std::string error = api_test_utils::RunFunctionAndReturnError(
-      function.get(), args, profile(), api_test_utils::FunctionMode::kNone);
-  EXPECT_EQ(tabs_constants::kSavedTabGroupNotEditableError, error);
+  EXPECT_TRUE(api_test_utils::RunFunction(function.get(), args, profile(),
+                                          api_test_utils::FunctionMode::kNone));
+
+  // Check that values were updated.
+  ASSERT_TRUE(tab_group_model->GetTabGroup(group)->visual_data()->title() ==
+              u"another title");
 }
 
 // Test that moving a group to the right results in the correct tab order.
@@ -561,13 +562,15 @@ TEST_F(TabGroupsApiUnitTest, TabGroupsMoveAcrossWindows) {
   int group_id = tab_groups_util::GetGroupId(group);
 
   // Create a new window and add a few tabs.
-  TestBrowserWindow* window2 = new TestBrowserWindow;
-  // TestBrowserWindowOwner handles its own lifetime, and also cleans up
-  // |window2|.
-  new TestBrowserWindowOwner(window2);
+  auto window2 = std::make_unique<TestBrowserWindow>();
   Browser::CreateParams params(profile(), /* user_gesture */ true);
   params.type = Browser::TYPE_NORMAL;
-  params.window = window2;
+  params.window = window2.get();
+
+  // TestBrowserWindowOwner handles its own lifetime, and also cleans up
+  // |window2|.
+  new TestBrowserWindowOwner(std::move(window2));
+
   std::unique_ptr<Browser> browser2(Browser::Create(params));
   BrowserList::SetLastActive(browser2.get());
   int window_id2 = ExtensionTabUtil::GetWindowId(browser2.get());

@@ -108,7 +108,7 @@
       !_dropData.download_metadata.empty()) {
     std::string mimeType;
 
-    // TODO(https://crbug.com/898608): The |downloadFileName_| and
+    // TODO(crbug.com/40599578): The |downloadFileName_| and
     // |downloadURL_| values should be computed by the caller.
     if (_dropData.download_metadata.empty()) {
       std::optional<base::FilePath> suggestedFilename =
@@ -206,7 +206,7 @@
   }
 
   if (!_dropData.custom_data.empty()) {
-    [writableTypes addObject:ui::kUTTypeChromiumWebCustomData];
+    [writableTypes addObject:ui::kUTTypeChromiumDataTransferCustomData];
   }
 
   return writableTypes;
@@ -280,7 +280,8 @@
     base::FilePath filePath =
         base::apple::NSURLToFilePath([NSURL URLWithString:dropDestination]);
     filePath = filePath.Append(_downloadFileName);
-    _host->DragPromisedFileTo(filePath, _dropData, _downloadURL, &filePath);
+    _host->DragPromisedFileTo(filePath, _dropData, _downloadURL, _sourceOrigin,
+                              &filePath);
 
     // The process of writing the file may have altered the value of
     // `filePath` if, say, an existing file at the drop site already had that
@@ -295,7 +296,7 @@
   }
 
   // Custom MIME data.
-  if ([type isEqualToString:ui::kUTTypeChromiumWebCustomData]) {
+  if ([type isEqualToString:ui::kUTTypeChromiumDataTransferCustomData]) {
     base::Pickle pickle;
     ui::WriteCustomDataToPickle(_dropData.custom_data, &pickle);
     return [NSData dataWithBytes:pickle.data() length:pickle.size()];
@@ -316,7 +317,7 @@
   }
 
   // Oops! Unknown drag pasteboard type.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return [NSData data];
 }
 

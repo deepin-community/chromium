@@ -13,9 +13,9 @@ import * as PerfUI from '../../ui/legacy/components/perf_ui/perf_ui.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
-import {ProfileFlameChartDataProvider} from './CPUProfileFlameChart.js';
 import {Events, HeapTimelineOverview, type IdsRangeChangedEvent, type Samples} from './HeapTimelineOverview.js';
 import {type Formatter, type ProfileDataGridNode} from './ProfileDataGrid.js';
+import {ProfileFlameChartDataProvider} from './ProfileFlameChartDataProvider.js';
 import {ProfileEvents, type ProfileHeader, ProfileType} from './ProfileHeader.js';
 import {ProfileView, WritableProfileHeader} from './ProfileView.js';
 
@@ -60,7 +60,7 @@ const UIStrings = {
   /**
    *@description The title for the collection of profiles that are gathered from various snapshots of the heap, using a sampling (e.g. every 1/100) technique.
    */
-  samplingProfiles: 'SAMPLING PROFILES',
+  samplingProfiles: 'Sampling profiles',
   /**
    *@description Description (part 1) in Heap Profile View of a profiler tool
    */
@@ -152,7 +152,7 @@ export class HeapProfileView extends ProfileView implements UI.SearchableView.Se
 
     this.timelineOverview = new HeapTimelineOverview();
 
-    if (Root.Runtime.experiments.isEnabled('samplingHeapProfilerTimeline')) {
+    if (Root.Runtime.experiments.isEnabled('sampling-heap-profiler-timeline')) {
       this.timelineOverview.addEventListener(Events.IdsRangeChanged, this.onIdsRangeChanged.bind(this));
       this.timelineOverview.show(this.element, this.element.firstChild);
       this.timelineOverview.start();
@@ -376,7 +376,7 @@ export class SamplingHeapProfileType extends SamplingHeapProfileTypeBase {
   }
 
   override hasTemporaryView(): boolean {
-    return Root.Runtime.experiments.isEnabled('samplingHeapProfilerTimeline');
+    return Root.Runtime.experiments.isEnabled('sampling-heap-profiler-timeline');
   }
 
   override startSampling(): void {
@@ -386,7 +386,7 @@ export class SamplingHeapProfileType extends SamplingHeapProfileTypeBase {
     }
 
     void heapProfilerModel.startSampling();
-    if (Root.Runtime.experiments.isEnabled('samplingHeapProfilerTimeline')) {
+    if (Root.Runtime.experiments.isEnabled('sampling-heap-profiler-timeline')) {
       this.updateTimer = window.setTimeout(() => {
         void this.updateStats();
       }, this.updateIntervalMs);
@@ -626,7 +626,6 @@ export class NodeFormatter implements Formatter {
 export class HeapFlameChartDataProvider extends ProfileFlameChartDataProvider {
   readonly profile: CPUProfile.ProfileTreeModel.ProfileTreeModel;
   readonly heapProfilerModel: SDK.HeapProfilerModel.HeapProfilerModel|null;
-  timelineDataInternal?: PerfUI.FlameChart.FlameChartTimelineData;
 
   constructor(
       profile: CPUProfile.ProfileTreeModel.ProfileTreeModel,

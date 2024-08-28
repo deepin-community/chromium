@@ -28,7 +28,6 @@
 #include "src/tint/lang/core/ir/switch.h"
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/core/ir/ir_helper_test.h"
 
 namespace tint::core::ir {
@@ -76,6 +75,7 @@ TEST_F(IR_SwitchTest, Clone) {
         auto& case1 = cases[0];
         EXPECT_NE(nullptr, case1.block);
         EXPECT_NE(switch_->Cases()[0].block, case1.block);
+        EXPECT_EQ(case1.block->Parent(), new_switch);
 
         ASSERT_EQ(2u, case1.selectors.Length());
         EXPECT_EQ(nullptr, case1.selectors[0].val);
@@ -88,6 +88,7 @@ TEST_F(IR_SwitchTest, Clone) {
         auto& case2 = cases[1];
         EXPECT_NE(nullptr, case2.block);
         EXPECT_NE(switch_->Cases()[1].block, case2.block);
+        EXPECT_EQ(case2.block->Parent(), new_switch);
 
         ASSERT_EQ(1u, case2.selectors.Length());
         auto val = case2.selectors[0].val->Value();

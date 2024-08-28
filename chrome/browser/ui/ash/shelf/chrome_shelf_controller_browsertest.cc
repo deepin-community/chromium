@@ -80,6 +80,7 @@
 #include "chrome/browser/ui/extensions/app_launch_params.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_app_window_icon_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -160,7 +161,7 @@ using ::web_app::WebAppProvider;
 
 ash::ShelfAction SelectItem(
     const ash::ShelfID& id,
-    ui::EventType event_type = ui::ET_MOUSE_PRESSED,
+    ui::EventType event_type = ui::EventType::kMousePressed,
     int64_t display_id = display::kInvalidDisplayId,
     ash::ShelfLaunchSource source = ash::LAUNCH_FROM_UNKNOWN) {
   return SelectShelfItem(id, event_type, display_id, source);
@@ -319,7 +320,7 @@ class ShelfPlatformAppBrowserTest : public extensions::PlatformAppBrowserTest {
 class ShelfAppBrowserTest : public extensions::ExtensionBrowserTest {
  protected:
   ShelfAppBrowserTest() {
-    // TODO(crbug.com/1258445): Update expectations to support Lacros.
+    // TODO(crbug.com/40201067): Update expectations to support Lacros.
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/{},
         /*disabled_features=*/ash::standalone_browser::GetFeatureRefs());
@@ -349,8 +350,9 @@ class ShelfAppBrowserTest : public extensions::ExtensionBrowserTest {
                                           int32_t event_flags) {
     EXPECT_TRUE(LoadExtension(test_data_dir_.AppendASCII(name)));
 
-    const Extension* extension = extension_registry()->GetExtensionById(
-        last_loaded_extension_id(), extensions::ExtensionRegistry::ENABLED);
+    const Extension* extension =
+        extension_registry()->enabled_extensions().GetByID(
+            last_loaded_extension_id());
     EXPECT_TRUE(extension);
 
     auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile());
@@ -364,8 +366,9 @@ class ShelfAppBrowserTest : public extensions::ExtensionBrowserTest {
     LoadExtension(test_data_dir_.AppendASCII(name));
 
     // First get app_id.
-    const Extension* extension = extension_registry()->GetExtensionById(
-        last_loaded_extension_id(), extensions::ExtensionRegistry::ENABLED);
+    const Extension* extension =
+        extension_registry()->enabled_extensions().GetByID(
+            last_loaded_extension_id());
     const std::string app_id = extension->id();
 
     // Then create a shortcut.
@@ -465,8 +468,8 @@ class ShelfWebAppBrowserTest : public ShelfAppBrowserTest {
   }
 
   webapps::AppId InstallWebApp(const GURL& start_url) {
-    auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-    web_app_info->start_url = start_url;
+    auto web_app_info =
+        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
     web_app_info->scope = start_url.GetWithoutFilename();
     return web_app::test::InstallWebApp(browser()->profile(),
                                         std::move(web_app_info));
@@ -762,7 +765,8 @@ IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest, MultipleApps) {
 
 // Confirm that app windows can be reactivated by clicking their icons and that
 // the correct activation order is maintained.
-IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest, WindowActivation) {
+// TODO(crbug.com/331536126): This test is flaky.
+IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest, DISABLED_WindowActivation) {
   int item_count = shelf_model()->item_count();
 
   // First run app.
@@ -807,10 +811,10 @@ IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest, WindowActivation) {
   EXPECT_TRUE(window1b->GetBaseWindow()->IsActive());
 
   // Key events selecting app1's shelf item will cycle through its windows.
-  SelectItem(item_id1, ui::ET_KEY_RELEASED);
+  SelectItem(item_id1, ui::EventType::kKeyReleased);
   EXPECT_TRUE(window1->GetBaseWindow()->IsActive());
   EXPECT_FALSE(window1b->GetBaseWindow()->IsActive());
-  SelectItem(item_id1, ui::ET_KEY_RELEASED);
+  SelectItem(item_id1, ui::EventType::kKeyReleased);
   EXPECT_FALSE(window1->GetBaseWindow()->IsActive());
   EXPECT_TRUE(window1b->GetBaseWindow()->IsActive());
 
@@ -1121,7 +1125,7 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, LaunchAppFromDisplayWithoutFocus0) {
   // Launches an app from the shelf of display 0 and expects a new tab is opened
   // in the uppermost browser in display 0.
   ash::ShelfID shortcut_id = CreateShortcut("app1");
-  SelectItem(shortcut_id, ui::ET_MOUSE_PRESSED, displays[1].id());
+  SelectItem(shortcut_id, ui::EventType::kMousePressed, displays[1].id());
   EXPECT_EQ(browser0->tab_strip_model()->count(), 1);
   EXPECT_EQ(browser1->tab_strip_model()->count(), 1);
   EXPECT_EQ(browser2->tab_strip_model()->count(), 2);
@@ -1159,7 +1163,7 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, LaunchAppFromDisplayWithoutFocus1) {
   // Launches an app from the shelf of display 0 and expects a new browser with
   // one tab is opened in display 0.
   ash::ShelfID shortcut_id = CreateShortcut("app1");
-  SelectItem(shortcut_id, ui::ET_MOUSE_PRESSED, displays[1].id());
+  SelectItem(shortcut_id, ui::EventType::kMousePressed, displays[1].id());
   Browser* browser1 = browser_list->GetLastActive();
   EXPECT_EQ(browser_list->size(), 2U);
   EXPECT_NE(browser1, browser0);
@@ -1500,9 +1504,9 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, TabDragAndDrop) {
 
   // Detach a tab at index 1 (app1) from |tab_strip_model1| and insert it as an
   // active tab at index 1 to |tab_strip_model2|.
-  std::unique_ptr<content::WebContents> detached_tab =
-      tab_strip_model1->DetachWebContentsAtForInsertion(1);
-  tab_strip_model2->InsertWebContentsAt(1, std::move(detached_tab),
+  std::unique_ptr<tabs::TabModel> detached_tab =
+      tab_strip_model1->DetachTabAtForInsertion(1);
+  tab_strip_model2->InsertDetachedTabAt(1, std::move(detached_tab),
                                         AddTabTypes::ADD_ACTIVE);
   EXPECT_EQ(1, tab_strip_model1->count());
   EXPECT_EQ(2, tab_strip_model2->count());
@@ -1649,8 +1653,9 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestNoDefaultBrowser,
   size_t tabs = BrowserShortcutMenuItemCount(true);
 
   // Create a second browser.
-  const Extension* extension = extension_registry()->GetExtensionById(
-      last_loaded_extension_id(), extensions::ExtensionRegistry::ENABLED);
+  const Extension* extension =
+      extension_registry()->enabled_extensions().GetByID(
+          last_loaded_extension_id());
   EXPECT_TRUE(extension);
   apps::AppServiceProxyFactory::GetForProfile(profile())->LaunchAppWithParams(
       apps::AppLaunchParams(
@@ -1698,9 +1703,9 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, AltNumberTabsTabbing) {
   // The active tab should still be the unnamed tab. Then we switch and reach
   // the first app and stay there.
   EXPECT_EQ(content1a, tab_strip->GetActiveWebContents());
-  SelectItem(shortcut_id, ui::ET_KEY_RELEASED);
+  SelectItem(shortcut_id, ui::EventType::kKeyReleased);
   EXPECT_EQ(content1, tab_strip->GetActiveWebContents());
-  SelectItem(shortcut_id, ui::ET_KEY_RELEASED);
+  SelectItem(shortcut_id, ui::EventType::kKeyReleased);
   EXPECT_EQ(content1, tab_strip->GetActiveWebContents());
 
   ui_test_utils::NavigateToURLWithDisposition(
@@ -1709,15 +1714,17 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTest, AltNumberTabsTabbing) {
   content::WebContents* content2 = tab_strip->GetActiveWebContents();
 
   EXPECT_EQ(content2, browser()->tab_strip_model()->GetActiveWebContents());
-  SelectItem(shortcut_id, ui::ET_KEY_RELEASED);
+  SelectItem(shortcut_id, ui::EventType::kKeyReleased);
   EXPECT_EQ(content1, browser()->tab_strip_model()->GetActiveWebContents());
-  SelectItem(shortcut_id, ui::ET_KEY_RELEASED);
+  SelectItem(shortcut_id, ui::EventType::kKeyReleased);
   EXPECT_EQ(content2, browser()->tab_strip_model()->GetActiveWebContents());
 }
 
 // Check that the keyboard activation of a shelf item tabs properly through
 // the items at hand.
-IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest, AltNumberAppsTabbing) {
+// TODO(crbug.com/331536126): This test is flaky.
+IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest,
+                       DISABLED_AltNumberAppsTabbing) {
   // First run app.
   const Extension* extension1 = LoadAndLaunchPlatformApp("launch", "Launched");
   ui::BaseWindow* window1 =
@@ -1735,9 +1742,9 @@ IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest, AltNumberAppsTabbing) {
   // By now the browser should be active. Issue Alt keystrokes several times to
   // see that we stay on that application.
   EXPECT_TRUE(window2->IsActive());
-  SelectItem(item.id, ui::ET_KEY_RELEASED);
+  SelectItem(item.id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(window1->IsActive());
-  SelectItem(item.id, ui::ET_KEY_RELEASED);
+  SelectItem(item.id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(window1->IsActive());
 
   ui::BaseWindow* window1a =
@@ -1745,9 +1752,9 @@ IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest, AltNumberAppsTabbing) {
 
   EXPECT_TRUE(window1a->IsActive());
   EXPECT_FALSE(window1->IsActive());
-  SelectItem(item.id, ui::ET_KEY_RELEASED);
+  SelectItem(item.id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(window1->IsActive());
-  SelectItem(item.id, ui::ET_KEY_RELEASED);
+  SelectItem(item.id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(window1a->IsActive());
 }
 
@@ -1780,14 +1787,14 @@ IN_PROC_BROWSER_TEST_F(ShelfPlatformAppBrowserTest,
   // Last created window should be active. Hitting the app shortcut should go to
   // the first window of the app.
   ASSERT_TRUE(app2_window2->IsActive());
-  SelectItem(item2.id, ui::ET_KEY_RELEASED);
+  SelectItem(item2.id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(app2_window1->IsActive());
 
   // Hitting the other app's shortcut should jump and focus the other app's
   // windows.
-  SelectItem(item1.id, ui::ET_KEY_RELEASED);
+  SelectItem(item1.id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(app1_window2->IsActive());
-  SelectItem(item1.id, ui::ET_KEY_RELEASED);
+  SelectItem(item1.id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(app1_window1->IsActive());
 }
 
@@ -1976,10 +1983,10 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestNoDefaultBrowser,
   // The first activation should create a browser at index 2 (App List @ 0 and
   // back button @ 1).
   const ash::ShelfID browser_id = shelf_model()->items()[0].id;
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
   // A second activation should not create a new instance.
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   Browser* browser1 = chrome::FindLastActive();
   EXPECT_TRUE(browser1);
   Browser* browser2 = CreateBrowser(profile());
@@ -1989,9 +1996,9 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestNoDefaultBrowser,
   EXPECT_TRUE(browser2->window()->IsActive());
 
   // Activate multiple times the switcher to see that the windows get activated.
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(browser1->window()->IsActive());
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(browser2->window()->IsActive());
 
   // Create a third browser - make sure that we do not toggle simply between
@@ -2003,13 +2010,13 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestNoDefaultBrowser,
   EXPECT_NE(browser2->window(), browser3->window());
   EXPECT_TRUE(browser3->window()->IsActive());
 
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(browser1->window()->IsActive());
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(browser2->window()->IsActive());
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(browser3->window()->IsActive());
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(browser1->window()->IsActive());
 
   // Create another app and make sure that none of our browsers is active.
@@ -2020,7 +2027,7 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestNoDefaultBrowser,
   EXPECT_FALSE(browser2->window()->IsActive());
 
   // After activation our browser should be active again.
-  SelectItem(browser_id, ui::ET_KEY_RELEASED);
+  SelectItem(browser_id, ui::EventType::kKeyReleased);
   EXPECT_TRUE(browser1->window()->IsActive());
 }
 
@@ -2101,7 +2108,7 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestNoDefaultBrowser,
 
   // Activate. This creates new browser
   base::Time time_before_launch = base::Time::Now();
-  SelectItem(browser_id, ui::ET_UNKNOWN);
+  SelectItem(browser_id, ui::EventType::kUnknown);
   base::Time time_after_launch = base::Time::Now();
   // New Window is created.
   running_browser = chrome::GetTotalBrowserCount();
@@ -2120,7 +2127,7 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestNoDefaultBrowser,
   EXPECT_TRUE(browser->window()->IsMinimized());
 
   // Activate again. This doesn't create new browser, it activates the window.
-  SelectItem(browser_id, ui::ET_UNKNOWN);
+  SelectItem(browser_id, ui::EventType::kUnknown);
   running_browser = chrome::GetTotalBrowserCount();
   EXPECT_EQ(1u, running_browser);
   EXPECT_TRUE(controller_->IsOpen(browser_id));
@@ -2335,13 +2342,17 @@ IN_PROC_BROWSER_TEST_F(ShelfWebAppBrowserTest, SettingsAndTaskManagerWindows) {
   ASSERT_GE(item_count, 0);
   size_t browser_count = BrowserShortcutMenuItemCount(false);
 
+  base::RunLoop run_loop;
   // Open a settings window. Number of browser items should remain unchanged,
   // number of shelf items should increase.
   settings_manager->ShowChromePageForProfile(
       browser()->profile(), chrome::GetOSSettingsUrl(std::string()),
-      display::kInvalidDisplayId);
+      display::kInvalidDisplayId,
+      base::BindOnce([](apps::LaunchResult&& result) {
+        EXPECT_EQ(apps::State::kSuccess, result.state);
+      }).Then(run_loop.QuitClosure()));
   // Spin a run loop to sync Ash's ShelfModel change for the settings window.
-  base::RunLoop().RunUntilIdle();
+  run_loop.Run();
   Browser* settings_browser =
       settings_manager->FindBrowserForProfile(browser()->profile());
   ASSERT_TRUE(settings_browser);
@@ -2428,9 +2439,8 @@ IN_PROC_BROWSER_TEST_F(ShelfWebAppBrowserTest, WindowedHostedAndWebApps) {
                             extensions::LAUNCH_TYPE_WINDOW);
   WebAppProvider* provider = WebAppProvider::GetForTest(browser()->profile());
   DCHECK(provider);
-  provider->sync_bridge_unsafe().SetAppUserDisplayMode(
-      web_app_id, web_app::mojom::UserDisplayMode::kStandalone,
-      /*is_user_action=*/false);
+  provider->sync_bridge_unsafe().SetAppUserDisplayModeForTesting(
+      web_app_id, web_app::mojom::UserDisplayMode::kStandalone);
 
   // The apps should be closed.
   EXPECT_EQ(ash::STATUS_CLOSED,
@@ -2558,8 +2568,8 @@ IN_PROC_BROWSER_TEST_F(ShelfWebAppBrowserTest, WebAppPolicy) {
 IN_PROC_BROWSER_TEST_F(ShelfWebAppBrowserTest, WebAppPolicyUpdate) {
   // Install web app.
   GURL app_url = GURL("https://example.org/");
-  auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-  web_app_info->start_url = app_url;
+  auto web_app_info =
+      web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
   web_app_info->scope = app_url;
   web_app_info->title = u"Example";
   webapps::AppId app_id =
@@ -2851,14 +2861,15 @@ IN_PROC_BROWSER_TEST_F(HotseatShelfAppBrowserTest, EnableChromeVox) {
         home_button->GetBoundsInScreen().CenterPoint();
 
     ui::TouchEvent touch_press(
-        ui::ET_TOUCH_PRESSED, home_button_center, base::TimeTicks::Now(),
+        ui::EventType::kTouchPressed, home_button_center,
+        base::TimeTicks::Now(),
         ui::PointerDetails(ui::EventPointerType::kTouch, 0));
     generator_ptr->Dispatch(&touch_press);
 
     clock_ptr->Advance(base::Seconds(1));
 
     ui::TouchEvent touch_move(
-        ui::ET_TOUCH_MOVED, home_button_center, base::TimeTicks::Now(),
+        ui::EventType::kTouchMoved, home_button_center, base::TimeTicks::Now(),
         ui::PointerDetails(ui::EventPointerType::kTouch, 0));
     generator_ptr->Dispatch(&touch_move);
   });
@@ -2878,7 +2889,7 @@ IN_PROC_BROWSER_TEST_F(HotseatShelfAppBrowserTest, EnableChromeVox) {
   speech_monitor.Call([generator_ptr]() {
     // Press the search + right. Expects that the browser icon receives the
     // accessibility focus and the hotseat switches to kExtended state.
-    generator_ptr->PressKey(ui::VKEY_RIGHT, ui::EF_COMMAND_DOWN);
+    generator_ptr->PressKeyAndModifierKeys(ui::VKEY_RIGHT, ui::EF_COMMAND_DOWN);
   });
 
   const int browser_index =
@@ -2927,7 +2938,7 @@ IN_PROC_BROWSER_TEST_F(ShelfAppBrowserTestWithDesks, MultipleDesks) {
   // The shelf context menu should show 2 items for both browsers. No new items
   // should be created and existing window should not be minimized.
   EXPECT_EQ(ash::ShelfAction::SHELF_ACTION_NONE,
-            SelectItem(browser_id, ui::ET_MOUSE_PRESSED,
+            SelectItem(browser_id, ui::EventType::kMousePressed,
                        display::kInvalidDisplayId, ash::LAUNCH_FROM_SHELF));
   EXPECT_EQ(
       2u, controller_
@@ -3084,74 +3095,3 @@ IN_PROC_BROWSER_TEST_F(FilesSystemWebAppPinnedTest, EnterpriseMigration) {
 }
 
 INSTANTIATE_TEST_SUITE_P(All, PerDeskShelfAppBrowserTest, ::testing::Bool());
-
-class AppServiceShortcutShelfBrowserTest : public ShelfAppBrowserTest {
- public:
-  AppServiceShortcutShelfBrowserTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        chromeos::features::kCrosWebAppShortcutUiUpdate);
-  }
-  ~AppServiceShortcutShelfBrowserTest() override = default;
-
-  apps::ShortcutId CreateWebAppBasedShortcut(
-      const GURL& shortcut_url,
-      const std::u16string& shortcut_name) {
-    webapps::AppId local_shortcut_id = web_app::test::InstallShortcut(
-        browser()->profile(), base::UTF16ToUTF8(shortcut_name), shortcut_url);
-    return apps::GenerateShortcutId(app_constants::kChromeAppId,
-                                    local_shortcut_id);
-  }
-
-  std::string CreateWebApp(const GURL& app_url,
-                           const std::u16string& app_name) {
-    // Create web app.
-    auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-    web_app_info->start_url = app_url;
-    web_app_info->title = app_name;
-    web_app_info->scope = app_url;
-    auto web_app_id = web_app::test::InstallWebApp(
-        profile(), std::move(web_app_info),
-        /*overwrite_existing_manifest_fields=*/true);
-    return web_app_id;
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(AppServiceShortcutShelfBrowserTest,
-                       ReplaceBetweenShortcutAndWebApp) {
-  GURL url = GURL("https://example.org/");
-  apps::ShortcutId shortcut_id = CreateWebAppBasedShortcut(url, u"Shortcut");
-
-  PinAppWithIDToShelf(shortcut_id.value());
-  const ash::ShelfItem* item =
-      shelf_model()->ItemByID(ash::ShelfID(shortcut_id.value()));
-  ASSERT_TRUE(item);
-  EXPECT_EQ(item->title, u"Shortcut");
-
-  // Install a web app with the same url should replace the shortcut. The item
-  // should no longer pinned.
-  std::string app_id = CreateWebApp(url, u"App");
-  ASSERT_EQ(app_id, shortcut_id.value());
-  item = shelf_model()->ItemByID(ash::ShelfID(shortcut_id.value()));
-  ASSERT_FALSE(item);
-
-  // Pin the item to the shelf and verify the title has changed.
-  PinAppWithIDToShelf(app_id);
-  item = shelf_model()->ItemByID(ash::ShelfID(app_id));
-  ASSERT_TRUE(item);
-  EXPECT_EQ(item->title, u"App");
-
-  // Create a shortcut with the same url should replace the web app. The item
-  // should no longer pinned.
-  CreateWebAppBasedShortcut(url, u"Shortcut");
-  item = shelf_model()->ItemByID(ash::ShelfID(app_id));
-  ASSERT_FALSE(item);
-
-  // Pin the item to the shelf and verify the title has changed.
-  PinAppWithIDToShelf(shortcut_id.value());
-  item = shelf_model()->ItemByID(ash::ShelfID(shortcut_id.value()));
-  ASSERT_TRUE(item);
-  EXPECT_EQ(item->title, u"Shortcut");
-}

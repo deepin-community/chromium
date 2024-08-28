@@ -10,8 +10,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
-#include "base/types/expected.h"
-#include "chrome/browser/ip_protection/get_proxy_config.pb.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -24,9 +22,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
-
-constexpr std::string_view kGoogApiKeyHeader = "X-Goog-Api-Key";
-
+const char kProtobufContentType[] = "application/x-protobuf";
 }  // namespace
 
 class IpProtectionConfigHttpTest : public testing::Test {
@@ -59,33 +55,107 @@ class IpProtectionConfigHttpTest : public testing::Test {
   GURL token_server_get_proxy_config_url_;
 };
 
-TEST_F(IpProtectionConfigHttpTest, DoRequestSendsCorrectRequest) {
-  auto request_type = quiche::BlindSignHttpRequestType::kGetInitialData;
+TEST_F(IpProtectionConfigHttpTest, DoRequestSendsCorrectRequestInitialData) {
+  auto request_type = quiche::BlindSignMessageRequestType::kGetInitialData;
   std::string authorization_header = "token";
   std::string body = "body";
 
   // Set up the response to return from the mock.
-  auto head = network::mojom::URLResponseHead::New();
-  std::string response_body = "Response body";
-  test_url_loader_factory_.AddResponse(
-      token_server_get_initial_data_url_, std::move(head), response_body,
-      network::URLLoaderCompletionStatus(net::OK));
+  test_url_loader_factory_.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        ASSERT_TRUE(request.url.is_valid());
+        ASSERT_EQ(request.url, token_server_get_initial_data_url_);
 
-  base::test::TestFuture<absl::StatusOr<quiche::BlindSignHttpResponse>>
+        std::string value;
+        ASSERT_TRUE(request.headers.GetHeader(
+            net::HttpRequestHeaders::kAuthorization, &value));
+        ASSERT_EQ(value, base::StrCat({"Bearer ", authorization_header}));
+        EXPECT_FALSE(
+            request.headers.HasHeader("Ip-Protection-Debug-Experiment-Arm"));
+        ASSERT_TRUE(request.headers.GetHeader(net::HttpRequestHeaders::kAccept,
+                                              &value));
+        ASSERT_EQ(value, kProtobufContentType);
+
+        std::string response_str = "Response body";
+        auto head = network::mojom::URLResponseHead::New();
+        test_url_loader_factory_.AddResponse(
+            request.url, std::move(head), response_str,
+            network::URLLoaderCompletionStatus(net::OK));
+      }));
+
+  base::test::TestFuture<absl::StatusOr<quiche::BlindSignMessageResponse>>
       result_future;
   // Note: We use a lambda expression and `TestFuture::SetValue()` instead of
   // `TestFuture::GetCallback()` to avoid having to convert the
   // `base::OnceCallback` to a `quiche::SignedTokenCallback` (an
   // `absl::AnyInvocable` behind the scenes).
   auto callback =
-      [&result_future](absl::StatusOr<quiche::BlindSignHttpResponse> response) {
+      [&result_future](
+          absl::StatusOr<quiche::BlindSignMessageResponse> response) {
         result_future.SetValue(std::move(response));
       };
 
   http_fetcher_->DoRequest(request_type, authorization_header, body,
                            std::move(callback));
 
-  absl::StatusOr<quiche::BlindSignHttpResponse> result = result_future.Get();
+  absl::StatusOr<quiche::BlindSignMessageResponse> result = result_future.Get();
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ("Response body", result->body());
+}
+
+TEST_F(IpProtectionConfigHttpTest,
+       DoRequestSendsCorrectRequestAuthAndSignAndExperimentArm) {
+  std::map<std::string, std::string> parameters;
+  parameters["IpPrivacyDebugExperimentArm"] = "42";
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      net::features::kEnableIpProtectionProxy, std::move(parameters));
+
+  auto request_type = quiche::BlindSignMessageRequestType::kAuthAndSign;
+  std::string authorization_header = "token";
+  std::string body = "body";
+
+  // Set up the response to return from the mock.
+  test_url_loader_factory_.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        ASSERT_TRUE(request.url.is_valid());
+        ASSERT_EQ(request.url, token_server_get_tokens_url_);
+
+        std::string value;
+        ASSERT_TRUE(request.headers.GetHeader(
+            net::HttpRequestHeaders::kAuthorization, &value));
+        ASSERT_EQ(value, base::StrCat({"Bearer ", authorization_header}));
+        ASSERT_TRUE(request.headers.GetHeader(
+            "Ip-Protection-Debug-Experiment-Arm", &value));
+        ASSERT_EQ(value, "42");
+        ASSERT_TRUE(request.headers.GetHeader(net::HttpRequestHeaders::kAccept,
+                                              &value));
+        ASSERT_EQ(value, kProtobufContentType);
+
+        std::string response_str = "Response body";
+        auto head = network::mojom::URLResponseHead::New();
+        test_url_loader_factory_.AddResponse(
+            request.url, std::move(head), response_str,
+            network::URLLoaderCompletionStatus(net::OK));
+      }));
+
+  base::test::TestFuture<absl::StatusOr<quiche::BlindSignMessageResponse>>
+      result_future;
+  // Note: We use a lambda expression and `TestFuture::SetValue()` instead of
+  // `TestFuture::GetCallback()` to avoid having to convert the
+  // `base::OnceCallback` to a `quiche::SignedTokenCallback` (an
+  // `absl::AnyInvocable` behind the scenes).
+  auto callback =
+      [&result_future](
+          absl::StatusOr<quiche::BlindSignMessageResponse> response) {
+        result_future.SetValue(std::move(response));
+      };
+
+  http_fetcher_->DoRequest(request_type, authorization_header, body,
+                           std::move(callback));
+
+  absl::StatusOr<quiche::BlindSignMessageResponse> result = result_future.Get();
 
   ASSERT_TRUE(result.ok());
   EXPECT_EQ("Response body", result->body());
@@ -93,7 +163,7 @@ TEST_F(IpProtectionConfigHttpTest, DoRequestSendsCorrectRequest) {
 
 TEST_F(IpProtectionConfigHttpTest,
        DoRequestFailsToConnectReturnsFailureStatus) {
-  auto request_type = quiche::BlindSignHttpRequestType::kAuthAndSign;
+  auto request_type = quiche::BlindSignMessageRequestType::kAuthAndSign;
   std::string authorization_header = "token";
   std::string body = "body";
 
@@ -104,17 +174,18 @@ TEST_F(IpProtectionConfigHttpTest,
       token_server_get_tokens_url_, std::move(head), response_body,
       network::URLLoaderCompletionStatus(net::ERR_FAILED));
 
-  base::test::TestFuture<absl::StatusOr<quiche::BlindSignHttpResponse>>
+  base::test::TestFuture<absl::StatusOr<quiche::BlindSignMessageResponse>>
       result_future;
   auto callback =
-      [&result_future](absl::StatusOr<quiche::BlindSignHttpResponse> response) {
+      [&result_future](
+          absl::StatusOr<quiche::BlindSignMessageResponse> response) {
         result_future.SetValue(std::move(response));
       };
 
   http_fetcher_->DoRequest(request_type, authorization_header, body,
                            std::move(callback));
 
-  absl::StatusOr<quiche::BlindSignHttpResponse> result = result_future.Get();
+  absl::StatusOr<quiche::BlindSignMessageResponse> result = result_future.Get();
 
   EXPECT_EQ("Failed Request to Authentication Server",
             result.status().message());
@@ -137,28 +208,29 @@ TEST_F(IpProtectionConfigHttpTest,
           base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
               &test_url_loader_factory_));
 
-  auto request_type = quiche::BlindSignHttpRequestType::kGetInitialData;
+  auto request_type = quiche::BlindSignMessageRequestType::kGetInitialData;
   std::string authorization_header = "token";
   std::string body = "body";
 
-  base::test::TestFuture<absl::StatusOr<quiche::BlindSignHttpResponse>>
+  base::test::TestFuture<absl::StatusOr<quiche::BlindSignMessageResponse>>
       result_future;
   auto callback =
-      [&result_future](absl::StatusOr<quiche::BlindSignHttpResponse> response) {
+      [&result_future](
+          absl::StatusOr<quiche::BlindSignMessageResponse> response) {
         result_future.SetValue(std::move(response));
       };
 
   http_fetcher->DoRequest(request_type, authorization_header, body,
                           std::move(callback));
 
-  absl::StatusOr<quiche::BlindSignHttpResponse> result = result_future.Get();
+  absl::StatusOr<quiche::BlindSignMessageResponse> result = result_future.Get();
 
   EXPECT_EQ("Invalid IP Protection Token URL", result.status().message());
   EXPECT_EQ(absl::StatusCode::kInternal, result.status().code());
 }
 
 TEST_F(IpProtectionConfigHttpTest, DoRequestHttpFailureStatus) {
-  auto request_type = quiche::BlindSignHttpRequestType::kAuthAndSign;
+  auto request_type = quiche::BlindSignMessageRequestType::kAuthAndSign;
   std::string authorization_header = "token";
   std::string body = "body";
 
@@ -168,136 +240,21 @@ TEST_F(IpProtectionConfigHttpTest, DoRequestHttpFailureStatus) {
   test_url_loader_factory_.AddResponse(token_server_get_tokens_url_.spec(),
                                        response_body, net::HTTP_BAD_REQUEST);
 
-  base::test::TestFuture<absl::StatusOr<quiche::BlindSignHttpResponse>>
+  base::test::TestFuture<absl::StatusOr<quiche::BlindSignMessageResponse>>
       result_future;
   auto callback =
-      [&result_future](absl::StatusOr<quiche::BlindSignHttpResponse> response) {
+      [&result_future](
+          absl::StatusOr<quiche::BlindSignMessageResponse> response) {
         result_future.SetValue(std::move(response));
       };
 
   http_fetcher_->DoRequest(request_type, authorization_header, body,
                            std::move(callback));
 
-  absl::StatusOr<quiche::BlindSignHttpResponse> result = result_future.Get();
+  absl::StatusOr<quiche::BlindSignMessageResponse> result = result_future.Get();
 
   EXPECT_TRUE(result.ok());
-  EXPECT_EQ(net::HTTP_BAD_REQUEST, result.value().status_code());
-}
-
-TEST_F(IpProtectionConfigHttpTest, GetProxyConfigSuccess) {
-  ip_protection::GetProxyConfigResponse response_proto;
-
-  ip_protection::GetProxyConfigResponse_ProxyChain* proxyChain =
-      response_proto.add_proxy_chain();
-  proxyChain->set_proxy_a("proxyA");
-  proxyChain->set_proxy_b("proxyB");
-  std::string response_str = response_proto.SerializeAsString();
-
-  test_url_loader_factory_.SetInterceptor(
-      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
-        ASSERT_TRUE(request.url.is_valid());
-        ASSERT_EQ(request.url, token_server_get_proxy_config_url_);
-
-        EXPECT_FALSE(
-            request.headers.HasHeader(net::HttpRequestHeaders::kAuthorization));
-        EXPECT_TRUE(request.headers.HasHeader(kGoogApiKeyHeader));
-
-        auto head = network::mojom::URLResponseHead::New();
-        test_url_loader_factory_.AddResponse(
-            token_server_get_proxy_config_url_, std::move(head), response_str,
-            network::URLLoaderCompletionStatus(net::OK));
-      }));
-
-  base::test::TestFuture<
-      base::expected<ip_protection::GetProxyConfigResponse, std::string>>
-      result_future;
-  http_fetcher_->GetProxyConfig(std::nullopt, result_future.GetCallback(),
-                                /*for_testing=*/true);
-
-  base::expected<ip_protection::GetProxyConfigResponse, std::string> result =
-      result_future.Get();
-
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ("proxyA", result->proxy_chain().at(0).proxy_a());
-  EXPECT_EQ("proxyB", result->proxy_chain().at(0).proxy_b());
-}
-
-TEST_F(IpProtectionConfigHttpTest, GetProxyConfigSuccessWithOAuthToken) {
-  ip_protection::GetProxyConfigResponse response_proto;
-  std::string oauth_token = "token";
-
-  ip_protection::GetProxyConfigResponse_ProxyChain* proxyChain =
-      response_proto.add_proxy_chain();
-  proxyChain->set_proxy_a("proxyA");
-  proxyChain->set_proxy_b("proxyB");
-  std::string response_str = response_proto.SerializeAsString();
-
-  test_url_loader_factory_.SetInterceptor(
-      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
-        ASSERT_TRUE(request.url.is_valid());
-        ASSERT_EQ(request.url, token_server_get_proxy_config_url_);
-
-        EXPECT_TRUE(
-            request.headers.HasHeader(net::HttpRequestHeaders::kAuthorization));
-        EXPECT_FALSE(request.headers.HasHeader(kGoogApiKeyHeader));
-
-        auto head = network::mojom::URLResponseHead::New();
-        test_url_loader_factory_.AddResponse(
-            token_server_get_proxy_config_url_, std::move(head), response_str,
-            network::URLLoaderCompletionStatus(net::OK));
-      }));
-
-  base::test::TestFuture<
-      base::expected<ip_protection::GetProxyConfigResponse, std::string>>
-      result_future;
-  http_fetcher_->GetProxyConfig(oauth_token, result_future.GetCallback(),
-                                /*for_testing=*/true);
-
-  base::expected<ip_protection::GetProxyConfigResponse, std::string> result =
-      result_future.Get();
-
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ("proxyA", result->proxy_chain().at(0).proxy_a());
-  EXPECT_EQ("proxyB", result->proxy_chain().at(0).proxy_b());
-}
-
-TEST_F(IpProtectionConfigHttpTest, GetProxyConfigEmpty) {
-  ip_protection::GetProxyConfigResponse response_proto;
-  std::string response_str = response_proto.SerializeAsString();
-
-  auto head = network::mojom::URLResponseHead::New();
-  test_url_loader_factory_.AddResponse(
-      token_server_get_proxy_config_url_, std::move(head), response_str,
-      network::URLLoaderCompletionStatus(net::OK));
-
-  base::test::TestFuture<
-      base::expected<ip_protection::GetProxyConfigResponse, std::string>>
-      result_future;
-  http_fetcher_->GetProxyConfig(std::nullopt, result_future.GetCallback(),
-                                /*for_testing=*/true);
-
-  base::expected<ip_protection::GetProxyConfigResponse, std::string> result =
-      result_future.Get();
-
-  ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(0, result->proxy_chain_size());
-}
-
-TEST_F(IpProtectionConfigHttpTest, GetProxyConfigFails) {
-  auto head = network::mojom::URLResponseHead::New();
-
-  test_url_loader_factory_.AddResponse(
-      token_server_get_proxy_config_url_, std::move(head), "uhoh",
-      network::URLLoaderCompletionStatus(net::HTTP_BAD_REQUEST));
-
-  base::test::TestFuture<
-      base::expected<ip_protection::GetProxyConfigResponse, std::string>>
-      result_future;
-  http_fetcher_->GetProxyConfig(std::nullopt, result_future.GetCallback(),
-                                /*for_testing=*/true);
-
-  base::expected<ip_protection::GetProxyConfigResponse, std::string> result =
-      result_future.Get();
-
-  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(quiche::BlindSignMessageResponse::HttpCodeToStatusCode(
+                net::HTTP_BAD_REQUEST),
+            result.value().status_code());
 }

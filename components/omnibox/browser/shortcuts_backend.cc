@@ -17,7 +17,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -418,7 +417,7 @@ void ShortcutsBackend::ShutdownOnUIThread() {
   template_url_service_ = nullptr;
 }
 
-void ShortcutsBackend::OnURLsDeleted(
+void ShortcutsBackend::OnHistoryDeletions(
     history::HistoryService* history_service,
     const history::DeletionInfo& deletion_info) {
   if (!initialized())

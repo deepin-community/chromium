@@ -32,7 +32,6 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -181,8 +180,6 @@ public class ExternalNavigationHandlerTest {
     private static final String SELF_SCHEME = "selfscheme";
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
-
-    @Rule public TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
 
     @Mock private IncognitoDialogDelegate mIncognitoDialogDelegateMock;
     @Mock private WindowAndroid mWindowAndroidMock;
@@ -1689,24 +1686,21 @@ public class ExternalNavigationHandlerTest {
         checkUrl(INTENT_URL_WITH_CHAIN_FALLBACK_URL, redirectHandler)
                 .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
 
-        // As a result of intent resolution fallback, we have clobberred the current tab.
-        // The fall-back URL was HTTP-schemed, but it was effectively redirected to a new intent
-        // URL using javascript. However, we do not allow chained fallback intent, so we do NOT
-        // override URL loading here.
+        mDelegate.setCanResolveActivityForExternalSchemes(true);
+        // As a result of intent resolution fallback, we have clobberred the current tab and the
+        // sending site has learned that an app is not installed. In order to prevent chaining this
+        // and learning about more not-installed apps, even URLs that would otherwise successfully
+        // launch an app will use the fallback URL.
         redirectHandler.updateNewUrlLoading(PageTransition.LINK, false, false, 0, 0, false, true);
         checkUrl(INTENT_URL_WITH_FALLBACK_URL, redirectHandler)
-                .expecting(OverrideUrlLoadingResultType.NO_OVERRIDE, IGNORE);
-
-        // Now enough time (2 seconds) have passed.
-        // New URL loading should not be affected.
-        // (The URL happened to be the same as previous one.)
-        // TODO(changwan): this is not likely cause flakiness, but it may be better to refactor
-        // systemclock or pass the new time as parameter.
-        long lastUserInteractionTimeInMillis = SystemClock.elapsedRealtime() + 2 * 1000L;
-        redirectHandler.updateNewUrlLoading(
-                PageTransition.LINK, false, true, lastUserInteractionTimeInMillis, 1, false, true);
-        checkUrl(INTENT_URL_WITH_FALLBACK_URL, redirectHandler)
                 .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
+
+        // New user gesture.
+        redirectHandler.updateNewUrlLoading(PageTransition.LINK, false, true, 0, 0, false, true);
+        checkUrl(INTENT_URL_WITH_FALLBACK_URL, redirectHandler)
+                .expecting(
+                        OverrideUrlLoadingResultType.OVERRIDE_WITH_EXTERNAL_INTENT,
+                        START_OTHER_ACTIVITY);
     }
 
     @Test
@@ -2084,6 +2078,9 @@ public class ExternalNavigationHandlerTest {
     @Test
     @SuppressLint("SdCardPath")
     @SmallTest
+    @MaxAndroidSdkLevel(
+            value = Build.VERSION_CODES.S,
+            reason = "T changed external storage permissions so we no longer handle this intent.")
     public void testFileAccessImage() {
         String fileUrl = "file://file.png";
 
@@ -3046,23 +3043,23 @@ public class ExternalNavigationHandlerTest {
         @Override
         protected OverrideUrlLoadingResult startActivity(
                 Intent intent,
+                ExternalNavigationParams params,
                 boolean requiresIntentChooser,
                 QueryIntentActivitiesSupplier resolvingInfos,
                 ResolveActivitySupplier resolveActivity,
                 GURL browserFallbackUrl,
-                GURL intentDataUrl,
-                ExternalNavigationParams params) {
+                GURL intentDataUrl) {
             mStartActivityIntent = intent;
             mRequiresIntentChooser = requiresIntentChooser;
             if (mSendIntentsForReal) {
                 return super.startActivity(
                         intent,
+                        params,
                         requiresIntentChooser,
                         resolvingInfos,
                         resolveActivity,
                         browserFallbackUrl,
-                        intentDataUrl,
-                        params);
+                        intentDataUrl);
             }
             return OverrideUrlLoadingResult.forExternalIntent();
         }

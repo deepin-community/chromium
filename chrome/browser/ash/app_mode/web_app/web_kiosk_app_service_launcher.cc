@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_service_launcher.h"
+
 #include <memory>
 #include <optional>
 
@@ -21,7 +22,6 @@
 #include "chrome/browser/chromeos/app_mode/web_kiosk_app_installer.h"
 #include "chrome/browser/extensions/extension_special_storage_policy.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chromeos/crosapi/mojom/web_kiosk_service.mojom.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/webapps/common/web_app_id.h"
@@ -78,6 +78,12 @@ void WebKioskAppServiceLauncher::Initialize() {
       apps::AppType::kWeb,
       base::BindOnce(&WebKioskAppServiceLauncher::OnWebAppInitialized,
                      weak_ptr_factory_.GetWeakPtr()));
+
+  // By default the app service will try to launch the start_url as defined by
+  // the web app's manifest. This is generally not what we want, so we need to
+  // set the complete url as override url.
+  app_service_launcher_->SetLaunchUrl(GetCurrentApp()->install_url());
+
   profile_->GetExtensionSpecialStoragePolicy()->AddOriginWithUnlimitedStorage(
       url::Origin::Create(GetCurrentApp()->install_url()));
 }

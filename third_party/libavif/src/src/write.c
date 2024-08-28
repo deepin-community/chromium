@@ -248,7 +248,7 @@ typedef struct avifEncoderData
 static void avifEncoderDataDestroy(avifEncoderData * data);
 
 // Returns NULL if a memory allocation failed.
-static avifEncoderData * avifEncoderDataCreate()
+static avifEncoderData * avifEncoderDataCreate(void)
 {
     avifEncoderData * data = (avifEncoderData *)avifAlloc(sizeof(avifEncoderData));
     if (!data) {
@@ -485,6 +485,9 @@ avifEncoder * avifEncoderCreate(void)
         return NULL;
     }
     encoder->headerFormat = AVIF_HEADER_FULL;
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    encoder->sampleTransformRecipe = AVIF_SAMPLE_TRANSFORM_NONE;
+#endif
     return encoder;
 }
 
@@ -527,6 +530,9 @@ static void avifEncoderBackupSettings(avifEncoder * encoder)
     encoder->data->lastTileRowsLog2 = encoder->data->tileRowsLog2;
     encoder->data->lastTileColsLog2 = encoder->data->tileColsLog2;
     lastEncoder->scalingMode = encoder->scalingMode;
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    lastEncoder->sampleTransformRecipe = encoder->sampleTransformRecipe;
+#endif
 }
 
 // This function detects changes made on avifEncoder. It returns true on success (i.e., if every
@@ -580,6 +586,12 @@ static avifBool avifEncoderDetectChanges(const avifEncoder * encoder, avifEncode
         *encoderChanges |= AVIF_ENCODER_CHANGE_CODEC_SPECIFIC;
     }
 
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    if (lastEncoder->sampleTransformRecipe != encoder->sampleTransformRecipe) {
+        return AVIF_FALSE;
+    }
+#endif
+
     return AVIF_TRUE;
 }
 
@@ -608,9 +620,7 @@ static avifResult avifEncoderWriteNclxProperty(avifRWStream * dedupStream,
     return AVIF_RESULT_OK;
 }
 
-// Subset of avifEncoderWriteColorProperties() for the properties clli, pasp, clap, irot, imir.
-// Also used by the extendedMeta field of the CondensedImageBox if AVIF_ENABLE_EXPERIMENTAL_AVIR is
-// defined.
+// Subset of avifEncoderWriteColorProperties() for the properties pasp, clap, irot, imir.
 static avifResult avifEncoderWriteExtendedColorProperties(avifRWStream * dedupStream,
                                                           avifRWStream * outputStream,
                                                           const avifImage * imageMetadata,
@@ -882,6 +892,11 @@ static avifBool avifWriteToneMappedImagePayload(avifRWData * data, const avifGai
     const uint8_t version = 0;
     AVIF_CHECKRES(avifRWStreamWriteU8(&s, version));
 
+    const uint16_t minimumVersion = 0;
+    AVIF_CHECKRES(avifRWStreamWriteU16(&s, minimumVersion));
+    const uint16_t writerVersion = 0;
+    AVIF_CHECKRES(avifRWStreamWriteU16(&s, writerVersion));
+
     uint8_t flags = 0u;
     // Always write three channels for now for simplicity.
     // TODO(maryla): the draft says that this specifies the count of channels of the
@@ -902,57 +917,29 @@ static avifBool avifWriteToneMappedImagePayload(avifRWData * data, const avifGai
         metadata->alternateOffsetD[0] == metadata->alternateOffsetD[2];
     const uint8_t channelCount = allChannelsIdentical ? 1u : 3u;
     if (channelCount == 3) {
-        flags |= 1;
+        flags |= (1 << 7);
     }
     if (metadata->useBaseColorSpace) {
-        flags |= 2;
-    }
-    if (metadata->backwardDirection) {
-        flags |= 4;
-    }
-    const uint32_t denom = metadata->baseHdrHeadroomD;
-    avifBool useCommonDenominator = metadata->baseHdrHeadroomD == denom && metadata->alternateHdrHeadroomD == denom;
-    for (int c = 0; c < channelCount; ++c) {
-        useCommonDenominator = useCommonDenominator && metadata->gainMapMinD[c] == denom && metadata->gainMapMaxD[c] == denom &&
-                               metadata->gainMapGammaD[c] == denom && metadata->baseOffsetD[c] == denom &&
-                               metadata->alternateOffsetD[c] == denom;
-    }
-    if (useCommonDenominator) {
-        flags |= 8;
+        flags |= (1 << 6);
     }
     AVIF_CHECKRES(avifRWStreamWriteU8(&s, flags));
 
-    if (useCommonDenominator) {
-        AVIF_CHECKRES(avifRWStreamWriteU32(&s, denom));
+    AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->baseHdrHeadroomN));
+    AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->baseHdrHeadroomD));
+    AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->alternateHdrHeadroomN));
+    AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->alternateHdrHeadroomD));
 
-        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->baseHdrHeadroomN));
-        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->alternateHdrHeadroomN));
-
-        for (int c = 0; c < channelCount; ++c) {
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->gainMapMinN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->gainMapMaxN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapGammaN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->baseOffsetN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->alternateOffsetN[c]));
-        }
-    } else {
-        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->baseHdrHeadroomN));
-        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->baseHdrHeadroomD));
-        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->alternateHdrHeadroomN));
-        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->alternateHdrHeadroomD));
-
-        for (int c = 0; c < channelCount; ++c) {
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->gainMapMinN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapMinD[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->gainMapMaxN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapMaxD[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapGammaN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapGammaD[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->baseOffsetN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->baseOffsetD[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->alternateOffsetN[c]));
-            AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->alternateOffsetD[c]));
-        }
+    for (int c = 0; c < channelCount; ++c) {
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->gainMapMinN[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapMinD[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->gainMapMaxN[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapMaxD[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapGammaN[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->gainMapGammaD[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->baseOffsetN[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->baseOffsetD[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, (uint32_t)metadata->alternateOffsetN[c]));
+        AVIF_CHECKRES(avifRWStreamWriteU32(&s, metadata->alternateOffsetD[c]));
     }
 
     avifRWStreamFinishWrite(&s);
@@ -982,6 +969,50 @@ static avifResult avifImageCopyAltImageMetadata(avifImage * altImageMetadata, co
     return AVIF_RESULT_OK;
 }
 #endif // AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP
+
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+static avifResult avifEncoderWriteSampleTransformTokens(avifRWStream * s, const avifSampleTransformExpression * expression)
+{
+    AVIF_ASSERT_OR_RETURN(expression->count <= 256);
+    AVIF_CHECKRES(avifRWStreamWriteU8(s, (uint8_t)expression->count)); // unsigned int(8) token_count;
+
+    for (uint32_t t = 0; t < expression->count; ++t) {
+        const avifSampleTransformToken * token = &expression->tokens[t];
+        AVIF_CHECKRES(avifRWStreamWriteU8(s, token->type)); // unsigned int(8) token;
+
+        if (token->type == AVIF_SAMPLE_TRANSFORM_CONSTANT) {
+            // TODO(yguyon): Verify two's complement representation is guaranteed here.
+            const uint32_t constant = *(const uint32_t *)&token->constant;
+            AVIF_CHECKRES(avifRWStreamWriteU32(s, constant)); // signed int(1<<(bit_depth+3)) constant;
+        } else if (token->type == AVIF_SAMPLE_TRANSFORM_INPUT_IMAGE_ITEM_INDEX) {
+            AVIF_CHECKRES(avifRWStreamWriteU8(s, token->inputImageItemIndex)); // unsigned int(8) input_image_item_index;
+        }
+    }
+    return AVIF_RESULT_OK;
+}
+
+static avifResult avifEncoderWriteSampleTransformPayload(avifEncoder * encoder, avifRWData * data)
+{
+    avifRWStream s;
+    avifRWStreamStart(&s, data);
+    AVIF_CHECKRES(avifRWStreamWriteBits(&s, 0, /*bitCount=*/6)); // unsigned int(6) version = 0;
+    // AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_32 is necessary because the two input images
+    // once combined use 16-bit unsigned values, but intermediate results are stored in signed integers.
+    AVIF_CHECKRES(avifRWStreamWriteBits(&s, AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_32, /*bitCount=*/2)); // unsigned int(2) bit_depth;
+
+    avifSampleTransformExpression expression = { 0 };
+    AVIF_CHECKRES(avifSampleTransformRecipeToExpression(encoder->sampleTransformRecipe, &expression));
+    const avifResult result = avifEncoderWriteSampleTransformTokens(&s, &expression);
+    avifArrayDestroy(&expression);
+    if (result != AVIF_RESULT_OK) {
+        avifDiagnosticsPrintf(&encoder->diag, "Failed to write sample transform metadata for recipe %d", encoder->sampleTransformRecipe);
+        return result;
+    }
+
+    avifRWStreamFinishWrite(&s);
+    return AVIF_RESULT_OK;
+}
+#endif // AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM
 
 static avifResult avifEncoderDataCreateExifItem(avifEncoderData * data, const avifRWData * exif)
 {
@@ -1101,6 +1132,27 @@ static const char infeNameAlpha[] = "Alpha";
 #if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
 static const char infeNameGainMap[] = "GMap";
 #endif
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+static const char infeNameSampleTransform[] = "SampleTransform";
+#endif
+
+static const char * getInfeName(avifItemCategory itemCategory)
+{
+    if (avifIsAlpha(itemCategory)) {
+        return infeNameAlpha;
+    }
+#if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
+    if (itemCategory == AVIF_ITEM_GAIN_MAP) {
+        return infeNameGainMap;
+    }
+#endif
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    if (itemCategory >= AVIF_SAMPLE_TRANSFORM_MIN_CATEGORY && itemCategory <= AVIF_SAMPLE_TRANSFORM_MAX_CATEGORY) {
+        return infeNameSampleTransform;
+    }
+#endif
+    return infeNameColor;
+}
 
 // Adds the items for a single cell or a grid of cells. Outputs the topLevelItemID which is
 // the only item if there is exactly one cell, or the grid item for multiple cells.
@@ -1115,11 +1167,7 @@ static avifResult avifEncoderAddImageItems(avifEncoder * encoder,
                                            uint16_t * topLevelItemID)
 {
     const uint32_t cellCount = gridCols * gridRows;
-    const char * infeName = (itemCategory == AVIF_ITEM_ALPHA) ? infeNameAlpha
-#if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
-                            : (itemCategory == AVIF_ITEM_GAIN_MAP) ? infeNameGainMap
-#endif
-                                                                   : infeNameColor;
+    const char * infeName = getInfeName(itemCategory);
     const size_t infeNameSize = strlen(infeName) + 1;
 
     if (cellCount > 1) {
@@ -1152,6 +1200,176 @@ static avifResult avifEncoderAddImageItems(avifEncoder * encoder,
     }
     return AVIF_RESULT_OK;
 }
+
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+static avifResult avifEncoderCreateBitDepthExtensionItems(avifEncoder * encoder,
+                                                          uint32_t gridCols,
+                                                          uint32_t gridRows,
+                                                          uint32_t gridWidth,
+                                                          uint32_t gridHeight,
+                                                          uint16_t colorItemID)
+{
+    AVIF_ASSERT_OR_RETURN(encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_8B_8B ||
+                          encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_12B_4B);
+
+    // There are multiple possible ISOBMFF box hierarchies for translucent images,
+    // using 'sato' (Sample Transform) derived image items:
+    //  - a primary 'sato' item uses a main color coded item and a hidden color coded item; each color coded
+    //    item has an auxiliary alpha coded item; the main color coded item and the 'sato' item are in
+    //    an 'altr' group (backward-compatible, implemented)
+    //  - a primary 'sato' item uses a main color coded item and a hidden color coded item; the primary
+    //    'sato' item has an auxiliary alpha 'sato' item using two alpha coded items (backward-incompatible)
+    // Likewise, there are multiple possible ISOBMFF box hierarchies for bit-depth-extended grids,
+    // using 'sato' (Sample Transform) derived image items:
+    //  - a primary color 'grid', an auxiliary alpha 'grid', a hidden color 'grid', a hidden auxiliary alpha 'grid'
+    //    and a 'sato' using the two color 'grid's as input items in this order; the primary color item
+    //    and the 'sato' item being in an 'altr' group (backward-compatible, implemented)
+    //  - a primary 'grid' of 'sato' cells and an auxiliary alpha 'grid' of 'sato' cells (backward-incompatible)
+    avifEncoderItem * sampleTransformItem = avifEncoderDataCreateItem(encoder->data,
+                                                                      "sato",
+                                                                      infeNameSampleTransform,
+                                                                      /*infeNameSize=*/strlen(infeNameSampleTransform) + 1,
+                                                                      /*cellIndex=*/0);
+    AVIF_CHECKRES(avifEncoderWriteSampleTransformPayload(encoder, &sampleTransformItem->metadataPayload));
+    sampleTransformItem->itemCategory = AVIF_ITEM_SAMPLE_TRANSFORM;
+    uint16_t sampleTransformItemID = sampleTransformItem->id;
+    // 'altr' group
+    uint16_t * alternativeItemID = (uint16_t *)avifArrayPush(&encoder->data->alternativeItemIDs);
+    AVIF_CHECKERR(alternativeItemID != NULL, AVIF_RESULT_OUT_OF_MEMORY);
+    *alternativeItemID = sampleTransformItem->id;
+    alternativeItemID = (uint16_t *)avifArrayPush(&encoder->data->alternativeItemIDs);
+    AVIF_CHECKERR(alternativeItemID != NULL, AVIF_RESULT_OUT_OF_MEMORY);
+    *alternativeItemID = colorItemID;
+
+    uint16_t bitDepthExtensionColorItemId;
+    AVIF_CHECKRES(
+        avifEncoderAddImageItems(encoder, gridCols, gridRows, gridWidth, gridHeight, AVIF_ITEM_SAMPLE_TRANSFORM_INPUT_0_COLOR, &bitDepthExtensionColorItemId));
+    avifEncoderItem * bitDepthExtensionColorItem = avifEncoderDataFindItemByID(encoder->data, bitDepthExtensionColorItemId);
+    assert(bitDepthExtensionColorItem);
+    bitDepthExtensionColorItem->hiddenImage = AVIF_TRUE;
+
+    // Set the color and bit depth extension items' dimgFromID value to point to the sample transform item.
+    // The color item shall be first, and the bit depth extension item second. avifEncoderFinish() writes the
+    // dimg item references in item id order, so as long as colorItemID < bitDepthExtensionColorItemId, the order
+    // will be correct.
+    AVIF_ASSERT_OR_RETURN(colorItemID < bitDepthExtensionColorItemId);
+    avifEncoderItem * colorItem = avifEncoderDataFindItemByID(encoder->data, colorItemID);
+    AVIF_ASSERT_OR_RETURN(colorItem != NULL);
+    AVIF_ASSERT_OR_RETURN(colorItem->dimgFromID == 0); // Our internal API only allows one dimg value per item.
+    colorItem->dimgFromID = sampleTransformItemID;
+    bitDepthExtensionColorItem->dimgFromID = sampleTransformItemID;
+
+    if (encoder->data->alphaPresent) {
+        uint16_t bitDepthExtensionAlphaItemId;
+        AVIF_CHECKRES(
+            avifEncoderAddImageItems(encoder, gridCols, gridRows, gridWidth, gridHeight, AVIF_ITEM_SAMPLE_TRANSFORM_INPUT_0_ALPHA, &bitDepthExtensionAlphaItemId));
+        avifEncoderItem * bitDepthExtensionAlphaItem = avifEncoderDataFindItemByID(encoder->data, bitDepthExtensionAlphaItemId);
+        assert(bitDepthExtensionAlphaItem);
+        bitDepthExtensionAlphaItem->irefType = "auxl";
+        bitDepthExtensionAlphaItem->irefToID = bitDepthExtensionColorItemId;
+        if (encoder->data->imageMetadata->alphaPremultiplied) {
+            // The reference may have changed; fetch it again.
+            bitDepthExtensionColorItem = avifEncoderDataFindItemByID(encoder->data, bitDepthExtensionColorItemId);
+            assert(bitDepthExtensionColorItem);
+            bitDepthExtensionColorItem->irefType = "prem";
+            bitDepthExtensionColorItem->irefToID = bitDepthExtensionAlphaItemId;
+        }
+    }
+    return AVIF_RESULT_OK;
+}
+
+// Same as avifImageApplyExpression() but for the expression (inputImageItem [op] constant).
+// Convenience function.
+static avifResult avifImageApplyImgOpConst(avifImage * result,
+                                           const avifImage * inputImageItem,
+                                           avifSampleTransformTokenType op,
+                                           int32_t constant,
+                                           avifPlanesFlags planes)
+{
+    // Postfix notation.
+    const avifSampleTransformToken tokens[] = { { AVIF_SAMPLE_TRANSFORM_INPUT_IMAGE_ITEM_INDEX, 0, /*inputImageItemIndex=*/1 },
+                                                { AVIF_SAMPLE_TRANSFORM_CONSTANT, constant, 0 },
+                                                { (uint8_t)op, 0, 0 } };
+    return avifImageApplyOperations(result, AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_32, /*numTokens=*/3, tokens, /*numInputImageItems=*/1, &inputImageItem, planes);
+}
+
+static avifResult avifImageCreateAllocate(avifImage ** sampleTransformedImage, const avifImage * reference, uint32_t numBits, avifPlanesFlag planes)
+{
+    *sampleTransformedImage = avifImageCreate(reference->width, reference->height, numBits, reference->yuvFormat);
+    AVIF_CHECKERR(*sampleTransformedImage != NULL, AVIF_RESULT_OUT_OF_MEMORY);
+    return avifImageAllocatePlanes(*sampleTransformedImage, planes);
+}
+
+static avifResult avifEncoderCreateSatoImage(const avifEncoder * encoder,
+                                             const avifEncoderItem * item,
+                                             avifBool itemWillBeEncodedLosslessly,
+                                             const avifImage * image,
+                                             avifImage ** sampleTransformedImage)
+{
+    const avifPlanesFlag planes = avifIsAlpha(item->itemCategory) ? AVIF_PLANES_A : AVIF_PLANES_YUV;
+    // The first image item used as input to the 'sato' Sample Transform derived image item.
+    avifBool isBase = item->itemCategory == AVIF_ITEM_COLOR || item->itemCategory == AVIF_ITEM_ALPHA;
+    if (!isBase) {
+        // The second image item used as input to the 'sato' Sample Transform derived image item.
+        AVIF_ASSERT_OR_RETURN(item->itemCategory >= AVIF_SAMPLE_TRANSFORM_MIN_CATEGORY &&
+                              item->itemCategory <= AVIF_SAMPLE_TRANSFORM_MAX_CATEGORY);
+    }
+
+    if (encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_8B_8B) {
+        if (isBase) {
+            AVIF_CHECKRES(avifImageCreateAllocate(sampleTransformedImage, image, 8, planes));
+            AVIF_CHECKRES(avifImageApplyImgOpConst(*sampleTransformedImage, image, AVIF_SAMPLE_TRANSFORM_DIVIDE, 256, planes));
+        } else {
+            AVIF_CHECKRES(avifImageCreateAllocate(sampleTransformedImage, image, 8, planes));
+            AVIF_CHECKRES(avifImageApplyImgOpConst(*sampleTransformedImage, image, AVIF_SAMPLE_TRANSFORM_AND, 255, planes));
+        }
+    } else {
+        AVIF_CHECKERR(encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_12B_4B, AVIF_RESULT_NOT_IMPLEMENTED);
+        if (isBase) {
+            AVIF_CHECKRES(avifImageCreateAllocate(sampleTransformedImage, image, 12, planes));
+            AVIF_CHECKRES(avifImageApplyImgOpConst(*sampleTransformedImage, image, AVIF_SAMPLE_TRANSFORM_DIVIDE, 16, planes));
+        } else {
+            AVIF_CHECKRES(avifImageCreateAllocate(sampleTransformedImage, image, 8, planes));
+            AVIF_CHECKRES(avifImageApplyImgOpConst(*sampleTransformedImage, image, AVIF_SAMPLE_TRANSFORM_AND, 15, planes));
+            // AVIF only supports 8, 10 or 12-bit image items. Scale the samples to fit the range.
+            // Note: The samples could be encoded as is without being shifted left before encoding,
+            //       but they would not be shifted right after decoding either. Right shifting after
+            //       decoding provides a guarantee on the range of values and on the lack of integer
+            //       overflow, so it is safer to do these extra steps.
+            //       It also makes more sense from a compression point-of-view to use the full range.
+            // Transform in-place.
+            AVIF_CHECKRES(
+                avifImageApplyImgOpConst(*sampleTransformedImage, *sampleTransformedImage, AVIF_SAMPLE_TRANSFORM_PRODUCT, 16, planes));
+            if (!itemWillBeEncodedLosslessly) {
+                // Small loss at encoding could be amplified by the truncation caused by the right
+                // shift after decoding. Offset sample values now, before encoding, to round rather
+                // than floor the samples shifted after decoding.
+                // Note: Samples were just left shifted by numShiftedBits, so adding less than
+                //       (1<<numShiftedBits) will not trigger any integer overflow.
+                // Transform in-place.
+                AVIF_CHECKRES(
+                    avifImageApplyImgOpConst(*sampleTransformedImage, *sampleTransformedImage, AVIF_SAMPLE_TRANSFORM_SUM, 7, planes));
+            }
+        }
+    }
+    return AVIF_RESULT_OK;
+}
+
+static avifResult avifEncoderCreateBitDepthExtensionImage(const avifEncoder * encoder,
+                                                          const avifEncoderItem * item,
+                                                          avifBool itemWillBeEncodedLosslessly,
+                                                          const avifImage * image,
+                                                          avifImage ** sampleTransformedImage)
+{
+    AVIF_ASSERT_OR_RETURN(image->depth == 16); // Other bit depths could be supported but for now it is 16-bit only.
+    *sampleTransformedImage = NULL;
+    const avifResult result = avifEncoderCreateSatoImage(encoder, item, itemWillBeEncodedLosslessly, image, sampleTransformedImage);
+    if (result != AVIF_RESULT_OK && *sampleTransformedImage != NULL) {
+        avifImageDestroy(*sampleTransformedImage);
+    }
+    return result;
+}
+#endif // AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM
 
 static avifCodecType avifEncoderGetCodecType(const avifEncoder * encoder)
 {
@@ -1192,20 +1410,18 @@ static avifBool avifEncoderDataShouldForceKeyframeForAlpha(const avifEncoderData
 
 static avifResult avifGetErrorForItemCategory(avifItemCategory itemCategory)
 {
-    return (itemCategory == AVIF_ITEM_ALPHA) ? AVIF_RESULT_ENCODE_ALPHA_FAILED : AVIF_RESULT_ENCODE_COLOR_FAILED;
-}
-
-static avifResult avifValidateImageBasicProperties(const avifImage * avifImage)
-{
-    if ((avifImage->depth != 8) && (avifImage->depth != 10) && (avifImage->depth != 12)) {
-        return AVIF_RESULT_UNSUPPORTED_DEPTH;
+#if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
+    if (itemCategory == AVIF_ITEM_GAIN_MAP) {
+        return AVIF_RESULT_ENCODE_GAIN_MAP_FAILED;
     }
-
-    if (avifImage->yuvFormat == AVIF_PIXEL_FORMAT_NONE) {
-        return AVIF_RESULT_NO_YUV_FORMAT_SELECTED;
+#endif
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    if (itemCategory == AVIF_ITEM_SAMPLE_TRANSFORM ||
+        (itemCategory >= AVIF_SAMPLE_TRANSFORM_MIN_CATEGORY && itemCategory <= AVIF_SAMPLE_TRANSFORM_MAX_CATEGORY)) {
+        return AVIF_RESULT_ENCODE_SAMPLE_TRANSFORM_FAILED;
     }
-
-    return AVIF_RESULT_OK;
+#endif
+    return avifIsAlpha(itemCategory) ? AVIF_RESULT_ENCODE_ALPHA_FAILED : AVIF_RESULT_ENCODE_COLOR_FAILED;
 }
 
 static uint32_t avifGridWidth(uint32_t gridCols, const avifImage * firstCell, const avifImage * bottomRightCell)
@@ -1326,7 +1542,14 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
 
     const avifImage * firstCell = cellImages[0];
     const avifImage * bottomRightCell = cellImages[cellCount - 1];
-    AVIF_CHECKRES(avifValidateImageBasicProperties(firstCell));
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    AVIF_CHECKERR(firstCell->depth == 8 || firstCell->depth == 10 || firstCell->depth == 12 ||
+                      (firstCell->depth == 16 && encoder->sampleTransformRecipe != AVIF_SAMPLE_TRANSFORM_NONE),
+                  AVIF_RESULT_UNSUPPORTED_DEPTH);
+#else
+    AVIF_CHECKERR(firstCell->depth == 8 || firstCell->depth == 10 || firstCell->depth == 12, AVIF_RESULT_UNSUPPORTED_DEPTH);
+#endif
+    AVIF_CHECKERR(firstCell->yuvFormat != AVIF_PIXEL_FORMAT_NONE, AVIF_RESULT_NO_YUV_FORMAT_SELECTED);
     if (!firstCell->width || !firstCell->height || !bottomRightCell->width || !bottomRightCell->height) {
         return AVIF_RESULT_NO_CONTENT;
     }
@@ -1361,8 +1584,7 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
             }
             const avifGainMapMetadata * firstMetadata = &firstGainMap->metadata;
             const avifGainMapMetadata * cellMetadata = &cellGainMap->metadata;
-            if (cellMetadata->backwardDirection != firstMetadata->backwardDirection ||
-                cellMetadata->baseHdrHeadroomN != firstMetadata->baseHdrHeadroomN ||
+            if (cellMetadata->baseHdrHeadroomN != firstMetadata->baseHdrHeadroomN ||
                 cellMetadata->baseHdrHeadroomD != firstMetadata->baseHdrHeadroomD ||
                 cellMetadata->alternateHdrHeadroomN != firstMetadata->alternateHdrHeadroomN ||
                 cellMetadata->alternateHdrHeadroomD != firstMetadata->alternateHdrHeadroomD) {
@@ -1388,7 +1610,13 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
     }
 
     if (hasGainMap) {
-        AVIF_CHECKRES(avifValidateImageBasicProperties(firstCell->gainMap->image));
+        // AVIF supports 16-bit images through sample transforms used as bit depth extensions,
+        // but this is not implemented for gain maps for now. Stick to at most 12 bits.
+        // TODO(yguyon): Implement 16-bit gain maps.
+        AVIF_CHECKERR(firstCell->gainMap->image->depth == 8 || firstCell->gainMap->image->depth == 10 ||
+                          firstCell->gainMap->image->depth == 12,
+                      AVIF_RESULT_UNSUPPORTED_DEPTH);
+        AVIF_CHECKERR(firstCell->gainMap->image->yuvFormat != AVIF_PIXEL_FORMAT_NONE, AVIF_RESULT_NO_YUV_FORMAT_SELECTED);
         AVIF_CHECKRES(avifValidateGrid(gridCols, gridRows, cellImages, /*validateGainMap=*/AVIF_TRUE, &encoder->diag));
         if (firstCell->gainMap->image->colorPrimaries != AVIF_COLOR_PRIMARIES_UNSPECIFIED ||
             firstCell->gainMap->image->transferCharacteristics != AVIF_TRANSFER_CHARACTERISTICS_UNSPECIFIED) {
@@ -1543,6 +1771,7 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
             toneMappedItem->itemCategory = AVIF_ITEM_COLOR;
             uint16_t toneMappedItemID = toneMappedItem->id;
 
+            AVIF_ASSERT_OR_RETURN(encoder->data->alternativeItemIDs.count == 0);
             uint16_t * alternativeItemID = (uint16_t *)avifArrayPush(&encoder->data->alternativeItemIDs);
             AVIF_CHECKERR(alternativeItemID != NULL, AVIF_RESULT_OUT_OF_MEMORY);
             *alternativeItemID = toneMappedItemID;
@@ -1575,6 +1804,20 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
             gainMapItem->dimgFromID = toneMappedItemID;
         }
 #endif // AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP
+
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+        if (encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_8B_8B ||
+            encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_12B_4B) {
+            // For now, only 16-bit depth is supported.
+            AVIF_ASSERT_OR_RETURN(firstCell->depth == 16);
+#if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
+            AVIF_CHECKERR(!firstCell->gainMap, AVIF_RESULT_NOT_IMPLEMENTED); // TODO(yguyon): Implement 16-bit HDR
+#endif
+            AVIF_CHECKRES(avifEncoderCreateBitDepthExtensionItems(encoder, gridCols, gridRows, gridWidth, gridHeight, colorItemID));
+        } else {
+            AVIF_CHECKERR(encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_NONE, AVIF_RESULT_NOT_IMPLEMENTED);
+        }
+#endif // AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM
 
         // -----------------------------------------------------------------------
         // Create metadata items (Exif, XMP)
@@ -1642,7 +1885,9 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
         avifEncoderItem * item = &encoder->data->items.item[itemIndex];
         if (item->codec) {
             const avifImage * cellImage = cellImages[item->cellIndex];
+            avifImage * cellImagePlaceholder = NULL; // May be used as a temporary, modified cellImage. Left as NULL otherwise.
             const avifImage * firstCellImage = firstCell;
+
 #if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
             if (item->itemCategory == AVIF_ITEM_GAIN_MAP) {
                 AVIF_ASSERT_OR_RETURN(cellImage->gainMap && cellImage->gainMap->image);
@@ -1651,29 +1896,69 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
                 firstCellImage = firstCell->gainMap->image;
             }
 #endif
-            avifImage * paddedCellImage = NULL;
+
             if ((cellImage->width != firstCellImage->width) || (cellImage->height != firstCellImage->height)) {
-                paddedCellImage = avifImageCreateEmpty();
-                AVIF_CHECKERR(paddedCellImage, AVIF_RESULT_OUT_OF_MEMORY);
-                const avifResult result = avifImageCopyAndPad(paddedCellImage, cellImage, firstCellImage->width, firstCellImage->height);
+                // Pad the right-most and/or bottom-most tiles so that all tiles share the same dimensions.
+                cellImagePlaceholder = avifImageCreateEmpty();
+                AVIF_CHECKERR(cellImagePlaceholder, AVIF_RESULT_OUT_OF_MEMORY);
+                const avifResult result =
+                    avifImageCopyAndPad(cellImagePlaceholder, cellImage, firstCellImage->width, firstCellImage->height);
                 if (result != AVIF_RESULT_OK) {
-                    avifImageDestroy(paddedCellImage);
+                    avifImageDestroy(cellImagePlaceholder);
                     return result;
                 }
-                cellImage = paddedCellImage;
+                cellImage = cellImagePlaceholder;
             }
-            const int quantizer = (item->itemCategory == AVIF_ITEM_ALPHA) ? encoder->data->quantizerAlpha
+
+            const avifBool isAlpha = avifIsAlpha(item->itemCategory);
+            int quantizer = isAlpha ? encoder->data->quantizerAlpha
 #if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
-                                  : (item->itemCategory == AVIF_ITEM_GAIN_MAP) ? encoder->data->quantizerGainMap
+                            : (item->itemCategory == AVIF_ITEM_GAIN_MAP) ? encoder->data->quantizerGainMap
 #endif
-                                                                               : encoder->data->quantizer;
+                                                                         : encoder->data->quantizer;
+
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+            // Remember original quantizer values in case they change, to reset them afterwards.
+            int * encoderMinQuantizer = isAlpha ? &encoder->minQuantizerAlpha : &encoder->minQuantizer;
+            int * encoderMaxQuantizer = isAlpha ? &encoder->maxQuantizerAlpha : &encoder->maxQuantizer;
+            const int originalMinQuantizer = *encoderMinQuantizer;
+            const int originalMaxQuantizer = *encoderMaxQuantizer;
+
+            if (encoder->sampleTransformRecipe != AVIF_SAMPLE_TRANSFORM_NONE) {
+                if ((encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_8B_8B ||
+                     encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_12B_4B) &&
+                    (item->itemCategory == AVIF_ITEM_COLOR || item->itemCategory == AVIF_ITEM_ALPHA)) {
+                    // Encoding the least significant bits of a sample does not make any sense if the
+                    // other bits are lossily compressed. Encode the most significant bits losslessly.
+                    quantizer = AVIF_QUANTIZER_LOSSLESS;
+                    *encoderMinQuantizer = AVIF_QUANTIZER_LOSSLESS;
+                    *encoderMaxQuantizer = AVIF_QUANTIZER_LOSSLESS;
+                    if (!avifEncoderDetectChanges(encoder, &encoderChanges)) {
+                        assert(AVIF_FALSE);
+                    }
+                }
+
+                // Replace cellImage by the first or second input to the AVIF_ITEM_SAMPLE_TRANSFORM derived image item.
+                const avifBool itemWillBeEncodedLosslessly = (quantizer == AVIF_QUANTIZER_LOSSLESS);
+                avifImage * sampleTransformedImage = NULL;
+                if (cellImagePlaceholder) {
+                    avifImageDestroy(cellImagePlaceholder); // Replaced by sampleTransformedImage.
+                    cellImagePlaceholder = NULL;
+                }
+                AVIF_CHECKRES(
+                    avifEncoderCreateBitDepthExtensionImage(encoder, item, itemWillBeEncodedLosslessly, cellImage, &sampleTransformedImage));
+                cellImagePlaceholder = sampleTransformedImage; // Transfer ownership.
+                cellImage = cellImagePlaceholder;
+            }
+#endif // AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM
+
             // If alpha channel is present, set disableLaggedOutput to AVIF_TRUE. If the encoder supports it, this enables
             // avifEncoderDataShouldForceKeyframeForAlpha to force a keyframe in the alpha channel whenever a keyframe has been
             // encoded in the color channel for animated images.
             avifResult encodeResult = item->codec->encodeImage(item->codec,
                                                                encoder,
                                                                cellImage,
-                                                               item->itemCategory == AVIF_ITEM_ALPHA,
+                                                               isAlpha,
                                                                encoder->data->tileRowsLog2,
                                                                encoder->data->tileColsLog2,
                                                                quantizer,
@@ -1681,15 +1966,21 @@ static avifResult avifEncoderAddImageInternal(avifEncoder * encoder,
                                                                /*disableLaggedOutput=*/encoder->data->alphaPresent,
                                                                addImageFlags,
                                                                item->encodeOutput);
-            if (paddedCellImage) {
-                avifImageDestroy(paddedCellImage);
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+            // Revert quality settings if they changed.
+            if (*encoderMinQuantizer != originalMinQuantizer || *encoderMaxQuantizer != originalMaxQuantizer) {
+                avifEncoderBackupSettings(encoder); // Remember last encoding settings for next avifEncoderDetectChanges().
+                *encoderMinQuantizer = originalMinQuantizer;
+                *encoderMaxQuantizer = originalMaxQuantizer;
+            }
+#endif // AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM
+            if (cellImagePlaceholder) {
+                avifImageDestroy(cellImagePlaceholder);
             }
             if (encodeResult == AVIF_RESULT_UNKNOWN_ERROR) {
                 encodeResult = avifGetErrorForItemCategory(item->itemCategory);
             }
-            if (encodeResult != AVIF_RESULT_OK) {
-                return encodeResult;
-            }
+            AVIF_CHECKRES(encodeResult);
             if (itemIndex == 0 && avifEncoderDataShouldForceKeyframeForAlpha(encoder->data, item, addImageFlags)) {
                 addImageFlags |= AVIF_ADD_IMAGE_FLAG_FORCE_KEYFRAME;
             }
@@ -1780,10 +2071,12 @@ static avifResult avifEncoderWriteMediaDataBox(avifEncoder * encoder,
                 // only process metadata (XMP/Exif) payloads when metadataPass is true
                 continue;
             }
-            avifBool isAlphaOrGainMap = item->itemCategory == AVIF_ITEM_ALPHA;
+            const avifBool isAlpha = avifIsAlpha(item->itemCategory);
+            const avifBool isAlphaOrGainMap = isAlpha
 #if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
-            isAlphaOrGainMap = isAlphaOrGainMap || item->itemCategory == AVIF_ITEM_GAIN_MAP;
+                                              || item->itemCategory == AVIF_ITEM_GAIN_MAP
 #endif
+                ;
             if (alphaAndGainMapPass != isAlphaOrGainMap) {
                 // only process alpha payloads when alphaPass is true
                 continue;
@@ -1794,8 +2087,8 @@ static avifResult avifEncoderWriteMediaDataBox(avifEncoder * encoder,
                 // We always interleave all AV1 items for layered images.
                 AVIF_ASSERT_OR_RETURN(item->encodeOutput->samples.count == item->mdatFixups.count);
 
-                avifEncoderItemReference * ref = (item->itemCategory == AVIF_ITEM_ALPHA) ? avifArrayPush(layeredAlphaItems)
-                                                                                         : avifArrayPush(layeredColorItems);
+                avifEncoderItemReference * ref =
+                    (avifEncoderItemReference *)avifArrayPush(isAlpha ? layeredAlphaItems : layeredColorItems);
                 AVIF_CHECKERR(ref != NULL, AVIF_RESULT_OUT_OF_MEMORY);
                 *ref = item;
                 continue;
@@ -1820,7 +2113,7 @@ static avifResult avifEncoderWriteMediaDataBox(avifEncoder * encoder,
                         avifEncodeSample * sample = &item->encodeOutput->samples.sample[sampleIndex];
                         AVIF_CHECKRES(avifRWStreamWrite(s, sample->data.data, sample->data.size));
 
-                        if (item->itemCategory == AVIF_ITEM_ALPHA) {
+                        if (isAlpha) {
                             encoder->ioStats.alphaOBUSize += sample->data.size;
                         } else if (item->itemCategory == AVIF_ITEM_COLOR) {
                             encoder->ioStats.colorOBUSize += sample->data.size;
@@ -1920,70 +2213,37 @@ static avifResult avifWriteAltrGroup(avifRWStream * s, const avifEncoderItemIdAr
     return AVIF_RESULT_OK;
 }
 
-#if defined(AVIF_ENABLE_EXPERIMENTAL_AVIR)
-// Writes the extendedMeta field of the CondensedImageBox.
-static avifResult avifImageWriteExtendedMeta(const avifImage * imageMetadata, avifRWStream * stream)
+#if defined(AVIF_ENABLE_EXPERIMENTAL_METAV1)
+// Returns true if the image can be encoded with a slim MetaBox with version 1
+// instead of a full regular MetaBox with version 0.
+static avifBool avifEncoderIsMetaBoxV1Compatible(const avifEncoder * encoder)
 {
-    // The ExtendedMetaBox has no size and box type because these are already set by the CondensedImageBox.
-
-    avifBoxMarker iprp;
-    AVIF_CHECKRES(avifRWStreamWriteBox(stream, "iprp", AVIF_BOX_SIZE_TBD, &iprp));
-    {
-        // ItemPropertyContainerBox
-
-        avifBoxMarker ipco;
-        AVIF_CHECKRES(avifRWStreamWriteBox(stream, "ipco", AVIF_BOX_SIZE_TBD, &ipco));
-        {
-            // No need for dedup because there is only one property of each type and for a single item.
-            AVIF_CHECKRES(avifEncoderWriteHDRProperties(stream, stream, imageMetadata, /*ipma=*/NULL, /*dedup=*/NULL));
-            AVIF_CHECKRES(avifEncoderWriteExtendedColorProperties(stream, stream, imageMetadata, /*ipma=*/NULL, /*dedup=*/NULL));
-        }
-        avifRWStreamFinishBox(stream, ipco);
-
-        // ItemPropertyAssociationBox
-
-        avifBoxMarker ipma;
-        AVIF_CHECKRES(avifRWStreamWriteFullBox(stream, "ipma", AVIF_BOX_SIZE_TBD, 0, 0, &ipma));
-        {
-            // Same order as in avifEncoderWriteExtendedColorProperties().
-            const uint8_t numNonEssentialProperties = ((imageMetadata->clli.maxCLL || imageMetadata->clli.maxPALL) ? 1 : 0) +
-                                                      ((imageMetadata->transformFlags & AVIF_TRANSFORM_PASP) ? 1 : 0);
-            const uint8_t numEssentialProperties = ((imageMetadata->transformFlags & AVIF_TRANSFORM_CLAP) ? 1 : 0) +
-                                                   ((imageMetadata->transformFlags & AVIF_TRANSFORM_IROT) ? 1 : 0) +
-                                                   ((imageMetadata->transformFlags & AVIF_TRANSFORM_IMIR) ? 1 : 0);
-            const uint8_t ipmaCount = numNonEssentialProperties + numEssentialProperties;
-            AVIF_ASSERT_OR_RETURN(ipmaCount >= 1);
-
-            // Only add properties to the primary item.
-            AVIF_CHECKRES(avifRWStreamWriteU32(stream, 1)); // unsigned int(32) entry_count;
-            {
-                // Primary item ID is defined as 1 by the CondensedImageBox.
-                AVIF_CHECKRES(avifRWStreamWriteU16(stream, 1));        // unsigned int(16) item_ID;
-                AVIF_CHECKRES(avifRWStreamWriteU8(stream, ipmaCount)); // unsigned int(8) association_count;
-                for (uint8_t i = 0; i < ipmaCount; ++i) {
-                    AVIF_CHECKRES(avifRWStreamWriteBits(stream, (i >= numNonEssentialProperties) ? 1 : 0, /*bitCount=*/1)); // bit(1) essential;
-                    // The CondensedImageBox will always create 8 item properties, so to refer to the
-                    // first property in the ItemPropertyContainerBox above, use index 9.
-                    AVIF_CHECKRES(avifRWStreamWriteBits(stream, 9 + i, /*bitCount=*/7)); // unsigned int(7) property_index;
-                }
-            }
-        }
-        avifRWStreamFinishBox(stream, ipma);
-    }
-    avifRWStreamFinishBox(stream, iprp);
-    return AVIF_RESULT_OK;
-}
-
-// Returns true if the image can be encoded with a CondensedImageBox instead of a full regular MetaBox.
-static avifBool avifEncoderIsCondensedImageBoxCompatible(const avifEncoder * encoder)
-{
-    // The CondensedImageBox ("avir" brand) only supports non-layered, still images.
+    // The MetaBox with version 1 ("mif3" brand) only supports non-layered, still images.
     if (encoder->extraLayerCount || (encoder->data->frames.count != 1)) {
         return AVIF_FALSE;
     }
 
-    // 4:4:4, 4:2:2, 4:2:0 and 4:0:0 are supported by a CondensedImageBox.
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+    if (encoder->sampleTransformRecipe != AVIF_SAMPLE_TRANSFORM_NONE) {
+        return AVIF_FALSE;
+    }
+#endif
+
+    if (encoder->data->imageMetadata->width > (1 << 15) || encoder->data->imageMetadata->height > (1 << 15)) {
+        return AVIF_FALSE;
+    }
+    if (encoder->data->imageMetadata->icc.size > (1 << 20) || encoder->data->imageMetadata->exif.size > (1 << 20) ||
+        encoder->data->imageMetadata->xmp.size > (1 << 20)) {
+        return AVIF_FALSE;
+    }
+
+    // 4:4:4, 4:2:2, 4:2:0 and 4:0:0 are supported by a MetaBox with version 1.
     if (encoder->data->imageMetadata->yuvFormat == AVIF_PIXEL_FORMAT_NONE) {
+        return AVIF_FALSE;
+    }
+
+    if (encoder->data->imageMetadata->colorPrimaries > 255 || encoder->data->imageMetadata->transferCharacteristics > 255 ||
+        encoder->data->imageMetadata->matrixCoefficients > 255) {
         return AVIF_FALSE;
     }
 
@@ -1991,7 +2251,7 @@ static avifBool avifEncoderIsCondensedImageBoxCompatible(const avifEncoder * enc
     for (uint32_t itemIndex = 0; itemIndex < encoder->data->items.count; ++itemIndex) {
         avifEncoderItem * item = &encoder->data->items.item[itemIndex];
 
-        // Grids are not supported by a CondensedImageBox.
+        // Grids are not supported by a MetaBox with version 1.
         if (item->gridCols || item->gridRows) {
             return AVIF_FALSE;
         }
@@ -1999,14 +2259,22 @@ static avifBool avifEncoderIsCondensedImageBoxCompatible(const avifEncoder * enc
         if (item->id == encoder->data->primaryItemID) {
             assert(!colorItem);
             colorItem = item;
-            continue; // The primary item can be stored in the CondensedImageBox.
+            // main_item_data_size_minus_one so 2^28 inclusive.
+            if (item->encodeOutput->samples.count != 1 || item->encodeOutput->samples.sample[0].data.size > (1 << 28)) {
+                return AVIF_FALSE;
+            }
+            continue; // The primary item can be stored in the MetaBox with version 1.
         }
         if (item->itemCategory == AVIF_ITEM_ALPHA && item->irefToID == encoder->data->primaryItemID) {
-            continue; // The alpha auxiliary item can be stored in the CondensedImageBox.
+            // alpha_item_data_size so 2^28 exclusive.
+            if (item->encodeOutput->samples.count != 1 || item->encodeOutput->samples.sample[0].data.size >= (1 << 28)) {
+                return AVIF_FALSE;
+            }
+            continue; // The alpha auxiliary item can be stored in the MetaBox with version 1.
         }
         if (!memcmp(item->type, "mime", 4) && !memcmp(item->infeName, "XMP", item->infeNameSize)) {
             assert(item->metadataPayload.size == encoder->data->imageMetadata->xmp.size);
-            continue; // XMP metadata can be stored in the CondensedImageBox.
+            continue; // XMP metadata can be stored in the MetaBox with version 1.
         }
         if (!memcmp(item->type, "Exif", 4) && !memcmp(item->infeName, "Exif", item->infeNameSize)) {
             assert(item->metadataPayload.size == encoder->data->imageMetadata->exif.size + 4);
@@ -2014,14 +2282,11 @@ static avifBool avifEncoderIsCondensedImageBoxCompatible(const avifEncoder * enc
             if (exif_tiff_header_offset != 0) {
                 return AVIF_FALSE;
             }
-            continue; // Exif metadata can be stored in the CondensedImageBox if exif_tiff_header_offset is 0.
+            continue; // Exif metadata can be stored in the MetaBox with version 1 if exif_tiff_header_offset is 0.
         }
 
         // Items besides the colorItem, the alphaItem and Exif/XMP/ICC
-        // metadata are not directly supported by the CondensedImageBox.
-        // Store them in its inner extendedMeta field instead.
-        // TODO(yguyon): Implement comment above instead of falling back to regular AVIF
-        //               (or drop the comment above if there is no other item type).
+        // metadata are not directly supported by the MetaBox with version 1.
         return AVIF_FALSE;
     }
     // A primary item is necessary.
@@ -2031,42 +2296,38 @@ static avifBool avifEncoderIsCondensedImageBoxCompatible(const avifEncoder * enc
     return AVIF_TRUE;
 }
 
-static avifResult avifEncoderWriteCondensedImageBox(avifEncoder * encoder, avifRWStream * s, avifRWData * extendedMeta);
+static avifResult avifEncoderWriteMetaBoxV1(avifEncoder * encoder, avifRWStream * s);
 
-static avifResult avifEncoderWriteFileTypeBoxAndCondensedImageBox(avifEncoder * encoder, avifRWData * output)
+static avifResult avifEncoderWriteFileTypeBoxAndMetaBoxV1(avifEncoder * encoder, avifRWData * output)
 {
     avifRWStream s;
     avifRWStreamStart(&s, output);
 
     avifBoxMarker ftyp;
     AVIF_CHECKRES(avifRWStreamWriteBox(&s, "ftyp", AVIF_BOX_SIZE_TBD, &ftyp));
-    AVIF_CHECKRES(avifRWStreamWriteChars(&s, "avir", 4)); // unsigned int(32) major_brand;
-    AVIF_CHECKRES(avifRWStreamWriteU32(&s, 0));           // unsigned int(32) minor_version;
-    AVIF_CHECKRES(avifRWStreamWriteChars(&s, "avir", 4)); // unsigned int(32) compatible_brands[];
+    AVIF_CHECKRES(avifRWStreamWriteChars(&s, "mif3", 4)); // unsigned int(32) major_brand;
+    AVIF_CHECKRES(avifRWStreamWriteChars(&s, "avif", 4)); // unsigned int(32) minor_version;
+                                                          // unsigned int(32) compatible_brands[];
     avifRWStreamFinishBox(&s, ftyp);
 
-    avifRWData extendedMeta = AVIF_DATA_EMPTY;
-    const avifResult result = avifEncoderWriteCondensedImageBox(encoder, &s, &extendedMeta);
-    avifRWDataFree(&extendedMeta);
-    AVIF_CHECKRES(result);
+    AVIF_CHECKRES(avifEncoderWriteMetaBoxV1(encoder, &s));
 
     avifRWStreamFinishWrite(&s);
     return AVIF_RESULT_OK;
 }
 
-static avifResult avifEncoderWriteCondensedImageBox(avifEncoder * encoder, avifRWStream * s, avifRWData * extendedMeta)
+static avifResult avifEncoderWriteMetaBoxV1(avifEncoder * encoder, avifRWStream * s)
 {
     const avifEncoderItem * colorItem = NULL;
     const avifEncoderItem * alphaItem = NULL;
     for (uint32_t itemIndex = 0; itemIndex < encoder->data->items.count; ++itemIndex) {
         avifEncoderItem * item = &encoder->data->items.item[itemIndex];
         if (item->id == encoder->data->primaryItemID) {
+            AVIF_ASSERT_OR_RETURN(!colorItem);
             colorItem = item;
-            AVIF_ASSERT_OR_RETURN(colorItem->encodeOutput->samples.count == 1);
         } else if (item->itemCategory == AVIF_ITEM_ALPHA && item->irefToID == encoder->data->primaryItemID) {
             AVIF_ASSERT_OR_RETURN(!alphaItem);
             alphaItem = item;
-            AVIF_ASSERT_OR_RETURN(alphaItem->encodeOutput->samples.count == 1);
         }
     }
 
@@ -2076,125 +2337,231 @@ static avifResult avifEncoderWriteCondensedImageBox(avifEncoder * encoder, avifR
 
     const avifImage * const image = encoder->data->imageMetadata;
 
-    const avifBool isMonochrome = image->yuvFormat == AVIF_PIXEL_FORMAT_YUV400;
-    const avifBool isSubsampled = image->yuvFormat == AVIF_PIXEL_FORMAT_YUV422 || image->yuvFormat == AVIF_PIXEL_FORMAT_YUV420;
+    const avifBool hasAlpha = alphaItem != NULL;
+    const avifBool alphaIsPremultiplied = encoder->data->imageMetadata->alphaPremultiplied;
+    const avifBool hasHdr = AVIF_FALSE; // Not implemented.
+    const avifBool hasIcc = image->icc.size != 0;
+    const uint32_t chromaSubsampling = image->yuvFormat == AVIF_PIXEL_FORMAT_YUV400   ? 0
+                                       : image->yuvFormat == AVIF_PIXEL_FORMAT_YUV420 ? 1
+                                       : image->yuvFormat == AVIF_PIXEL_FORMAT_YUV422 ? 2
+                                                                                      : 3;
+
+    const avifColorPrimaries defaultColorPrimaries = hasIcc ? AVIF_COLOR_PRIMARIES_UNSPECIFIED : AVIF_COLOR_PRIMARIES_BT709;
+    const avifTransferCharacteristics defaultTransferCharacteristics = hasIcc ? AVIF_TRANSFER_CHARACTERISTICS_UNSPECIFIED
+                                                                              : AVIF_TRANSFER_CHARACTERISTICS_SRGB;
+    const avifMatrixCoefficients defaultMatrixCoefficients = chromaSubsampling == 0 ? AVIF_MATRIX_COEFFICIENTS_UNSPECIFIED
+                                                                                    : AVIF_MATRIX_COEFFICIENTS_BT601;
+    const avifBool hasExplicitCicp = image->colorPrimaries != defaultColorPrimaries ||
+                                     image->transferCharacteristics != defaultTransferCharacteristics ||
+                                     image->matrixCoefficients != defaultMatrixCoefficients;
+
     const avifBool fullRange = image->yuvRange == AVIF_RANGE_FULL;
+    const uint32_t pixelFormat = image->depth == 8    ? AVIF_METAV1_PIXEL_FORMAT_UINT8
+                                 : image->depth == 10 ? AVIF_METAV1_PIXEL_FORMAT_UINT10
+                                                      : AVIF_METAV1_PIXEL_FORMAT_UINT12;
 
-    avifBoxMarker mini;
-    AVIF_CHECKRES(avifRWStreamWriteBox(s, "mini", AVIF_BOX_SIZE_TBD, &mini));
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, 0, 2)); // unsigned int(2) version;
-
-    AVIF_CHECKRES(avifRWStreamWriteVarInt(s, image->width - 1));  // varint width_minus_one;
-    AVIF_CHECKRES(avifRWStreamWriteVarInt(s, image->height - 1)); // varint height_minus_one;
-
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, 0, 1));                // unsigned int(1) is_float;
-                                                                  // unsigned int(2) float_precision;
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, image->depth - 1, 4)); // unsigned int(4) bit_depth_minus_one;
-    if (isMonochrome) {
-        AVIF_CHECKRES(avifRWStreamWriteBits(s, 0, 2)); // unsigned int(2) subsampling;
-    } else {
-        AVIF_CHECKRES(avifRWStreamWriteBits(s, (uint32_t)image->yuvFormat, 2)); // unsigned int(2) subsampling;
+    // In AV1, the chroma_sample_position syntax element is not present for the YUV 4:2:2 format.
+    // Assume that AV1 uses the same 4:2:2 chroma sample location as HEVC and VVC (colocated).
+    if (image->yuvFormat != AVIF_PIXEL_FORMAT_YUV420 && image->yuvChromaSamplePosition != AVIF_CHROMA_SAMPLE_POSITION_UNKNOWN) {
+        avifDiagnosticsPrintf(&encoder->diag,
+                              "YUV chroma sample position %d is only supported with 4:2:0 YUV format in AV1",
+                              image->yuvChromaSamplePosition);
+        return AVIF_RESULT_INVALID_ARGUMENT;
     }
-    if (isSubsampled) {
-        AVIF_CHECKRES(avifRWStreamWriteBits(s, image->yuvChromaSamplePosition == AVIF_CHROMA_SAMPLE_POSITION_VERTICAL ? 1 : 0, 1)); // unsigned int(1) is_centered;
+    // For the YUV 4:2:0 format, assume centered sample position unless specified otherwise.
+    // This is consistent with the behavior in read.c.
+    const avifBool isHorizontallyCentered = image->yuvFormat == AVIF_PIXEL_FORMAT_YUV420 &&
+                                            image->yuvChromaSamplePosition != AVIF_CHROMA_SAMPLE_POSITION_VERTICAL &&
+                                            image->yuvChromaSamplePosition != AVIF_CHROMA_SAMPLE_POSITION_COLOCATED;
+    const avifBool isVerticallyCentered = image->yuvFormat == AVIF_PIXEL_FORMAT_YUV420 &&
+                                          image->yuvChromaSamplePosition != AVIF_CHROMA_SAMPLE_POSITION_COLOCATED;
+
+    const uint32_t orientation = avifImageIrotImirToExifOrientation(image) - 1;
+
+    const avifBool hasExplicitCodecTypes = AVIF_FALSE; // 'av01' and 'av1C' known from 'avif' minor_version field of FileTypeBox.
+
+    const uint32_t dimensionSize = image->width <= (1 << 7) && image->height <= (1 << 7) ? 7 : 15;
+    const uint32_t codecConfigSize = 4; // 'av1C' always uses 4 bytes.
+    const uint32_t codecConfigSizeSize = codecConfigSize < (1 << 3) ? 3 : 12;
+    const uint32_t itemDataSizeSize = colorData->size <= (1 << 15) && (!alphaData || alphaData->size < (1 << 15)) ? 15 : 28;
+    const uint32_t metadataSizeSize =
+        image->icc.size <= (1 << 10) && image->exif.size <= (1 << 10) && image->xmp.size <= (1 << 10) ? 10 : 20;
+
+    uint32_t flags = 0;
+    flags |= alphaItem ? 0x000001 : 0;                // has_alpha
+    flags |= alphaIsPremultiplied ? 0x000002 : 0;     // alpha_is_premultiplied
+    flags |= hasHdr ? 0x000004 : 0;                   // has_hdr
+    flags |= hasExplicitCicp ? 0x000008 : 0;          // has_explicit_cicp
+    flags |= hasIcc ? 0x000010 : 0;                   // has_icc
+    flags |= image->exif.size ? 0x000020 : 0;         // has_exif
+    flags |= image->xmp.size ? 0x000040 : 0;          // has_xmp
+    flags |= fullRange ? 0x000080 : 0;                // full_range
+    flags |= pixelFormat << 8;                        // pixel_format (4 bits)
+    flags |= chromaSubsampling << 12;                 // chroma_subsampling (2 bits)
+    flags |= isHorizontallyCentered ? 0x004000 : 0;   // is_horizontally_centered
+    flags |= isVerticallyCentered ? 0x008000 : 0;     // is_vertically_centered
+    flags |= orientation << 16;                       // orientation (3 bits)
+    flags |= hasExplicitCodecTypes ? 0x080000 : 0;    // has_explicit_codec_types
+    flags |= dimensionSize == 7 ? 0x100000 : 0;       // dimension_size
+    flags |= codecConfigSizeSize == 3 ? 0x200000 : 0; // codec_config_size_size
+    flags |= itemDataSizeSize == 15 ? 0x400000 : 0;   // item_data_size_size
+    flags |= metadataSizeSize == 10 ? 0x800000 : 0;   // metadata_size_size
+
+    avifBoxMarker meta;
+    AVIF_CHECKRES(avifRWStreamWriteFullBox(s, "meta", AVIF_BOX_SIZE_TBD, /*version=*/1, flags, &meta));
+
+    AVIF_CHECKRES(avifRWStreamWriteBits(s, image->width - 1, dimensionSize));  // unsigned int(dimension_size) width_minus_one;
+    AVIF_CHECKRES(avifRWStreamWriteBits(s, image->height - 1, dimensionSize)); // unsigned int(dimension_size) height_minus_one;
+
+    if (hasIcc) {
+        AVIF_CHECKRES(avifRWStreamWriteBits(s, (uint32_t)image->icc.size - 1, metadataSizeSize)); // unsigned int(metadata_size_size) icc_data_size_minus_one;
     }
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, fullRange, 1)); // unsigned int(1) full_range;
-    if (image->icc.size) {
-        AVIF_CHECKRES(avifRWStreamWriteBits(s, AVIF_MINI_COLOR_TYPE_ICC, 2)); // unsigned int(2) color_type;
-        AVIF_CHECKERR(image->colorPrimaries == AVIF_COLOR_PRIMARIES_UNSPECIFIED, AVIF_RESULT_INVALID_ARGUMENT);
-        AVIF_CHECKERR(image->transferCharacteristics == AVIF_TRANSFER_CHARACTERISTICS_UNSPECIFIED, AVIF_RESULT_INVALID_ARGUMENT);
-        if (isMonochrome) {
-            AVIF_CHECKERR(image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_UNSPECIFIED, AVIF_RESULT_INVALID_ARGUMENT);
-        } else {
-            AVIF_CHECKRES(avifRWStreamWriteBits(s, image->matrixCoefficients, 8)); // unsigned int(8) matrix_coefficients;
+
+    if (hasExplicitCicp) {
+        AVIF_CHECKRES(avifRWStreamWriteBits(s, image->colorPrimaries, 8));          // bit(8) colour_primaries;
+        AVIF_CHECKRES(avifRWStreamWriteBits(s, image->transferCharacteristics, 8)); // bit(8) transfer_characteristics;
+    }
+    if (chromaSubsampling == 0) {
+        AVIF_CHECKERR(image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_UNSPECIFIED, AVIF_RESULT_ENCODE_COLOR_FAILED);
+    } else if (hasExplicitCicp) {
+        AVIF_CHECKRES(avifRWStreamWriteBits(s, image->matrixCoefficients, 8)); // bit(8) matrix_coefficients;
+    }
+
+    AVIF_CHECKRES(avifRWStreamWriteBits(s, codecConfigSize, codecConfigSizeSize)); // unsigned int(codec_config_size_size) main_item_codec_config_size;
+    AVIF_CHECKRES(avifRWStreamWriteBits(s, (uint32_t)colorData->size - 1, itemDataSizeSize)); // unsigned int(item_data_size_size) main_item_data_size_minus_one;
+
+    if (hasAlpha) {
+        AVIF_CHECKRES(avifRWStreamWriteBits(s, (uint32_t)alphaData->size, itemDataSizeSize)); // unsigned int(item_data_size_size) alpha_item_data_size;
+        if (alphaData->size != 0) {
+            AVIF_CHECKRES(avifRWStreamWriteBits(s, codecConfigSize, codecConfigSizeSize)); // unsigned int(codec_config_size_size) alpha_item_codec_config_size;
         }
-        AVIF_CHECKRES(avifRWStreamWriteVarInt(s, (uint32_t)image->icc.size - 1)); // varint icc_data_size_minus_one;
-    } else {
-        if (image->colorPrimaries == AVIF_COLOR_PRIMARIES_SRGB && image->transferCharacteristics == AVIF_TRANSFER_CHARACTERISTICS_SRGB &&
-            (image->matrixCoefficients == (isMonochrome ? AVIF_MATRIX_COEFFICIENTS_UNSPECIFIED : AVIF_MATRIX_COEFFICIENTS_BT601))) {
-            AVIF_CHECKRES(avifRWStreamWriteBits(s, AVIF_MINI_COLOR_TYPE_SRGB, 2)); // unsigned int(2) color_type;
-        } else {
-            const avifMiniColorType colorType = ((image->colorPrimaries >> 5 == 0) && (image->transferCharacteristics >> 5 == 0) &&
-                                                 (image->matrixCoefficients >> 5 == 0))
-                                                    ? AVIF_MINI_COLOR_TYPE_NCLX_5BIT
-                                                    : AVIF_MINI_COLOR_TYPE_NCLX_8BIT;
-            const uint32_t numBitsPerComponent = (colorType == AVIF_MINI_COLOR_TYPE_NCLX_5BIT) ? 5 : 8;
-            AVIF_CHECKRES(avifRWStreamWriteBits(s, colorType, 2));                               // unsigned int(2) color_type;
-            AVIF_CHECKRES(avifRWStreamWriteBits(s, image->colorPrimaries, numBitsPerComponent)); // unsigned int(5/8) color_primaries;
-            AVIF_CHECKRES(avifRWStreamWriteBits(s, image->transferCharacteristics, numBitsPerComponent)); // unsigned int(5/8) transfer_characteristics;
-            if (isMonochrome) {
-                AVIF_CHECKERR(image->matrixCoefficients == AVIF_MATRIX_COEFFICIENTS_UNSPECIFIED, AVIF_RESULT_INVALID_ARGUMENT);
-            } else {
-                AVIF_CHECKRES(avifRWStreamWriteBits(s, image->matrixCoefficients, numBitsPerComponent)); // unsigned int(5/8) matrix_coefficients;
-            }
-        }
     }
 
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, 0, 1)); // unsigned int(1) has_explicit_codec_types;
-                                                   // unsigned int(32) infe_type;
-                                                   // unsigned int(32) codec_config_type;
-    AVIF_CHECKRES(avifRWStreamWriteVarInt(s, 4));  // varint main_item_codec_config_size;
-    AVIF_ASSERT_OR_RETURN(colorData->size >= 1);
-    AVIF_CHECKRES(avifRWStreamWriteVarInt(s, (uint32_t)colorData->size - 1)); // varint main_item_data_size_minus_one;
+    if (hasHdr) {
+        // bit(1) has_gainmap;
+        // bit(1) has_clli;
+        // bit(1) has_mdcv;
+        // bit(1) has_cclv;
+        // bit(1) has_amve;
+        // bit(1) has_reve;
+        // bit(1) has_ndwt;
+        // if (has_clli)
+        //     ContentLightLevel clli;
+        // if (has_mdcv)
+        //     MasteringDisplayColourVolume mdcv;
+        // if (has_cclv)
+        //     ContentColourVolume cclv;
+        // if (has_amve)
+        //     AmbientViewingEnvironment amve;
+        // if (has_reve)
+        //     ReferenceViewingEnvironment reve;
+        // if (has_ndwt)
+        //     NominalDiffuseWhite ndwt;
 
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, alphaItem ? 1 : 0, 1)); // unsigned int(1) has_alpha;
-    if (alphaItem) {
-        AVIF_CHECKRES(avifRWStreamWriteBits(s, image->alphaPremultiplied, 1)); // unsigned int(1) alpha_is_premultiplied;
-        AVIF_CHECKRES(avifRWStreamWriteVarInt(s, 4));                          // varint alpha_item_codec_config_size;
-        AVIF_CHECKRES(avifRWStreamWriteVarInt(s, (uint32_t)alphaData->size));  // varint alpha_item_data_size;
+        // if (has_gainmap) {
+        //     unsigned int(metadata_size_size) gainmap_metadata_size;
+        //     unsigned int(item_data_size_size) gainmap_item_data_size;
+        //     unsigned int(codec_config_size_size) gainmap_item_codec_config_size;
+        //     unsigned int(dimension_size) gainmap_width_minus_one;
+        //     unsigned int(dimension_size) gainmap_height_minus_one;
+        //     bit(8) gainmap_matrix_coefficients;
+        //     bit(1) gainmap_full_range;
+        //     bit(2) gainmap_chroma_subsampling;
+        //     bit(1) gainmap_is_horizontally_centered;
+        //     bit(1) gainmap_is_vertically_centered;
+        //     bit(4) gainmap_pixel_format;
+
+        //     bit(1) tmap_has_clli;
+        //     bit(1) tmap_has_mdcv;
+        //     bit(1) tmap_has_cclv;
+        //     bit(1) tmap_has_amve;
+        //     bit(1) tmap_has_reve;
+        //     bit(1) tmap_has_ndwt;
+        //     if (tmap_has_clli)
+        //         ContentLightLevel tmap_clli;
+        //     if (tmap_has_mdcv)
+        //         MasteringDisplayColourVolume tmap_mdcv;
+        //     if (tmap_has_cclv)
+        //         ContentColourVolume tmap_cclv;
+        //     if (tmap_has_amve)
+        //         AmbientViewingEnvironment tmap_amve;
+        //     if (tmap_has_reve)
+        //         ReferenceViewingEnvironment tmap_reve;
+        //     if (tmap_has_ndwt)
+        //         NominalDiffuseWhite tmap_ndwt;
+
+        //     bit(1) tmap_has_icc;
+        //     if (tmap_has_icc)
+        //         unsigned int(metadata_size_size) tmap_icc_data_size_minus_one;
+        //     bit(1) tmap_has_explicit_cicp;
+        //     if (tmap_has_explicit_cicp) {
+        //         bit(8) tmap_colour_primaries;
+        //         bit(8) tmap_transfer_characteristics;
+        //         bit(8) tmap_matrix_coefficients;
+        //         bit(1) tmap_full_range;
+        //     } else {
+        //         tmap_colour_primaries = 1;
+        //         tmap_transfer_characteristics = 13;
+        //         tmap_matrix_coefficients = 6;
+        //         tmap_full_range = 1;
+        //     }
+        // }
+        return AVIF_RESULT_NOT_IMPLEMENTED;
     }
 
-    if (image->clli.maxCLL || image->clli.maxPALL || (image->transformFlags != AVIF_TRANSFORM_NONE)) {
-        avifRWStream extendedMetaStream;
-        avifRWStreamStart(&extendedMetaStream, extendedMeta);
-        AVIF_CHECKRES(avifImageWriteExtendedMeta(image, &extendedMetaStream));
-        avifRWStreamFinishWrite(&extendedMetaStream);
-    }
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, extendedMeta->size ? 1 : 0, 1)); // unsigned int(1) has_extended_meta;
-    if (extendedMeta->size) {
-        AVIF_CHECKRES(avifRWStreamWriteVarInt(s, (uint32_t)extendedMeta->size - 1)); // varint extended_meta_size_minus_one;
-    }
-
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, image->exif.size ? 1 : 0, 1)); // unsigned int(1) has_exif;
     if (image->exif.size) {
-        AVIF_CHECKRES(avifRWStreamWriteVarInt(s, (uint32_t)image->exif.size - 1)); // varint exif_data_size_minus_one;
+        AVIF_CHECKRES(avifRWStreamWriteBits(s, (uint32_t)image->exif.size - 1, metadataSizeSize)); // unsigned int(metadata_size_size) exif_data_size_minus_one;
     }
-    AVIF_CHECKRES(avifRWStreamWriteBits(s, image->xmp.size ? 1 : 0, 1)); // unsigned int(1) has_xmp;
     if (image->xmp.size) {
-        AVIF_CHECKRES(avifRWStreamWriteVarInt(s, (uint32_t)image->xmp.size - 1)); // varint xmp_data_size_minus_one;
+        AVIF_CHECKRES(avifRWStreamWriteBits(s, (uint32_t)image->xmp.size - 1, metadataSizeSize)); // unsigned int(metadata_size_size) xmp_data_size_minus_one;
     }
 
     // Padding to align with whole bytes if necessary.
-    if (s->numUsedBitsInPartialByte) {
+    if (s->numUsedBitsInPartialByte != 0) {
         AVIF_CHECKRES(avifRWStreamWriteBits(s, 0, 8 - s->numUsedBitsInPartialByte));
     }
+    const size_t headerSize = avifRWStreamOffset(s);
 
-    if (alphaItem) {
-        AVIF_CHECKRES(writeCodecConfig(s, &alphaItem->av1C)); // unsigned int(8) alpha_item_codec_config[];
+    // Codec configs
+    if (hasAlpha) {
+        AVIF_CHECKRES(writeCodecConfig(s, &alphaItem->av1C)); // unsigned int(8) alpha_item_codec_config[alpha_item_codec_config_size];
     }
-    AVIF_CHECKRES(writeCodecConfig(s, &colorItem->av1C)); // unsigned int(8) main_item_codec_config[];
+    // if (has_hdr && has_gainmap && gainmap_item_codec_config_size > 0)
+    //     unsigned int(8) gainmap_item_codec_config[gainmap_item_codec_config_size];
+    AVIF_CHECKRES(writeCodecConfig(s, &colorItem->av1C)); // unsigned int(8) main_item_codec_config[main_item_codec_config_size];
 
-    if (extendedMeta->size) {
-        AVIF_CHECKRES(avifRWStreamWrite(s, extendedMeta->data, extendedMeta->size));
-    }
-
+    // Color profiles
     if (image->icc.size) {
-        AVIF_CHECKRES(avifRWStreamWrite(s, image->icc.data, image->icc.size)); // unsigned int(8) icc_data[];
+        AVIF_CHECKRES(avifRWStreamWrite(s, image->icc.data, image->icc.size)); // unsigned int(8) icc_data[icc_data_size_minus_one + 1];
     }
-    if (alphaItem) {
-        AVIF_CHECKRES(avifRWStreamWrite(s, alphaData->data, alphaData->size)); // unsigned int(8) alpha_data[];
+    // if (has_hdr && has_gainmap && tmap_has_icc)
+    //     unsigned int(8) tmap_icc_data[tmap_icc_data_size_minus_one + 1];
+    // if (has_hdr && has_gainmap && gainmap_metadata_size > 0)
+    //     unsigned int(8) gainmap_metadata[gainmap_metadata_size];
+
+    // Encoded samples
+    if (hasAlpha) {
+        AVIF_CHECKRES(avifRWStreamWrite(s, alphaData->data, alphaData->size)); // unsigned int(8) alpha_item_data[alpha_item_data_size];
     }
-    AVIF_CHECKRES(avifRWStreamWrite(s, colorData->data, colorData->size)); // unsigned int(8) main_data[];
+    // if (has_hdr && has_gainmap && gainmap_item_data_size > 0)
+    //     unsigned int(8) gainmap_item_data[gainmap_item_data_size];
+    AVIF_CHECKRES(avifRWStreamWrite(s, colorData->data, colorData->size)); // unsigned int(8) main_item_data[main_item_data_size_minus_one + 1];
+
+    // Metadata
     if (image->exif.size) {
-        AVIF_CHECKRES(avifRWStreamWrite(s, image->exif.data, image->exif.size)); // unsigned int(8) exif_data[];
+        AVIF_CHECKRES(avifRWStreamWrite(s, image->exif.data, image->exif.size)); // unsigned int(8) exif_data[exif_data_size_minus_one + 1];
     }
     if (image->xmp.size) {
-        AVIF_CHECKRES(avifRWStreamWrite(s, image->xmp.data, image->xmp.size)); // unsigned int(8) xmp_data[];
+        AVIF_CHECKRES(avifRWStreamWrite(s, image->xmp.data, image->xmp.size)); // unsigned int(8) xmp_data[xmp_data_size_minus_one + 1];
     }
-    avifRWStreamFinishBox(s, mini);
+
+    AVIF_ASSERT_OR_RETURN(avifRWStreamOffset(s) - headerSize == (hasAlpha ? codecConfigSize : 0) + codecConfigSize +
+                                                                    image->icc.size + (hasAlpha ? alphaData->size : 0) +
+                                                                    colorData->size + image->exif.size + image->xmp.size);
+    avifRWStreamFinishBox(s, meta);
     return AVIF_RESULT_OK;
 }
-#endif // AVIF_ENABLE_EXPERIMENTAL_AVIR
+#endif // AVIF_ENABLE_EXPERIMENTAL_METAV1
 
 static avifResult avifRWStreamWriteProperties(avifItemPropertyDedup * const dedup,
                                               avifRWStream * const s,
@@ -2205,10 +2572,22 @@ static avifResult avifRWStreamWriteProperties(avifItemPropertyDedup * const dedu
     for (uint32_t itemIndex = 0; itemIndex < encoder->data->items.count; ++itemIndex) {
         avifEncoderItem * item = &encoder->data->items.item[itemIndex];
         const avifBool isGrid = (item->gridCols > 0);
+        // Whether there is ipma to write for this item.
+        avifBool hasIpmaToWrite = item->codec || isGrid;
+#if defined(AVIF_ENABLE_EXPERIMENTAL_GAIN_MAP)
         const avifBool isToneMappedImage = !memcmp(item->type, "tmap", 4);
+        if (isToneMappedImage) {
+            hasIpmaToWrite = AVIF_TRUE;
+        }
+#endif
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+        const avifBool isSampleTransformImage = !memcmp(item->type, "sato", 4);
+        if (isSampleTransformImage) {
+            hasIpmaToWrite = AVIF_TRUE;
+        }
+#endif
         memset(&item->ipma, 0, sizeof(item->ipma));
-        if (!item->codec && !isGrid && !isToneMappedImage) {
-            // No ipma to write for this item
+        if (!hasIpmaToWrite) {
             continue;
         }
 
@@ -2254,7 +2633,7 @@ static avifResult avifRWStreamWriteProperties(avifItemPropertyDedup * const dedu
             imageHeight = item->gridHeight;
         }
 
-        // Properties all image items need
+        // Properties all image items need (coded and derived)
         // ispe = image spatial extent (width, height)
         avifItemPropertyDedupStart(dedup);
         avifBoxMarker ispe;
@@ -2272,15 +2651,38 @@ static avifResult avifRWStreamWriteProperties(avifItemPropertyDedup * const dedu
             hasPixi = AVIF_FALSE;
         }
 #endif
+        const avifBool isAlpha = avifIsAlpha(item->itemCategory);
+        uint8_t depth = (uint8_t)itemMetadata->depth;
+#if defined(AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM)
+        if (encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_8B_8B ||
+            encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_12B_4B) {
+            if (item->itemCategory == AVIF_ITEM_SAMPLE_TRANSFORM) {
+                AVIF_ASSERT_OR_RETURN(depth == 16); // Only 16-bit depth is supported for now.
+            } else if (encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_8B_8B) {
+                depth = 8;
+            } else {
+                if (item->itemCategory == AVIF_ITEM_COLOR || item->itemCategory == AVIF_ITEM_ALPHA) {
+                    depth = 12;
+                } else {
+                    AVIF_ASSERT_OR_RETURN(item->itemCategory == AVIF_ITEM_SAMPLE_TRANSFORM_INPUT_0_COLOR ||
+                                          item->itemCategory == AVIF_ITEM_SAMPLE_TRANSFORM_INPUT_0_ALPHA);
+                    // Will be shifted to 4-bit samples at decoding for AVIF_SAMPLE_TRANSFORM_BIT_DEPTH_EXTENSION_12B_4B.
+                    depth = 8;
+                }
+            }
+        } else {
+            AVIF_CHECKERR(encoder->sampleTransformRecipe == AVIF_SAMPLE_TRANSFORM_NONE, AVIF_RESULT_NOT_IMPLEMENTED);
+        }
+        assert(isSampleTransformImage == (item->itemCategory == AVIF_ITEM_SAMPLE_TRANSFORM));
+#endif // AVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM
         if (hasPixi) {
             avifItemPropertyDedupStart(dedup);
-            uint8_t channelCount =
-                (item->itemCategory == AVIF_ITEM_ALPHA || (itemMetadata->yuvFormat == AVIF_PIXEL_FORMAT_YUV400)) ? 1 : 3;
+            uint8_t channelCount = (isAlpha || (itemMetadata->yuvFormat == AVIF_PIXEL_FORMAT_YUV400)) ? 1 : 3;
             avifBoxMarker pixi;
             AVIF_CHECKRES(avifRWStreamWriteFullBox(&dedup->s, "pixi", AVIF_BOX_SIZE_TBD, 0, 0, &pixi));
             AVIF_CHECKRES(avifRWStreamWriteU8(&dedup->s, channelCount)); // unsigned int (8) num_channels;
             for (uint8_t chan = 0; chan < channelCount; ++chan) {
-                AVIF_CHECKRES(avifRWStreamWriteU8(&dedup->s, (uint8_t)itemMetadata->depth)); // unsigned int (8) bits_per_channel;
+                AVIF_CHECKRES(avifRWStreamWriteU8(&dedup->s, depth)); // unsigned int (8) bits_per_channel;
             }
             avifRWStreamFinishBox(&dedup->s, pixi);
             AVIF_CHECKRES(avifItemPropertyDedupFinish(dedup, s, &item->ipma, AVIF_FALSE));
@@ -2293,7 +2695,7 @@ static avifResult avifRWStreamWriteProperties(avifItemPropertyDedup * const dedu
             AVIF_CHECKRES(avifItemPropertyDedupFinish(dedup, s, &item->ipma, AVIF_TRUE));
         }
 
-        if (item->itemCategory == AVIF_ITEM_ALPHA) {
+        if (isAlpha) {
             // Alpha specific properties
 
             avifItemPropertyDedupStart(dedup);
@@ -2312,8 +2714,45 @@ static avifResult avifRWStreamWriteProperties(avifItemPropertyDedup * const dedu
         } else if (item->itemCategory == AVIF_ITEM_GAIN_MAP) {
             // Gain map specific properties
 
-            // Write just the colr nclx box
+            // Write the colr nclx box.
             AVIF_CHECKRES(avifEncoderWriteNclxProperty(&dedup->s, s, itemMetadata, &item->ipma, dedup));
+
+            // Also write the transformative properties.
+
+            // For the orientation, it could be done in multiple ways:
+            // - Bake the orientation in the base and gain map images.
+            //   This does not allow for orientation changes without recompression.
+            // - Associate 'irot'/'imir' with the 'tmap' derived image item only.
+            //   If so, decoding only the base image would give a different orientation than
+            //   decoding the tone-mapped image.
+            // - Wrap the base image in an 'iden' derived image item and associate 'irot'/'imir'
+            //   with the 'tmap' and 'iden' derived image items. 'iden' is not currently supported
+            //   by libavif, reducing the backward compatibility of this solution.
+            // - Associate 'irot'/'imir' with the base and gain map image items.
+            //   Do not associate 'irot'/'imir' with the 'tmap' derived image item.
+            //   These transformative properties are supposed to be applied at decoding on
+            //   image items before these are used as input to a derived image item.
+            //   libavif uses this pattern at encoding and requires it at decoding.
+            //   As of today, this is forbidden by the AVIF specification:
+            //     https://aomediacodec.github.io/av1-avif/v1.1.0.html#file-constraints
+            //   That rule was written before 'tmap' was proposed and may be relaxed for 'tmap'.
+
+            // 'clap' is treated as 'irot'/'imir', although it could differ between the base and
+            // gain map image items if these have different dimensions.
+            if (imageMetadata->transformFlags & AVIF_TRANSFORM_CLAP) {
+                AVIF_CHECKERR(imageMetadata->width != itemMetadata->width || imageMetadata->height != itemMetadata->height,
+                              AVIF_RESULT_NOT_IMPLEMENTED);
+            }
+
+            // 'pasp' is not a transformative property (despite AVIF_TRANSFORM_PASP being part of
+            // avifTransformFlag) but it is assumed to apply to the gain map in the same way as
+            // the transformative properties above.
+
+            // Based on the explanation above, 'pasp', 'clap', 'irot' and 'imir' have to match between the base and
+            // gain map image items in the container part of the encoded file.
+            // To enforce that, the transformative properties of the gain map cannot be set explicitly in the API.
+            AVIF_CHECKERR(itemMetadata->transformFlags == AVIF_TRANSFORM_NONE, AVIF_RESULT_ENCODE_GAIN_MAP_FAILED);
+            AVIF_CHECKRES(avifEncoderWriteExtendedColorProperties(&dedup->s, s, imageMetadata, &item->ipma, dedup));
 #endif
         }
 
@@ -2407,13 +2846,13 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
     // -----------------------------------------------------------------------
     // Begin write stream
 
-#if defined(AVIF_ENABLE_EXPERIMENTAL_AVIR)
-    // Decide whether to go for a CondensedImageBox or a full regular MetaBox.
-    if ((encoder->headerFormat == AVIF_HEADER_REDUCED) && avifEncoderIsCondensedImageBoxCompatible(encoder)) {
-        AVIF_CHECKRES(avifEncoderWriteFileTypeBoxAndCondensedImageBox(encoder, output));
+#if defined(AVIF_ENABLE_EXPERIMENTAL_METAV1)
+    // Decide whether to go for a reduced MetaBox with version 1 or a full regular MetaBox with version 0.
+    if ((encoder->headerFormat == AVIF_HEADER_REDUCED) && avifEncoderIsMetaBoxV1Compatible(encoder)) {
+        AVIF_CHECKRES(avifEncoderWriteFileTypeBoxAndMetaBoxV1(encoder, output));
         return AVIF_RESULT_OK;
     }
-#endif // AVIF_ENABLE_EXPERIMENTAL_AVIR
+#endif // AVIF_ENABLE_EXPERIMENTAL_METAV1
 
     const avifImage * imageMetadata = encoder->data->imageMetadata;
     // The epoch for creation_time and modification_time is midnight, Jan. 1,
@@ -2584,6 +3023,7 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
     // -----------------------------------------------------------------------
     // Write iinf
 
+    // Section 8.11.6.2 of ISO/IEC 14496-12.
     avifBoxMarker iinf;
     AVIF_CHECKRES(avifRWStreamWriteFullBox(&s, "iinf", AVIF_BOX_SIZE_TBD, 0, 0, &iinf));
     AVIF_CHECKRES(avifRWStreamWriteU16(&s, (uint16_t)encoder->data->items.count)); //  unsigned int(16) entry_count;
@@ -2597,9 +3037,13 @@ avifResult avifEncoderFinish(avifEncoder * encoder, avifRWData * output)
         AVIF_CHECKRES(avifRWStreamWriteU16(&s, item->id));                             // unsigned int(16) item_ID;
         AVIF_CHECKRES(avifRWStreamWriteU16(&s, 0));                                    // unsigned int(16) item_protection_index;
         AVIF_CHECKRES(avifRWStreamWrite(&s, item->type, 4));                           // unsigned int(32) item_type;
-        AVIF_CHECKRES(avifRWStreamWriteChars(&s, item->infeName, item->infeNameSize)); // string item_name; (writing null terminator)
-        if (item->infeContentType && item->infeContentTypeSize) { // string content_type; (writing null terminator)
-            AVIF_CHECKRES(avifRWStreamWriteChars(&s, item->infeContentType, item->infeContentTypeSize));
+        AVIF_CHECKRES(avifRWStreamWriteChars(&s, item->infeName, item->infeNameSize)); // utf8string item_name; (writing null terminator)
+        if (!memcmp(item->type, "mime", 4)) {
+            AVIF_CHECKRES(avifRWStreamWriteChars(&s, item->infeContentType, item->infeContentTypeSize)); // utf8string content_type; (writing null terminator)
+            // utf8string content_encoding; //optional
+        } else if (!memcmp(item->type, "uri ", 4)) {
+            // utf8string item_uri_type;
+            return AVIF_RESULT_NOT_IMPLEMENTED;
         }
         avifRWStreamFinishBox(&s, infe);
     }

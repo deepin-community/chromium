@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chromeos/components/in_session_auth/in_session_auth.h"
+
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/in_session_auth_dialog_controller.h"
 #include "ash/public/cpp/session/session_controller.h"
@@ -39,7 +40,7 @@ void InSessionAuth::RequestToken(chromeos::auth::mojom::Reason reason,
                                  const std::optional<std::string>& prompt,
                                  RequestTokenCallback callback) {
   ash::InSessionAuthDialogController::Get()->ShowAuthDialog(
-      ToAshReason(reason),
+      ToAshReason(reason), prompt,
       base::BindOnce(&InSessionAuth::OnAuthComplete, weak_factory_.GetWeakPtr(),
                      std::move(callback)));
 }
@@ -54,6 +55,14 @@ void InSessionAuth::CheckToken(chromeos::auth::mojom::Reason reason,
 
 void InSessionAuth::InvalidateToken(const std::string& token) {
   ash::AuthSessionStorage::Get()->Invalidate(token, base::DoNothing());
+}
+
+void InSessionAuth::RequestLegacyWebAuthn(
+    const std::string& rp_id,
+    const std::string& window_id,
+    RequestLegacyWebAuthnCallback callback) {
+  ash::InSessionAuthDialogController::Get()->ShowLegacyWebAuthnDialog(
+      rp_id, window_id, std::move(callback));
 }
 
 void InSessionAuth::OnAuthComplete(RequestTokenCallback callback,

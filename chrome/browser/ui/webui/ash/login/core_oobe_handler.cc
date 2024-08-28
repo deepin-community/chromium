@@ -80,7 +80,6 @@ void CoreOobeHandler::DeclareJSCallbacks() {
 }
 
 void CoreOobeHandler::GetAdditionalParameters(base::Value::Dict* dict) {
-  dict->Set("isInTabletMode", display::Screen::GetScreen()->InTabletMode());
   dict->Set("isDemoModeEnabled", DemoSetupController::IsDemoModeAllowed());
   if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
     // The value is used to show a different UI for this type of the devices.
@@ -171,6 +170,10 @@ void CoreOobeHandler::SetBluetoothDeviceInfo(
   CallJS("cr.ui.Oobe.setBluetoothDeviceInfo", bluetooth_name);
 }
 
+base::WeakPtr<CoreOobeView> CoreOobeHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void CoreOobeHandler::HandleInitializeCoreHandler() {
   VLOG(3) << "CoreOobeHandler::HandleInitializeCoreHandler";
   CHECK(ui_init_state_ == UiState::kUninitialized);
@@ -224,7 +227,7 @@ void CoreOobeHandler::HandleUpdateOobeUIState(int state) {
 }
 
 void CoreOobeHandler::HandleRaiseTabKeyEvent(bool reverse) {
-  ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_TAB, ui::EF_NONE);
+  ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_TAB, ui::EF_NONE);
   if (reverse) {
     event.SetFlags(ui::EF_SHIFT_DOWN);
   }

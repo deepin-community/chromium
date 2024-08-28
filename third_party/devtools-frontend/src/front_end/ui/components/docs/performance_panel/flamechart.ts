@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import * as EnvironmentHelpers from '../../../../../test/unittests/front_end/helpers/EnvironmentHelpers.js';
-import * as TraceHelpers from '../../../../../test/unittests/front_end/helpers/TraceHelpers.js';
-import * as PerfUI from '../../../legacy/components/perf_ui/perf_ui.js';
-import * as ComponentSetup from '../../helpers/helpers.js';
-
 import type * as Platform from '../../../../core/platform/platform.js';
 import * as TraceEngine from '../../../../models/trace/trace.js';
+import * as EnvironmentHelpers from '../../../../testing/EnvironmentHelpers.js';
+import * as TraceHelpers from '../../../../testing/TraceHelpers.js';
+import * as PerfUI from '../../../legacy/components/perf_ui/perf_ui.js';
+import * as ComponentSetup from '../../helpers/helpers.js';
 
 await EnvironmentHelpers.initializeGlobalVars();
 await ComponentSetup.ComponentServerSetup.setup();
@@ -26,7 +25,7 @@ const defaultGroupStyle = {
 /**
  * Render a basic flame chart with 3 events on the same level
  **/
-function renderExample1() {
+function renderBasicExample() {
   class FakeProviderWithBasicEvents extends TraceHelpers.FakeFlameChartProvider {
     override timelineData(): PerfUI.FlameChart.FlameChartTimelineData|null {
       return PerfUI.FlameChart.FlameChartTimelineData.create({
@@ -54,7 +53,7 @@ function renderExample1() {
     }
   }
 
-  const container = document.querySelector('div#container1');
+  const container = document.querySelector('div#basic');
   if (!container) {
     throw new Error('No container');
   }
@@ -71,7 +70,7 @@ function renderExample1() {
 /**
  * Render a flame chart with main thread long events to stripe and a warning triangle.
  **/
-function renderExample2() {
+function renderLongTaskExample() {
   class FakeProviderWithLongTasksForStriping extends TraceHelpers.FakeFlameChartProvider {
     override timelineData(): PerfUI.FlameChart.FlameChartTimelineData|null {
       return PerfUI.FlameChart.FlameChartTimelineData.create({
@@ -148,7 +147,7 @@ function renderExample2() {
     }
   }
 
-  const container = document.querySelector('div#container2');
+  const container = document.querySelector('div#long-task');
   if (!container) {
     throw new Error('No container');
   }
@@ -165,7 +164,7 @@ function renderExample2() {
 /**
  * Render a flame chart with nested track.
  **/
-function renderExample3() {
+function renderNestedExample() {
   class FakeProviderWithNestedGroup extends TraceHelpers.FakeFlameChartProvider {
     override timelineData(): PerfUI.FlameChart.FlameChartTimelineData|null {
       return PerfUI.FlameChart.FlameChartTimelineData.create({
@@ -193,7 +192,7 @@ function renderExample3() {
     }
   }
 
-  const container = document.querySelector('div#container3');
+  const container = document.querySelector('div#nested');
   if (!container) {
     throw new Error('No container');
   }
@@ -211,7 +210,7 @@ function renderExample3() {
  * Render a flame chart with nested case and buttons to hide/unhide and reorder
  * tracks
  **/
-function renderExample4() {
+function renderTrackCustomizationExample() {
   class FakeProviderWithBasicEvents extends TraceHelpers.FakeFlameChartProvider {
     override timelineData(): PerfUI.FlameChart.FlameChartTimelineData|null {
       return PerfUI.FlameChart.FlameChartTimelineData.create({
@@ -248,7 +247,7 @@ function renderExample4() {
     }
   }
 
-  const container = document.querySelector('div#container4');
+  const container = document.querySelector('div#track-customization');
   if (!container) {
     throw new Error('No container');
   }
@@ -287,28 +286,61 @@ function renderExample4() {
 
 /**
  * Render a flame chart with event initiators of different sizes.
+ * Some initiator and initiated events are hidden.
  **/
-function renderExample5() {
+function renderInitiatorsExample() {
   class FakeProviderWithVariousTasksForInitiators extends TraceHelpers.FakeFlameChartProvider {
     override timelineData(): PerfUI.FlameChart.FlameChartTimelineData|null {
       return PerfUI.FlameChart.FlameChartTimelineData.create({
-        entryLevels: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2],
-        entryStartTimes: [5, 5, 5, 15, 15, 15, 40, 40, 40, 55.4, 55.4, 55.4, 80, 80, 80],
-        entryTotalTimes: [5, 5, 5, 5, 5, 5, 15, 15, 15, 2, 2, 2, 10, 10, 10],
+        entryLevels: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 3],
+        entryStartTimes: [5, 5, 5, 15, 15, 15, 40, 40, 40, 55.4, 55.4, 55.4, 80, 80, 80, 17],
+        entryTotalTimes: [6, 6, 6, 5, 5, 20, 15, 15, 15, 2, 2, 2, 10, 10, 10, 10],
+        entryDecorations: [
+          [],
+          [],
+          [
+            {type: PerfUI.FlameChart.FlameChartDecorationType.HIDDEN_DESCENDANTS_ARROW},
+          ],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [
+            {type: PerfUI.FlameChart.FlameChartDecorationType.HIDDEN_DESCENDANTS_ARROW},
+          ],
+          [],
+          [],
+          [
+            {type: PerfUI.FlameChart.FlameChartDecorationType.HIDDEN_DESCENDANTS_ARROW},
+          ],
+          [
+            {type: PerfUI.FlameChart.FlameChartDecorationType.HIDDEN_DESCENDANTS_ARROW},
+          ],
+        ],
+        initiatorsData: [
+          {initiatorIndex: 2, eventIndex: 3, isInitiatorHidden: true},
+          {initiatorIndex: 1, eventIndex: 13},
+          {initiatorIndex: 3, eventIndex: 6},
+          {initiatorIndex: 3, eventIndex: 8, isEntryHidden: true},
+          {initiatorIndex: 6, eventIndex: 11},
+          {initiatorIndex: 11, eventIndex: 12, isInitiatorHidden: true, isEntryHidden: true},
+          {initiatorIndex: 5, eventIndex: 15},
+        ],
         groups: [{
           name: 'Testing initiators' as Platform.UIString.LocalizedString,
           startLevel: 0,
           style: defaultGroupStyle,
         }],
-        flowStartTimes: [10, 20, 20, 55, 57.4, 10],
-        flowStartLevels: [2, 0, 0, 0, 2, 1],
-        flowEndTimes: [15, 40, 40, 55.4, 80, 80],
-        flowEndLevels: [0, 2, 0, 2, 0, 1],
       });
+    }
+
+    override maxStackDepth(): number {
+      return 4;
     }
   }
 
-  const container = document.querySelector('div#container5');
+  const container = document.querySelector('div#initiators');
   if (!container) {
     throw new Error('No container');
   }
@@ -323,8 +355,8 @@ function renderExample5() {
   flameChart.update();
 }
 
-renderExample1();
-renderExample2();
-renderExample3();
-renderExample4();
-renderExample5();
+renderBasicExample();
+renderLongTaskExample();
+renderNestedExample();
+renderTrackCustomizationExample();
+renderInitiatorsExample();

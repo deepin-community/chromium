@@ -16,7 +16,6 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
@@ -36,8 +35,7 @@ FileSystemAccessRestorePermissionBubbleView::
   // Initial set up.
   views::LayoutProvider* layout_provider = views::LayoutProvider::Get();
   SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical, gfx::Insets(),
-      DISTANCE_BUTTON_VERTICAL));
+      views::BoxLayout::Orientation::kVertical, gfx::Insets()));
   set_close_on_deactivate(false);
   set_fixed_width(layout_provider->GetDistanceMetric(
       views::DISTANCE_BUBBLE_PREFERRED_WIDTH));
@@ -85,11 +83,9 @@ FileSystemAccessRestorePermissionBubbleView::
       l10n_util::GetStringUTF16(IDS_PERMISSION_DONT_ALLOW));
   deny_button->SetID(static_cast<int>(RestorePermissionButton::kDeny));
 
-  if (features::IsChromeRefresh2023()) {
-    allow_once_button->SetStyle(ui::ButtonStyle::kTonal);
-    allow_always_button->SetStyle(ui::ButtonStyle::kTonal);
-    deny_button->SetStyle(ui::ButtonStyle::kTonal);
-  }
+  allow_once_button->SetStyle(ui::ButtonStyle::kTonal);
+  allow_always_button->SetStyle(ui::ButtonStyle::kTonal);
+  deny_button->SetStyle(ui::ButtonStyle::kTonal);
 
   auto buttons_container = std::make_unique<views::View>();
   buttons_container->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -190,7 +186,7 @@ void FileSystemAccessRestorePermissionBubbleView::OnButtonPressed(
       std::move(callback_).Run(permissions::PermissionAction::DENIED);
       return;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void FileSystemAccessRestorePermissionBubbleView::OnPromptDismissed() {

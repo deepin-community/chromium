@@ -93,17 +93,13 @@ DiceWebSigninInterceptUI::DiceWebSigninInterceptUI(content::WebUI* web_ui)
 
   // Adding localized strings for the Chrome Signin sub page: /chrome_signin.
   source->AddLocalizedString(
-      "chromeSigninTitle",
-      IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_TITLE);
-  source->AddLocalizedString(
-      "chromeSigninSubtitle",
-      IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE);
-  source->AddLocalizedString(
       "chromeSigninAcceptText",
       IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_ACCEPT_TEXT);
   source->AddLocalizedString(
       "chromeSigninDeclineText",
       IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_DECLINE_TEXT);
+  source->AddLocalizedString("acceptButtonAriaLabel",
+                             IDS_SIGNIN_CONTINUE_AS_BUTTON_ACCESSIBILITY_LABEL);
 
   source->UseStringsJs();
   source->EnableReplaceI18nInJS();
@@ -112,7 +108,6 @@ DiceWebSigninInterceptUI::DiceWebSigninInterceptUI(content::WebUI* web_ui)
       network::mojom::CSPDirectiveName::ScriptSrc,
       "script-src chrome://resources chrome://webui-test 'self';");
   webui::EnableTrustedTypesCSP(source);
-  webui::SetupChromeRefresh2023(source);
 
   if (web_ui->GetWebContents()->GetVisibleURL().query() == "debug") {
     // Not intended to be hooked to anything. The bubble will not initialize it

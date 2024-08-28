@@ -194,8 +194,9 @@ class ArcNotificationContentViewTest : public AshTestBase {
             MessageViewFactory::Create(notification, /*shown_in_popup=*/false)
                 .release()));
 
-    views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+    views::Widget::InitParams params(
+        views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+        views::Widget::InitParams::TYPE_POPUP);
     params.context = Shell::GetPrimaryRootWindow();
     auto wrapper_widget = std::make_unique<views::Widget>();
     wrapper_widget->Init(std::move(params));
@@ -218,9 +219,8 @@ class ArcNotificationContentViewTest : public AshTestBase {
         surface_manager(), surface_.get(), notification_key);
 
     exo::test::ExoTestHelper exo_test_helper;
-    surface_buffer_ =
-        std::make_unique<exo::Buffer>(exo_test_helper.CreateGpuMemoryBuffer(
-            kNotificationSurfaceBounds.size()));
+    surface_buffer_ = exo::test::ExoTestHelper::CreateBuffer(
+        kNotificationSurfaceBounds.size());
     surface_->Attach(surface_buffer_.get());
 
     surface_->Commit();
@@ -313,6 +313,25 @@ TEST_F(ArcNotificationContentViewTest, CreateNotificationWithoutSurface) {
   Notification notification = CreateNotification(notification_item.get());
 
   CreateAndShowNotificationView(notification);
+  CloseNotificationView();
+}
+
+TEST_F(ArcNotificationContentViewTest,
+       CreateSurfaceAfterCollapsingNotification) {
+  std::string notification_key("notification id");
+
+  auto notification_item =
+      std::make_unique<MockArcNotificationItem>(notification_key);
+  Notification notification = CreateNotification(notification_item.get());
+
+  CreateAndShowNotificationView(notification);
+  GetArcNotificationContentView()->SetVisible(false);
+
+  PrepareSurface(notification_key);
+  EXPECT_FALSE(surface_manager()->GetArcSurface(notification_key)->IsAttached());
+
+  GetArcNotificationContentView()->SetVisible(true);
+  EXPECT_TRUE(surface_manager()->GetArcSurface(notification_key)->IsAttached());
   CloseNotificationView();
 }
 

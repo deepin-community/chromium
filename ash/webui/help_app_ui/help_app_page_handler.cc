@@ -33,6 +33,10 @@ void HelpAppPageHandler::OpenFeedbackDialog(
   std::move(callback).Run(std::move(error_message));
 }
 
+void HelpAppPageHandler::ShowOnDeviceAppControls() {
+  help_app_ui_->delegate()->ShowOnDeviceAppControls();
+}
+
 void HelpAppPageHandler::ShowParentalControls() {
   help_app_ui_->delegate()->ShowParentalControls();
 }
@@ -53,10 +57,6 @@ void HelpAppPageHandler::IsLauncherSearchEnabled(
 
 void HelpAppPageHandler::LaunchMicrosoft365Setup() {
   help_app_ui_->delegate()->LaunchMicrosoft365Setup();
-}
-
-void HelpAppPageHandler::MaybeShowDiscoverNotification() {
-  help_app_ui_->delegate()->MaybeShowDiscoverNotification();
 }
 
 void HelpAppPageHandler::MaybeShowReleaseNotesNotification() {

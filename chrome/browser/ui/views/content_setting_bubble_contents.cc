@@ -29,7 +29,6 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
@@ -68,18 +67,14 @@ std::u16string GetCancelButtonText(
 
 ui::ImageModel GetSiteSettingsIcon() {
   return ui::ImageModel::FromVectorIcon(
-      features::IsChromeRefresh2023() ? vector_icons::kSettingsChromeRefreshIcon
-                                      : vector_icons::kSettingsIcon,
-      ui::kColorIcon, GetLayoutConstant(PAGE_INFO_ICON_SIZE));
+      vector_icons::kSettingsChromeRefreshIcon, ui::kColorIcon,
+      GetLayoutConstant(PAGE_INFO_ICON_SIZE));
 }
 
 ui::ImageModel GetLaunchIcon() {
-  return ui::ImageModel::FromVectorIcon(
-      features::IsChromeRefresh2023() ? vector_icons::kLaunchChromeRefreshIcon
-                                      : vector_icons::kLaunchIcon,
-      features::IsChromeRefresh2023() ? ui::kColorIcon
-                                      : ui::kColorIconSecondary,
-      GetLayoutConstant(PAGE_INFO_ICON_SIZE));
+  return ui::ImageModel::FromVectorIcon(vector_icons::kLaunchChromeRefreshIcon,
+                                        ui::kColorIcon,
+                                        GetLayoutConstant(PAGE_INFO_ICON_SIZE));
 }
 
 bool ShouldShowManageButton(
@@ -277,7 +272,10 @@ ContentSettingBubbleContents::ContentSettingBubbleContents(
     views::View* anchor_view,
     views::BubbleBorder::Arrow arrow)
     : content::WebContentsObserver(web_contents),
-      BubbleDialogDelegateView(anchor_view, arrow),
+      BubbleDialogDelegateView(anchor_view,
+                               arrow,
+                               views::BubbleBorder::DIALOG_SHADOW,
+                               true),
       content_setting_bubble_model_(std::move(content_setting_bubble_model)) {
   // Although other code in this class treats content_setting_bubble_model_ as
   // though it's optional, in fact it can only become null if
@@ -328,13 +326,11 @@ void ContentSettingBubbleContents::OnListItemAdded(
     const ContentSettingBubbleModel::ListItem& item) {
   DCHECK(list_item_container_);
   list_item_container_->AddItem(item);
-  SizeToContents();
 }
 
 void ContentSettingBubbleContents::OnListItemRemovedAt(int index) {
   DCHECK(list_item_container_);
   list_item_container_->RemoveRowAtIndex(index);
-  SizeToContents();
 }
 
 int ContentSettingBubbleContents::GetSelectedRadioOption() {
@@ -565,9 +561,7 @@ ContentSettingBubbleContents::CreateHelpAndManageView() {
     manage_button->SetMinSize(gfx::Size(
         layout->GetDistanceMetric(views::DISTANCE_DIALOG_BUTTON_MINIMUM_WIDTH),
         0));
-    if (features::IsChromeRefresh2023()) {
-      manage_button->SetStyle(ui::ButtonStyle::kTonal);
-    }
+    manage_button->SetStyle(ui::ButtonStyle::kTonal);
     manage_button_ = manage_button.get();
     extra_views.push_back(std::move(manage_button));
   }

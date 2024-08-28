@@ -31,28 +31,26 @@ buildflag_header("buildflags") {
   ]
 }
 
-if (use_typeface_fontations) {
-  source_set("path_bridge") {
-    sources = [ "//third_party/skia/src/ports/fontations/src/skpath_bridge.h" ]
-  }
+source_set("path_bridge") {
+  sources = skia_fontations_path_bridge_sources
+}
 
-  rust_static_library("bridge_rust_side") {
-    allow_unsafe = true
-    crate_root = "//third_party/skia/src/ports/fontations/src/ffi.rs"
-    sources = [ "//third_party/skia/src/ports/fontations/src/ffi.rs" ]
-    cxx_bindings = [ "//third_party/skia/src/ports/fontations/src/ffi.rs" ]
-    deps = [
-      ":path_bridge",
-      "//third_party/rust/font_types/v0_4:lib",
-      "//third_party/rust/read_fonts/v0_15:lib",
-      "//third_party/rust/skrifa/v0_15:lib",
-    ]
-    configs -= [ "//build/config/compiler:chromium_code" ]
-    configs += [
-      ":skia_config",
-      "//build/config/compiler:no_chromium_code",
-    ]
-  }
+rust_static_library("bridge_rust_side") {
+  allow_unsafe = true
+  crate_root = skia_fontations_bridge_root
+  sources = skia_fontations_bridge_sources
+  cxx_bindings = skia_fontations_bridge_sources
+  deps = [
+    ":path_bridge",
+    "//third_party/rust/font_types/v0_5:lib",
+    "//third_party/rust/read_fonts/v0_19:lib",
+    "//third_party/rust/skrifa/v0_19:lib",
+  ]
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [
+    ":skia_config",
+    "//build/config/compiler:no_chromium_code",
+  ]
 }
 
 # External-facing config for dependent code.
@@ -63,10 +61,10 @@ config("skia_config") {
     "SK_USER_CONFIG_HEADER=\"../../skia/config/SkUserConfig.h\"",
     "SK_WIN_FONTMGR_NO_SIMULATIONS",
     "SK_DISABLE_LEGACY_INIT_DECODERS",
-    "SK_SLUG_DISABLE_LEGACY_DESERIALIZE",
-    "SK_DISABLE_LEGACY_VULKAN_BACKENDSEMAPHORE",
-    "SK_DISABLE_LEGACY_CREATE_CHARACTERIZATION",
-    "SK_DISABLE_LEGACY_VULKAN_MUTABLE_TEXTURE_STATE",
+    "SK_DISABLE_LEGACY_BACKEND_TEXTURE_FUNCS",
+    "SK_DISABLE_LEGACY_TEXTURE_INFO_FUNCS",
+    "SK_DISABLE_LEGACY_BACKEND_SEMAPHORE_FUNCS",
+    "SK_DISABLE_LEGACY_GRAPHITE_IMAGES",
   ]
 
   include_dirs = [
@@ -128,9 +126,7 @@ config("skia_config") {
     if (enable_vulkan) {
       defines += [ "SK_VULKAN=1" ]
       include_dirs += [ "//third_party/vulkan/include" ]
-      configs += [
-        "//third_party/vulkan-deps/vulkan-headers/src:vulkan_headers_config",
-      ]
+      configs += [ "//third_party/vulkan-headers/src:vulkan_headers_config" ]
     }
 
     # Graphite
@@ -235,8 +231,10 @@ component("skia") {
     "ext/benchmarking_canvas.h",
     "ext/cicp.h",
     "ext/convolver.h",
+    "ext/draw_gainmap_image.h",
     "ext/event_tracer_impl.h",
     "ext/font_utils.h",
+    "ext/geometry.h",
     "ext/image_operations.h",
     "ext/legacy_display_globals.h",
     "ext/opacity_filter_canvas.h",
@@ -259,8 +257,10 @@ component("skia") {
     "ext/benchmarking_canvas.cc",
     "ext/cicp.cc",
     "ext/convolver.cc",
+    "ext/draw_gainmap_image.cc",
     "ext/event_tracer_impl.cc",
     "ext/font_utils.cc",
+    "ext/geometry.cc",
     "ext/google_logging.cc",
     "ext/image_operations.cc",
     "ext/legacy_display_globals.cc",
@@ -331,7 +331,9 @@ component("skia") {
 
   # The imported Skia gni source paths are made absolute by gn.
   defines = []
-  sources += skia_sksl_sources
+  sources += skia_ports_sources
+  sources += skia_sksl_core_sources
+  sources += skia_sksl_default_module_sources
   sources += skia_codec_core
   sources += skia_utils_private
   sources += skia_xps_sources
@@ -339,33 +341,27 @@ component("skia") {
   sources += skia_encode_png_srcs
   sources += skia_encode_webp_srcs
   sources += [
-    "//third_party/skia/src/fonts/SkFontMgr_indirect.cpp",
-    "//third_party/skia/src/fonts/SkRemotableFontMgr.cpp",
-    "//third_party/skia/src/ports/SkGlobalInitialization_default.cpp",
-    "//third_party/skia/src/ports/SkImageGenerator_none.cpp",
-    "//third_party/skia/src/ports/SkOSFile_stdio.cpp",
+    "//third_party/skia/src/codec/SkEncodedInfo.cpp",
+    "//third_party/skia/src/codec/SkPngCodec.cpp",
     "//third_party/skia/src/sfnt/SkOTTable_name.cpp",
     "//third_party/skia/src/sfnt/SkOTUtils.cpp",
   ]
   if (use_blink) {
-    sources -= [ "//third_party/skia/src/ports/SkImageGenerator_none.cpp" ]
     sources += skia_codec_decode_bmp
     sources += skia_encode_jpeg_srcs
     public += skia_encode_jpeg_public
     sources += [
-      "//third_party/skia/src/codec/SkEncodedInfo.cpp",
       "//third_party/skia/src/codec/SkIcoCodec.cpp",
       "//third_party/skia/src/codec/SkJpegCodec.cpp",
       "//third_party/skia/src/codec/SkJpegDecoderMgr.cpp",
+      "//third_party/skia/src/codec/SkJpegMetadataDecoderImpl.cpp",
       "//third_party/skia/src/codec/SkJpegMultiPicture.cpp",
       "//third_party/skia/src/codec/SkJpegSegmentScan.cpp",
       "//third_party/skia/src/codec/SkJpegSourceMgr.cpp",
       "//third_party/skia/src/codec/SkJpegUtility.cpp",
       "//third_party/skia/src/codec/SkParseEncodedOrigin.cpp",
-      "//third_party/skia/src/codec/SkPngCodec.cpp",
       "//third_party/skia/src/codec/SkWebpCodec.cpp",
       "//third_party/skia/src/codec/SkWuffsCodec.cpp",
-      "//third_party/skia/src/ports/SkImageGenerator_skia.cpp",
     ]
     deps += [ "//third_party/wuffs" ]
   } else {
@@ -392,21 +388,17 @@ component("skia") {
   # FreeType is needed everywhere where blink is used, on Linux and Android as main
   # font backend, on Windows and Mac as fallback backend for Variations. Pdfium
   # also uses this when decoding data out of the device cache.
+  # Fontations is the backend we are migrating to. In preparation for rollout
+  # default compile-in Fontations as well.
   if (use_blink) {
     # See SK_TYPEFACE_FACTORY_FREETYPE
-    sources += [
-      "//third_party/skia/src/ports/SkFontHost_FreeType.cpp",
-      "//third_party/skia/src/ports/SkFontHost_FreeType_common.cpp",
-      "//third_party/skia/src/ports/SkFontMgr_custom.cpp",
-      "//third_party/skia/src/ports/SkFontMgr_custom_empty.cpp",
-    ]
-  }
+    sources += skia_ports_freetype_sources
+    sources += skia_ports_fontmgr_custom_sources
+    sources += skia_ports_typeface_fontations_sources
+    sources += skia_ports_fontmgr_empty_sources
+    public += skia_ports_fontmgr_empty_public
 
-  if (use_typeface_fontations) {
-    sources += [
-      "//third_party/skia/src/ports/SkTypeface_fontations.cpp",
-      "//third_party/skia/src/ports/SkTypeface_fontations_priv.h",
-    ]
+    # Fontations Rust/C++ bridge interfaces.
     deps += [
       ":bridge_rust_side",
       ":path_bridge",
@@ -415,54 +407,37 @@ component("skia") {
 
   if (is_win) {
     # See SK_TYPEFACE_FACTORY_DIRECTWRITE
-    sources += [
-      "//third_party/skia/src/ports/SkFontMgr_win_dw.cpp",
-      "//third_party/skia/src/ports/SkOSFile_win.cpp",
-      "//third_party/skia/src/ports/SkRemotableFontMgr_win_dw.cpp",
-      "//third_party/skia/src/ports/SkScalerContext_win_dw.cpp",
-      "//third_party/skia/src/ports/SkTypeface_win_dw.cpp",
-    ]
+    sources += skia_ports_windows_fonts_sources
+    sources += skia_ports_windows_sources
   } else {
     sources += [ "//third_party/skia/src/ports/SkOSFile_posix.cpp" ]
   }
 
   if (is_apple) {
     # See SK_TYPEFACE_FACTORY_CORETEXT
-    sources += [
-      "//third_party/skia/include/ports/SkFontMgr_mac_ct.h",
-      "//third_party/skia/src/ports/SkFontMgr_mac_ct.cpp",
-      "//third_party/skia/src/ports/SkScalerContext_mac_ct.cpp",
-      "//third_party/skia/src/ports/SkScalerContext_mac_ct.h",
-      "//third_party/skia/src/ports/SkTypeface_mac_ct.cpp",
-      "//third_party/skia/src/ports/SkTypeface_mac_ct.h",
-    ]
+    public += skia_ports_fontmgr_coretext_public
+    sources += skia_ports_fontmgr_coretext_sources
   }
 
   if (is_linux || is_chromeos) {
-    sources += [
-      "//third_party/skia/src/ports/SkFontConfigInterface.cpp",
-      "//third_party/skia/src/ports/SkFontConfigInterface_direct.cpp",
-      "//third_party/skia/src/ports/SkFontConfigInterface_direct_factory.cpp",
-      "//third_party/skia/src/ports/SkFontMgr_FontConfigInterface.cpp",
-    ]
+    public += skia_ports_fci_public
+    sources += skia_ports_fci_sources
   }
 
   if (is_linux || is_chromeos || is_android) {
-    sources += [
-      # Retain the files for the SkFontMgr_Android on linux to emulate android
-      # fonts. See content/zygote/zygote_main_linux.cc
-      # Note that this requires expat.
-      "//third_party/skia/src/ports/SkFontMgr_android.cpp",
-      "//third_party/skia/src/ports/SkFontMgr_android_parser.cpp",
-    ]
+    # Retain the files for the SkFontMgr_Android on linux to emulate android
+    # fonts. See content/zygote/zygote_main_linux.cc
+    # Note that this requires expat.
+    sources += skia_ports_fontmgr_android_sources
   }
 
   if (is_fuchsia) {
-    sources += [ "//third_party/skia/src/ports/SkFontMgr_fuchsia.cpp" ]
+    public += skia_ports_fontmgr_fuchsia_public
+    sources += skia_ports_fontmgr_fuchsia_sources
 
     # This is already here if use_blink is set
     if (!use_blink) {
-      sources += [ "//third_party/skia/src/ports/SkFontMgr_custom.cpp" ]
+      sources += skia_ports_fontmgr_custom_sources
     }
     deps += [
       "//third_party/fuchsia-sdk/sdk/fidl/fuchsia.fonts:fuchsia.fonts_hlcpp",
@@ -484,11 +459,12 @@ component("skia") {
   deps += [
     ":skcms",
     ":skia_opts",
+    ":skia_switches",
     "//base",
-    "//base/third_party/dynamic_annotations",
     "//third_party/libpng",
     "//third_party/libwebp",
     "//third_party/libwebp:libwebp_webp",
+    "//ui/base:features",
   ]
   public_deps = [
     ":buildflags",
@@ -551,7 +527,8 @@ component("skia") {
     public += skia_gpu_chromium_public
     sources += skia_ganesh_private
     sources += skia_null_gpu_sources
-    sources += skia_sksl_gpu_sources
+    sources += skia_sksl_pipeline_sources
+    sources += skia_sksl_codegen_sources
     sources += skia_shared_gpu_sources
     if (skia_use_gl) {
       public += skia_gpu_gl_public
@@ -604,6 +581,18 @@ component("skia") {
       "SKOTTIE_TRIVIAL_FONTRUN_ITER",
     ]
   }
+}
+
+component("skia_switches") {
+  sources = [
+    "ext/switches.cc",
+    "ext/switches.h",
+    "ext/switches_export.h",
+  ]
+
+  defines = [ "SKIA_SWITCHES_IMPLEMENTATION" ]
+
+  deps = [ "//base" ]
 }
 
 # Template for things that are logically part of :skia, but need to be split out
@@ -730,6 +719,8 @@ skia_source_set("skia_opts") {
     # Conditional and empty body needed to avoid assert() below.
   } else if (current_cpu == "riscv64") {
     # Conditional and empty body needed to avoid assert() below.
+  } else if (current_cpu == "loong64") {
+    # Conditional and empty body needed to avoid assert() below.
   } else {
     assert(false, "Unknown cpu target")
   }
@@ -826,7 +817,6 @@ if (skia_support_gpu) {
       public += skia_graphite_dawn_public
       public_deps = [
         "//third_party/dawn/include/dawn:cpp_headers",
-        "//third_party/dawn/src/dawn:cpp",
         "//third_party/dawn/src/dawn:proc",
       ]
     }
@@ -949,6 +939,7 @@ source_set("test_fonts") {
 test("skia_unittests") {
   sources = [
     "ext/convolver_unittest.cc",
+    "ext/geometry_unittest.cc",
     "ext/image_operations_unittest.cc",
     "ext/platform_canvas_unittest.cc",
     "ext/recursive_gaussian_convolution_unittest.cc",

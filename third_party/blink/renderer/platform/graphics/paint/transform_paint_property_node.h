@@ -17,7 +17,6 @@
 #include "third_party/blink/renderer/platform/graphics/paint/paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/paint/scroll_paint_property_node.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "ui/gfx/geometry/point3_f.h"
 #include "ui/gfx/geometry/transform.h"
@@ -37,8 +36,8 @@ using CompositorStickyConstraint = cc::StickyPositionConstraint;
 class TransformPaintPropertyNode;
 
 class PLATFORM_EXPORT TransformPaintPropertyNodeOrAlias
-    : public PaintPropertyNode<TransformPaintPropertyNodeOrAlias,
-                               TransformPaintPropertyNode> {
+    : public PaintPropertyNodeBase<TransformPaintPropertyNodeOrAlias,
+                                   TransformPaintPropertyNode> {
  public:
   // If |relative_to_node| is an ancestor of |this|, returns true if any node is
   // marked changed, at least significance of |change|, along the path from
@@ -47,18 +46,21 @@ class PLATFORM_EXPORT TransformPaintPropertyNodeOrAlias
   bool Changed(PaintPropertyChangeType change,
                const TransformPaintPropertyNodeOrAlias& relative_to_node) const;
 
-  void AddChanged(PaintPropertyChangeType changed) {
+  void AddChanged(PaintPropertyChangeType changed) final {
     DCHECK_NE(PaintPropertyChangeType::kUnchanged, changed);
     GeometryMapperTransformCache::ClearCache();
     GeometryMapperClipCache::ClearCache();
     PaintPropertyNode::AddChanged(changed);
   }
 
+  // See PaintPropertyNode::ChangedSequenceNumber().
+  void ClearChangedToRoot(int sequence_number) const;
+
  protected:
-  using PaintPropertyNode::PaintPropertyNode;
+  using PaintPropertyNodeBase::PaintPropertyNodeBase;
 };
 
-class TransformPaintPropertyNodeAlias
+class TransformPaintPropertyNodeAlias final
     : public TransformPaintPropertyNodeOrAlias {
  public:
   static scoped_refptr<TransformPaintPropertyNodeAlias> Create(
@@ -72,7 +74,7 @@ class TransformPaintPropertyNodeAlias
       : TransformPaintPropertyNodeOrAlias(parent, kParentAlias) {}
 };
 
-class PLATFORM_EXPORT TransformPaintPropertyNode
+class PLATFORM_EXPORT TransformPaintPropertyNode final
     : public TransformPaintPropertyNodeOrAlias {
  public:
   enum class BackfaceVisibility : unsigned char {
@@ -233,6 +235,11 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
   const TransformPaintPropertyNode& NearestScrollTranslationNode() const {
     return GetTransformCache().nearest_scroll_translation();
   }
+  // Similar to the above, but excludes this node.
+  const TransformPaintPropertyNode* ParentScrollTranslationNode() const {
+    const auto* parent = UnaliasedParent();
+    return parent ? &parent->NearestScrollTranslationNode() : nullptr;
+  }
 
   // This is different from NearestScrollTranslationNode in that for a
   // fixed-position paint offset translation, this returns
@@ -373,12 +380,9 @@ class PLATFORM_EXPORT TransformPaintPropertyNode
 
   bool IsForSVGChild() const { return state_.is_for_svg_child; }
 
-  std::unique_ptr<JSONObject> ToJSON() const;
+  std::unique_ptr<JSONObject> ToJSON() const final;
 
  private:
-  friend class PaintPropertyNode<TransformPaintPropertyNodeOrAlias,
-                                 TransformPaintPropertyNode>;
-
   TransformPaintPropertyNode(const TransformPaintPropertyNodeOrAlias* parent,
                              State&& state)
       : TransformPaintPropertyNodeOrAlias(parent), state_(std::move(state)) {

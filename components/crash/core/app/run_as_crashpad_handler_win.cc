@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/files/file_path.h"
+#include "base/logging.h"
 #include "base/process/memory.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -36,6 +36,7 @@ int RunAsCrashpadHandler(const base::CommandLine& command_line,
   // Make sure this process terminates on OOM in the same mode as other Chrome
   // processes.
   base::EnableTerminationOnOutOfMemory();
+  logging::RegisterAbslAbortHook();
 
   base::PlatformThread::SetName("CrashpadMainThread");
 
@@ -61,7 +62,7 @@ int RunAsCrashpadHandler(const base::CommandLine& command_line,
       L"--" + base::UTF8ToWide(process_type_switch) + L"=";
   const std::wstring user_data_dir_arg_prefix =
       L"--" + base::UTF8ToWide(user_data_dir_switch) + L"=";
-  base::EraseIf(argv, [&process_type_arg_prefix,
+  std::erase_if(argv, [&process_type_arg_prefix,
                        &user_data_dir_arg_prefix](const std::wstring& str) {
     return base::StartsWith(str, process_type_arg_prefix,
                             base::CompareCase::SENSITIVE) ||

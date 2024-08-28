@@ -5,11 +5,17 @@
 #include "components/sync/model/client_tag_based_remote_update_handler.h"
 
 #include <utility>
+#include <vector>
 
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "components/sync/base/deletion_origin.h"
 #include "components/sync/base/features.h"
+#include "components/sync/engine/data_type_activation_response.h"
+#include "components/sync/engine/forwarding_model_type_processor.h"
+#include "components/sync/model/conflict_resolution.h"
 #include "components/sync/model/metadata_batch.h"
+#include "components/sync/model/processor_entity.h"
 #include "components/sync/model/processor_entity_tracker.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
@@ -24,6 +30,9 @@ namespace syncer {
 
 namespace {
 
+using testing::ElementsAre;
+using testing::IsEmpty;
+
 const char kKey1[] = "key1";
 const char kKey2[] = "key2";
 const char kValue1[] = "value1";
@@ -36,9 +45,23 @@ sync_pb::ModelTypeState GenerateModelTypeState() {
   return model_type_state;
 }
 
+std::unique_ptr<DataTypeActivationResponse> GenerateDataTypeActivationResponse(
+    ModelTypeProcessor* processor) {
+  auto response = std::make_unique<DataTypeActivationResponse>();
+  response->model_type_state = GenerateModelTypeState();
+  response->type_processor =
+      std::make_unique<ForwardingModelTypeProcessor>(processor);
+  return response;
+}
+
 ClientTagHash GetPrefHash(const std::string& key) {
   return ClientTagHash::FromUnhashed(
       PREFERENCES, FakeModelTypeSyncBridge::ClientTagFromKey(key));
+}
+
+ClientTagHash GetSharedTabGroupDataHash(const std::string& key) {
+  return ClientTagHash::FromUnhashed(
+      SHARED_TAB_GROUP_DATA, FakeModelTypeSyncBridge::ClientTagFromKey(key));
 }
 
 sync_pb::EntitySpecifics GeneratePrefSpecifics(const std::string& key,
@@ -49,48 +72,61 @@ sync_pb::EntitySpecifics GeneratePrefSpecifics(const std::string& key,
   return specifics;
 }
 
+sync_pb::EntitySpecifics GenerateSharedTabGroupSpecifics(
+    const std::string& guid) {
+  sync_pb::EntitySpecifics specifics;
+  specifics.mutable_shared_tab_group_data()->set_guid(guid);
+  return specifics;
+}
+
 class ClientTagBasedRemoteUpdateHandlerTest : public ::testing::Test {
  public:
   ClientTagBasedRemoteUpdateHandlerTest()
+      : ClientTagBasedRemoteUpdateHandlerTest(PREFERENCES) {}
+
+  explicit ClientTagBasedRemoteUpdateHandlerTest(ModelType type)
       : processor_entity_tracker_(GenerateModelTypeState(),
                                   EntityMetadataMap()),
-        model_type_sync_bridge_(PREFERENCES,
+        model_type_sync_bridge_(type,
                                 change_processor_.CreateForwardingProcessor()),
-        remote_update_handler_(PREFERENCES,
+        remote_update_handler_(type,
                                &model_type_sync_bridge_,
                                &processor_entity_tracker_),
-        worker_(GenerateModelTypeState(), &model_type_processor_) {}
+        worker_(MockModelTypeWorker::CreateWorkerAndConnectSync(
+            GenerateDataTypeActivationResponse(&model_type_processor_))) {}
 
   ~ClientTagBasedRemoteUpdateHandlerTest() override = default;
 
   void ProcessSingleUpdate(const sync_pb::ModelTypeState& model_type_state,
-                           UpdateResponseData update) {
+                           UpdateResponseData update,
+                           std::optional<sync_pb::GarbageCollectionDirective>
+                               gc_directive = std::nullopt) {
     UpdateResponseDataList updates;
     updates.push_back(std::move(update));
-    remote_update_handler_.ProcessIncrementalUpdate(model_type_state,
-                                                    std::move(updates));
+    remote_update_handler_.ProcessIncrementalUpdate(
+        model_type_state, std::move(updates), gc_directive);
   }
 
   void ProcessSingleUpdate(UpdateResponseData update) {
     ProcessSingleUpdate(GenerateModelTypeState(), std::move(update));
   }
 
-  UpdateResponseData GenerateUpdate(const std::string& key,
-                                    const std::string& value) {
+  UpdateResponseData GeneratePrefUpdate(const std::string& key,
+                                        const std::string& value) {
     const ClientTagHash client_tag_hash = GetPrefHash(key);
-    return GenerateUpdate(client_tag_hash, key, value);
+    return GeneratePrefUpdate(client_tag_hash, key, value);
   }
 
-  UpdateResponseData GenerateUpdate(const ClientTagHash& client_tag_hash,
-                                    const std::string& key,
-                                    const std::string& value) {
+  UpdateResponseData GeneratePrefUpdate(const ClientTagHash& client_tag_hash,
+                                        const std::string& key,
+                                        const std::string& value) {
     return worker()->GenerateUpdateData(client_tag_hash,
                                         GeneratePrefSpecifics(key, value));
   }
 
-  UpdateResponseData GenerateUpdate(const std::string& key,
-                                    const std::string& value,
-                                    int64_t version_offset) {
+  UpdateResponseData GeneratePrefUpdate(const std::string& key,
+                                        const std::string& value,
+                                        int64_t version_offset) {
     const ClientTagHash client_tag_hash = GetPrefHash(key);
     const sync_pb::ModelTypeState model_type_state = GenerateModelTypeState();
     const sync_pb::EntitySpecifics specifics =
@@ -98,6 +134,13 @@ class ClientTagBasedRemoteUpdateHandlerTest : public ::testing::Test {
     return worker()->GenerateUpdateData(client_tag_hash, specifics,
                                         version_offset,
                                         model_type_state.encryption_key_name());
+  }
+
+  std::unique_ptr<EntityData> GeneratePrefEntityData(const std::string& key,
+                                                     const std::string& value) {
+    auto entity_data = std::make_unique<EntityData>();
+    entity_data->specifics = GeneratePrefSpecifics(key, value);
+    return entity_data;
   }
 
   size_t ProcessorEntityCount() const {
@@ -115,7 +158,7 @@ class ClientTagBasedRemoteUpdateHandlerTest : public ::testing::Test {
   testing::NiceMock<MockModelTypeChangeProcessor>* change_processor() {
     return &change_processor_;
   }
-  MockModelTypeWorker* worker() { return &worker_; }
+  MockModelTypeWorker* worker() { return worker_.get(); }
 
  private:
   testing::NiceMock<MockModelTypeChangeProcessor> change_processor_;
@@ -123,12 +166,12 @@ class ClientTagBasedRemoteUpdateHandlerTest : public ::testing::Test {
   FakeModelTypeSyncBridge model_type_sync_bridge_;
   ClientTagBasedRemoteUpdateHandler remote_update_handler_;
   testing::NiceMock<MockModelTypeProcessor> model_type_processor_;
-  MockModelTypeWorker worker_;
+  std::unique_ptr<MockModelTypeWorker> worker_;
 };
 
 // Thoroughly tests the data generated by a server item creation.
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldProcessRemoteCreation) {
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
   EXPECT_EQ(1u, db()->data_count());
   EXPECT_EQ(1u, db()->metadata_count());
   EXPECT_EQ(0u, bridge()->trimmed_specifics_change_count());
@@ -169,7 +212,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
        ShouldIgnoreRemoteUpdatesWithUnexpectedClientTagHash) {
   ASSERT_EQ(0U, ProcessorEntityCount());
-  ProcessSingleUpdate(GenerateUpdate(GetPrefHash(kKey2), kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(GetPrefHash(kKey2), kKey1, kValue1));
   EXPECT_EQ(0U, db()->data_count());
   EXPECT_EQ(0U, db()->metadata_count());
   EXPECT_EQ(0U, ProcessorEntityCount());
@@ -180,7 +223,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
   const std::string kUnknownField = "unknown_field";
 
   // Initial update containing unsupported fields.
-  UpdateResponseData update1 = GenerateUpdate(kKey1, kValue1);
+  UpdateResponseData update1 = GeneratePrefUpdate(kKey1, kValue1);
   *update1.entity.specifics.mutable_unknown_fields() = kUnknownField;
   ProcessSingleUpdate(std::move(update1));
   ASSERT_EQ(1U, ProcessorEntityCount());
@@ -189,7 +232,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
   ASSERT_EQ(1U, bridge()->trimmed_specifics_change_count());
 
   // Redundant update should not clear trimmed specifics.
-  UpdateResponseData update2 = GenerateUpdate(kKey1, kValue1);
+  UpdateResponseData update2 = GeneratePrefUpdate(kKey1, kValue1);
   *update2.entity.specifics.mutable_unknown_fields() = kUnknownField;
   ProcessSingleUpdate(std::move(update2));
   EXPECT_EQ(1U, db()->data_change_count());
@@ -202,7 +245,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
 
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
        ShouldUpdateMetadataOnNoopRemoteUpdates) {
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
   ASSERT_EQ(1U, ProcessorEntityCount());
   ASSERT_EQ(1U, db()->data_change_count());
   ASSERT_EQ(1U, db()->metadata_change_count());
@@ -210,7 +253,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
   // Redundant update from server doesn't write data but updates metadata.
   const int64_t time_before_update =
       db()->GetMetadata(kKey1).modification_time();
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
   EXPECT_EQ(1U, db()->data_change_count());
   EXPECT_EQ(2U, db()->metadata_change_count());
   // Check that `modification_time` was updated.
@@ -219,26 +262,26 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
 
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
        ShouldIgnoreReflectionsOnRemoteUpdates) {
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
   ASSERT_EQ(1U, ProcessorEntityCount());
   ASSERT_EQ(1U, db()->data_change_count());
   ASSERT_EQ(1U, db()->metadata_change_count());
 
   // A reflection (update already received) is ignored completely.
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1, /*version_offset=*/0));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1, /*version_offset=*/0));
   EXPECT_EQ(1U, db()->data_change_count());
   EXPECT_EQ(1U, db()->metadata_change_count());
 }
 
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldProcessRemoteUpdates) {
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
   ASSERT_EQ(1U, ProcessorEntityCount());
   ASSERT_EQ(1U, db()->data_change_count());
   ASSERT_EQ(1U, db()->metadata_change_count());
   ASSERT_EQ(0U, bridge()->trimmed_specifics_change_count());
 
   // Should update both data and metadata.
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue2));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue2));
   ASSERT_EQ(2U, db()->data_change_count());
   ASSERT_EQ(2U, db()->metadata_change_count());
   EXPECT_EQ(1U, db()->data_count());
@@ -253,7 +296,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldProcessRemoteUpdates) {
 }
 
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldProcessRemoteDeletion) {
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
   ASSERT_EQ(1U, ProcessorEntityCount());
   ASSERT_EQ(1U, db()->data_change_count());
   ASSERT_EQ(1U, db()->metadata_change_count());
@@ -279,7 +322,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
 
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
        ShouldNotTreatMatchingChangesAsConflict) {
-  UpdateResponseData update = GenerateUpdate(kKey1, kValue1);
+  UpdateResponseData update = GeneratePrefUpdate(kKey1, kValue1);
   sync_pb::EntitySpecifics specifics = update.entity.specifics;
   ProcessSingleUpdate(std::move(update));
   ASSERT_EQ(1U, ProcessorEntityCount());
@@ -292,17 +335,121 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
   entity_tracker()->IncrementSequenceNumberForAllExcept({});
   ASSERT_TRUE(entity_tracker()->HasLocalChanges());
 
-  update = GenerateUpdate(kKey1, kValue1);
+  update = GeneratePrefUpdate(kKey1, kValue1);
   // Make sure to have the same specifics.
   update.entity.specifics = specifics;
-  // Changes match doesn't call ResolveConflict.
+
+  base::HistogramTester histogram_tester;
   ProcessSingleUpdate(std::move(update));
+  histogram_tester.ExpectUniqueSample(
+      "Sync.ModelTypeEntityConflictResolution.PREFERENCE",
+      ConflictResolution::kChangesMatch, /*expected_bucket_count=*/1);
 
   EXPECT_EQ(1U, db()->data_change_count());
   ASSERT_EQ(0U, bridge()->trimmed_specifics_change_count());
   EXPECT_EQ(2U, db()->GetMetadata(kKey1).server_version());
   EXPECT_EQ(1U, ProcessorEntityCount());
   EXPECT_FALSE(entity_tracker()->HasLocalChanges());
+}
+
+TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
+       ShouldPreferRemoteNonDeletionOverLocalTombstoneOnConflict) {
+  UpdateResponseData update = GeneratePrefUpdate(kKey1, kValue1);
+  sync_pb::EntitySpecifics specifics = update.entity.specifics;
+  ProcessSingleUpdate(std::move(update));
+  ASSERT_EQ(1U, ProcessorEntityCount());
+  ASSERT_EQ(1U, db()->data_change_count());
+  ASSERT_EQ(1U, db()->metadata_change_count());
+  ASSERT_EQ(1U, db()->GetMetadata(kKey1).server_version());
+
+  // Mark local entity as deleted (tombstone).
+  db()->RemoveData(kKey1);
+  entity_tracker()->GetEntityForStorageKey(kKey1)->RecordLocalDeletion(
+      DeletionOrigin::Unspecified());
+  entity_tracker()->IncrementSequenceNumberForAllExcept({});
+  ASSERT_EQ(2U, db()->data_change_count());
+  ASSERT_TRUE(entity_tracker()->HasLocalChanges());
+
+  update = GeneratePrefUpdate(kKey1, kValue1);
+  // Make sure to have the same specifics.
+  update.entity.specifics = specifics;
+
+  base::HistogramTester histogram_tester;
+  ProcessSingleUpdate(std::move(update));
+  histogram_tester.ExpectUniqueSample(
+      "Sync.ModelTypeEntityConflictResolution.PREFERENCE",
+      ConflictResolution::kUseRemote, /*expected_bucket_count=*/1);
+
+  EXPECT_EQ(3U, db()->data_change_count());
+  EXPECT_EQ(2U, db()->GetMetadata(kKey1).server_version());
+  EXPECT_EQ(1U, ProcessorEntityCount());
+  EXPECT_FALSE(entity_tracker()->HasLocalChanges());
+}
+
+TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
+       ShouldPreferRemoteNonDeletionOverLocalEncryptionOnConflict) {
+  UpdateResponseData update = GeneratePrefUpdate(kKey1, kValue1);
+  sync_pb::EntitySpecifics specifics = update.entity.specifics;
+  ProcessSingleUpdate(std::move(update));
+  ASSERT_EQ(1U, ProcessorEntityCount());
+  ASSERT_EQ(1U, db()->data_change_count());
+  ASSERT_EQ(1U, db()->metadata_change_count());
+  ASSERT_EQ(1U, db()->GetMetadata(kKey1).server_version());
+
+  // Mark local entity as updated but having the same specifics (local
+  // re-encryption).
+  entity_tracker()->IncrementSequenceNumberForAllExcept({});
+  ASSERT_TRUE(entity_tracker()->HasLocalChanges());
+  ASSERT_TRUE(
+      entity_tracker()->GetEntityForStorageKey(kKey1)->MatchesOwnBaseData());
+
+  // Remote update has different specifics so data does not match.
+  update = GeneratePrefUpdate(kKey1, kValue2);
+
+  base::HistogramTester histogram_tester;
+  ProcessSingleUpdate(std::move(update));
+  histogram_tester.ExpectUniqueSample(
+      "Sync.ModelTypeEntityConflictResolution.PREFERENCE",
+      ConflictResolution::kIgnoreLocalEncryption, /*expected_bucket_count=*/1);
+
+  EXPECT_EQ(2U, db()->data_change_count());
+  ASSERT_EQ(0U, bridge()->trimmed_specifics_change_count());
+  EXPECT_EQ(2U, db()->GetMetadata(kKey1).server_version());
+  EXPECT_EQ(1U, ProcessorEntityCount());
+  EXPECT_FALSE(entity_tracker()->HasLocalChanges());
+}
+
+TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
+       ShouldPreferLocalChangeOverRemoteEncryptionOnConflict) {
+  UpdateResponseData update = GeneratePrefUpdate(kKey1, kValue1);
+  sync_pb::EntitySpecifics specifics = update.entity.specifics;
+  ProcessSingleUpdate(std::move(update));
+  ASSERT_EQ(1U, ProcessorEntityCount());
+  ASSERT_EQ(1U, db()->data_change_count());
+  ASSERT_EQ(1U, db()->metadata_change_count());
+  ASSERT_EQ(1U, db()->GetMetadata(kKey1).server_version());
+
+  // Update the local entity to not match the remote update.
+  entity_tracker()->GetEntityForStorageKey(kKey1)->RecordLocalUpdate(
+      GeneratePrefEntityData(kKey1, kValue2),
+      /*trimmed_specifics=*/sync_pb::EntitySpecifics());
+  ASSERT_TRUE(entity_tracker()->HasLocalChanges());
+
+  // Remote update has the same specifics to represent re-encryption.
+  update = GeneratePrefUpdate(kKey1, kValue1);
+  update.entity.specifics = specifics;
+
+  base::HistogramTester histogram_tester;
+  ProcessSingleUpdate(std::move(update));
+  histogram_tester.ExpectUniqueSample(
+      "Sync.ModelTypeEntityConflictResolution.PREFERENCE",
+      ConflictResolution::kIgnoreRemoteEncryption, /*expected_bucket_count=*/1);
+
+  EXPECT_EQ(1U, db()->data_change_count());
+  ASSERT_EQ(0U, bridge()->trimmed_specifics_change_count());
+  EXPECT_EQ(2U, db()->GetMetadata(kKey1).server_version());
+  EXPECT_EQ(1U, ProcessorEntityCount());
+  EXPECT_TRUE(entity_tracker()->HasLocalChanges());
 }
 
 // Test for the case from crbug.com/1046309. Tests that there is no redundant
@@ -316,7 +463,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
   sync_pb::ModelTypeState model_type_state = GenerateModelTypeState();
   model_type_state.set_encryption_key_name(kTestEncryptionKeyName);
 
-  ProcessSingleUpdate(GenerateUpdate(kClientTagHash, kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kClientTagHash, kKey1, kValue1));
 
   // Generate a remote deletion with a different encryption key.
   model_type_state.set_encryption_key_name(kDifferentEncryptionKeyName);
@@ -329,7 +476,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
        ShouldNotProcessInvalidRemoteCreationWithInvalidStorageKey) {
   ASSERT_EQ(0U, ProcessorEntityCount());
-  UpdateResponseData update = GenerateUpdate("", "");
+  UpdateResponseData update = GeneratePrefUpdate("", "");
   ASSERT_TRUE(bridge()->SupportsGetStorageKey());
   // Bridge will generate an empty storage key.
   ProcessSingleUpdate(std::move(update));
@@ -347,14 +494,14 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest,
   bridge()->TreatRemoteUpdateAsInvalid(GetPrefHash(kKey1));
 
   ASSERT_EQ(0U, ProcessorEntityCount());
-  ProcessSingleUpdate(GenerateUpdate(GetPrefHash(kKey1), kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(GetPrefHash(kKey1), kKey1, kValue1));
   EXPECT_EQ(0U, db()->data_count());
   EXPECT_EQ(0U, db()->metadata_count());
   EXPECT_EQ(0U, ProcessorEntityCount());
 }
 
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldIgnoreInvalidRemoteUpdate) {
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
   ASSERT_EQ(1U, ProcessorEntityCount());
   ASSERT_EQ(1U, db()->data_change_count());
   ASSERT_EQ(1U, db()->metadata_change_count());
@@ -364,7 +511,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldIgnoreInvalidRemoteUpdate) {
   // Force flag next remote update as invalid.
   bridge()->TreatRemoteUpdateAsInvalid(GetPrefHash(kKey1));
 
-  ProcessSingleUpdate(GenerateUpdate(kKey1, kValue2));
+  ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue2));
   ASSERT_EQ(1U, db()->data_change_count());
   ASSERT_EQ(1U, db()->metadata_change_count());
   EXPECT_EQ(1U, ProcessorEntityCount());
@@ -373,7 +520,7 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldIgnoreInvalidRemoteUpdate) {
 TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldLogFreshnessToUma) {
   {
     base::HistogramTester histogram_tester;
-    ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1));
+    ProcessSingleUpdate(GeneratePrefUpdate(kKey1, kValue1));
     histogram_tester.ExpectTotalCount(
         "Sync.NonReflectionUpdateFreshnessPossiblySkewed2.PREFERENCE", 1);
   }
@@ -382,7 +529,8 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldLogFreshnessToUma) {
   // hasn't increased.
   {
     base::HistogramTester histogram_tester;
-    ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1, /*version_offset=*/0));
+    ProcessSingleUpdate(
+        GeneratePrefUpdate(kKey1, kValue1, /*version_offset=*/0));
     histogram_tester.ExpectTotalCount(
         "Sync.NonReflectionUpdateFreshnessPossiblySkewed2.PREFERENCE", 0);
   }
@@ -390,7 +538,8 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldLogFreshnessToUma) {
   // Increase version and process again; should log freshness.
   {
     base::HistogramTester histogram_tester;
-    ProcessSingleUpdate(GenerateUpdate(kKey1, kValue1, /*version_offset=*/1));
+    ProcessSingleUpdate(
+        GeneratePrefUpdate(kKey1, kValue1, /*version_offset=*/1));
     histogram_tester.ExpectTotalCount(
         "Sync.NonReflectionUpdateFreshnessPossiblySkewed2.PREFERENCE", 1);
   }
@@ -412,6 +561,105 @@ TEST_F(ClientTagBasedRemoteUpdateHandlerTest, ShouldLogFreshnessToUma) {
     histogram_tester.ExpectTotalCount(
         "Sync.NonReflectionUpdateFreshnessPossiblySkewed2.PREFERENCE", 0);
   }
+}
+
+class ClientTagBasedRemoteUpdateHandlerForSharedTest
+    : public ClientTagBasedRemoteUpdateHandlerTest {
+ public:
+  ClientTagBasedRemoteUpdateHandlerForSharedTest()
+      : ClientTagBasedRemoteUpdateHandlerTest(SHARED_TAB_GROUP_DATA) {}
+
+  UpdateResponseData GenerateSharedTabGroupDataUpdate(
+      const std::string& guid,
+      const std::string& collaboration_id) {
+    const ClientTagHash client_tag_hash = GetSharedTabGroupDataHash(guid);
+    return GenerateSharedTabGroupDataUpdate(client_tag_hash, guid,
+                                            collaboration_id);
+  }
+
+  UpdateResponseData GenerateSharedTabGroupDataUpdate(
+      const ClientTagHash& client_tag_hash,
+      const std::string& guid,
+      const std::string& collaboration_id) {
+    return worker()->GenerateSharedUpdateData(
+        client_tag_hash, GenerateSharedTabGroupSpecifics(guid),
+        collaboration_id);
+  }
+
+  void ProcessSharedSingleUpdate(
+      UpdateResponseData update,
+      const std::vector<std::string>& active_collaborations) {
+    sync_pb::GarbageCollectionDirective gc_directive;
+    for (const std::string& active_collaboration : active_collaborations) {
+      gc_directive.mutable_collaboration_gc()->add_active_collaboration_ids(
+          active_collaboration);
+    }
+    ProcessSingleUpdate(GenerateModelTypeState(), std::move(update),
+                        std::move(gc_directive));
+  }
+};
+
+TEST_F(ClientTagBasedRemoteUpdateHandlerForSharedTest,
+       ShouldClearEntitiesForInactiveCollaborations) {
+  const std::string kGuidInactiveCollaboration = "guid_inactive";
+
+  ProcessSharedSingleUpdate(
+      GenerateSharedTabGroupDataUpdate("guid_1", "active_collaboration"),
+      {"active_collaboration"});
+  ProcessSharedSingleUpdate(
+      GenerateSharedTabGroupDataUpdate(kGuidInactiveCollaboration,
+                                       "inactive_collaboration"),
+      {"active_collaboration", "inactive_collaboration"});
+  EXPECT_EQ(2U, ProcessorEntityCount());
+  EXPECT_EQ(2U, db()->data_change_count());
+  EXPECT_EQ(2U, db()->metadata_change_count());
+  EXPECT_EQ("active_collaboration",
+            db()->GetMetadata("guid_1").collaboration().collaboration_id());
+  EXPECT_EQ("inactive_collaboration",
+            db()->GetMetadata(kGuidInactiveCollaboration)
+                .collaboration()
+                .collaboration_id());
+  ASSERT_THAT(bridge()->deleted_collaboration_membership_storage_keys(),
+              IsEmpty());
+
+  // Simulate another update to remove entities for the inactive collaboration
+  // (only one collaboration remains active).
+  ProcessSharedSingleUpdate(
+      GenerateSharedTabGroupDataUpdate("guid_1", "active_collaboration"),
+      {"active_collaboration"});
+  EXPECT_EQ(1U, ProcessorEntityCount());
+  EXPECT_EQ(3U, db()->data_change_count());
+
+  // 3 remote updates plus 1 change for inactive collaboration.
+  EXPECT_EQ(4U, db()->metadata_change_count());
+  EXPECT_EQ(1U, db()->metadata_count());
+
+  EXPECT_THAT(bridge()->deleted_collaboration_membership_storage_keys(),
+              ElementsAre(kGuidInactiveCollaboration));
+}
+
+TEST_F(ClientTagBasedRemoteUpdateHandlerForSharedTest,
+       ShouldCreateDeletionForActiveCollaborationMembership) {
+  ProcessSharedSingleUpdate(
+      GenerateSharedTabGroupDataUpdate("guid", "active_collaboration"),
+      {"active_collaboration"});
+  ASSERT_EQ(1U, ProcessorEntityCount());
+  ASSERT_EQ(1U, db()->data_change_count());
+  ASSERT_EQ(1U, db()->metadata_change_count());
+  ASSERT_EQ("active_collaboration",
+            db()->GetMetadata("guid").collaboration().collaboration_id());
+  ASSERT_THAT(bridge()->deleted_collaboration_membership_storage_keys(),
+              IsEmpty());
+
+  // Normal deletion (tombstone) from the server while the collaboration is
+  // still active.
+  ProcessSingleUpdate(
+      worker()->GenerateTombstoneUpdateData(GetSharedTabGroupDataHash("guid")));
+  EXPECT_EQ(0U, ProcessorEntityCount());
+  EXPECT_EQ(0U, db()->metadata_count());
+  EXPECT_EQ(2U, db()->metadata_change_count());
+  EXPECT_THAT(bridge()->deleted_collaboration_membership_storage_keys(),
+              IsEmpty());
 }
 
 }  // namespace

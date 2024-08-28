@@ -10,9 +10,9 @@
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/actions/chrome_actions.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/browser_actions.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
@@ -85,9 +85,7 @@ ExtensionSidePanelCoordinator::ExtensionSidePanelCoordinator(
     scoped_service_observation_.Observe(service);
     LoadExtensionIcon();
     if (IsGlobalCoordinator()) {
-      if (features::IsSidePanelPinningEnabled()) {
-        UpdateActionItemIcon();
-      }
+      UpdateActionItemIcon();
       browser_->tab_strip_model()->AddObserver(this);
     }
 
@@ -278,8 +276,7 @@ void ExtensionSidePanelCoordinator::CreateAndRegisterEntry() {
   // is always deregistered when this class is destroyed, so CreateView can't be
   // called after the destruction of `this`.
   registry_->Register(std::make_unique<SidePanelEntry>(
-      GetEntryKey(), base::UTF8ToUTF16(extension_->short_name()),
-      ui::ImageModel::FromImage(extension_icon_->image()),
+      GetEntryKey(),
       base::BindRepeating(&ExtensionSidePanelCoordinator::CreateView,
                           base::Unretained(this))));
 }
@@ -337,10 +334,6 @@ void ExtensionSidePanelCoordinator::HandleCloseExtensionSidePanel(
   } else {
     entry->ClearCachedView();
   }
-
-  // Closing the panel or removing the view should synchronously result in
-  // the extension view being destroyed, which destroys `host_`.
-  DCHECK(!host_);
 }
 
 void ExtensionSidePanelCoordinator::NavigateIfNecessary() {
@@ -353,7 +346,7 @@ void ExtensionSidePanelCoordinator::NavigateIfNecessary() {
   if (side_panel_url_ != host_contents->GetLastCommittedURL()) {
     // Since the navigation happens automatically when the URL is changed from
     // an API call, this counts as a top level navigation.
-    // TODO(crbug.com/1378048): Investigate if LoadURLWithParams() is needed
+    // TODO(crbug.com/40243760): Investigate if LoadURLWithParams() is needed
     // here, and which params should be used.
     host_contents->GetController().LoadURL(side_panel_url_, content::Referrer(),
                                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
@@ -371,10 +364,10 @@ void ExtensionSidePanelCoordinator::LoadExtensionIcon() {
       /*observer=*/nullptr);
 
   // Triggers actual image loading with all supported scale factors.
-  // TODO(crbug.com/1442996): This is a temporary fix since the combobox and its
-  // drop down menu currently do not automatically get an image's representation
-  // when they are shown. Remove this when the aforementioend crbug has been
-  // fixed.
+  // TODO(crbug.com/40910886): This is a temporary fix since the combobox and
+  // its drop down menu currently do not automatically get an image's
+  // representation when they are shown. Remove this when the aforementioend
+  // crbug has been fixed.
   extension_icon_->image_skia().EnsureRepsForSupportedScales();
 }
 
@@ -383,7 +376,7 @@ void ExtensionSidePanelCoordinator::UpdateActionItemIcon() {
   std::optional<actions::ActionId> extension_action_id =
       actions::ActionIdMap::StringToActionId(GetEntryKey().ToString());
   CHECK(extension_action_id.has_value());
-  BrowserActions* browser_actions = BrowserActions::FromBrowser(browser_);
+  BrowserActions* browser_actions = browser_->browser_actions();
   actions::ActionItem* action_item = actions::ActionManager::Get().FindAction(
       extension_action_id.value(), browser_actions->root_action_item());
   if (action_item) {

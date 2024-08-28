@@ -5,7 +5,9 @@
 #include "components/feedback/redaction_tool/redaction_tool.h"
 
 #include <gtest/gtest.h>
+
 #include <set>
+#include <string_view>
 #include <utility>
 
 #include "base/files/file_path.h"
@@ -304,7 +306,7 @@ class RedactionToolTest : public testing::Test {
 
   template <typename T>
   void ExpectBucketCount(
-      const base::StringPiece histogram_name,
+      const std::string_view histogram_name,
       const T enum_value,
       const size_t expected_count,
       const base::Location location = base::Location::Current()) {
@@ -708,9 +710,15 @@ TEST_F(RedactionToolTest, RedactChunk) {
   ExpectBucketCount(kRedactionToolCallerHistogram,
                     RedactionToolCaller::kErrorReporting, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,
-                    RedactionToolCaller::kFeedbackTool, 0);
+                    RedactionToolCaller::kFeedbackToolHotRod, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,
-                    RedactionToolCaller::kBrowserSystemLogs, 0);
+                    RedactionToolCaller::kFeedbackToolUserDescriptions, 0);
+  ExpectBucketCount(kRedactionToolCallerHistogram,
+                    RedactionToolCaller::kFeedbackToolLogs, 0);
+  ExpectBucketCount(kRedactionToolCallerHistogram,
+                    RedactionToolCaller::kCrashTool, 0);
+  ExpectBucketCount(kRedactionToolCallerHistogram,
+                    RedactionToolCaller::kCrashToolJSErrors, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,
                     RedactionToolCaller::kUndetermined, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,
@@ -767,9 +775,15 @@ TEST_F(RedactionToolTest, RedactChunk) {
   ExpectBucketCount(kRedactionToolCallerHistogram,
                     RedactionToolCaller::kErrorReporting, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,
-                    RedactionToolCaller::kFeedbackTool, 0);
+                    RedactionToolCaller::kFeedbackToolHotRod, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,
-                    RedactionToolCaller::kBrowserSystemLogs, 0);
+                    RedactionToolCaller::kFeedbackToolUserDescriptions, 0);
+  ExpectBucketCount(kRedactionToolCallerHistogram,
+                    RedactionToolCaller::kFeedbackToolLogs, 0);
+  ExpectBucketCount(kRedactionToolCallerHistogram,
+                    RedactionToolCaller::kCrashTool, 0);
+  ExpectBucketCount(kRedactionToolCallerHistogram,
+                    RedactionToolCaller::kCrashToolJSErrors, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,
                     RedactionToolCaller::kUndetermined, 0);
   ExpectBucketCount(kRedactionToolCallerHistogram,

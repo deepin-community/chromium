@@ -10,6 +10,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/containers/heap_array.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
@@ -167,7 +168,8 @@ class TestUrlIndex : public UrlIndex {
 
   scoped_refptr<UrlData> NewUrlData(const GURL& url,
                                     UrlData::CorsMode cors_mode) override {
-    last_url_data_ = new TestUrlData(url, cors_mode, this, task_runner_);
+    last_url_data_ =
+        base::MakeRefCounted<TestUrlData>(url, cors_mode, this, task_runner_);
     return last_url_data_;
   }
 
@@ -175,8 +177,6 @@ class TestUrlIndex : public UrlIndex {
     EXPECT_TRUE(last_url_data_);
     return last_url_data_;
   }
-
-  size_t load_queue_size() { return loading_queue_.size(); }
 
  private:
   scoped_refptr<TestUrlData> last_url_data_;
@@ -339,10 +339,10 @@ class MultiBufferDataSourceTest : public testing::Test {
 
   void ReceiveDataLow(int size) {
     EXPECT_TRUE(active_loader());
-    std::unique_ptr<char[]> data(new char[size]);
-    memset(data.get(), 0xA5, size);  // Arbitrary non-zero value.
+    auto data = base::HeapArray<char>::Uninit(size);
+    memset(data.data(), 0xA5, size);  // Arbitrary non-zero value.
 
-    data_provider()->DidReceiveData(data.get(), size);
+    data_provider()->DidReceiveData(data.data(), size);
   }
 
   void ReceiveData(int size) {

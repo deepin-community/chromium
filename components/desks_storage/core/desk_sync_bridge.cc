@@ -36,6 +36,7 @@
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_registry_cache_wrapper.h"
 #include "components/services/app_service/public/cpp/app_types.h"
+#include "components/sync/base/deletion_origin.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/metadata_change_list.h"
@@ -238,8 +239,8 @@ std::optional<syncer::ModelError> DeskSyncBridge::ApplyIncrementalSyncChanges(
   return std::nullopt;
 }
 
-void DeskSyncBridge::GetData(StorageKeyList storage_keys,
-                             DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> DeskSyncBridge::GetDataForCommit(
+    StorageKeyList storage_keys) {
   auto batch = std::make_unique<syncer::MutableDataBatch>();
 
   for (const std::string& uuid : storage_keys) {
@@ -253,10 +254,10 @@ void DeskSyncBridge::GetData(StorageKeyList storage_keys,
                          entry, apps::AppRegistryCacheWrapper::Get()
                                     .GetAppRegistryCache(account_id_))));
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
-void DeskSyncBridge::GetAllDataForDebugging(DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> DeskSyncBridge::GetAllDataForDebugging() {
   auto batch = std::make_unique<syncer::MutableDataBatch>();
   for (const auto& it : desk_template_entries_) {
     batch->Put(it.first.AsLowercaseString(),
@@ -265,7 +266,7 @@ void DeskSyncBridge::GetAllDataForDebugging(DataCallback callback) {
                    apps::AppRegistryCacheWrapper::Get().GetAppRegistryCache(
                        account_id_))));
   }
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
 std::string DeskSyncBridge::GetClientTag(
@@ -420,6 +421,7 @@ void DeskSyncBridge::DeleteEntry(const base::Uuid& uuid,
       store_->CreateWriteBatch();
 
   change_processor()->Delete(uuid.AsLowercaseString(),
+                             syncer::DeletionOrigin::Unspecified(),
                              batch->GetMetadataChangeList());
 
   desk_template_entries_.erase(uuid);
@@ -451,6 +453,7 @@ DeskModel::DeleteEntryStatus DeskSyncBridge::DeleteAllEntriesSync() {
 
   for (const auto& uuid : all_uuids) {
     change_processor()->Delete(uuid.AsLowercaseString(),
+                               syncer::DeletionOrigin::Unspecified(),
                                batch->GetMetadataChangeList());
     batch->DeleteData(uuid.AsLowercaseString());
   }

@@ -13,6 +13,7 @@
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/sequence_bound.h"
+#include "base/types/pass_key.h"
 #include "chrome/browser/dips/dips_browser_signin_detector.h"
 #include "chrome/browser/dips/dips_redirect_info.h"
 #include "chrome/browser/dips/dips_storage.h"
@@ -20,17 +21,16 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 
-class Profile;
-
 namespace content {
 class BrowserContext;
-}
+class DipsDelegate;
+}  // namespace content
 
 namespace content_settings {
 class CookieSettings;
 }
 
-namespace signin {
+namespace dips {
 class PersistentRepeatingTimer;
 }
 
@@ -103,7 +103,6 @@ class DIPSService : public KeyedService {
   }
 
   void OnTimerFiredForTesting() { OnTimerFired(); }
-  void WaitForInitCompleteForTesting() { wait_for_prepopulating_.Run(); }
   void WaitForFileDeletionCompleteForTesting() {
     wait_for_file_deletion_.Run();
   }
@@ -133,8 +132,7 @@ class DIPSService : public KeyedService {
   // So DIPSServiceFactory::BuildServiceInstanceFor can call the constructor.
   friend class DIPSServiceFactory;
   explicit DIPSService(content::BrowserContext* context);
-  std::unique_ptr<signin::PersistentRepeatingTimer> CreateTimer(
-      Profile* profile);
+  std::unique_ptr<dips::PersistentRepeatingTimer> CreateTimer();
   void Shutdown() override;
   bool IsShuttingDown() const { return !cookie_settings_; }
 
@@ -158,19 +156,12 @@ class DIPSService : public KeyedService {
       base::RepeatingCallback<void(const GURL&)> content_settings_callback);
 
   scoped_refptr<base::SequencedTaskRunner> CreateTaskRunner();
-  void InitializeStorageWithEngagedSites(bool prepopulated);
-  // Prepopulates the DIPS database with `sites` having interaction at `time`.
-  void InitializeStorage(base::Time time, std::vector<std::string> sites);
 
-  void OnStorageInitialized();
   void OnTimerFired();
   void DeleteDIPSEligibleState(DeletedSitesCallback callback,
                                std::vector<std::string> sites_to_clear);
-  void PostDeletionTaskToUIThread(base::OnceClosure callback,
-                                  std::vector<std::string> sites_to_clear);
-  void RunDeletionTaskOnUIThread(
-      std::unique_ptr<content::BrowsingDataFilterBuilder> filter,
-      base::OnceClosure callback);
+  void RunDeletionTaskOnUIThread(std::vector<std::string> sites_to_clear,
+                                 base::OnceClosure callback);
 
   // Checks whether |third_party_url| is allowed to use third-party cookies when
   // embedded under |first_party_url|. Factors the following into account:
@@ -185,17 +176,17 @@ class DIPSService : public KeyedService {
                      const GURL& third_party_url) const;
 
   base::RunLoop wait_for_file_deletion_;
-  base::RunLoop wait_for_prepopulating_;
   raw_ptr<content::BrowserContext> browser_context_;
   scoped_refptr<content_settings::CookieSettings> cookie_settings_;
   // The persisted timer controlling how often incidental state is cleared.
   // This timer is null if the DIPS feature isn't enabled with a valid TimeDelta
   // given for its `timer_delay` parameter.
   // See base/time/time_delta_from_string.h for how that param should be given.
-  std::unique_ptr<signin::PersistentRepeatingTimer> repeating_timer_;
+  std::unique_ptr<dips::PersistentRepeatingTimer> repeating_timer_;
   base::SequenceBound<DIPSStorage> storage_;
   base::ObserverList<Observer> observers_;
   std::optional<DIPSBrowserSigninDetector> dips_browser_signin_detector_;
+  std::unique_ptr<content::DipsDelegate> dips_delegate_;
 
   std::map<std::string, int> open_sites_;
 

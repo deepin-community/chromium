@@ -2,7 +2,7 @@
 
 shared uint arg_0;
 void tint_zero_workgroup_memory(uint local_idx) {
-  {
+  if ((local_idx < 1u)) {
     atomicExchange(arg_0, 0u);
   }
   barrier();
@@ -12,15 +12,15 @@ layout(binding = 0, std430) buffer prevent_dce_block_ssbo {
   uint inner;
 } prevent_dce;
 
-void atomicMax_beccfc() {
+uint atomicMax_beccfc() {
   uint arg_1 = 1u;
   uint res = atomicMax(arg_0, arg_1);
-  prevent_dce.inner = res;
+  return res;
 }
 
 void compute_main(uint local_invocation_index) {
   tint_zero_workgroup_memory(local_invocation_index);
-  atomicMax_beccfc();
+  prevent_dce.inner = atomicMax_beccfc();
 }
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;

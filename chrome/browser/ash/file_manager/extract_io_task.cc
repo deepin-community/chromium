@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/file_manager/extract_io_task.h"
 
 #include <grp.h>
+
 #include <optional>
 #include <utility>
 
@@ -89,7 +90,10 @@ void ExtractIOTask::FinishedExtraction(base::FilePath directory, bool success) {
   if (success) {
     // Open a new window to show the extracted content.
     platform_util::ShowItemInFolder(profile_, directory);
+  } else {
+    any_archive_failed_ = true;
   }
+
   // Release the unpacker parameters stored for the extraction.
   auto unpacker = unpackers_[directory];
   if (unpacker) {
@@ -102,10 +106,9 @@ void ExtractIOTask::FinishedExtraction(base::FilePath directory, bool success) {
   }
   DCHECK_GT(extractCount_, 0u);
   if (--extractCount_ == 0) {
-    progress_.state = success ? State::kSuccess : State::kError;
-    RecordUmaExtractStatus(progress_.state == State::kSuccess
-                               ? ExtractStatus::kSuccess
-                               : ExtractStatus::kUnknownError);
+    progress_.state = any_archive_failed_ ? State::kError : State::kSuccess;
+    RecordUmaExtractStatus(any_archive_failed_ ? ExtractStatus::kUnknownError
+                                               : ExtractStatus::kSuccess);
     Complete();
   }
 }
@@ -120,7 +123,7 @@ std::optional<gid_t> GetDirectoriesOwnerGid() {
   return grp.gr_gid;
 }
 
-// Recursively walk directory and set 'u+rwx,g+x,o+x'.
+// Recursively walk directory and set 'u+rwx,g+rx,o+x'.
 bool SetDirectoryPermissions(base::FilePath directory, bool success) {
   // Always set permissions in case of error mid-extract.
   base::FileEnumerator traversal(directory, true,
@@ -128,13 +131,14 @@ bool SetDirectoryPermissions(base::FilePath directory, bool success) {
   const std::optional<gid_t> owner_gid = GetDirectoriesOwnerGid();
   for (base::FilePath current = traversal.Next(); !current.empty();
        current = traversal.Next()) {
-    base::SetPosixFilePermissions(current,
-                                  base::FILE_PERMISSION_READ_BY_USER |
-                                      base::FILE_PERMISSION_WRITE_BY_USER |
-                                      base::FILE_PERMISSION_EXECUTE_BY_USER |
-                                      base::FILE_PERMISSION_READ_BY_GROUP |
-                                      base::FILE_PERMISSION_EXECUTE_BY_GROUP |
-                                      base::FILE_PERMISSION_EXECUTE_BY_OTHERS);
+    base::SetPosixFilePermissions(
+        current,
+        base::FILE_PERMISSION_READ_BY_USER |  // "rwxr-x--x".
+            base::FILE_PERMISSION_WRITE_BY_USER |
+            base::FILE_PERMISSION_EXECUTE_BY_USER |
+            base::FILE_PERMISSION_READ_BY_GROUP |
+            base::FILE_PERMISSION_EXECUTE_BY_GROUP |
+            base::FILE_PERMISSION_EXECUTE_BY_OTHERS);
     // Might not exist in tests.
     if (owner_gid.has_value()) {
       HANDLE_EINTR(chown(current.value().c_str(), -1, owner_gid.value()));
@@ -173,28 +177,49 @@ void ExtractIOTask::ExtractIntoNewDirectory(
   } else {
     LOG(ERROR) << "Cannot create directory "
                << zip::Redact(destination_directory);
+    ZipExtractCallback(base::FilePath(), false);
   }
 }
 
 bool CreateExtractionDirectory(const base::FilePath& destination_directory) {
-  bool created_ok = base::CreateDirectory(destination_directory);
-  // Make sure the directory is world readable.
-  if (created_ok) {
-    created_ok = base::SetPosixFilePermissions(
-        destination_directory, base::FILE_PERMISSION_READ_BY_USER |
-                                   base::FILE_PERMISSION_WRITE_BY_USER |
-                                   base::FILE_PERMISSION_EXECUTE_BY_USER |
-                                   base::FILE_PERMISSION_READ_BY_GROUP |
-                                   base::FILE_PERMISSION_EXECUTE_BY_GROUP |
-                                   base::FILE_PERMISSION_EXECUTE_BY_OTHERS);
-    // Might not exist in tests.
-    const std::optional<gid_t> owner_gid = GetDirectoriesOwnerGid();
-    if (created_ok && owner_gid.has_value()) {
-      created_ok = (HANDLE_EINTR(chown(destination_directory.value().c_str(),
-                                       -1, owner_gid.value())) == 0);
-    }
+  if (!base::CreateDirectory(destination_directory)) {
+    return false;
   }
-  return created_ok;
+
+  if (base::StartsWith(destination_directory.value(),
+                       file_manager::util::kFuseBoxMediaSlashPath)) {
+    // Fusebox files wrap Chromium's SBFS (//storage/browser/file_system) API
+    // and the SBFS cross-platform abstraction doesn't expose Unix-style rwx
+    // permission bits or owner:group chown-ership fields. The Fusebox server
+    // offers synthetic "rwxrwx---" mode bits (for directories) but trying to
+    // chmod that to something different will fail. Still, while "rwxrwx---" is
+    // not exactly equal to "rwxr-x--x", it's good enough for many purposes.
+    // For Fusebox paths, we just return early (with success) instead of trying
+    // to chmod and chown the freshly created directory.
+    return true;
+  }
+
+  // Make sure the directory is world readable.
+  if (!base::SetPosixFilePermissions(
+          destination_directory,
+          base::FILE_PERMISSION_READ_BY_USER |  // "rwxr-x--x".
+              base::FILE_PERMISSION_WRITE_BY_USER |
+              base::FILE_PERMISSION_EXECUTE_BY_USER |
+              base::FILE_PERMISSION_READ_BY_GROUP |
+              base::FILE_PERMISSION_EXECUTE_BY_GROUP |
+              base::FILE_PERMISSION_EXECUTE_BY_OTHERS)) {
+    return false;
+  }
+
+  const std::optional<gid_t> owner_gid = GetDirectoriesOwnerGid();
+  if (!owner_gid.has_value()) {
+    // Might not exist in tests.
+  } else if (HANDLE_EINTR(chown(destination_directory.value().c_str(), -1,
+                                owner_gid.value()))) {
+    return false;
+  }
+
+  return true;
 }
 
 void ExtractIOTask::ExtractArchive(

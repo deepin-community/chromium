@@ -7,13 +7,15 @@
 #include <dlfcn.h>
 #include <mach-o/getsect.h>
 
+#include <string_view>
+
 #include "base/apple/scoped_cftyperef.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
+#include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 
@@ -103,8 +105,8 @@ void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
 
   // Get the function pointer using the right API for the type.
   if (library->type == BUNDLE) {
-    apple::ScopedCFTypeRef<CFStringRef> symbol_name(CFStringCreateWithCString(
-        kCFAllocatorDefault, name, kCFStringEncodingUTF8));
+    apple::ScopedCFTypeRef<CFStringRef> symbol_name =
+        SysUTF8ToCFStringRef(name);
     function_pointer =
         CFBundleGetFunctionPointerForName(library->bundle, symbol_name.get());
   } else {
@@ -119,12 +121,12 @@ void* GetFunctionPointerFromNativeLibrary(NativeLibrary library,
   return function_pointer;
 }
 
-std::string GetNativeLibraryName(StringPiece name) {
+std::string GetNativeLibraryName(std::string_view name) {
   DCHECK(IsStringASCII(name));
   return StrCat({"lib", name, ".dylib"});
 }
 
-std::string GetLoadableModuleName(StringPiece name) {
+std::string GetLoadableModuleName(std::string_view name) {
   DCHECK(IsStringASCII(name));
   return StrCat({name, ".so"});
 }

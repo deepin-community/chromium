@@ -9,6 +9,8 @@
 
 #include "libANGLE/renderer/wgpu/DisplayWgpu.h"
 
+#include <dawn/dawn_proc.h>
+
 #include "common/debug.h"
 
 #include "libANGLE/Display.h"
@@ -20,8 +22,6 @@
 
 namespace rx
 {
-
-static wgpu::AdapterType adapterType = wgpu::AdapterType::Unknown;
 
 DisplayWgpu::DisplayWgpu(const egl::DisplayState &state) : DisplayImpl(state) {}
 
@@ -159,13 +159,13 @@ SurfaceImpl *DisplayWgpu::createWindowSurface(const egl::SurfaceState &state,
                                               EGLNativeWindowType window,
                                               const egl::AttributeMap &attribs)
 {
-    return new SurfaceWgpu(state);
+    return CreateWgpuWindowSurface(state, window);
 }
 
 SurfaceImpl *DisplayWgpu::createPbufferSurface(const egl::SurfaceState &state,
                                                const egl::AttributeMap &attribs)
 {
-    return new SurfaceWgpu(state);
+    return new OffscreenSurfaceWgpu(state);
 }
 
 SurfaceImpl *DisplayWgpu::createPbufferFromClientBuffer(const egl::SurfaceState &state,
@@ -173,14 +173,16 @@ SurfaceImpl *DisplayWgpu::createPbufferFromClientBuffer(const egl::SurfaceState 
                                                         EGLClientBuffer buffer,
                                                         const egl::AttributeMap &attribs)
 {
-    return new SurfaceWgpu(state);
+    UNIMPLEMENTED();
+    return nullptr;
 }
 
 SurfaceImpl *DisplayWgpu::createPixmapSurface(const egl::SurfaceState &state,
                                               NativePixmapType nativePixmap,
                                               const egl::AttributeMap &attribs)
 {
-    return new SurfaceWgpu(state);
+    UNIMPLEMENTED();
+    return nullptr;
 }
 
 ImageImpl *DisplayWgpu::createImage(const egl::ImageState &state,
@@ -197,7 +199,7 @@ rx::ContextImpl *DisplayWgpu::createContext(const gl::State &state,
                                             const gl::Context *shareContext,
                                             const egl::AttributeMap &attribs)
 {
-    return new ContextWgpu(state, errorSet);
+    return new ContextWgpu(state, errorSet, this);
 }
 
 StreamProducerImpl *DisplayWgpu::createStreamProducerD3DTexture(
@@ -247,35 +249,60 @@ void DisplayWgpu::generateCaps(egl::Caps *outCaps) const
 
 egl::Error DisplayWgpu::createWgpuDevice()
 {
-    WGPUInstanceDescriptor instanceDescriptor{};
+    dawnProcSetProcs(&dawn::native::GetProcs());
+
+    dawn::native::DawnInstanceDescriptor dawnInstanceDescriptor;
+
+    wgpu::InstanceDescriptor instanceDescriptor;
     instanceDescriptor.features.timedWaitAnyEnable = true;
-    mInstance = std::make_unique<dawn::native::Instance>(&instanceDescriptor);
+    instanceDescriptor.nextInChain                 = &dawnInstanceDescriptor;
+    mInstance                                      = wgpu::CreateInstance(&instanceDescriptor);
 
-    // Get an adapter for the backend to use, and create the device.
-    auto adapters = mInstance->EnumerateAdapters();
-    wgpu::DawnAdapterPropertiesPowerPreference power_props{};
-    wgpu::AdapterProperties adapterProperties{};
-    adapterProperties.nextInChain = &power_props;
-
-    auto isAdapterType = [&adapterProperties](const auto &adapter) -> bool {
-        // picks the first adapter when adapterType is unknown.
-        if (adapterType == wgpu::AdapterType::Unknown)
-        {
-            return true;
-        }
-        adapter.GetProperties(&adapterProperties);
-        return adapterProperties.adapterType == adapterType;
-    };
-
-    auto preferredAdapter = std::find_if(adapters.begin(), adapters.end(), isAdapterType);
-    if (preferredAdapter == adapters.end())
+    struct RequestAdapterResult
     {
-        fprintf(stderr, "Failed to find an adapter! Please try another adapter type.\n");
-        return egl::EglNotInitialized();
+        WGPURequestAdapterStatus status;
+        wgpu::Adapter adapter;
+        std::string message;
+    };
+    RequestAdapterResult adapterResult;
+
+    wgpu::RequestAdapterOptions requestAdapterOptions;
+
+    wgpu::RequestAdapterCallbackInfo callbackInfo;
+    callbackInfo.mode     = wgpu::CallbackMode::WaitAnyOnly;
+    callbackInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
+                               char const *message, void *userdata) {
+        RequestAdapterResult *result = reinterpret_cast<RequestAdapterResult *>(userdata);
+        result->status               = status;
+        result->adapter              = wgpu::Adapter::Acquire(adapter);
+        result->message              = message ? message : "";
+    };
+    callbackInfo.userdata = &adapterResult;
+
+    wgpu::FutureWaitInfo futureWaitInfo;
+    futureWaitInfo.future = mInstance.RequestAdapter(&requestAdapterOptions, callbackInfo);
+
+    wgpu::WaitStatus status = mInstance.WaitAny(1, &futureWaitInfo, -1);
+    if (webgpu::IsWgpuError(status))
+    {
+        return egl::EglBadAlloc() << "Failed to get WebGPU adapter: " << adapterResult.message;
     }
 
-    WGPUDeviceDescriptor deviceDesc = {};
-    mDevice = wgpu::Device::Acquire(preferredAdapter->CreateDevice(&deviceDesc));
+    mAdapter = adapterResult.adapter;
+
+    std::vector<wgpu::FeatureName> requiredFeatures;
+    requiredFeatures.push_back(wgpu::FeatureName::SurfaceCapabilities);
+
+    wgpu::DeviceDescriptor deviceDesc;
+    deviceDesc.requiredFeatureCount = requiredFeatures.size();
+    deviceDesc.requiredFeatures     = requiredFeatures.data();
+
+    mDevice = mAdapter.CreateDevice(&deviceDesc);
+    mDevice.SetUncapturedErrorCallback(
+        [](WGPUErrorType type, const char *message, void *userdata) {
+            ERR() << "Error: " << type << " - message: " << message;
+        },
+        nullptr);
     return egl::NoError();
 }
 

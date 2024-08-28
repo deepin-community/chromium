@@ -13,7 +13,6 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/test/gtest_tags.h"
@@ -37,22 +36,20 @@
 #include "chrome/browser/extensions/webstore_data_fetcher.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/crx_file/crx_verifier.h"
+#include "components/policy/core/common/device_local_account_type.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/sandboxed_unpacker.h"
 #include "extensions/common/extension.h"
-#include "net/base/host_port_pair.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
 using base::test::RepeatingTestFuture;
 using base::test::TestFuture;
-using content::BrowserThread;
 
 namespace ash {
 
@@ -77,13 +74,12 @@ scoped_refptr<extensions::Extension> MakeKioskApp(
     const std::string& version,
     const std::string& id,
     const std::string& required_platform_version) {
-  base::Value::Dict value;
-  value.Set("name", name);
-  value.Set("version", version);
-  base::Value::List scripts;
-  scripts.Append("main.js");
-  value.SetByDottedPath("app.background.scripts", std::move(scripts));
-  value.Set("kiosk_enabled", true);
+  auto value = base::Value::Dict()
+                   .Set("name", name)
+                   .Set("version", version)
+                   .SetByDottedPath("app.background.scripts",
+                                    base::Value::List().Append("main.js"))
+                   .Set("kiosk_enabled", true);
   if (!required_platform_version.empty()) {
     value.SetByDottedPath("kiosk.required_platform_version",
                           required_platform_version);
@@ -173,6 +169,8 @@ class ChromeAppKioskAppManagerTest : public InProcessBrowserTest {
     embedded_test_server()->ServeFilesFromDirectory(test_data_dir);
 
     // Log the response code for WebstoreDataFetcher instance if it is not 200.
+    // TODO(crbug.com/325314721): Use a mock FetchItemSnippetResponse instead
+    // when the old item JSON API used for fetching webstore data is removed.
     extensions::WebstoreDataFetcher::SetLogResponseCodeForTesting(true);
 
     // Don't spin up the IO thread yet since no threads are allowed while
@@ -245,31 +243,30 @@ class ChromeAppKioskAppManagerTest : public InProcessBrowserTest {
     base::FilePath icon_path =
         CopyFileToTempDir(data_dir.AppendASCII(icon_file_name));
 
-    base::Value::Dict apps_dict;
-    apps_dict.SetByDottedPath(app_id + ".name", app_name);
-    apps_dict.SetByDottedPath(app_id + ".icon", icon_path.MaybeAsASCII());
-    apps_dict.SetByDottedPath(app_id + ".required_platform_version",
-                              required_platform_version);
-
     PrefService* local_state = g_browser_process->local_state();
     ScopedDictPrefUpdate dict_update(
         local_state, KioskChromeAppManager::kKioskDictionaryName);
-    dict_update->Set(KioskAppDataBase::kKeyApps, std::move(apps_dict));
+    dict_update->Set(
+        KioskAppDataBase::kKeyApps,
+        base::Value::Dict()
+            .SetByDottedPath(app_id + ".name", app_name)
+            .SetByDottedPath(app_id + ".icon", icon_path.MaybeAsASCII())
+            .SetByDottedPath(app_id + ".required_platform_version",
+                             required_platform_version));
 
     // Make the app appear in device settings.
-    base::Value::List device_local_accounts;
-    base::Value::Dict entry;
-    // Fake an account id. Note this needs to match GenerateKioskAppAccountId
-    // in kiosk_chrome_app_manager.cc to make SetAutoLaunchApp work with the
-    // existing app entry created here.
-    entry.Set(kAccountsPrefDeviceLocalAccountsKeyId, app_id + "@kiosk-apps");
-    entry.Set(kAccountsPrefDeviceLocalAccountsKeyType,
-              policy::DeviceLocalAccount::TYPE_KIOSK_APP);
-    entry.Set(
-        kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
-        static_cast<int>(policy::DeviceLocalAccount::EphemeralMode::kUnset));
-    entry.Set(kAccountsPrefDeviceLocalAccountsKeyKioskAppId, app_id);
-    device_local_accounts.Append(std::move(entry));
+    auto device_local_accounts = base::Value::List().Append(
+        base::Value::Dict()
+            // Fake an account id. Note this needs to match
+            // GenerateKioskAppAccountId in kiosk_chrome_app_manager.cc to make
+            // SetAutoLaunchApp work with the existing app entry created here.
+            .Set(kAccountsPrefDeviceLocalAccountsKeyId, app_id + "@kiosk-apps")
+            .Set(kAccountsPrefDeviceLocalAccountsKeyType,
+                 static_cast<int>(policy::DeviceLocalAccountType::kKioskApp))
+            .Set(kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
+                 static_cast<int>(
+                     policy::DeviceLocalAccount::EphemeralMode::kUnset))
+            .Set(kAccountsPrefDeviceLocalAccountsKeyKioskAppId, app_id));
     owner_settings_service_->Set(kAccountsPrefDeviceLocalAccounts,
                                  base::Value(std::move(device_local_accounts)));
   }
@@ -799,62 +796,6 @@ IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, UpdateAndRemoveApp) {
     EXPECT_FALSE(base::PathExists(v2_crx_path));
   }
   EXPECT_FALSE(GetCachedCrx(kTestLocalFsKioskApp, &v2_crx_path, &version));
-}
-
-IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, EnableConsumerKiosk) {
-  // Consumer kiosk is disabled by default. Enable it for test.
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableConsumerKiosk);
-
-  TestFuture<KioskChromeAppManager::ConsumerKioskAutoLaunchStatus>
-      result_future;
-  manager()->GetConsumerKioskAutoLaunchStatus(result_future.GetCallback());
-  EXPECT_EQ(KioskChromeAppManager::ConsumerKioskAutoLaunchStatus::kConfigurable,
-            result_future.Get());
-
-  TestFuture<bool> result_future2;
-  manager()->EnableConsumerKioskAutoLaunch(result_future2.GetCallback());
-  EXPECT_TRUE(result_future2.Get());
-
-  TestFuture<KioskChromeAppManager::ConsumerKioskAutoLaunchStatus>
-      result_future3;
-  manager()->GetConsumerKioskAutoLaunchStatus(result_future3.GetCallback());
-  EXPECT_EQ(KioskChromeAppManager::ConsumerKioskAutoLaunchStatus::kEnabled,
-            result_future3.Get());
-}
-
-IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest, ConsumerKioskDisabled) {
-  TestFuture<KioskChromeAppManager::ConsumerKioskAutoLaunchStatus>
-      result_future;
-  manager()->GetConsumerKioskAutoLaunchStatus(result_future.GetCallback());
-  EXPECT_EQ(KioskChromeAppManager::ConsumerKioskAutoLaunchStatus::kDisabled,
-            result_future.Get());
-}
-
-IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest,
-                       PreventEnableConsumerKioskForEnterprise) {
-  // Consumer kiosk is disabled by default. Enable it for test.
-  base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableConsumerKiosk);
-
-  // Lock the device as enterprise.
-  EXPECT_EQ(LockDeviceForEnterprise(), InstallAttributes::LOCK_SUCCESS);
-
-  TestFuture<KioskChromeAppManager::ConsumerKioskAutoLaunchStatus>
-      result_future;
-  manager()->GetConsumerKioskAutoLaunchStatus(result_future.GetCallback());
-  EXPECT_EQ(KioskChromeAppManager::ConsumerKioskAutoLaunchStatus::kDisabled,
-            result_future.Get());
-
-  TestFuture<bool> result_future2;
-  manager()->EnableConsumerKioskAutoLaunch(result_future2.GetCallback());
-  EXPECT_FALSE(result_future2.Get());
-
-  TestFuture<KioskChromeAppManager::ConsumerKioskAutoLaunchStatus>
-      result_future3;
-  manager()->GetConsumerKioskAutoLaunchStatus(result_future3.GetCallback());
-  EXPECT_EQ(KioskChromeAppManager::ConsumerKioskAutoLaunchStatus::kDisabled,
-            result_future3.Get());
 }
 
 IN_PROC_BROWSER_TEST_F(ChromeAppKioskAppManagerTest,

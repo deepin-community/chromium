@@ -18,7 +18,9 @@
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/overview/overview_window_drag_controller.h"
 #include "ash/wm/splitview/split_view_constants.h"
+#include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/splitview/split_view_highlight_view.h"
+#include "ash/wm/splitview/split_view_overview_session.h"
 #include "ash/wm/splitview/split_view_types.h"
 #include "ash/wm/splitview/split_view_utils.h"
 #include "ash/wm/window_animations.h"
@@ -55,9 +57,9 @@ constexpr float kOtherHighlightScreenPrimaryAxisRatio = 0.03f;
 // Creates the widget responsible for displaying the indicators.
 std::unique_ptr<views::Widget> CreateWidget(aura::Window* root_window) {
   auto widget = std::make_unique<views::Widget>();
-  views::Widget::InitParams params;
-  params.type = views::Widget::InitParams::TYPE_POPUP;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.accept_events = false;
   params.layer_type = ui::LAYER_NOT_DRAWN;
@@ -395,33 +397,32 @@ class SplitViewDragIndicators::SplitViewDragIndicatorsView
       // window snapped in split view below if there is any, but respect the
       // minimum size of `dragged_window_`. See crbug/1017464.
       aura::Window* root_window = GetWidget()->GetNativeWindow();
-      // TODO(b/309856199): Currently we only check
-      // `SplitViewController::ShouldConsiderDivider()` because the divider is
-      // created there. Refactor this when we move the divider to
-      // `SnapGroup`.
-      const bool should_consider_divider =
-          SplitViewController::Get(root_window)->ShouldConsiderDivider();
-      int divider_position = CalculateDividerPosition(
-          snap_position, root_window, chromeos::kDefaultSnapRatio,
-          should_consider_divider);
+      // Use `chromeos::kDefaultSnapRatio` to calculate the default divider
+      // position. If there is a snapped window in `SplitViewOverviewSession`,
+      // calculate the divider position based on the snapped window bounds as it
+      // can be resized to an arbitrary location.
       // Note `dragged_window_` may not be on the same root as `root_window`.
       // Check the partial overview session on `root_window`, the root it's
       // being dragged to.
-      if (auto* split_view_overview_session =
-              RootWindowController::ForWindow(root_window)
-                  ->split_view_overview_session();
-          split_view_overview_session) {
-        divider_position = GetEquivalentDividerPosition(
-            split_view_overview_session->window(), should_consider_divider);
-      }
-      const int divider_width =
-          should_consider_divider ? kSplitviewDividerShortSideLength : 0;
+      // TODO(b/309856199): Consolidate the divider position calculation.
+      SplitViewOverviewSession* split_view_overview_session =
+          RootWindowController::ForWindow(root_window)
+              ->split_view_overview_session();
+      const bool should_consider_divider =
+          SplitViewController::Get(root_window)->ShouldConsiderDivider();
+      const int divider_position =
+          split_view_overview_session
+              ? GetEquivalentDividerPosition(
+                    split_view_overview_session->window(),
+                    should_consider_divider)
+              : CalculateDividerPosition(root_window, snap_position,
+                                         chromeos::kDefaultSnapRatio,
+                                         should_consider_divider);
       preview_area_bounds =
           gfx::Rect(CalculateSnappedWindowBoundsInScreen(
-                        snap_position,
-                        /*root_window=*/root_window,
+                        snap_position, root_window,
                         /*window_for_minimum_size=*/dragged_window_,
-                        divider_position, divider_width,
+                        should_consider_divider, divider_position,
                         /*is_resizing_with_divider=*/false)
                         .size());
 
@@ -438,7 +439,7 @@ class SplitViewDragIndicators::SplitViewDragIndicatorsView
       if (!horizontal)
         other_bounds.Transpose();
 
-      if (IsPhysicalLeftOrTop(snap_position, dragged_window_)) {
+      if (IsPhysicallyLeftOrTop(snap_position, dragged_window_)) {
         left_highlight_bounds = preview_area_bounds;
         right_highlight_bounds = other_bounds;
         if (animate) {
@@ -476,7 +477,7 @@ class SplitViewDragIndicators::SplitViewDragIndicatorsView
     } else if (GetSnapPosition(previous_window_dragging_state_) !=
                    SnapPosition::kNone &&
                animate) {
-      if (IsPhysicalLeftOrTop(snap_position, dragged_window_)) {
+      if (IsPhysicallyLeftOrTop(snap_position, dragged_window_)) {
         left_highlight_animation_type =
             SPLITVIEW_ANIMATION_PREVIEW_AREA_SLIDE_OUT;
         right_highlight_animation_type =
@@ -547,7 +548,7 @@ class SplitViewDragIndicators::SplitViewDragIndicatorsView
     if (snap_position == SnapPosition::kNone) {
       preview_label_layer = nullptr;
       other_highlight_label_layer = nullptr;
-    } else if (IsPhysicalLeftOrTop(snap_position, dragged_window_)) {
+    } else if (IsPhysicallyLeftOrTop(snap_position, dragged_window_)) {
       preview_label_layer = left_rotated_view_->layer();
       other_highlight_label_layer = right_rotated_view_->layer();
       preview_label_transform = left_rotation;
@@ -574,7 +575,7 @@ class SplitViewDragIndicators::SplitViewDragIndicatorsView
           0.5f * (highlight_width - other_highlight_width);
 
       // Positive (unchanged) for left or up; negative for right or down.
-      if (!IsPhysicalLeftOrTop(snap_position, dragged_window_)) {
+      if (!IsPhysicallyLeftOrTop(snap_position, dragged_window_)) {
         preview_label_delta = -preview_label_delta;
         other_highlight_label_delta = -other_highlight_label_delta;
       }

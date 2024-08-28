@@ -80,8 +80,6 @@ NSMenuItem* BuildAppMenu(NSApplication* nsapp,
                   .action(@selector(toggleConfirmToQuit:))
                   .remove_if(is_pwa),
               Item().is_separator(),
-              // AppKit inserts "Quit and Keep Windows" as an alternate item
-              // automatically by using the -terminate: action.
               Item(IDS_EXIT_MAC)
                   .string_format_1(product_name)
                   .tag(IDC_EXIT)
@@ -126,11 +124,14 @@ NSMenuItem* BuildFileMenu(NSApplication* nsapp,
                   .command_id(IDC_FOCUS_LOCATION)
                   .remove_if(is_pwa),
               Item().is_separator(),
-              // AppKit inserts "Close All" as an alternate item automatically
-              // by using the -performClose: action.
               Item(IDS_CLOSE_WINDOW_MAC)
                   .tag(IDC_CLOSE_WINDOW)
                   .action(@selector(performClose:)),
+              Item(IDS_CLOSE_ALL_WINDOWS_MAC)
+                  .action(@selector(closeAll:))
+                  .is_alternate()
+                  .key_equivalent(@"W", NSEventModifierFlagCommand |
+                                            NSEventModifierFlagOption),
               Item(IDS_CLOSE_TAB_MAC)
                   .command_id(IDC_CLOSE_TAB)
                   .remove_if(is_pwa),
@@ -150,6 +151,17 @@ NSMenuItem* BuildFileMenu(NSApplication* nsapp,
           })
           .Build();
   // clang-format on
+
+  // The default key bindings assign Cmd-W to Close Tab, and Shift-Cmd-W to
+  // Close Window. For PWAs, we skipped adding the Close Tab item, but Close
+  // Window still has the Shift-Cmd-W shortcut. Remove Shift from the shortcut.
+  if (is_pwa) {
+    NSMenuItem* closeWindowMenuItem =
+        [[item submenu] itemWithTag:IDC_CLOSE_WINDOW];
+    // @"W" corresponds to the "Shift-W" portion of Shift-Cmd-W. We remove the
+    // Shift by making the equivalent string lower case.
+    closeWindowMenuItem.keyEquivalent = @"w";
+  }
 
   return item;
 }
@@ -280,6 +292,8 @@ NSMenuItem* BuildViewMenu(NSApplication* nsapp,
                   .command_id(IDC_TOGGLE_FULLSCREEN_TOOLBAR),
               Item(IDS_CONTEXT_MENU_SHOW_FULL_URLS)
                   .command_id(IDC_SHOW_FULL_URLS),
+              Item(IDS_CONTEXT_MENU_SHOW_GOOGLE_LENS_SHORTCUT)
+                  .command_id(IDC_SHOW_GOOGLE_LENS_SHORTCUT),
               Item(IDS_CUSTOMIZE_TOUCH_BAR)
                   .tag(IDC_CUSTOMIZE_TOUCH_BAR)
                   .action(@selector(toggleTouchBarCustomizationPalette:))
@@ -311,9 +325,6 @@ NSMenuItem* BuildViewMenu(NSApplication* nsapp,
               Item().is_separator(),
               Item(IDS_MEDIA_ROUTER_MENU_ITEM_TITLE)
                   .command_id(IDC_ROUTE_MEDIA),
-              Item(IDS_DISTILL_PAGE)
-                  .command_id(IDC_DISTILL_PAGE)
-                  .remove_if(!dom_distiller::IsDomDistillerEnabled()),
               Item().is_separator(),
               Item(IDS_DEVELOPER_MENU_MAC)
                   .tag(IDC_DEVELOPER_MENU)
@@ -579,6 +590,10 @@ void BuildMainMenu(NSApplication* nsapp,
   nsapp.mainMenu = main_menu;
 }
 
+NSMenuItem* BuildFileMenuForTesting(bool is_pwa) {
+  return BuildFileMenu(nil, nil, u"", is_pwa);
+}
+
 namespace internal {
 
 MenuItemBuilder::MenuItemBuilder(int string_id) : string_id_(string_id) {}
@@ -657,8 +672,9 @@ NSMenuItem* MenuItemBuilder::Build() const {
     NSMenu* menu = [[NSMenu alloc] initWithTitle:title];
     for (const auto& subitem : submenu_.value()) {
       NSMenuItem* ns_subitem = subitem.Build();
-      if (ns_subitem)
+      if (ns_subitem) {
         [menu addItem:ns_subitem];
+      }
     }
     item.submenu = menu;
   }

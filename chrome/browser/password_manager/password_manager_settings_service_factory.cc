@@ -11,6 +11,7 @@
 #include "components/password_manager/core/browser/password_manager_settings_service.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/password_manager/android/password_manager_android_util.h"
 #include "chrome/browser/password_manager/android/password_manager_settings_service_android_impl.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -42,9 +43,12 @@ PasswordManagerSettingsServiceFactory::PasswordManagerSettingsServiceFactory()
           // regular profile.
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kRedirectedToOriginal)
-              // TODO(crbug.com/1418376): Check if this service is needed in
+              // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
               .Build()) {
 #if BUILDFLAG(IS_ANDROID)
   // The sync status is necessary on Android to decide which prefs to check.
@@ -61,9 +65,11 @@ PasswordManagerSettingsServiceFactory::BuildServiceInstanceForBrowserContext(
   TRACE_EVENT0("passwords", "PasswordManagerSettingsServiceCreation");
   Profile* profile = Profile::FromBrowserContext(context);
 #if BUILDFLAG(IS_ANDROID)
+  if (password_manager_android_util::AreMinUpmRequirementsMet()) {
     return std::make_unique<PasswordManagerSettingsServiceAndroidImpl>(
         profile->GetPrefs(), SyncServiceFactory::GetForProfile(profile));
-#else
-  return std::make_unique<PasswordManagerSettingsServiceImpl>(profile->GetPrefs());
+  }
 #endif
+  return std::make_unique<PasswordManagerSettingsServiceImpl>(
+      profile->GetPrefs());
 }

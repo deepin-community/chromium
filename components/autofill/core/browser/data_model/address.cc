@@ -99,6 +99,13 @@ bool Address::IsStructuredAddressMergeable(const Address& newer) const {
   return GetRoot().IsMergeableWithComponent(newer.GetRoot());
 }
 
+bool Address::IsStructuredAddressMergeableForType(FieldType type,
+                                                  const Address& other) const {
+  return address_component_store_.GetNodeForType(type)
+      ->IsMergeableWithComponent(
+          *other.address_component_store_.GetNodeForType(type));
+}
+
 const AddressComponent& Address::GetRoot() const {
   return *address_component_store_.Root();
 }
@@ -173,7 +180,7 @@ void Address::GetMatchingTypes(const std::u16string& text,
   if (!state_name.empty() || !state_abbreviation.empty()) {
     std::u16string canon_profile_state =
         AutofillProfileComparator::NormalizeForComparison(
-            GetInfo(AutofillType(ADDRESS_HOME_STATE), app_locale));
+            GetInfo(ADDRESS_HOME_STATE, app_locale));
     if ((!state_name.empty() &&
          compare.StringsEqual(state_name, canon_profile_state)) ||
         (!state_abbreviation.empty() &&

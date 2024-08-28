@@ -279,7 +279,7 @@ void PagedAppsGridView::OnGestureEvent(ui::GestureEvent* event) {
   // in our current design. This prevents both ignoring horizontal scrolls in
   // app list, and closing open folders.
   if (pagination_controller_->OnGestureEvent(*event, GetContentsBounds()) ||
-      event->type() == ui::ET_GESTURE_SCROLL_BEGIN) {
+      event->type() == ui::EventType::kGestureScrollBegin) {
     event->SetHandled();
   }
 }
@@ -641,6 +641,11 @@ void PagedAppsGridView::ScrollEnded() {
 
 bool PagedAppsGridView::ShouldContainerHandleDragEvents() {
   return true;
+}
+
+bool PagedAppsGridView::IsAboveTheFold(AppListItemView* item_view) {
+  // The first page is considered above the fold.
+  return GetIndexOfView(item_view).page == 0;
 }
 
 bool PagedAppsGridView::DoesIntersectRect(const views::View* target,

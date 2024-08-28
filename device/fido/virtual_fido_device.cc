@@ -2,12 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "device/fido/virtual_fido_device.h"
 
 #include <tuple>
 #include <utility>
+#include <vector>
 
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/logging.h"
 #include "base/rand_util.h"
 #include "base/ranges/algorithm.h"
@@ -501,15 +506,14 @@ void VirtualFidoDevice::State::InjectLargeBlob(RegistrationData* credential,
       reader.Materialize().value_or(cbor::Value::ArrayValue());
 
   if (credential->large_blob_key) {
-    base::EraseIf(
+    std::erase_if(
         large_blob_array, [&credential](const cbor::Value& blob_cbor) {
           std::optional<LargeBlobData> blob = LargeBlobData::Parse(blob_cbor);
           return blob && blob->Decrypt(*credential->large_blob_key).has_value();
         });
   } else {
     credential->large_blob_key.emplace();
-    base::RandBytes(credential->large_blob_key->data(),
-                    credential->large_blob_key->size());
+    base::RandBytes(*credential->large_blob_key);
   }
 
   large_blob_array.emplace_back(
@@ -693,7 +697,7 @@ FidoTransportProtocol VirtualFidoDevice::DeviceTransport() const {
 // static
 std::string VirtualFidoDevice::MakeVirtualFidoDeviceId() {
   uint8_t rand_bytes[32];
-  base::RandBytes(rand_bytes, sizeof(rand_bytes));
+  base::RandBytes(rand_bytes);
   return "VirtualFidoDevice-" + base::HexEncode(rand_bytes);
 }
 

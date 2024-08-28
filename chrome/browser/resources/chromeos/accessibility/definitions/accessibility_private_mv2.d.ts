@@ -13,7 +13,7 @@
  * regenerate.
  */
 
-import {ChromeEvent} from '../../../../../../tools/typescript/definitions/chrome_event';
+import {ChromeEvent} from '../../../../../../tools/typescript/definitions/chrome_event.js';
 
 declare global {
   export namespace chrome {
@@ -96,6 +96,7 @@ declare global {
         CUT = 'cut',
         DECREMENT = 'decrement',
         DICTATION = 'dictation',
+        DRILL_DOWN = 'drillDown',
         END_TEXT_SELECTION = 'endTextSelection',
         INCREMENT = 'increment',
         ITEM_SCAN = 'itemScan',
@@ -350,6 +351,8 @@ declare global {
       export function setKeyboardListener(enabled: boolean, capture: boolean):
           void;
 
+      export function setChromeVoxFocus(bounds: ScreenRect): void;
+
       export function setSelectToSpeakFocus(bounds: ScreenRect): void;
 
       export function darkenScreen(darken: boolean): void;
@@ -442,12 +445,11 @@ declare global {
 
       export const onIntroduceChromeVox: ChromeEvent<() => void>;
 
+      export const onChromeVoxFocusChanged:
+          ChromeEvent<(bounds: ScreenRect) => void>;
+
       export const onAccessibilityGesture:
           ChromeEvent<(gesture: Gesture, x: number, y: number) => void>;
-
-      export const onTwoFingerTouchStart: ChromeEvent<() => void>;
-
-      export const onTwoFingerTouchStop: ChromeEvent<() => void>;
 
       export const onSelectToSpeakContextMenuClicked: ChromeEvent<() => void>;
 

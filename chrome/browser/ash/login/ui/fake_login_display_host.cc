@@ -70,8 +70,6 @@ bool FakeLoginDisplayHost::IsFinalizing() {
 
 void FakeLoginDisplayHost::FinalizeImmediately() {}
 
-void FakeLoginDisplayHost::SetStatusAreaVisible(bool visible) {}
-
 void FakeLoginDisplayHost::StartWizard(OobeScreenId first_screen) {
   if (wizard_controller_) {
     wizard_controller_->AdvanceToScreen(first_screen);
@@ -86,10 +84,6 @@ void FakeLoginDisplayHost::StartWizard(OobeScreenId first_screen) {
 
 WizardController* FakeLoginDisplayHost::GetWizardController() {
   return wizard_controller_.get();
-}
-
-KioskLaunchController* FakeLoginDisplayHost::GetKioskLaunchController() {
-  return nullptr;
 }
 
 WizardContext* FakeLoginDisplayHost::GetWizardContext() {
@@ -143,10 +137,6 @@ void FakeLoginDisplayHost::UpdateOobeDialogState(OobeDialogState state) {}
 
 void FakeLoginDisplayHost::CancelPasswordChangedFlow() {}
 
-void FakeLoginDisplayHost::MigrateUserData(const std::string& old_password) {}
-
-void FakeLoginDisplayHost::ResyncUserData() {}
-
 bool FakeLoginDisplayHost::HandleAccelerator(LoginAcceleratorAction action) {
   return false;
 }
@@ -172,7 +162,7 @@ SigninUI* FakeLoginDisplayHost::GetSigninUI() {
 
 void FakeLoginDisplayHost::AddWizardCreatedObserverForTests(
     base::RepeatingClosure on_created) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 bool FakeLoginDisplayHost::IsWizardControllerCreated() const {
@@ -180,7 +170,7 @@ bool FakeLoginDisplayHost::IsWizardControllerCreated() const {
 }
 
 WizardContext* FakeLoginDisplayHost::GetWizardContextForTesting() {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 }
 

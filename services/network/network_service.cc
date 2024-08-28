@@ -27,6 +27,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -39,6 +40,7 @@
 #include "components/network_session_configurator/common/network_features.h"
 #include "components/os_crypt/sync/os_crypt.h"
 #include "components/privacy_sandbox/masked_domain_list/masked_domain_list.pb.h"
+#include "mojo/public/cpp/base/proto_wrapper.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/scoped_message_error_crash_key.h"
@@ -90,10 +92,10 @@
 #include "services/network/public/mojom/network_service_test.mojom.h"
 #include "services/network/public/mojom/system_dns_resolution.mojom-forward.h"
 #include "services/network/restricted_cookie_manager.h"
+#include "services/network/tpcd/metadata/manager.h"
 #include "services/network/url_loader.h"
 
 #if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
-#include "crypto/openssl_util.h"
 #include "third_party/boringssl/src/include/openssl/cpu.h"
 #endif
 
@@ -388,15 +390,7 @@ void NetworkService::Initialize(mojom::NetworkServiceParamsPtr params,
 
   initialized_ = true;
 
-#if BUILDFLAG(IS_ANDROID)
-  base::UmaHistogramTimes("NetworkService.InitializedTime",
-                          base::Time::Now().since_origin());
-#endif
-
 #if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
-  // Make sure OpenSSL is initialized before using it to histogram data.
-  crypto::EnsureOpenSSLInit();
-
   // Measure Android kernels with missing AT_HWCAP2 auxv fields. See
   // https://crbug.com/boringssl/46.
   UMA_HISTOGRAM_BOOLEAN("Net.NeedsHWCAP2Workaround",
@@ -473,12 +467,11 @@ void NetworkService::Initialize(mojom::NetworkServiceParamsPtr params,
   first_party_sets_manager_ =
       std::make_unique<FirstPartySetsManager>(params->first_party_sets_enabled);
 
+  tpcd_metadata_manager_ = std::make_unique<network::tpcd::metadata::Manager>();
+
   network_service_proxy_allow_list_ =
       std::make_unique<NetworkServiceProxyAllowList>(
           params->ip_protection_proxy_bypass_policy);
-
-  network_service_resource_block_list_ =
-      std::make_unique<NetworkServiceResourceBlockList>();
 
 #if BUILDFLAG(IS_CT_SUPPORTED)
   constexpr size_t kMaxSCTAuditingCacheEntries = 1024;
@@ -927,27 +920,30 @@ void NetworkService::UpdateKeyPinsList(mojom::PinListPtr pin_list,
 }
 
 void NetworkService::UpdateMaskedDomainList(
-    const std::string& raw_mdl,
+    mojo_base::ProtoWrapper masked_domain_list,
     const std::vector<std::string>& exclusion_list) {
   const base::Time start_time = base::Time::Now();
-  auto mdl = masked_domain_list::MaskedDomainList();
-  if (mdl.ParseFromString(raw_mdl)) {
+  auto mdl = masked_domain_list.As<masked_domain_list::MaskedDomainList>();
+  if (mdl.has_value()) {
     UMA_HISTOGRAM_MEMORY_KB("NetworkService.MaskedDomainList.SizeInKB",
-                            mdl.ByteSizeLong() / 1024);
+                            mdl->ByteSizeLong() / 1024);
 
-    network_service_proxy_allow_list_->UseMaskedDomainList(mdl, exclusion_list);
-    network_service_resource_block_list_->UseMaskedDomainList(mdl);
+    network_service_proxy_allow_list_->UseMaskedDomainList(mdl.value(),
+                                                           exclusion_list);
 
-    base::UmaHistogramBoolean("NetworkService.MaskedDomainList.UpdateSuccess",
-                              true);
+    base::UmaHistogramBoolean(
+        "NetworkService.IpProtection.ProxyAllowList."
+        "UpdateSuccess",
+        true);
   } else {
-    base::UmaHistogramBoolean("NetworkService.MaskedDomainList.UpdateSuccess",
-                              false);
+    base::UmaHistogramBoolean(
+        "NetworkService.IpProtection.ProxyAllowList.UpdateSuccess", false);
     LOG(ERROR) << "Unable to parse MDL in NetworkService";
   }
 
-  base::UmaHistogramTimes("NetworkService.MaskedDomainList.UpdateProcessTime",
-                          base::Time::Now() - start_time);
+  base::UmaHistogramTimes(
+      "NetworkService.IpProtection.ProxyAllowList.UpdateProcessTime",
+      base::Time::Now() - start_time);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1083,7 +1079,7 @@ void NetworkService::DestroyNetworkContexts() {
 void NetworkService::OnNetworkContextConnectionClosed(
     NetworkContext* network_context) {
   auto it = owned_network_contexts_.find(network_context);
-  DCHECK(it != owned_network_contexts_.end());
+  CHECK(it != owned_network_contexts_.end(), base::NotFatalUntil::M130);
   owned_network_contexts_.erase(it);
 }
 
@@ -1106,4 +1102,8 @@ NetworkService* NetworkService::GetNetworkServiceForTesting() {
   return g_network_service;
 }
 
+void NetworkService::SetTpcdMetadataGrants(
+    const std::vector<ContentSettingPatternSource>& settings) {
+  tpcd_metadata_manager_->SetGrants(settings);
+}
 }  // namespace network

@@ -35,12 +35,6 @@
 #include "gpu/command_buffer/service/shared_image/skia_graphite_dawn_image_representation.h"
 #endif
 
-#if BUILDFLAG(USE_DAWN)
-using dawn::native::d3d::ExternalImageDXGI;
-using dawn::native::d3d::ExternalImageDXGIBeginAccessDescriptor;
-using dawn::native::d3d::ExternalImageDXGIFenceDescriptor;
-#endif
-
 namespace gpu {
 
 namespace {
@@ -125,7 +119,7 @@ class DCompSurfaceImageBacking::D3DTextureGLSurfaceEGL
 
   gfx::SwapResult SwapBuffers(PresentationCallback callback,
                               gfx::FrameData data) override {
-    NOTREACHED()
+    NOTREACHED_IN_MIGRATION()
         << "Attempted to call SwapBuffers on a D3DTextureGLSurfaceEGL.";
     return gfx::SwapResult::SWAP_FAILED;
   }
@@ -185,7 +179,7 @@ std::unique_ptr<DCompSurfaceImageBacking> DCompSurfaceImageBacking::Create(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    gpu::SharedImageUsageSet usage,
     std::string debug_label) {
   // IDCompositionSurface only supports the following formats:
   // https://learn.microsoft.com/en-us/windows/win32/api/dcomp/nf-dcomp-idcompositiondevice2-createsurface#remarks
@@ -228,7 +222,7 @@ DCompSurfaceImageBacking::DCompSurfaceImageBacking(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    gpu::SharedImageUsageSet usage,
     std::string debug_label,
     Microsoft::WRL::ComPtr<IDCompositionSurface> dcomp_surface)
     : ClearTrackingSharedImageBacking(
@@ -246,9 +240,9 @@ DCompSurfaceImageBacking::DCompSurfaceImageBacking(
           new D3DTextureGLSurfaceEGL(gl::GLSurfaceEGL::GetGLDisplayEGL(),
                                      size))),
       dcomp_surface_(std::move(dcomp_surface)) {
-  const bool has_scanout = !!(usage & SHARED_IMAGE_USAGE_SCANOUT);
-  const bool write_only = !(usage & SHARED_IMAGE_USAGE_DISPLAY_READ) &&
-                          !!(usage & SHARED_IMAGE_USAGE_DISPLAY_WRITE);
+  const bool has_scanout = usage.Has(SHARED_IMAGE_USAGE_SCANOUT);
+  const bool write_only = !usage.Has(SHARED_IMAGE_USAGE_DISPLAY_READ) &&
+                          usage.Has(SHARED_IMAGE_USAGE_DISPLAY_WRITE);
   DCHECK(has_scanout);
   DCHECK(write_only);
   DCHECK(dcomp_surface_);
@@ -412,7 +406,7 @@ sk_sp<SkSurface> DCompSurfaceImageBacking::BeginDrawGanesh(
       framebuffer_info.fFormat = GL_BGRA8_EXT;
       break;
     default:
-      NOTREACHED() << "color_type: " << color_type;
+      NOTREACHED_IN_MIGRATION() << "color_type: " << color_type;
   }
 
   auto render_target = GrBackendRenderTargets::MakeGL(
@@ -434,10 +428,10 @@ void DCompSurfaceImageBacking::EndDrawGanesh() {
   EndDraw();
 }
 
-#if BUILDFLAG(USE_DAWN)
 wgpu::Texture DCompSurfaceImageBacking::BeginDrawDawn(
     const wgpu::Device& device,
     const wgpu::TextureUsage usage,
+    const wgpu::TextureUsage internal_usage,
     const gfx::Rect& update_rect) {
   auto draw_texture = BeginDraw(update_rect, dcomp_update_offset_);
 
@@ -479,28 +473,30 @@ wgpu::Texture DCompSurfaceImageBacking::BeginDrawDawn(
   update_rect_ = update_rect;
 
   // Import the texture into dawn
-  D3D11_TEXTURE2D_DESC d3d11_texture_desc;
-  dcomp_surface_draw_texture_copy_->GetDesc(&d3d11_texture_desc);
 
-  DCHECK(!external_image_);
-  external_image_ = CreateDawnExternalImageDXGI(
-      device, DCompSurfaceImageBacking::usage(), d3d11_texture_desc,
-      dcomp_surface_draw_texture_copy_,
-      /*view_formats=*/{});
-  if (!external_image_) {
-    LOG(ERROR) << "Failed to create external image.";
+  DCHECK(!shared_texture_memory_);
+  shared_texture_memory_ =
+      CreateDawnSharedTextureMemory(device, dcomp_surface_draw_texture_copy_);
+  if (!shared_texture_memory_) {
+    LOG(ERROR) << "Failed to create shared texture memory.";
     return nullptr;
   }
 
-  ExternalImageDXGIBeginAccessDescriptor descriptor;
-  descriptor.isInitialized = true;
-  descriptor.isSwapChainTexture = true;
-  descriptor.usage = static_cast<WGPUTextureUsage>(usage);
-  descriptor.waitFences = {};
+  wgpu::SharedTextureMemoryD3DSwapchainBeginState swapchain_begin_state = {};
+  swapchain_begin_state.isSwapchain = true;
+
+  wgpu::SharedTextureMemoryBeginAccessDescriptor desc = {};
+  desc.initialized = true;
+  desc.nextInChain = &swapchain_begin_state;
 
   wgpu::Texture texture =
-      wgpu::Texture::Acquire(external_image_->BeginAccess(&descriptor));
-
+      CreateDawnSharedTexture(shared_texture_memory_, usage, internal_usage,
+                              /*view_formats=*/{});
+  if (!texture || shared_texture_memory_.BeginAccess(texture, &desc) !=
+                      wgpu::Status::Success) {
+    LOG(ERROR) << "Failed to begin access and produce WGPUTexture";
+    return nullptr;
+  }
   return texture;
 }
 
@@ -508,9 +504,9 @@ void DCompSurfaceImageBacking::EndDrawDawn(const wgpu::Device& device,
                                            wgpu::Texture texture) {
   // We don't need any synchronization here because dawn and dcomp are using the
   // same d3d11 device.
-  ExternalImageDXGIFenceDescriptor descriptor;
-  external_image_->EndAccess(texture.Get(), &descriptor);
-  external_image_ = nullptr;
+  wgpu::SharedTextureMemoryEndAccessState end_state = {};
+  shared_texture_memory_.EndAccess(texture.Get(), &end_state);
+  shared_texture_memory_ = nullptr;
   texture.Destroy();
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device;
@@ -533,6 +529,5 @@ void DCompSurfaceImageBacking::EndDrawDawn(const wgpu::Device& device,
 
   EndDraw();
 }
-#endif  // BUILDFLAG(USE_DAWN)
 
 }  // namespace gpu

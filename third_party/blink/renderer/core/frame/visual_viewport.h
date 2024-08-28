@@ -197,6 +197,7 @@ class CORE_EXPORT VisualViewport : public GarbageCollected<VisualViewport>,
                            mojom::blink::ScrollBehavior::kInstant) override;
   PhysicalRect ScrollIntoView(
       const PhysicalRect&,
+      const PhysicalBoxStrut& scroll_margin,
       const mojom::blink::ScrollIntoViewParamsPtr&) override;
   bool IsThrottled() const override {
     // VisualViewport is always in the main frame, so the frame does not get
@@ -247,7 +248,9 @@ class CORE_EXPORT VisualViewport : public GarbageCollected<VisualViewport>,
   // WebViewImpl explicitly rather than via
   // ScrollingCoordinator::DidCompositorScroll() since it needs to be set in
   // tandem with the page scale delta.
-  void DidCompositorScroll(const gfx::PointF&) final { NOTREACHED(); }
+  void DidCompositorScroll(const gfx::PointF&) final {
+    NOTREACHED_IN_MIGRATION();
+  }
 
   // Visual Viewport API implementation.
   double OffsetLeft() const;
@@ -301,8 +304,7 @@ class CORE_EXPORT VisualViewport : public GarbageCollected<VisualViewport>,
   //
   // A VisualViewport is created in renderers for remote frames / nested pages;
   // however, in those cases it is "inert", it cannot change scale or location
-  // values. Only a <portal> or outermost main frame can have an active
-  // viewport.
+  // values. Only an outermost main frame can have an active viewport.
   bool IsActiveViewport() const;
 
   OverscrollType GetOverscrollType() const { return overscroll_type_; }
@@ -311,6 +313,8 @@ class CORE_EXPORT VisualViewport : public GarbageCollected<VisualViewport>,
     SetNeedsPaintPropertyUpdate();
   }
   std::optional<blink::Color> CSSScrollbarThumbColor() const;
+
+  void DropCompositorScrollDeltaNextCommit() override;
 
  private:
   bool DidSetScaleOrLocation(float scale,

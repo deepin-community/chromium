@@ -116,6 +116,8 @@ StateChangeReason DiscardReasonToStateChangeReason(
       return StateChangeReason::SYSTEM_MEMORY_PRESSURE;
     case LifecycleUnitDiscardReason::PROACTIVE:
       return StateChangeReason::BROWSER_INITIATED;
+    case LifecycleUnitDiscardReason::SUGGESTED:
+      return StateChangeReason::BROWSER_INITIATED;
   }
 }
 
@@ -161,7 +163,8 @@ class TabLifecycleUnitExternalImpl : public TabLifecycleUnitExternal {
 
 TabLifecycleUnitSource::TabLifecycleUnit::TabLifecycleUnit(
     TabLifecycleUnitSource* source,
-    base::ObserverList<TabLifecycleObserver>::Unchecked* observers,
+    base::ObserverList<TabLifecycleObserver>::UncheckedAndDanglingUntriaged*
+        observers,
     UsageClock* usage_clock,
     content::WebContents* web_contents,
     TabStripModel* tab_strip_model)
@@ -214,10 +217,17 @@ void TabLifecycleUnitSource::TabLifecycleUnit::SetFocused(bool focused) {
 
   switch (GetState()) {
     case LifecycleUnitState::DISCARDED: {
-      // Reload the tab.
+      // Transition to the active state.
       SetState(LifecycleUnitState::ACTIVE, StateChangeReason::USER_INITIATED);
-      bool loaded = Load();
-      DCHECK(loaded);
+
+      // Load the tab if it's discarded. It will typically be discarded, but
+      // might not be if this is invoked as part of reloading the tab explicitly
+      // and we haven't been notified of the ongoing load yet
+      // (crbug.com/40075246).
+      if (web_contents()->WasDiscarded()) {
+        bool loaded = Load();
+        DCHECK(loaded);
+      }
       break;
     }
 
@@ -250,7 +260,7 @@ void TabLifecycleUnitSource::TabLifecycleUnit::UpdateLifecycleState(
     }
 
     default: {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     }
   }
@@ -538,7 +548,7 @@ void TabLifecycleUnitSource::TabLifecycleUnit::FinishDiscard(
   null_contents->SetWasDiscarded(true);
 
   std::unique_ptr<content::WebContents> old_contents_deleter =
-      tab_strip_model_->ReplaceWebContentsAt(index, std::move(null_contents));
+      tab_strip_model_->DiscardWebContentsAt(index, std::move(null_contents));
   DCHECK_EQ(web_contents(), raw_null_contents);
 
   // Discard the old tab's renderer.

@@ -53,7 +53,7 @@ float EvaluateLut(float x,
       lut_j1 = lut[j1].b;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
@@ -141,6 +141,12 @@ void GammaCurve::Evaluate(float x,
   out_r = static_cast<uint16_t>(std::round(65535.f * r));
   out_g = static_cast<uint16_t>(std::round(65535.f * g));
   out_b = static_cast<uint16_t>(std::round(65535.f * b));
+}
+
+void GammaCurve::Evaluate(float rgb[3]) const {
+  for (size_t c = 0; c < 3; ++c) {
+    rgb[c] = Evaluate(rgb[c], c);
+  }
 }
 
 std::string GammaCurve::ToString() const {

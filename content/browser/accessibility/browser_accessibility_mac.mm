@@ -7,6 +7,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/debug/stack_trace.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/scoped_policy.h"
 #import "base/task/single_thread_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -20,8 +21,7 @@ namespace content {
 std::unique_ptr<BrowserAccessibility> BrowserAccessibility::Create(
     BrowserAccessibilityManager* manager,
     ui::AXNode* node) {
-  return std::unique_ptr<BrowserAccessibilityMac>(
-      new BrowserAccessibilityMac(manager, node));
+  return base::WrapUnique(new BrowserAccessibilityMac(manager, node));
 }
 
 BrowserAccessibilityMac::BrowserAccessibilityMac(
@@ -61,8 +61,9 @@ void BrowserAccessibilityMac::ReplaceNativeObject() {
   // could have never called this method without a platform node having been
   // created.
   if (!platform_node_) {
-    NOTREACHED() << "No platform node exists, so there should not be any "
-                    "native wrapper to replace.";
+    NOTREACHED_IN_MIGRATION()
+        << "No platform node exists, so there should not be any "
+           "native wrapper to replace.";
     return;
   }
 
@@ -74,7 +75,8 @@ void BrowserAccessibilityMac::ReplaceNativeObject() {
   // We should have never called this method if a native wrapper has not been
   // created, but keep a null check just in case.
   if (!old_native_obj) {
-    NOTREACHED() << "No native wrapper exists, so there is nothing to replace.";
+    NOTREACHED_IN_MIGRATION()
+        << "No native wrapper exists, so there is nothing to replace.";
     return;
   }
 

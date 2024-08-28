@@ -16,6 +16,7 @@
 #include "ash/style/ash_color_id.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/notreached.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/constants/chromeos_features.h"
@@ -38,6 +39,7 @@
 #include "ui/gfx/font_list.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/vector_icons.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/background.h"
@@ -68,16 +70,12 @@ constexpr int kMinimumArtworkSize = 30;
 constexpr int kDesiredArtworkSize = 48;
 constexpr int kArtworkRowPadding = 16;
 constexpr auto kArtworkRowInsets = gfx::Insets::TLBR(24, 0, 9, 0);
-constexpr gfx::Size kArtworkRowPreferredSize =
-    gfx::Size(328, kDesiredArtworkSize);
 constexpr int kMediaButtonRowPadding = 16;
 constexpr auto kButtonRowInsets = gfx::Insets::TLBR(4, 0, 0, 0);
 constexpr int kPlayPauseIconSize = 40;
 constexpr int kMediaControlsIconSize = 24;
 constexpr gfx::Size kPlayPauseButtonSize = gfx::Size(72, 72);
 constexpr gfx::Size kMediaControlsButtonSize = gfx::Size(48, 48);
-constexpr gfx::Size kMediaControlsButtonRowSize =
-    gfx::Size(328, kPlayPauseButtonSize.height());
 constexpr gfx::Size kMediaButtonGroupSize =
     gfx::Size(2 * kMediaControlsButtonSize.width() + kMediaButtonRowPadding,
               kPlayPauseButtonSize.height());
@@ -139,11 +137,11 @@ const gfx::VectorIcon& GetVectorIconForMediaAction(MediaSessionAction action) {
     case MediaSessionAction::kPreviousSlide:
     case MediaSessionAction::kNextSlide:
     case MediaSessionAction::kEnterAutoPictureInPicture:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return gfx::kNoneIcon;
 }
 
@@ -274,7 +272,6 @@ LockScreenMediaControlsView::LockScreenMediaControlsView(
 
   // |artwork_row| contains the session artwork, artist and track info.
   auto artwork_row = std::make_unique<NonAccessibleView>();
-  artwork_row->SetPreferredSize(kArtworkRowPreferredSize);
   auto* artwork_row_layout =
       artwork_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, kArtworkRowInsets,
@@ -369,7 +366,6 @@ LockScreenMediaControlsView::LockScreenMediaControlsView(
   right_control_group_layout->set_main_axis_alignment(
       views::BoxLayout::MainAxisAlignment::kStart);
 
-  button_row->SetPreferredSize(kMediaControlsButtonRowSize);
   button_row_ = contents_view_->AddChildView(std::move(button_row));
 
   left_control_group->SetPreferredSize(kMediaButtonGroupSize);
@@ -456,8 +452,9 @@ LockScreenMediaControlsView::~LockScreenMediaControlsView() {
   base::PowerMonitor::RemovePowerSuspendObserver(this);
 }
 
-gfx::Size LockScreenMediaControlsView::CalculatePreferredSize() const {
-  return contents_view_->GetPreferredSize();
+gfx::Size LockScreenMediaControlsView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  return contents_view_->GetPreferredSize(available_size);
 }
 
 void LockScreenMediaControlsView::Layout(PassKey) {
@@ -472,8 +469,8 @@ void LockScreenMediaControlsView::GetAccessibleNodeData(
       l10n_util::GetStringUTF8(
           IDS_ASH_LOCK_SCREEN_MEDIA_CONTROLS_ACCESSIBLE_NAME));
 
-  if (!GetAccessibleName().empty()) {
-    node_data->SetName(GetAccessibleName());
+  if (!GetViewAccessibility().GetCachedName().empty()) {
+    node_data->SetName(GetViewAccessibility().GetCachedName());
   }
 }
 
@@ -552,7 +549,7 @@ void LockScreenMediaControlsView::MediaSessionMetadataChanged(
   title_label_->SetText(session_metadata.title);
   artist_label_->SetText(session_metadata.artist);
 
-  SetAccessibleName(
+  GetViewAccessibility().SetName(
       media_message_center::GetAccessibleNameFromMetadata(session_metadata));
 }
 
@@ -653,6 +650,11 @@ void LockScreenMediaControlsView::MediaControllerImageChanged(
             kDesiredSourceIconSize);
       }
       header_row_->SetAppIcon(session_icon);
+      break;
+    }
+    case media_session::mojom::MediaSessionImageType::kChapter: {
+      NOTREACHED_IN_MIGRATION() << " The chpater images should be updated in "
+                                   "`MediaControllerChapterImageChanged` ";
     }
   }
 }
@@ -666,8 +668,8 @@ void LockScreenMediaControlsView::OnGestureEvent(ui::GestureEvent* event) {
   ConvertPointToScreen(this, &point_in_screen);
 
   switch (event->type()) {
-    case ui::ET_SCROLL_FLING_START:
-    case ui::ET_GESTURE_SCROLL_BEGIN: {
+    case ui::EventType::kScrollFlingStart:
+    case ui::EventType::kGestureScrollBegin: {
       if (is_in_drag_) {
         break;
       }
@@ -677,13 +679,13 @@ void LockScreenMediaControlsView::OnGestureEvent(ui::GestureEvent* event) {
       event->SetHandled();
       break;
     }
-    case ui::ET_GESTURE_SCROLL_UPDATE: {
+    case ui::EventType::kGestureScrollUpdate: {
       last_fling_velocity_ = event->details().scroll_x();
       UpdateDrag(point_in_screen);
       event->SetHandled();
       break;
     }
-    case ui::ET_GESTURE_END: {
+    case ui::EventType::kGestureEnd: {
       if (!is_in_drag_) {
         break;
       }

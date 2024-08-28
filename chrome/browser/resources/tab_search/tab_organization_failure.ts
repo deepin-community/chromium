@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'chrome://resources/cr_components/localized_link/localized_link.js';
 import './strings.m.js';
-import './tab_organization_shared_style.css.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {getTemplate} from './tab_organization_failure.html.js';
+import {getCss} from './tab_organization_failure.css.js';
+import {getHtml} from './tab_organization_failure.html.js';
 import {TabOrganizationError} from './tab_search.mojom-webui.js';
 
 export interface TabOrganizationFailureElement {
@@ -18,32 +19,31 @@ export interface TabOrganizationFailureElement {
 }
 
 // Failure state for the tab organization UI.
-export class TabOrganizationFailureElement extends PolymerElement {
+export class TabOrganizationFailureElement extends CrLitElement {
   static get is() {
     return 'tab-organization-failure';
   }
 
-  static get properties() {
+  static override get properties() {
     return {
-      error: Object,
-      showFre: Boolean,
+      error: {type: Number},
+      showFre: {type: Boolean},
     };
   }
 
   error: TabOrganizationError = TabOrganizationError.kNone;
-  showFre: boolean;
+  showFre: boolean = false;
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return getCss();
   }
 
-  announceHeader() {
-    this.$.header.textContent = '';
-    this.$.header.textContent = this.getTitle_();
+  override render() {
+    return getHtml.bind(this)();
   }
 
-  private getTitle_(): string {
-    switch (this.error) {
+  getTitle(error: TabOrganizationError): string {
+    switch (error) {
       case TabOrganizationError.kGrouping:
         return loadTimeData.getString('failureTitleGrouping');
       case TabOrganizationError.kGeneric:
@@ -53,60 +53,30 @@ export class TabOrganizationFailureElement extends PolymerElement {
     }
   }
 
-  private getBodyPreLink_(): string {
+  protected getBody_(): string {
     switch (this.error) {
       case TabOrganizationError.kGrouping:
-        return loadTimeData.getString('failureBodyGroupingPreLink');
+        return loadTimeData.getString('failureBodyGrouping');
       case TabOrganizationError.kGeneric:
-        return loadTimeData.getString('failureBodyGenericPreLink');
+        return loadTimeData.getString('failureBodyGeneric');
       default:
         return '';
     }
   }
 
-  private getBodyLink_(): string {
-    switch (this.error) {
-      case TabOrganizationError.kGrouping:
-        return loadTimeData.getString('failureBodyGroupingLink');
-      case TabOrganizationError.kGeneric:
-        return loadTimeData.getString('failureBodyGenericLink');
-      default:
-        return '';
-    }
+  protected onCheckNow_(e: CustomEvent<{event: Event}>) {
+    // A place holder href with the value "#" is used to have a compliant link.
+    // This prevents the browser from navigating the window to "#"
+    e.detail.event.preventDefault();
+    e.stopPropagation();
+    this.fire('check-now');
   }
 
-  private getBodyPostLink_(): string {
-    switch (this.error) {
-      case TabOrganizationError.kGrouping:
-        return loadTimeData.getString('failureBodyGroupingPostLink');
-      case TabOrganizationError.kGeneric:
-        return loadTimeData.getString('failureBodyGenericPostLink');
-      default:
-        return '';
-    }
+  protected onTipClick_() {
+    this.fire('tip-click');
   }
 
-  private onCheckNow_() {
-    this.dispatchEvent(new CustomEvent('check-now', {
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  private onCheckNowKeyDown_(event: KeyboardEvent) {
-    if (event.key === 'Enter') {
-      this.onCheckNow_();
-    }
-  }
-
-  private onTipClick_() {
-    this.dispatchEvent(new CustomEvent('tip-click', {
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
-  private onTipKeyDown_(event: KeyboardEvent) {
+  protected onTipKeyDown_(event: KeyboardEvent) {
     if (event.key === 'Enter') {
       this.onTipClick_();
     }

@@ -19,14 +19,13 @@
 #include "ash/shell.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/system/sys_info.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
-#include "chrome/browser/ash/boot_times_recorder_tab_helper.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/ash/login/enrollment/auto_enrollment_check_screen_view.h"
 #include "chrome/browser/ash/login/enrollment/enrollment_screen_view.h"
@@ -46,12 +45,14 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/about/about_ui.h"
 #include "chrome/browser/ui/webui/ash/login/add_child_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/ai_intro_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/app_downloading_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/arc_vm_data_migration_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/assistant_optin_flow_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/auto_enrollment_check_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/categories_selection_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/choobe_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/consolidated_consent_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/consumer_update_screen_handler.h"
@@ -73,8 +74,8 @@
 #include "chrome/browser/ui/webui/ash/login/family_link_notice_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/fingerprint_setup_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_info_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/gaia_password_changed_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/gemini_intro_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gesture_navigation_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/guest_tos_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/hardware_data_collection_screen_handler.h"
@@ -96,6 +97,7 @@
 #include "chrome/browser/ui/webui/ash/login/offline_login_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/online_authentication_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_display_chooser.h"
+#include "chrome/browser/ui/webui/ash/login/oobe_screens_handler_factory.h"
 #include "chrome/browser/ui/webui/ash/login/os_install_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/os_trial_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/osauth/apply_online_password_screen_handler.h"
@@ -105,6 +107,8 @@
 #include "chrome/browser/ui/webui/ash/login/packaged_license_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/parental_handoff_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/password_selection_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/perks_discovery_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/personalized_recommend_apps_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/pin_setup_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/quick_start_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/recommend_apps_screen_handler.h"
@@ -143,9 +147,8 @@
 #include "chrome/grit/gaia_auth_host_resources.h"
 #include "chrome/grit/gaia_auth_host_resources_map.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/oobe_conditional_resources.h"
-#include "chrome/grit/oobe_unconditional_resources.h"
-#include "chrome/grit/oobe_unconditional_resources_map.h"
+#include "chrome/grit/oobe_resources.h"
+#include "chrome/grit/oobe_resources_map.h"
 #include "chromeos/ash/components/assistant/buildflags.h"
 #include "chromeos/ash/services/auth_factor_config/in_process_instances.h"
 #include "chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom.h"
@@ -177,10 +180,6 @@ namespace ash {
 
 namespace {
 
-const char* kKnownDisplayTypes[] = {OobeUI::kAppLaunchSplashDisplay,
-                                    OobeUI::kGaiaSigninDisplay,
-                                    OobeUI::kOobeDisplay};
-
 // Sorted
 constexpr char kArcOverlayCSSPath[] = "arc_support/overlay.css";
 constexpr char kArcPlaystoreCSSPath[] = "arc_support/playstore.css";
@@ -188,6 +187,8 @@ constexpr char kArcPlaystoreJSPath[] = "arc_support/playstore.js";
 constexpr char kArcPlaystoreLogoPath[] = "arc_support/icon/playstore.svg";
 constexpr char kDebuggerMJSPath[] = "debug/debug.js";
 constexpr char kQuickStartDebuggerPath[] = "debug/quick_start_debugger.js";
+constexpr char kQuickStartDebuggerHtmlPath[] =
+    "debug/quick_start_debugger.html.js";
 
 constexpr char kProductLogoPath[] = "product-logo.png";
 constexpr char kTestAPIJsMPath[] = "test_api/test_api.js";
@@ -267,25 +268,27 @@ void AddDebuggerResources(content::WebUIDataSource* source) {
     base::SysInfo::CrashIfChromeOSNonTestImage();
   }
 
-  source->AddResourcePath(kDebuggerMJSPath,
-                          dev_overlay_enabled
-                              ? IDR_OOBE_CONDITIONAL_DEBUG_DEBUG_JS
-                              : IDR_OOBE_CONDITIONAL_DEBUG_NO_DEBUG_JS);
+  source->AddResourcePath(kDebuggerMJSPath, dev_overlay_enabled
+                                                ? IDR_OOBE_DEBUG_DEBUG_JS
+                                                : IDR_OOBE_DEBUG_NO_DEBUG_JS);
 
-  source->AddResourcePath(
-      kQuickStartDebuggerPath,
-      quick_start_debugger_enabled
-          ? IDR_OOBE_CONDITIONAL_DEBUG_QUICK_START_DEBUGGER_JS
-          : IDR_OOBE_CONDITIONAL_DEBUG_NO_DEBUG_JS);
+  source->AddResourcePath(kQuickStartDebuggerPath,
+                          quick_start_debugger_enabled
+                              ? IDR_OOBE_DEBUG_QUICK_START_DEBUGGER_JS
+                              : IDR_OOBE_DEBUG_NO_DEBUG_JS);
+  if (quick_start_debugger_enabled) {
+    source->AddResourcePath(kQuickStartDebuggerHtmlPath,
+                            IDR_OOBE_DEBUG_QUICK_START_DEBUGGER_HTML_JS);
+  }
 }
 
 void AddTestAPIResources(content::WebUIDataSource* source) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   const bool enabled = command_line->HasSwitch(switches::kEnableOobeTestAPI);
 
-  source->AddResourcePath(
-      kTestAPIJsMPath, enabled ? IDR_OOBE_CONDITIONAL_TEST_API_TEST_API_JS
-                               : IDR_OOBE_CONDITIONAL_TEST_API_NO_TEST_API_JS);
+  source->AddResourcePath(kTestAPIJsMPath,
+                          enabled ? IDR_OOBE_TEST_API_TEST_API_JS
+                                  : IDR_OOBE_TEST_API_NO_TEST_API_JS);
 }
 
 // Creates a WebUIDataSource for chrome://oobe
@@ -302,16 +305,26 @@ void CreateAndAddOobeUIDataSource(Profile* profile,
 
   OobeUI::AddOobeComponents(source);
 
-  source->SetDefaultResource(IDR_OOBE_UNCONDITIONAL_OOBE_HTML);
+  source->SetDefaultResource(IDR_OOBE_OOBE_HTML);
 
   // Add boolean variables that are used to add screens
   // dynamically depending on the flow type.
   const bool is_oobe_flow = display_type == OobeUI::kOobeDisplay;
+
+  if (display_type == OobeUI::kOobeTestLoader) {
+    source->AddResourcePath("test_loader.js", IDR_WEBUI_JS_TEST_LOADER_JS);
+    source->AddResourcePath("test_loader_util.js",
+                            IDR_WEBUI_JS_TEST_LOADER_UTIL_JS);
+    source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
+  }
+
   source->AddBoolean("isOsInstallAllowed", switches::IsOsInstallAllowed());
   source->AddBoolean("isOobeFlow", is_oobe_flow);
   source->AddBoolean("isOobeLazyLoadingEnabled",
                      features::IsOobeLazyLoadingEnabled());
-  // TODO (b/268463435) Cleanup OobeJelly
+  source->AddBoolean("isOobeAiIntroEnabled", features::IsOobeAiIntroEnabled());
+  source->AddBoolean("isOobeGeminiIntroEnabled",
+                     features::IsOobeGeminiIntroEnabled());
   source->AddBoolean("isJellyEnabled", features::IsOobeJellyEnabled());
   source->AddBoolean("isOobeJellyEnabled", features::IsOobeJellyEnabled());
   source->AddBoolean("isOobeJellyModalEnabled",
@@ -342,6 +355,12 @@ void CreateAndAddOobeUIDataSource(Profile* profile,
 
   source->AddBoolean("isDisplaySizeEnabled",
                      features::IsOobeDisplaySizeEnabled());
+
+  source->AddBoolean("isPersonalizedOnboarding",
+                     features::IsOobePersonalizedOnboardingEnabled());
+
+  source->AddBoolean("isPerksDiscoveryEnabled",
+                     features::IsOobePerksDiscoveryEnabled());
 
   source->AddBoolean("isOobeSoftwareUpdateEnabled",
                      features::IsOobeSoftwareUpdateEnabled());
@@ -386,8 +405,13 @@ void CreateAndAddOobeUIDataSource(Profile* profile,
 std::string GetDisplayType(const GURL& url) {
   std::string path = url.path().size() ? url.path().substr(1) : "";
 
-  if (!base::Contains(kKnownDisplayTypes, path)) {
-    NOTREACHED() << "Unknown display type '" << path << "'. Setting default.";
+  constexpr auto kKnownDisplayTypes = base::MakeFixedFlatSet<std::string_view>(
+      {OobeUI::kAppLaunchSplashDisplay, OobeUI::kGaiaSigninDisplay,
+       OobeUI::kOobeDisplay, OobeUI::kOobeTestLoader});
+
+  if (!kKnownDisplayTypes.contains(path)) {
+    NOTREACHED_IN_MIGRATION()
+        << "Unknown display type '" << path << "'. Setting default.";
     return OobeUI::kOobeDisplay;
   }
   return path;
@@ -404,14 +428,14 @@ const DisplayScaleFactor k4KDisplay = {3840, 1.5f},
                          kMediumDisplay = {1440, 4.f / 3};
 
 bool OobeUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
-  return ash::ProfileHelper::IsSigninProfile(
-      Profile::FromBrowserContext(browser_context));
-}
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  bool is_running_test = command_line->HasSwitch(::switches::kTestName) ||
+                         command_line->HasSwitch(::switches::kTestType);
 
-// static
-const char OobeUI::kAppLaunchSplashDisplay[] = "app-launch-splash";
-const char OobeUI::kGaiaSigninDisplay[] = "gaia-signin";
-const char OobeUI::kOobeDisplay[] = "oobe";
+  return ash::ProfileHelper::IsSigninProfile(
+             Profile::FromBrowserContext(browser_context)) ||
+         is_running_test;
+}
 
 void OobeUI::ConfigureOobeDisplay() {
   network_state_informer_ = new NetworkStateInformer();
@@ -475,6 +499,14 @@ void OobeUI::ConfigureOobeDisplay() {
 
   AddScreenHandler(std::make_unique<AppDownloadingScreenHandler>());
 
+  if (features::IsOobeAiIntroEnabled()) {
+    AddScreenHandler(std::make_unique<AiIntroScreenHandler>());
+  }
+
+  if (features::IsOobeGeminiIntroEnabled()) {
+    AddScreenHandler(std::make_unique<GeminiIntroScreenHandler>());
+  }
+
   AddScreenHandler(std::make_unique<DemoSetupScreenHandler>());
 
   AddScreenHandler(std::make_unique<FamilyLinkNoticeScreenHandler>());
@@ -494,12 +526,6 @@ void OobeUI::ConfigureOobeDisplay() {
   AddScreenHandler(std::make_unique<GestureNavigationScreenHandler>());
 
   AddScreenHandler(std::make_unique<MarketingOptInScreenHandler>());
-
-  AddScreenHandler(std::make_unique<GaiaPasswordChangedScreenHandler>());
-
-  if (features::IsOobeGaiaInfoScreenEnabled()) {
-    AddScreenHandler(std::make_unique<GaiaInfoScreenHandler>());
-  }
 
   AddScreenHandler(std::make_unique<GaiaScreenHandler>(network_state_informer_,
                                                        error_screen));
@@ -570,14 +596,25 @@ void OobeUI::ConfigureOobeDisplay() {
     AddScreenHandler(std::make_unique<TouchpadScrollScreenHandler>());
   }
 
+  if (features::IsOobeGaiaInfoScreenEnabled()) {
+    AddScreenHandler(std::make_unique<GaiaInfoScreenHandler>());
+  }
+
   if (features::IsOobeDisplaySizeEnabled()) {
     AddScreenHandler(std::make_unique<DisplaySizeScreenHandler>());
   }
+
+  AddScreenHandler(std::make_unique<CategoriesSelectionScreenHandler>());
+  AddScreenHandler(std::make_unique<PersonalizedRecommendAppsScreenHandler>());
 
   AddScreenHandler(std::make_unique<AddChildScreenHandler>());
 
   if (drive::util::IsOobeDrivePinningScreenEnabled()) {
     AddScreenHandler(std::make_unique<DrivePinningScreenHandler>());
+  }
+
+  if (features::IsOobePerksDiscoveryEnabled()) {
+    AddScreenHandler(std::make_unique<PerksDiscoveryScreenHandler>());
   }
 
   AddScreenHandler(std::make_unique<LocalStateErrorScreenHandler>());
@@ -603,8 +640,6 @@ void OobeUI::ConfigureOobeDisplay() {
 
   // TabHelper is required for OOBE webui to make webview working on it.
   extensions::TabHelper::CreateForWebContents(contents);
-
-  BootTimesRecorderTabHelper::MaybeCreateForWebContents(contents);
 
   if (ShouldUpScaleOobe()) {
     UpScaleOobe();
@@ -668,6 +703,12 @@ void OobeUI::BindInterface(
 void OobeUI::BindInterface(
     mojo::PendingReceiver<cellular_setup::mojom::ESimManager> receiver) {
   GetESimManager(std::move(receiver));
+}
+
+void OobeUI::BindInterface(
+    mojo::PendingReceiver<screens_factory::mojom::ScreensFactory> receiver) {
+  oobe_screens_handler_factory_ =
+      std::make_unique<OobeScreensHandlerFactory>(std::move(receiver));
 }
 
 void OobeUI::BindInterface(
@@ -742,11 +783,24 @@ OobeUI::~OobeUI() {
 }
 
 // static
-
 void OobeUI::AddOobeComponents(content::WebUIDataSource* source) {
   // Add all resources from OOBE's autogenerated GRD.
-  source->AddResourcePaths(base::make_span(kOobeUnconditionalResources,
-                                           kOobeUnconditionalResourcesSize));
+  constexpr auto kConditionalResources =
+      base::MakeFixedFlatSet<std::string_view>({
+          "debug/debug.js",
+          "debug/no_debug.js",
+          "debug/quick_start_debugger.js",
+          "debug/quick_start_debugger.html.js",
+          "components/oobe_vars/oobe_custom_vars.css.js",
+          "components/oobe_vars/oobe_custom_vars_remora.css.js",
+          "test_api/no_test_api.js",
+          "test_api/test_api.js",
+      });
+  for (const auto& path : base::make_span(kOobeResources, kOobeResourcesSize)) {
+    if (!kConditionalResources.contains(path.path)) {
+      source->AddResourcePath(path.path, path.id);
+    }
+  }
   // Add Gaia Authenticator resources
   source->AddResourcePaths(
       base::make_span(kGaiaAuthHostResources, kGaiaAuthHostResourcesSize));
@@ -754,11 +808,11 @@ void OobeUI::AddOobeComponents(content::WebUIDataSource* source) {
   if (policy::EnrollmentRequisitionManager::IsRemoraRequisition()) {
     source->AddResourcePath(
         kOobeCustomVarsCssJs,
-        IDR_OOBE_CONDITIONAL_COMPONENTS_OOBE_VARS_OOBE_CUSTOM_VARS_REMORA_CSS_JS);
+        IDR_OOBE_COMPONENTS_OOBE_VARS_OOBE_CUSTOM_VARS_REMORA_CSS_JS);
   } else {
     source->AddResourcePath(
         kOobeCustomVarsCssJs,
-        IDR_OOBE_CONDITIONAL_COMPONENTS_OOBE_VARS_OOBE_CUSTOM_VARS_CSS_JS);
+        IDR_OOBE_COMPONENTS_OOBE_VARS_OOBE_CUSTOM_VARS_CSS_JS);
   }
 
   source->OverrideContentSecurityPolicy(
@@ -772,6 +826,10 @@ CoreOobe* OobeUI::GetCoreOobe() {
 
 ErrorScreen* OobeUI::GetErrorScreen() {
   return error_screen_.get();
+}
+
+OobeScreensHandlerFactory* OobeUI::GetOobeScreensHandlerFactory() {
+  return oobe_screens_handler_factory_.get();
 }
 
 base::Value::Dict OobeUI::GetLocalizedStrings() {

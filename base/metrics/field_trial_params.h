@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef BASE_METRICS_FIELD_TRIAL_PARAMS_H_
 #define BASE_METRICS_FIELD_TRIAL_PARAMS_H_
 
@@ -143,7 +148,7 @@ struct FeatureParam {
 
 // Declares a string-valued parameter. Example:
 //
-//     constexpr FeatureParam<string> kAssistantName{
+//     constexpr FeatureParam<string> kAssistantName = {
 //         &kAssistantFeature, "assistant_name", "HAL"};
 //
 // If the feature is not enabled, the parameter is not set, or set to the empty
@@ -159,8 +164,7 @@ struct FeatureParam<std::string> {
   // GetFieldTrialParamValueByFeature() for more details.
   BASE_EXPORT std::string Get() const;
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope,
   RAW_PTR_EXCLUSION const Feature* const feature;
   const char* const name;
   const char* const default_value;
@@ -168,7 +172,7 @@ struct FeatureParam<std::string> {
 
 // Declares a double-valued parameter. Example:
 //
-//     constexpr FeatureParam<double> kAssistantTriggerThreshold{
+//     constexpr FeatureParam<double> kAssistantTriggerThreshold = {
 //         &kAssistantFeature, "trigger_threshold", 0.10};
 //
 // If the feature is not enabled, the parameter is not set, or set to an invalid
@@ -184,8 +188,7 @@ struct FeatureParam<double> {
   // GetFieldTrialParamValueByFeature() for more details.
   BASE_EXPORT double Get() const;
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const Feature* const feature;
   const char* const name;
   const double default_value;
@@ -193,7 +196,7 @@ struct FeatureParam<double> {
 
 // Declares an int-valued parameter. Example:
 //
-//     constexpr FeatureParam<int> kAssistantParallelism{
+//     constexpr FeatureParam<int> kAssistantParallelism = {
 //         &kAssistantFeature, "parallelism", 4};
 //
 // If the feature is not enabled, the parameter is not set, or set to an invalid
@@ -209,8 +212,7 @@ struct FeatureParam<int> {
   // GetFieldTrialParamValueByFeature() for more details.
   BASE_EXPORT int Get() const;
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const Feature* const feature;
   const char* const name;
   const int default_value;
@@ -218,7 +220,7 @@ struct FeatureParam<int> {
 
 // Declares a bool-valued parameter. Example:
 //
-//     constexpr FeatureParam<int> kAssistantIsHelpful{
+//     constexpr FeatureParam<int> kAssistantIsHelpful = {
 //         &kAssistantFeature, "is_helpful", true};
 //
 // If the feature is not enabled, the parameter is not set, or set to value
@@ -234,8 +236,7 @@ struct FeatureParam<bool> {
   // GetFieldTrialParamValueByFeature() for more details.
   BASE_EXPORT bool Get() const;
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const Feature* const feature;
   const char* const name;
   const bool default_value;
@@ -260,8 +261,7 @@ struct FeatureParam<base::TimeDelta> {
   // GetFieldTrialParamValueByFeature() for more details.
   BASE_EXPORT base::TimeDelta Get() const;
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const Feature* const feature;
   const char* const name;
   const base::TimeDelta default_value;
@@ -278,7 +278,7 @@ BASE_EXPORT void LogInvalidEnumValue(const Feature& feature,
 //         {SHAPE_CIRCLE, "circle"},
 //         {SHAPE_CYLINDER, "cylinder"},
 //         {SHAPE_PAPERCLIP, "paperclip"}};
-//     constexpr FeatureParam<ShapeEnum> kAssistantShapeParam{
+//     constexpr FeatureParam<ShapeEnum> kAssistantShapeParam = {
 //         &kAssistantFeature, "shape", SHAPE_CIRCLE, &kShapeParamOptions};
 //
 // With this declaration, the parameter may be set to "circle", "cylinder", or
@@ -327,17 +327,15 @@ struct FeatureParam<Enum, true> {
       if (value == options[i].value)
         return options[i].name;
     }
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return "";
   }
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const base::Feature* const feature;
   const char* const name;
   const Enum default_value;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #global-scope, #constexpr-ctor-field-initializer
+  // RAW_PTR_EXCLUSION: #global-scope
   RAW_PTR_EXCLUSION const Option* const options;
   const size_t option_count;
 };

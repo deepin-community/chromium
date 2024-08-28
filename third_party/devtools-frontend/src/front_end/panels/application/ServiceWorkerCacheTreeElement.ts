@@ -66,7 +66,8 @@ export class ServiceWorkerCacheTreeElement extends ExpandableApplicationPanelTre
 
   private handleContextMenuEvent(event: MouseEvent): void {
     const contextMenu = new UI.ContextMenu.ContextMenu(event);
-    contextMenu.defaultSection().appendItem(i18nString(UIStrings.refreshCaches), this.refreshCaches.bind(this));
+    contextMenu.defaultSection().appendItem(
+        i18nString(UIStrings.refreshCaches), this.refreshCaches.bind(this), {jslogContext: 'refresh-caches'});
     void contextMenu.show();
   }
 
@@ -162,7 +163,7 @@ export class SWCacheTreeElement extends ApplicationPanelTreeElement {
     } else {
       cacheName = cache.cacheName;
     }
-    super(resourcesPanel, cacheName, false);
+    super(resourcesPanel, cacheName, false, 'cache-storage-instance');
     this.model = model;
     this.cache = cache;
     this.view = null;
@@ -182,7 +183,8 @@ export class SWCacheTreeElement extends ApplicationPanelTreeElement {
 
   private handleContextMenuEvent(event: MouseEvent): void {
     const contextMenu = new UI.ContextMenu.ContextMenu(event);
-    contextMenu.defaultSection().appendItem(i18nString(UIStrings.delete), this.clearCache.bind(this));
+    contextMenu.defaultSection().appendItem(
+        i18nString(UIStrings.delete), this.clearCache.bind(this), {jslogContext: 'delete'});
     void contextMenu.show();
   }
 

@@ -29,6 +29,8 @@
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 
+// RTP Payload Format for HEVC: https://datatracker.ietf.org/doc/html/rfc7798
+
 namespace webrtc {
 namespace {
 
@@ -55,6 +57,10 @@ bool ParseApStartOffsets(const uint8_t* nalu_ptr,
   return true;
 }
 
+// Single NALU packet structure
+// https://datatracker.ietf.org/doc/html/rfc7798#section-4.4.1
+// Aggregation Packet (AP) strcture
+// https://datatracker.ietf.org/doc/html/rfc7798#section-4.4.2
 absl::optional<VideoRtpDepacketizer::ParsedRtpPayload> ProcessApOrSingleNalu(
     rtc::CopyOnWriteBuffer rtp_payload) {
   // Skip the single NALU header (payload header), aggregated packet case will
@@ -114,6 +120,8 @@ absl::optional<VideoRtpDepacketizer::ParsedRtpPayload> ProcessApOrSingleNalu(
 
     uint8_t nalu_type = (payload_data[start_offset] & kH265TypeMask) >> 1;
     start_offset += kH265NalHeaderSizeBytes;
+    rtc::ArrayView<const uint8_t> nalu_data(&payload_data[start_offset],
+                                            end_offset - start_offset);
     switch (nalu_type) {
       case H265::NaluType::kBlaWLp:
       case H265::NaluType::kBlaWRadl:
@@ -122,17 +130,21 @@ absl::optional<VideoRtpDepacketizer::ParsedRtpPayload> ProcessApOrSingleNalu(
       case H265::NaluType::kIdrNLp:
       case H265::NaluType::kCra:
       case H265::NaluType::kRsvIrapVcl23:
+        // Mark IRAP(Intra Random Access Point) frames as key frames. Their NALU
+        // types are in the range of BLA_W_LP (16) to RSV_IRAP_VCL23 (23),
+        // inclusive.
+        // https://datatracker.ietf.org/doc/html/rfc7798#section-3.1.1
         parsed_payload->video_header.frame_type =
             VideoFrameType::kVideoFrameKey;
-        ABSL_FALLTHROUGH_INTENDED;
+        break;
       case H265::NaluType::kSps: {
         // Copy any previous data first (likely just the first header).
         std::unique_ptr<rtc::Buffer> output_buffer(new rtc::Buffer());
         if (start_offset)
           output_buffer->AppendData(payload_data, start_offset);
 
-        absl::optional<H265SpsParser::SpsState> sps = H265SpsParser::ParseSps(
-            &payload_data[start_offset], end_offset - start_offset);
+        absl::optional<H265SpsParser::SpsState> sps =
+            H265SpsParser::ParseSps(nalu_data);
 
         if (sps) {
           // TODO(bugs.webrtc.org/13485): Implement the size calculation taking
@@ -170,6 +182,8 @@ absl::optional<VideoRtpDepacketizer::ParsedRtpPayload> ProcessApOrSingleNalu(
   return parsed_payload;
 }
 
+// Fragmentation Unit (FU) structure:
+// https://datatracker.ietf.org/doc/html/rfc7798#section-4.4.3
 absl::optional<VideoRtpDepacketizer::ParsedRtpPayload> ParseFuNalu(
     rtc::CopyOnWriteBuffer rtp_payload) {
   if (rtp_payload.size() < kH265FuHeaderSizeBytes + kH265NalHeaderSizeBytes) {
@@ -202,9 +216,10 @@ absl::optional<VideoRtpDepacketizer::ParsedRtpPayload> ParseFuNalu(
         rtp_payload.size() - kH265NalHeaderSizeBytes - kH265FuHeaderSizeBytes);
   }
 
-  if (original_nal_type == H265::NaluType::kIdrWRadl ||
-      original_nal_type == H265::NaluType::kIdrNLp ||
-      original_nal_type == H265::NaluType::kCra) {
+  if (original_nal_type >= H265::NaluType::kBlaWLp &&
+      original_nal_type <= H265::NaluType::kRsvIrapVcl23) {
+    // IRAP picture.
+    // https://datatracker.ietf.org/doc/html/rfc7798#section-3.1.1
     parsed_payload->video_header.frame_type = VideoFrameType::kVideoFrameKey;
   } else {
     parsed_payload->video_header.frame_type = VideoFrameType::kVideoFrameDelta;

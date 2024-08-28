@@ -99,11 +99,12 @@ class PermissionRequestManagerTest : public content::RenderViewHostTestHarness {
 
   void OpenHelpCenterLink() {
 #if !BUILDFLAG(IS_ANDROID)
-    const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
-                               ui::EventTimeForNow(), 0, 0);
+    const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                               gfx::Point(), ui::EventTimeForNow(), 0, 0);
 #else  // BUILDFLAG(IS_ANDROID)
     const ui::TouchEvent event(
-        ui::ET_TOUCH_MOVED, gfx::PointF(), gfx::PointF(), ui::EventTimeForNow(),
+        ui::EventType::kTouchMoved, gfx::PointF(), gfx::PointF(),
+        ui::EventTimeForNow(),
         ui::PointerDetails(ui::EventPointerType::kTouch, 1));
 #endif
     manager_->OpenHelpCenterLink(event);
@@ -574,14 +575,15 @@ class QuicklyDeletedRequest : public PermissionRequest {
   QuicklyDeletedRequest(const GURL& requesting_origin,
                         RequestType request_type,
                         PermissionRequestGestureType gesture_type)
-      : PermissionRequest(requesting_origin,
-                          request_type,
-                          gesture_type == PermissionRequestGestureType::GESTURE,
-                          base::BindLambdaForTesting(
-                              [](ContentSetting result,
-                                 bool is_one_time,
-                                 bool is_final_decision) { NOTREACHED(); }),
-                          base::NullCallback()) {}
+      : PermissionRequest(
+            requesting_origin,
+            request_type,
+            gesture_type == PermissionRequestGestureType::GESTURE,
+            base::BindLambdaForTesting(
+                [](ContentSetting result,
+                   bool is_one_time,
+                   bool is_final_decision) { NOTREACHED_IN_MIGRATION(); }),
+            base::NullCallback()) {}
 
   static std::unique_ptr<QuicklyDeletedRequest> CreateRequest(
       MockPermissionRequest* request) {
@@ -1273,7 +1275,7 @@ TEST_F(PermissionRequestManagerTest,
   std::unique_ptr<MockPermissionRequest> request_clipboard =
       CreateAndAddRequest(RequestType::kClipboard, /*should_be_seen=*/true, 2);
   std::unique_ptr<MockPermissionRequest> request_midi =
-      CreateAndAddRequest(RequestType::kMidi, /*should_be_seen=*/true, 3);
+      CreateAndAddRequest(RequestType::kMidiSysex, /*should_be_seen=*/true, 3);
 
   for (auto* kRequest :
        {request_midi.get(), request_clipboard.get(), request_camera.get()}) {

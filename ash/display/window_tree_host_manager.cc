@@ -25,7 +25,6 @@
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/unified/unified_system_tray.h"
-#include "ash/wm/bounds_tracker/window_bounds_tracker.h"
 #include "ash/wm/window_util.h"
 #include "base/check.h"
 #include "base/containers/contains.h"
@@ -65,6 +64,9 @@
 #include "ui/wm/public/activation_client.h"
 
 namespace ash {
+
+using DM = display::DisplayObserver::DisplayMetric;
+
 namespace {
 
 // Primary display stored in global object as it can be
@@ -304,7 +306,6 @@ WindowTreeHostManager::~WindowTreeHostManager() {
 }
 
 void WindowTreeHostManager::Start() {
-  display_observer_.emplace(this);
   Shell::Get()
       ->display_configurator()
       ->content_protection_manager()
@@ -333,12 +334,6 @@ void WindowTreeHostManager::Shutdown() {
 
   effective_resolution_UMA_timer_->Reset();
 
-  auto* display_manager = Shell::Get()->display_manager();
-
-  // Unset the display manager's delegate here because
-  // DisplayManager outlives WindowTreeHostManager.
-  display_manager->set_delegate(nullptr);
-
   cursor_window_controller_.reset();
   mirror_window_controller_.reset();
 
@@ -346,7 +341,10 @@ void WindowTreeHostManager::Shutdown() {
       ->display_configurator()
       ->content_protection_manager()
       ->RemoveObserver(this);
-  display_observer_.reset();
+
+  // Unset the display manager's delegate here because
+  // DisplayManager outlives WindowTreeHostManager.
+  Shell::Get()->display_manager()->set_delegate(nullptr);
 
   int64_t primary_id = display::Screen::GetScreen()->GetPrimaryDisplay().id();
 
@@ -402,9 +400,6 @@ void WindowTreeHostManager::InitHosts() {
       EnableRoundedCorners(display);
     }
   }
-
-  for (auto& observer : observers_)
-    observer.OnDisplaysInitialized();
 }
 
 void WindowTreeHostManager::AddObserver(Observer* observer) {
@@ -583,7 +578,7 @@ bool WindowTreeHostManager::UpdateWorkAreaOfDisplayNearestWindow(
   return GetDisplayManager()->UpdateWorkAreaOfDisplay(id, insets);
 }
 
-void WindowTreeHostManager::OnDisplayAdded(const display::Display& display) {
+void WindowTreeHostManager::CreateDisplay(const display::Display& display) {
   // If we're switching from/to offscreen WTH, we need to
   // create new WTH for primary display instead of reusing.
   if (primary_tree_host_for_replace_ &&
@@ -658,10 +653,6 @@ void WindowTreeHostManager::OnDisplayAdded(const display::Display& display) {
   if (display::features::IsRoundedDisplayEnabled()) {
     EnableRoundedCorners(display);
   }
-
-  if (Shell::Get()->window_bounds_tracker()) {
-    should_restore_windows_on_display_added_ = true;
-  }
 }
 
 void WindowTreeHostManager::DeleteHost(AshWindowTreeHost* host_to_delete) {
@@ -688,7 +679,7 @@ void WindowTreeHostManager::DeleteHost(AshWindowTreeHost* host_to_delete) {
                                                                 controller);
 }
 
-void WindowTreeHostManager::OnDisplayRemoved(const display::Display& display) {
+void WindowTreeHostManager::RemoveDisplay(const display::Display& display) {
   AshWindowTreeHost* host_to_delete = window_tree_hosts_[display.id()];
   CHECK(host_to_delete) << display.ToString();
 
@@ -739,7 +730,7 @@ void WindowTreeHostManager::OnDisplayRemoved(const display::Display& display) {
     // update the WTH the RoundedDisplayProviders are attached to.
     UpdateHostOfDisplayProviders();
 
-    OnDisplayMetricsChanged(new_primary_display, DISPLAY_METRIC_BOUNDS);
+    UpdateDisplayMetrics(new_primary_display, DM::DISPLAY_METRIC_BOUNDS);
   }
 
   DeleteHost(host_to_delete);
@@ -750,11 +741,12 @@ void WindowTreeHostManager::OnDisplayRemoved(const display::Display& display) {
   window_tree_hosts_.erase(display.id());
 }
 
-void WindowTreeHostManager::OnDisplayMetricsChanged(
+void WindowTreeHostManager::UpdateDisplayMetrics(
     const display::Display& display,
     uint32_t metrics) {
-  if (!(metrics & (DISPLAY_METRIC_BOUNDS | DISPLAY_METRIC_ROTATION |
-                   DISPLAY_METRIC_DEVICE_SCALE_FACTOR | DISPLAY_METRIC_VRR))) {
+  if (!(metrics &
+        (DM::DISPLAY_METRIC_BOUNDS | DM::DISPLAY_METRIC_ROTATION |
+         DM::DISPLAY_METRIC_DEVICE_SCALE_FACTOR | DM::DISPLAY_METRIC_VRR))) {
     return;
   }
 
@@ -864,7 +856,7 @@ void WindowTreeHostManager::CreateOrUpdateMirroringDisplay(
     mirror_window_controller_->UpdateWindow(info_list);
     cursor_window_controller_->UpdateContainer();
   } else {
-    NOTREACHED();
+    DUMP_WILL_BE_NOTREACHED();
   }
 }
 
@@ -882,8 +874,7 @@ void WindowTreeHostManager::CloseMirroringDisplayIfNotNecessary() {
 void WindowTreeHostManager::PreDisplayConfigurationChange(bool clear_focus) {
   // Pause occlusion tracking during display configuration updates.
   scoped_pause_ = std::make_unique<aura::WindowOcclusionTracker::ScopedPause>();
-  for (auto& observer : observers_)
-    observer.OnDisplayConfigurationChanging();
+
   focus_activation_store_->Store(clear_focus);
   display::Screen* screen = display::Screen::GetScreen();
   gfx::Point point_in_screen = screen->GetCursorScreenPoint();
@@ -931,12 +922,6 @@ void WindowTreeHostManager::SetPrimaryDisplayId(int64_t id) {
       display::Screen::GetScreen()->GetPrimaryDisplay();
   const int64_t old_primary_id = old_primary_display.id();
   DCHECK_EQ(old_primary_id, primary_display_id);
-
-  auto* window_bounds_tracker = Shell::Get()->window_bounds_tracker();
-  if (window_bounds_tracker) {
-    window_bounds_tracker->OnWillSwapDisplayRootWindows(old_primary_id,
-                                                        new_primary_id);
-  }
 
   // Swap root windows between current and new primary display.
   AshWindowTreeHost* primary_host = window_tree_hosts_[primary_display_id];
@@ -992,28 +977,16 @@ void WindowTreeHostManager::SetPrimaryDisplayId(int64_t id) {
   GetDisplayManager()->set_force_bounds_changed(true);
   GetDisplayManager()->UpdateDisplays();
   GetDisplayManager()->set_force_bounds_changed(false);
-
-  if (window_bounds_tracker) {
-    window_bounds_tracker->OnDisplayRootWindowsSwapped(old_primary_id,
-                                                       new_primary_id);
-  }
 }
 
 void WindowTreeHostManager::PostDisplayConfigurationChange() {
   focus_activation_store_->Restore();
 
-  for (auto& observer : observers_)
-    observer.OnDisplayConfigurationChanged();
   UpdateMouseLocationAfterDisplayChange();
 
   // Enable cursor compositing, so that cursor could be mirrored to
   // destination displays along with other display content.
   Shell::Get()->UpdateCursorCompositingEnabled();
-
-  if (should_restore_windows_on_display_added_) {
-    Shell::Get()->window_bounds_tracker()->MaybeRestoreWindowsOnDisplayAdded();
-    should_restore_windows_on_display_added_ = false;
-  }
 
   // Unpause occlusion tracking.
   scoped_pause_.reset();
@@ -1065,7 +1038,7 @@ AshWindowTreeHost* WindowTreeHostManager::AddWindowTreeHostForDisplay(
   params_with_bounds.display_id = display.id();
   params_with_bounds.device_scale_factor = display.device_scale_factor();
 
-  // TODO(crbug/1261776): Temporarily increase compositor memory limit for
+  // TODO(crbug.com/40799092): Temporarily increase compositor memory limit for
   // 4K+ displays to avoid rendering corruption.
   // Check both width and height in case of rotated display.
   if (std::max(display.GetSizeInPixel().width(),

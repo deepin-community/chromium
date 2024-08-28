@@ -10,13 +10,18 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
-#include <xnnpack.h>
-#include <xnnpack/allocator.h>
-#include <xnnpack/log.h>
-#include <xnnpack/math.h>
-#include <xnnpack/params.h>
-#include <xnnpack/subgraph.h>
+#include "xnnpack.h"
+#include "xnnpack/allocation-type.h"
+#include "xnnpack/common.h"
+#include "xnnpack/config-types.h"
+#include "xnnpack/config.h"
+#include "xnnpack/log.h"
+#include "xnnpack/math.h"
+#include "xnnpack/packq.h"
+#include "xnnpack/params.h"
+#include "xnnpack/subgraph.h"
 
 static void set_allocation_type(struct xnn_value* value)
 {
@@ -36,17 +41,6 @@ static void set_shape(struct xnn_value* value, size_t num_dims, const size_t* di
   value->shape.num_dims = num_dims;
   if (num_dims != 0) {
     memcpy(value->shape.dim, dims, num_dims * sizeof(size_t));
-  }
-  for (size_t i = 0; i < num_dims; i++) {
-    const size_t original_dim = value->shape.dim[i];
-    if (original_dim == 0) {
-      // Dimension of 0 implies an unknown dimension.
-      value->shape.minimum_dim[i] = 0;
-      value->shape.maximum_dim[i] = SIZE_MAX;
-    } else {
-      value->shape.minimum_dim[i] = original_dim;
-      value->shape.maximum_dim[i] = original_dim;
-    }
   }
 }
 
@@ -181,25 +175,15 @@ enum xnn_status xnn_define_quantized_tensor_value(
     return xnn_status_invalid_parameter;
   }
 
-  if (num_dims > XNN_MAX_TENSOR_DIMS) {
-    xnn_log_error(
-      "failed to create Quantized Dense Tensor value: num of dimensions exceeds XNNPACK limit (%d)",
-      XNN_MAX_TENSOR_DIMS);
-    return xnn_status_unsupported_parameter;
-  }
-
-  enum xnn_status status = check_zero_point(datatype, zero_point);
+  enum xnn_status status = xnn_validate_quantized_tensor(
+      datatype,
+      zero_point,
+      scale,
+      num_dims,
+      dims);
   if (status != xnn_status_success) {
     return status;
   }
-
-  if (scale <= 0.0f || !isnormal(scale)) {
-    xnn_log_error(
-      "failed to create Quantized Dense Tensor value with %.7g scale: scale must be finite, normalized, and positive",
-      scale);
-    return xnn_status_invalid_parameter;
-  }
-
   struct xnn_value* value = subgraph->values + external_id;
   if (external_id == XNN_INVALID_VALUE_ID) {
     value = xnn_subgraph_new_internal_value(subgraph);
@@ -261,6 +245,7 @@ enum xnn_status xnn_define_dynamically_quantized_tensor_value(
 
   switch (datatype) {
     case xnn_datatype_qdint8:
+    case xnn_datatype_qpint8:
       break;
     default:
       xnn_log_error("failed to create Dynamically Quantized Dense Tensor value: unsupported datatype %s (%d)",
@@ -287,6 +272,7 @@ enum xnn_status xnn_define_dynamically_quantized_tensor_value(
   value->quantization.num_nonbatch_dims = num_nonbatch_dims;
   set_shape(value, num_dims, dims);
   value->size = xnn_tensor_get_size_by_id(subgraph, value->id);
+  value->quantization.dynamic_params_size =  xnn_tensor_get_dynamic_quant_param_size(value);
   value->flags = flags;
   value->data = NULL;
   set_allocation_type(value);
@@ -315,32 +301,42 @@ enum xnn_status xnn_define_channelwise_quantized_tensor_value(
     id_out);
 }
 
-enum xnn_status xnn_define_channelwise_quantized_tensor_value_v2(
-    xnn_subgraph_t subgraph,
+enum xnn_status xnn_validate_quantized_tensor(
+    enum xnn_datatype datatype,
+    int32_t zero_point,
+    float scale,
+    size_t num_dims,
+    const size_t* dims)
+{
+  if (num_dims > XNN_MAX_TENSOR_DIMS) {
+    xnn_log_error(
+      "failed to create Quantized Dense Tensor value: num of dimensions exceeds XNNPACK limit (%d)",
+      XNN_MAX_TENSOR_DIMS);
+    return xnn_status_unsupported_parameter;
+  }
+
+  enum xnn_status status = check_zero_point(datatype, zero_point);
+  if (status != xnn_status_success) {
+    return status;
+  }
+
+  if (scale <= 0.0f || !isnormal(scale)) {
+    xnn_log_error(
+      "failed to create Quantized Dense Tensor value with %.7g scale: scale must be finite, normalized, and positive",
+      scale);
+    return xnn_status_invalid_parameter;
+  }
+  return xnn_status_success;
+}
+
+enum xnn_status xnn_validate_channelwise_quantized_tensor(
     enum xnn_datatype datatype,
     int32_t zero_point,
     const float* scale,
     size_t num_dims,
     size_t channel_dim,
-    const size_t* dims,
-    const void* data,
-    uint32_t external_id,
-    uint32_t flags,
-    uint32_t* id_out)
+    const size_t* dims)
 {
-  if ((xnn_params.init_flags & XNN_INIT_FLAG_XNNPACK) == 0) {
-    xnn_log_error("failed to create Channelwise Quantized Dense Tensor value: XNNPACK is not initialized");
-    return xnn_status_uninitialized;
-  }
-
-  if (external_id != XNN_INVALID_VALUE_ID && external_id >= subgraph->external_value_ids) {
-    xnn_log_error(
-      "failed to create Channelwise Quantized Dense Tensor value: "
-      "external ID %" PRIu32 " exceeds the number of reserved external IDs in subgraph (%" PRIu32 ")",
-      external_id, subgraph->external_value_ids);
-    return xnn_status_invalid_parameter;
-  }
-
   if (num_dims == 0) {
     xnn_log_error(
       "failed to create Channelwise Quantized Dense Tensor value: no channel dimension exists");
@@ -387,6 +383,45 @@ enum xnn_status xnn_define_channelwise_quantized_tensor_value_v2(
         scale[channel], channel);
       return xnn_status_invalid_parameter;
     }
+  }
+  return xnn_status_success;
+}
+
+enum xnn_status xnn_define_channelwise_quantized_tensor_value_v2(
+    xnn_subgraph_t subgraph,
+    enum xnn_datatype datatype,
+    int32_t zero_point,
+    const float* scale,
+    size_t num_dims,
+    size_t channel_dim,
+    const size_t* dims,
+    const void* data,
+    uint32_t external_id,
+    uint32_t flags,
+    uint32_t* id_out)
+{
+  if ((xnn_params.init_flags & XNN_INIT_FLAG_XNNPACK) == 0) {
+    xnn_log_error("failed to create Channelwise Quantized Dense Tensor value: XNNPACK is not initialized");
+    return xnn_status_uninitialized;
+  }
+
+  if (external_id != XNN_INVALID_VALUE_ID && external_id >= subgraph->external_value_ids) {
+    xnn_log_error(
+      "failed to create Channelwise Quantized Dense Tensor value: "
+      "external ID %" PRIu32 " exceeds the number of reserved external IDs in subgraph (%" PRIu32 ")",
+      external_id, subgraph->external_value_ids);
+    return xnn_status_invalid_parameter;
+  }
+
+  enum xnn_status status = xnn_validate_channelwise_quantized_tensor(
+      datatype,
+      zero_point,
+      scale,
+      num_dims,
+      channel_dim,
+      dims);
+  if (status != xnn_status_success) {
+    return status;
   }
 
   struct xnn_value* value = subgraph->values + external_id;
@@ -469,6 +504,13 @@ size_t xnn_tensor_get_size(const struct xnn_value* value)
   assert(value->type == xnn_value_type_dense_tensor);
   assert(value->datatype != xnn_datatype_invalid);
 
+  // Special handling for packed quantized types.
+  if (value->datatype == xnn_datatype_qpint8) {
+    const size_t m = xnn_shape_multiply_batch_dims(&value->shape, 1);
+    const size_t k = value->shape.dim[value->shape.num_dims - 1];
+    return xnn_x8_packq_f32qp8_gemm_packed_size(m, k);
+  }
+
   size_t size = 0;
   switch (value->datatype) {
     case xnn_datatype_fp16:
@@ -482,6 +524,7 @@ size_t xnn_tensor_get_size(const struct xnn_value* value)
     case xnn_datatype_qint8:
     case xnn_datatype_quint8:
     case xnn_datatype_qcint8:
+    case xnn_datatype_qpint8:
       size = 1;
       break;
     case xnn_datatype_qint32:
@@ -494,12 +537,29 @@ size_t xnn_tensor_get_size(const struct xnn_value* value)
 
   size *= xnn_shape_multiply_all_dims(&value->shape);
 
-  // Adjustments for nibbles, assume that we can't have sizes are byte-aligned (rounded up).
+  // Adjustments for nibbles, assume that we can't have sizes are byte-aligned
+  // (rounded up).
   if (value->datatype == xnn_datatype_qcint4) {
     size = round_up_po2(size, 2) >> 1;
   }
 
   return size;
+}
+
+// Return size of the dynamic quantization params in this value
+size_t xnn_tensor_get_dynamic_quant_param_size(const struct xnn_value* value)
+{
+  switch (value->datatype) {
+    case xnn_datatype_qdint8: {
+      const size_t batch_dims_size = xnn_shape_multiply_batch_dims(
+          &value->shape, value->quantization.num_nonbatch_dims);
+      return batch_dims_size * sizeof(struct xnn_dynamic_quantization_params);
+    }
+    case xnn_datatype_qpint8:
+      return 0;
+    default:
+      XNN_UNREACHABLE;
+  }
 }
 
 size_t xnn_tensor_get_size_by_id(xnn_subgraph_t subgraph, uint32_t value_id)
@@ -508,39 +568,4 @@ size_t xnn_tensor_get_size_by_id(xnn_subgraph_t subgraph, uint32_t value_id)
 
   const struct xnn_value* value = subgraph->values + value_id;
   return xnn_tensor_get_size(value);
-}
-
-static bool tensor_dim_is_static(const struct xnn_value* value, uint32_t dim_index)
-{
-  return (value->shape.dim[dim_index] == value->shape.minimum_dim[dim_index] &&
-          value->shape.dim[dim_index] == value->shape.maximum_dim[dim_index]);
-}
-
-bool xnn_tensor_shape_is_static(const struct xnn_value* value)
-{
-  for (size_t i = 0; i < value->shape.num_dims; i++) {
-    if (!tensor_dim_is_static(value, i)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-enum xnn_shape_inference_status xnn_tensor_propagate_dimension(
-  struct xnn_value* to,
-  uint32_t to_dim,
-  size_t inferred_dim)
-{
-  assert(to_dim < to->shape.num_dims);
-
-  // If inferred_dim is dynamic, then we don't have useful information to propagate.
-  if (to->shape.dim[to_dim] == inferred_dim || inferred_dim == 0) {
-    return xnn_shape_inference_status_no_change;
-  }
-
-  to->shape.dim[to_dim] = inferred_dim;
-  if (inferred_dim > to->shape.maximum_dim[to_dim]) {
-    to->shape.maximum_dim[to_dim] = inferred_dim;
-  }
-  return xnn_shape_inference_status_changed;
 }

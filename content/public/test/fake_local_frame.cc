@@ -86,11 +86,11 @@ void FakeLocalFrame::MediaPlayerActionAt(
     const gfx::Point& location,
     blink::mojom::MediaPlayerActionPtr action) {}
 
-void FakeLocalFrame::RequestVideoFrameAt(const gfx::Point& window_point,
-                                         const gfx::Size& max_size,
-                                         int max_area,
-                                         RequestVideoFrameAtCallback callback) {
-}
+void FakeLocalFrame::RequestVideoFrameAtWithBoundsHint(
+    const gfx::Point& window_point,
+    const gfx::Size& max_size,
+    int max_area,
+    RequestVideoFrameAtWithBoundsHintCallback callback) {}
 
 void FakeLocalFrame::PluginActionAt(const gfx::Point& location,
                                     blink::mojom::PluginActionType action) {}
@@ -202,8 +202,13 @@ void FakeLocalFrame::DispatchNavigateEventForCrossDocumentTraversal(
     bool is_browser_initiated) {}
 
 void FakeLocalFrame::SnapshotDocumentForViewTransition(
-    blink::mojom::PageConcealEventParamsPtr,
+    const blink::ViewTransitionToken& transition_token,
+    blink::mojom::PageSwapEventParamsPtr,
     SnapshotDocumentForViewTransitionCallback callback) {}
+
+void FakeLocalFrame::NotifyViewTransitionAbortedToOldDocument() {}
+
+void FakeLocalFrame::DispatchPageSwap(blink::mojom::PageSwapEventParamsPtr) {}
 
 void FakeLocalFrame::AddResourceTimingEntryForFailedSubframeNavigation(
     const ::blink::FrameToken& subframe_token,
@@ -222,12 +227,15 @@ void FakeLocalFrame::AddResourceTimingEntryForFailedSubframeNavigation(
     const std::string& normalized_server_timing,
     const ::network::URLLoaderCompletionStatus& completion_status) {}
 
-void FakeLocalFrame::RequestFullscreenDocumentElement() {}
-
 void FakeLocalFrame::BindFrameHostReceiver(
     mojo::ScopedInterfaceEndpointHandle handle) {
   receiver_.Bind(mojo::PendingAssociatedReceiver<blink::mojom::LocalFrame>(
       std::move(handle)));
+}
+
+void FakeLocalFrame::UpdatePrerenderURL(const ::GURL& matched_url,
+                                        UpdatePrerenderURLCallback callback) {
+  std::move(callback).Run();
 }
 
 }  // namespace content

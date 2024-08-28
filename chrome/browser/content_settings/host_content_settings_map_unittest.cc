@@ -190,7 +190,7 @@ class TesterForType {
         break;
       default:
         // Add support as needed.
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
 
@@ -1082,7 +1082,7 @@ TEST_P(IndexedHostContentSettingsMapTest, IncognitoInheritCookies) {
   EXPECT_EQ(CONTENT_SETTING_BLOCK, result);
 }
 
-TEST_P(IndexedHostContentSettingsMapTest, IncognitoDontInheritSetting) {
+TEST_P(IndexedHostContentSettingsMapTest, IncognitoDontInheritWebsiteSetting) {
   // Website settings marked DONT_INHERIT_IN_INCOGNITO in
   // WebsiteSettingsRegistry (e.g. usb chooser data) don't inherit any values
   // from from regular to incognito.
@@ -1110,7 +1110,7 @@ TEST_P(IndexedHostContentSettingsMapTest, IncognitoDontInheritSetting) {
       host, host, ContentSettingsType::USB_CHOOSER_DATA,
       base::Value(test_dict.Clone()));
 
-  // The setting is not inherted by |otr_map|.
+  // The setting is not inherited by |otr_map|.
   base::Value stored_value = host_content_settings_map->GetWebsiteSetting(
       host, host, ContentSettingsType::USB_CHOOSER_DATA);
   EXPECT_EQ(stored_value, test_dict);
@@ -1125,9 +1125,43 @@ TEST_P(IndexedHostContentSettingsMapTest, IncognitoDontInheritSetting) {
   }
 }
 
+TEST_P(IndexedHostContentSettingsMapTest, IncognitoDontInheritContentSetting) {
+  // Content settings marked DONT_INHERIT_IN_INCOGNITO in
+  // ContentSettingsRegistry (e.g. top-level scoped 3pcd, which is a special
+  // case) don't inherit any values from from regular to incognito.
+  TestingProfile profile;
+  Profile* otr_profile =
+      profile.GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  HostContentSettingsMap* map =
+      HostContentSettingsMapFactory::GetForProfile(&profile);
+  HostContentSettingsMap* otr_map =
+      HostContentSettingsMapFactory::GetForProfile(otr_profile);
+
+  GURL host("https://example.com/");
+
+  // top-level scoped 3pcd defaults to ALLOW.
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            map->GetContentSetting(
+                host, host, ContentSettingsType::TOP_LEVEL_TPCD_ORIGIN_TRIAL));
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            otr_map->GetContentSetting(
+                host, host, ContentSettingsType::TOP_LEVEL_TPCD_ORIGIN_TRIAL));
+
+  map->SetContentSettingDefaultScope(
+      host, GURL(), ContentSettingsType::TOP_LEVEL_TPCD_ORIGIN_TRIAL,
+      CONTENT_SETTING_BLOCK);
+
+  // The setting is not inherited by |otr_map|.
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            map->GetContentSetting(
+                host, host, ContentSettingsType::TOP_LEVEL_TPCD_ORIGIN_TRIAL));
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            otr_map->GetContentSetting(
+                host, host, ContentSettingsType::TOP_LEVEL_TPCD_ORIGIN_TRIAL));
+}
+
 TEST_P(IndexedHostContentSettingsMapTest, PrefExceptionsOperation) {
-  using content_settings::SETTING_SOURCE_POLICY;
-  using content_settings::SETTING_SOURCE_USER;
+  using content_settings::SettingSource;
 
   const char kUrl1[] = "http://user_exception_allow.com";
   const char kUrl2[] = "http://user_exception_block.com";
@@ -1144,20 +1178,20 @@ TEST_P(IndexedHostContentSettingsMapTest, PrefExceptionsOperation) {
   // No policy setting: follow users settings.
   tester.ClearPolicyDefault();
   // User exceptions.
-  EXPECT_EQ(SETTING_SOURCE_USER, tester.GetSettingSourceForURL(kUrl1));
-  EXPECT_EQ(SETTING_SOURCE_USER, tester.GetSettingSourceForURL(kUrl2));
+  EXPECT_EQ(SettingSource::kUser, tester.GetSettingSourceForURL(kUrl1));
+  EXPECT_EQ(SettingSource::kUser, tester.GetSettingSourceForURL(kUrl2));
   // User default.
-  EXPECT_EQ(SETTING_SOURCE_USER, tester.GetSettingSourceForURL(kUrl3));
+  EXPECT_EQ(SettingSource::kUser, tester.GetSettingSourceForURL(kUrl3));
 
   // Policy overrides users always.
   tester.SetPolicyDefault(CONTENT_SETTING_ALLOW);
-  EXPECT_EQ(SETTING_SOURCE_POLICY, tester.GetSettingSourceForURL(kUrl1));
-  EXPECT_EQ(SETTING_SOURCE_POLICY, tester.GetSettingSourceForURL(kUrl2));
-  EXPECT_EQ(SETTING_SOURCE_POLICY, tester.GetSettingSourceForURL(kUrl3));
+  EXPECT_EQ(SettingSource::kPolicy, tester.GetSettingSourceForURL(kUrl1));
+  EXPECT_EQ(SettingSource::kPolicy, tester.GetSettingSourceForURL(kUrl2));
+  EXPECT_EQ(SettingSource::kPolicy, tester.GetSettingSourceForURL(kUrl3));
   tester.SetPolicyDefault(CONTENT_SETTING_BLOCK);
-  EXPECT_EQ(SETTING_SOURCE_POLICY, tester.GetSettingSourceForURL(kUrl1));
-  EXPECT_EQ(SETTING_SOURCE_POLICY, tester.GetSettingSourceForURL(kUrl2));
-  EXPECT_EQ(SETTING_SOURCE_POLICY, tester.GetSettingSourceForURL(kUrl3));
+  EXPECT_EQ(SettingSource::kPolicy, tester.GetSettingSourceForURL(kUrl1));
+  EXPECT_EQ(SettingSource::kPolicy, tester.GetSettingSourceForURL(kUrl2));
+  EXPECT_EQ(SettingSource::kPolicy, tester.GetSettingSourceForURL(kUrl3));
 }
 
 TEST_P(IndexedHostContentSettingsMapTest, GetUserModifiableContentSetting) {
@@ -1841,7 +1875,7 @@ void ReloadProviders(PrefService* pref_service,
       pref_service, false, true, false);
   content_settings::TestUtils::OverrideProvider(
       host_content_settings_map, std::move(pref_provider),
-      HostContentSettingsMap::PREF_PROVIDER);
+      content_settings::ProviderType::kPrefProvider);
 }
 
 TEST_P(IndexedHostContentSettingsMapTest, GetPatternsFromScopingType) {
@@ -1893,20 +1927,6 @@ TEST_P(IndexedHostContentSettingsMapTest, GetPatternsFromScopingType) {
   EXPECT_EQ(settings[0].primary_pattern,
             ContentSettingsPattern::FromURLToSchemefulSitePattern(primary_url));
   EXPECT_EQ(settings[0].secondary_pattern, ContentSettingsPattern::Wildcard());
-
-  // Testing cases:
-  //   WebsiteSettingsInfo::REQUESTING_AND_TOP_ORIGIN_SCOPE,
-  host_content_settings_map->SetContentSettingDefaultScope(
-      primary_url, secondary_url, ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS,
-      CONTENT_SETTING_ALLOW);
-
-  settings = host_content_settings_map->GetSettingsForOneType(
-      ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS);
-
-  EXPECT_EQ(settings[0].primary_pattern,
-            ContentSettingsPattern::FromURLNoWildcard(primary_url));
-  EXPECT_EQ(settings[0].secondary_pattern,
-            ContentSettingsPattern::FromURLNoWildcard(secondary_url));
 
   // Testing cases:
   //   WebsiteSettingsInfo::REQUESTING_ORIGIN_AND_TOP_SCHEMEFUL_SITE_SCOPE,
@@ -1981,17 +2001,6 @@ TEST_P(IndexedHostContentSettingsMapTest, GetPatternsForContentSettingsType) {
   EXPECT_EQ(patterns.first,
             ContentSettingsPattern::FromURLToSchemefulSitePattern(primary_url));
   EXPECT_EQ(patterns.second, ContentSettingsPattern::Wildcard());
-
-  // Testing cases:
-  //   WebsiteSettingsInfo::REQUESTING_AND_TOP_ORIGIN_SCOPE,
-  patterns = HostContentSettingsMap::GetPatternsForContentSettingsType(
-      primary_url, secondary_url,
-      ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS);
-
-  EXPECT_EQ(patterns.first,
-            ContentSettingsPattern::FromURLNoWildcard(primary_url));
-  EXPECT_EQ(patterns.second,
-            ContentSettingsPattern::FromURLNoWildcard(secondary_url));
 
   // Testing cases:
   //   WebsiteSettingsInfo::REQUESTING_ORIGIN_AND_TOP_SCHEMEFUL_SITE_SCOPE,
@@ -2122,7 +2131,8 @@ TEST_P(IndexedHostContentSettingsMapTest, MixedScopeSettings) {
   // Set a Session only permission for our second url and we expect it should
   // co-exist with the other permission just fine.
   content_settings::ContentSettingConstraints constraints;
-  constraints.set_session_model(content_settings::SessionModel::UserSession);
+  constraints.set_session_model(
+      content_settings::mojom::SessionModel::USER_SESSION);
   map->SetContentSettingDefaultScope(example_url2, example_url2,
                                      persistent_type, CONTENT_SETTING_ALLOW,
                                      constraints);
@@ -2178,11 +2188,12 @@ TEST_P(IndexedHostContentSettingsMapTest,
 
   // Set permissions in two different scopes.
   content_settings::ContentSettingConstraints constraints;
-  constraints.set_session_model(content_settings::SessionModel::Durable);
+  constraints.set_session_model(content_settings::mojom::SessionModel::DURABLE);
   map->SetContentSettingDefaultScope(example_url1, example_url1,
                                      persistent_type, CONTENT_SETTING_BLOCK,
                                      constraints);
-  constraints.set_session_model(content_settings::SessionModel::UserSession);
+  constraints.set_session_model(
+      content_settings::mojom::SessionModel::USER_SESSION);
   map->SetContentSettingDefaultScope(example_url2, example_url2,
                                      persistent_type, CONTENT_SETTING_ALLOW,
                                      constraints);
@@ -2201,11 +2212,11 @@ TEST_P(IndexedHostContentSettingsMapTest,
   // specific scope without getting any of the other results. For Durable we
   // should see our set value and the default value.
   settings = map->GetSettingsForOneType(
-      persistent_type, content_settings::SessionModel::Durable);
+      persistent_type, content_settings::mojom::SessionModel::DURABLE);
   ASSERT_EQ(2u, settings.size());
 
   settings = map->GetSettingsForOneType(
-      persistent_type, content_settings::SessionModel::UserSession);
+      persistent_type, content_settings::mojom::SessionModel::USER_SESSION);
   ASSERT_EQ(1u, settings.size());
 
   // Reload to clear our session settings.
@@ -2214,7 +2225,7 @@ TEST_P(IndexedHostContentSettingsMapTest,
   // If a scope is specified that has no settings, we should get an empty set
   // returned.
   settings = map->GetSettingsForOneType(
-      persistent_type, content_settings::SessionModel::UserSession);
+      persistent_type, content_settings::mojom::SessionModel::USER_SESSION);
   ASSERT_EQ(0u, settings.size());
 }
 
@@ -2286,7 +2297,8 @@ TEST_P(HostContentSettingsMapActiveExpirationTest,
   // third with no expiration.
   content_settings::ContentSettingConstraints constraints;
   constraints.set_lifetime(base::Seconds(100));
-  constraints.set_session_model(content_settings::SessionModel::UserSession);
+  constraints.set_session_model(
+      content_settings::mojom::SessionModel::USER_SESSION);
   map->SetContentSettingDefaultScope(example_url1, example_url1,
                                      persistent_type, CONTENT_SETTING_BLOCK,
                                      constraints);
@@ -2302,7 +2314,7 @@ TEST_P(HostContentSettingsMapActiveExpirationTest,
   // Validate that we can retrieve all our settings and none of them are
   // expired.
   ContentSettingsForOneType settings = map->GetSettingsForOneType(
-      persistent_type, content_settings::SessionModel::UserSession);
+      persistent_type, content_settings::mojom::SessionModel::USER_SESSION);
   ASSERT_EQ(3u, settings.size());
 
   // None of our current settings should be expired, but we'll keep each one to
@@ -2335,7 +2347,7 @@ TEST_P(HostContentSettingsMapActiveExpirationTest,
   ASSERT_FALSE(url2_setting.IsExpired());
   ASSERT_FALSE(url3_setting.IsExpired());
   settings = map->GetSettingsForOneType(
-      persistent_type, content_settings::SessionModel::UserSession);
+      persistent_type, content_settings::mojom::SessionModel::USER_SESSION);
   ASSERT_EQ(2u, settings.size());
 
   t.ExpectTotalCount(kActiveExpiryHistogramName, GetParam() ? 1 : 0);
@@ -2354,7 +2366,7 @@ TEST_P(HostContentSettingsMapActiveExpirationTest,
   ASSERT_TRUE(url2_setting.IsExpired());
   ASSERT_FALSE(url3_setting.IsExpired());
   settings = map->GetSettingsForOneType(
-      persistent_type, content_settings::SessionModel::UserSession);
+      persistent_type, content_settings::mojom::SessionModel::USER_SESSION);
   ASSERT_EQ(1u, settings.size());
 
   t.ExpectTotalCount(kActiveExpiryHistogramName, GetParam() ? 2 : 0);
@@ -2374,7 +2386,7 @@ TEST_P(HostContentSettingsMapActiveExpirationTest,
   ASSERT_TRUE(url2_setting.IsExpired());
   ASSERT_FALSE(url3_setting.IsExpired());
   settings = map->GetSettingsForOneType(
-      persistent_type, content_settings::SessionModel::UserSession);
+      persistent_type, content_settings::mojom::SessionModel::USER_SESSION);
   ASSERT_EQ(1u, settings.size());
 
   t.ExpectTotalCount(kActiveExpiryHistogramName, GetParam() ? 2 : 0);
@@ -2523,6 +2535,31 @@ TEST_P(IndexedHostContentSettingsMapTest, ShutdownDuringExpirationAsanTest) {
 
   host_content_settings_map->ShutdownOnUIThread();
   FastForwardTime(ttl);
+}
+
+TEST_P(IndexedHostContentSettingsMapTest, TrackingProtectionMetrics) {
+  const ContentSettingsType type = ContentSettingsType::TRACKING_PROTECTION;
+  TestingProfile profile;
+  auto* map = HostContentSettingsMapFactory::GetForProfile(&profile);
+  map->SetContentSettingCustomScope(
+      ContentSettingsPattern::Wildcard(),
+      ContentSettingsPattern::FromString("https://example1.com"), type,
+      CONTENT_SETTING_ALLOW);
+  map->SetContentSettingCustomScope(
+      ContentSettingsPattern::Wildcard(),
+      ContentSettingsPattern::FromString("https://example2.com"), type,
+      CONTENT_SETTING_ALLOW);
+  map->SetContentSettingCustomScope(
+      ContentSettingsPattern::Wildcard(),
+      ContentSettingsPattern::FromString("https://example3.com"), type,
+      CONTENT_SETTING_ALLOW);
+
+  base::HistogramTester t;
+  auto map2 = base::MakeRefCounted<HostContentSettingsMap>(
+      profile.GetPrefs(), false, true, true, true);
+  map2->ShutdownOnUIThread();
+  t.ExpectUniqueSample(
+      "ContentSettings.RegularProfile.Exceptions.tracking-protection", 3, 1);
 }
 
 // File access is not implemented on Android. Luckily we don't need it for DevTools.

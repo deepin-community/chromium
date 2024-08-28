@@ -82,6 +82,12 @@ BluetoothAdapter::PermissionStatus BluetoothAdapter::GetOsPermissionStatus()
   return PermissionStatus::kAllowed;
 }
 
+void BluetoothAdapter::RequestSystemPermission(
+    BluetoothAdapter::RequestSystemPermissionCallback callback) {
+  ui_task_runner_->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), GetOsPermissionStatus()));
+}
+
 void BluetoothAdapter::SetPowered(bool powered,
                                   base::OnceClosure callback,
                                   ErrorCallback error_callback) {
@@ -109,7 +115,7 @@ void BluetoothAdapter::SetPowered(bool powered,
 }
 
 bool BluetoothAdapter::IsPeripheralRoleSupported() const {
-  // TODO(crbug/1071595): Implement this for more platforms.
+  // TODO(crbug.com/40685201): Implement this for more platforms.
   return true;
 }
 
@@ -291,17 +297,32 @@ BluetoothDevice::PairingDelegate* BluetoothAdapter::DefaultPairingDelegate() {
   return pairing_delegates_.front().first;
 }
 
+// Default to assume the controller doesn't supports ext adv.
+bool BluetoothAdapter::IsExtendedAdvertisementsAvailable() const {
+  return false;
+}
+
 std::vector<BluetoothAdvertisement*>
 BluetoothAdapter::GetPendingAdvertisementsForTesting() const {
   return {};
 }
 
+base::WeakPtr<BluetoothLocalGattService>
+BluetoothAdapter::CreateLocalGattService(
+    const BluetoothUUID& uuid,
+    bool is_primary,
+    BluetoothLocalGattService::Delegate* delegate) {
+  return nullptr;
+}
+
 void BluetoothAdapter::NotifyAdapterPresentChanged(bool present) {
+  BLUETOOTH_LOG(EVENT) << "Adapter " << (present ? "present" : "not present");
   for (auto& observer : observers_)
     observer.AdapterPresentChanged(this, present);
 }
 
 void BluetoothAdapter::NotifyAdapterPoweredChanged(bool powered) {
+  BLUETOOTH_LOG(EVENT) << "Adapter powered " << (powered ? "on" : "off");
   for (auto& observer : observers_)
     observer.AdapterPoweredChanged(this, powered);
 }
@@ -696,6 +717,12 @@ void BluetoothAdapter::RemoveTimedOutDevices() {
     }
 
     DVLOG(1) << "Removing device: " << device->GetAddress();
+#if BUILDFLAG(IS_MAC)
+    if (!device->IsLowEnergyDevice()) {
+      BLUETOOTH_LOG(EVENT) << "Classic device removed: "
+                           << device->GetAddress();
+    }
+#endif  // BUILDFLAG(IS_MAC)
     auto next = it;
     next++;
     std::unique_ptr<BluetoothDevice> removed_device = std::move(it->second);

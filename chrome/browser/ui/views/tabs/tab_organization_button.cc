@@ -14,6 +14,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/layer.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
@@ -44,7 +45,8 @@ TabOrganizationButton::TabOrganizationButton(
   SetProperty(views::kElementIdentifierKey, kTabOrganizationButtonElementId);
 
   SetTooltipText(l10n_util::GetStringUTF16(IDS_TOOLTIP_TAB_ORGANIZE));
-  SetAccessibleName(l10n_util::GetStringUTF16(IDS_ACCNAME_TAB_ORGANIZE));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_ACCNAME_TAB_ORGANIZE));
   SetLabelStyle(views::style::STYLE_BODY_3_EMPHASIS);
   label()->SetElideBehavior(gfx::ElideBehavior::NO_ELIDE);
 
@@ -62,7 +64,6 @@ TabOrganizationButton::TabOrganizationButton(
   set_paint_transparent_for_custom_image_theme(false);
 
   SetCloseButton(std::move(close_pressed_callback));
-  layout_manager->SetFlexForView(close_button_, 1);
 
   UpdateColors();
 }
@@ -79,10 +80,14 @@ void TabOrganizationButton::SetWidthFactor(float factor) {
   PreferredSizeChanged();
 }
 
-gfx::Size TabOrganizationButton::CalculatePreferredSize() const {
-  const int full_width = GetLayoutManager()->GetPreferredSize(this).width();
+gfx::Size TabOrganizationButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  const int full_width =
+      GetLayoutManager()->GetPreferredSize(this, available_size).width();
   const int width = full_width * width_factor_;
-  const int height = TabStripControlButton::CalculatePreferredSize().height();
+  const int height = TabStripControlButton::CalculatePreferredSize(
+                         views::SizeBounds(width, available_size.height()))
+                         .height();
   return gfx::Size(width, height);
 }
 

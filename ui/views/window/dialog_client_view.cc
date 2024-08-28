@@ -104,6 +104,7 @@ DialogClientView::DialogClientView(Widget* owner, View* contents_view)
           LayoutProvider::Get()->GetInsetsMetric(INSETS_DIALOG_BUTTON_ROW)),
       input_protector_(
           std::make_unique<views::InputEventActivationProtector>()) {
+  SetLayoutManager(std::make_unique<DelegatingLayoutManager>(this));
   // Doing this now ensures this accelerator will have lower priority than
   // one set by the contents view.
   AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
@@ -126,30 +127,32 @@ void DialogClientView::SetButtonRowInsets(const gfx::Insets& insets) {
   }
 }
 
-gfx::Size DialogClientView::CalculatePreferredSize() const {
+gfx::Size DialogClientView::CalculatePreferredSize(
+    const SizeBounds& available_size) const {
   const gfx::Insets& content_margins = GetDialogDelegate()->margins();
 
   gfx::Size contents_size;
   const int fixed_width = GetDialogDelegate()->fixed_width();
   if (fixed_width) {
     const int content_width = fixed_width - content_margins.width();
-    contents_size = gfx::Size(content_width,
-                              ClientView::GetHeightForWidth(content_width));
+    contents_size = ClientView::CalculatePreferredSize(
+        views::SizeBounds(content_width, {}));
+    contents_size.set_width(content_width);
   } else {
-    contents_size = ClientView::CalculatePreferredSize();
+    SizeBounds content_available_size(available_size);
+    content_available_size.Enlarge(-content_margins.width(),
+                                   -content_margins.height());
+    contents_size = ClientView::CalculatePreferredSize(content_available_size);
   }
   contents_size.Enlarge(content_margins.width(), content_margins.height());
   return GetBoundingSizeForVerticalStack(
-      contents_size, button_row_container_->GetPreferredSize());
+      contents_size, button_row_container_->GetPreferredSize({}));
 }
 
 gfx::Size DialogClientView::GetMinimumSize() const {
-  // TODO(pbos): Try to find a way for ClientView::GetMinimumSize() to be
-  // fixed-width aware. For now this uses min-size = preferred size for
-  // fixed-width dialogs (even though min height might not be preferred height).
-  // Fixing this might require View::GetMinHeightForWidth().
   if (GetDialogDelegate()->fixed_width()) {
-    return CalculatePreferredSize();
+    return CalculatePreferredSize(
+        SizeBounds(GetDialogDelegate()->fixed_width(), {}));
   }
 
   return GetBoundingSizeForVerticalStack(
@@ -165,7 +168,7 @@ gfx::Size DialogClientView::GetMaximumSize() const {
   // If the height is constrained, add the button row height. Leave the width as
   // it is (be it constrained or unconstrained).
   if (max_size.height() != kUnconstrained) {
-    max_size.Enlarge(0, button_row_container_->GetPreferredSize().height());
+    max_size.Enlarge(0, button_row_container_->GetPreferredSize({}).height());
   }
 
   // Note not all constraints can be met. E.g. it's possible here for
@@ -197,15 +200,27 @@ void DialogClientView::UpdateWindowRoundedCorners(int corner_radius) {
 
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-void DialogClientView::Layout(PassKey) {
-  button_row_container_->SetSize(
-      gfx::Size(width(), button_row_container_->GetHeightForWidth(width())));
-  button_row_container_->SetY(height() - button_row_container_->height());
+ProposedLayout DialogClientView::CalculateProposedLayout(
+    const SizeBounds& size_bounds) const {
+  ProposedLayout layouts;
+  DCHECK(size_bounds.is_fully_bounded());
+  const int container_height =
+      button_row_container_->GetHeightForWidth(size_bounds.width().value());
+  const int container_y = size_bounds.height().value() - container_height;
+  layouts.child_layouts.emplace_back(
+      button_row_container_.get(), button_row_container_->GetVisible(),
+      gfx::Rect(0, container_y, size_bounds.width().value(), container_height),
+      size_bounds);
   if (contents_view()) {
-    gfx::Rect contents_bounds(width(), button_row_container_->y());
+    gfx::Rect contents_bounds(size_bounds.width().value(), container_y);
     contents_bounds.Inset(GetDialogDelegate()->margins());
-    contents_view()->SetBoundsRect(contents_bounds);
+    layouts.child_layouts.emplace_back(contents_view(),
+                                       contents_view()->GetVisible(),
+                                       contents_bounds, size_bounds);
   }
+  layouts.host_size =
+      gfx::Size(size_bounds.width().value(), size_bounds.height().value());
+  return layouts;
 }
 
 bool DialogClientView::AcceleratorPressed(const ui::Accelerator& accelerator) {
@@ -321,15 +336,13 @@ void DialogClientView::UpdateDialogButtons() {
   InvalidateLayout();
 }
 
-void DialogClientView::UpdateDialogButton(
-    raw_ptr<MdTextButton, DanglingUntriaged>* member,
-    ui::DialogButton type) {
+void DialogClientView::UpdateDialogButton(raw_ptr<MdTextButton>* member,
+                                          ui::DialogButton type) {
   DialogDelegate* const delegate = GetDialogDelegate();
-  if (!(delegate->GetDialogButtons() & type)) {
+  if (!(delegate->buttons() & type)) {
     if (*member) {
-      button_row_container_->RemoveChildViewT(*member);
+      button_row_container_->RemoveChildViewT(std::exchange(*member, nullptr));
     }
-    *member = nullptr;
     return;
   }
 
@@ -406,8 +419,9 @@ DialogClientView::GetButtonRowViews() {
 }
 
 void DialogClientView::UpdateExtraViewFromDelegate() {
-  auto new_extra_view = GetDialogDelegate()->DisownExtraView();
-  if (!new_extra_view) {
+  // DisownExtraView() returns nullopt if the extra view was not updated.
+  auto maybe_new_extra_view = GetDialogDelegate()->DisownExtraView();
+  if (!maybe_new_extra_view.has_value()) {
     return;
   }
 
@@ -419,6 +433,10 @@ void DialogClientView::UpdateExtraViewFromDelegate() {
     button_row_container_->RemoveChildViewT(old_extra_view);
   }
 
+  auto new_extra_view = std::move(maybe_new_extra_view.value());
+  if (!new_extra_view) {
+    return;
+  }
   extra_view_ =
       button_row_container_->AddChildViewAt(std::move(new_extra_view), 0);
   if (IsViewClass<Button>(extra_view_)) {
@@ -452,7 +470,7 @@ void DialogClientView::SetupLayout() {
     // TableLayout will force its child views to be visible if they aren't
     // explicitly ignored, which will cause the extra view the client supplied
     // to be shown when they don't want it to.
-    // TODO(https://crbug.com/1474952): Remove this workaround.
+    // TODO(crbug.com/40279463): Remove this workaround.
     extra_view_->SetProperty(kViewIgnoredByLayoutKey,
                              !extra_view_->GetVisible());
   }
@@ -489,10 +507,6 @@ void DialogClientView::SetupLayout() {
       .SetLinkedColumnSizeLimit(layout_provider->GetDistanceMetric(
           DISTANCE_BUTTON_MAX_LINKABLE_WIDTH));
 
-  // Track which columns to link sizes under MD.
-  constexpr size_t kViewToColumnIndex[] = {1, 3, 5};
-  std::vector<size_t> columns_to_link;
-
   // Skip views that are not a button, or are a specific subclass of Button
   // that should never be linked. Otherwise, link everything.
   auto should_link = [](views::View* view) {
@@ -500,19 +514,27 @@ void DialogClientView::SetupLayout() {
            !IsViewClass<ImageButton>(view);
   };
 
-  for (size_t view_index = 0; view_index < kNumButtons; ++view_index) {
-    if (views[view_index]) {
-      RemoveFillerView(view_index);
-      button_row_container_->ReorderChildView(views[view_index], view_index);
-      if (should_link(views[view_index])) {
-        columns_to_link.push_back(kViewToColumnIndex[view_index]);
-      }
+  for (size_t i = 0; i < kNumButtons; ++i) {
+    if (views[i]) {
+      RemoveFillerView(i);
+      button_row_container_->ReorderChildView(views[i], i);
     } else {
-      AddFillerView(view_index);
+      AddFillerView(i);
     }
   }
 
-  layout->LinkColumnSizes(columns_to_link);
+  {
+    std::vector<size_t> cols;
+    for (size_t i = 0; i < kNumButtons; ++i) {
+      if (should_link(views[i])) {
+        // View columns are interspersed with padding columns, so view i is at
+        // column i * 2 + 1 in the TableLayout (view 0 is in column 1, view 1 is
+        // in column 3, etc).
+        cols.push_back(i * 2 + 1);
+      }
+    }
+    layout->LinkColumnSizes(cols);
+  }
 
   // The default focus is lost when child views are added back into the dialog.
   // This restores focus if the button is still available.

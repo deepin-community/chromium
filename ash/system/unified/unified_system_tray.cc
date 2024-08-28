@@ -115,11 +115,8 @@ UnifiedSystemTray::UnifiedSystemTray(Shelf* shelf)
   ime_mode_view_ = AddTrayItemToContainer(std::make_unique<ImeModeView>(shelf));
   managed_device_view_ = AddTrayItemToContainer(
       std::make_unique<ManagedDeviceTrayItemView>(shelf));
-
-  if (features::IsHotspotEnabled()) {
-    hotspot_tray_view_ =
-        AddTrayItemToContainer(std::make_unique<HotspotTrayView>(shelf));
-  }
+  hotspot_tray_view_ =
+      AddTrayItemToContainer(std::make_unique<HotspotTrayView>(shelf));
 
   if (features::IsSeparateNetworkIconsEnabled()) {
     AddTrayItemToContainer(std::make_unique<NetworkTrayView>(
@@ -470,7 +467,18 @@ void UnifiedSystemTray::HideBubble(const TrayBubbleView* bubble_view) {
 
 void UnifiedSystemTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {}
 
-void UnifiedSystemTray::ClickedOutsideBubble() {
+void UnifiedSystemTray::ClickedOutsideBubble(const ui::LocatedEvent& event) {
+  const gfx::Point event_location =
+      event.target() ? event.target()->GetScreenLocation(event)
+                     : event.root_location();
+
+  // When Quick Settings bubble is opened and the date tray is clicked, the
+  // bubble should not be closed since it will transition to show calendar.
+  if (shelf()->GetStatusAreaWidget()->date_tray()->GetBoundsInScreen().Contains(
+          event_location)) {
+    return;
+  }
+
   CloseBubble();
 }
 
@@ -539,7 +547,7 @@ void UnifiedSystemTray::DestroyBubble() {
 }
 
 void UnifiedSystemTray::UpdateTrayItemColor(bool is_active) {
-  for (auto* tray_item : tray_items_) {
+  for (TrayItemView* tray_item : tray_items_) {
     tray_item->UpdateLabelOrImageViewColor(is_active);
   }
 }

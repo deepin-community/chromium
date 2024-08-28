@@ -46,6 +46,7 @@
 #include "third_party/blink/renderer/core/style/inset_area.h"
 #include "third_party/blink/renderer/platform/fonts/font_description.h"
 #include "third_party/blink/renderer/platform/fonts/font_smoothing_mode.h"
+#include "third_party/blink/renderer/platform/fonts/font_variant_emoji.h"
 #include "third_party/blink/renderer/platform/fonts/text_rendering_mode.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
 #include "third_party/blink/renderer/platform/graphics/touch_action.h"
@@ -127,7 +128,7 @@ inline CSSReflectionDirection CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kReflectionBelow;
 }
 
@@ -201,7 +202,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(
       value_id_ = CSSValueID::kPlusLighter;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }
@@ -245,7 +246,7 @@ inline CompositingOperator CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return CompositingOperator::kAdd;
 }
 
@@ -254,6 +255,15 @@ inline CSSIdentifierValue::CSSIdentifierValue(ControlPart e)
     : CSSValue(kIdentifierClass) {
   switch (e) {
     case kNoControlPart:
+    // Non standard appearance values that are not listed as
+    // compat-auto must be rendered as none.
+    // https://drafts.csswg.org/css-ui/#appearance-switching
+    case kMediaSliderPart:
+    case kMediaSliderThumbPart:
+    case kMediaVolumeSliderPart:
+    case kMediaVolumeSliderThumbPart:
+    case kSliderThumbHorizontalPart:
+    case kSliderThumbVerticalPart:
       value_id_ = CSSValueID::kNone;
       break;
     case kAutoPart:
@@ -280,18 +290,6 @@ inline CSSIdentifierValue::CSSIdentifierValue(ControlPart e)
     case kListboxPart:
       value_id_ = CSSValueID::kListbox;
       break;
-    case kMediaSliderPart:
-      value_id_ = CSSValueID::kMediaSlider;
-      break;
-    case kMediaSliderThumbPart:
-      value_id_ = CSSValueID::kMediaSliderthumb;
-      break;
-    case kMediaVolumeSliderPart:
-      value_id_ = CSSValueID::kMediaVolumeSlider;
-      break;
-    case kMediaVolumeSliderThumbPart:
-      value_id_ = CSSValueID::kMediaVolumeSliderthumb;
-      break;
     case kMediaControlPart:
       value_id_ = CSSValueID::kInternalMediaControl;
       break;
@@ -313,12 +311,6 @@ inline CSSIdentifierValue::CSSIdentifierValue(ControlPart e)
     case kSliderVerticalPart:
       value_id_ = CSSValueID::kSliderVertical;
       break;
-    case kSliderThumbHorizontalPart:
-      value_id_ = CSSValueID::kSliderthumbHorizontal;
-      break;
-    case kSliderThumbVerticalPart:
-      value_id_ = CSSValueID::kSliderthumbVertical;
-      break;
     case kSearchFieldPart:
       value_id_ = CSSValueID::kSearchfield;
       break;
@@ -330,6 +322,10 @@ inline CSSIdentifierValue::CSSIdentifierValue(ControlPart e)
       break;
     case kTextAreaPart:
       value_id_ = CSSValueID::kTextarea;
+      break;
+    case kBaseSelectPart:
+      CHECK(RuntimeEnabledFeatures::StylableSelectEnabled());
+      value_id_ = CSSValueID::kBaseSelect;
       break;
   }
 }
@@ -355,14 +351,6 @@ inline ControlPart CSSIdentifierValue::ConvertTo() const {
       return kInnerSpinButtonPart;
     case CSSValueID::kListbox:
       return kListboxPart;
-    case CSSValueID::kMediaSlider:
-      return kMediaSliderPart;
-    case CSSValueID::kMediaSliderthumb:
-      return kMediaSliderThumbPart;
-    case CSSValueID::kMediaVolumeSlider:
-      return kMediaVolumeSliderPart;
-    case CSSValueID::kMediaVolumeSliderthumb:
-      return kMediaVolumeSliderThumbPart;
     case CSSValueID::kInternalMediaControl:
       return kMediaControlPart;
     case CSSValueID::kMenulist:
@@ -377,10 +365,6 @@ inline ControlPart CSSIdentifierValue::ConvertTo() const {
       return kSliderHorizontalPart;
     case CSSValueID::kSliderVertical:
       return kSliderVerticalPart;
-    case CSSValueID::kSliderthumbHorizontal:
-      return kSliderThumbHorizontalPart;
-    case CSSValueID::kSliderthumbVertical:
-      return kSliderThumbVerticalPart;
     case CSSValueID::kSearchfield:
       return kSearchFieldPart;
     case CSSValueID::kSearchfieldCancelButton:
@@ -389,8 +373,10 @@ inline ControlPart CSSIdentifierValue::ConvertTo() const {
       return kTextFieldPart;
     case CSSValueID::kTextarea:
       return kTextAreaPart;
+    case CSSValueID::kBaseSelect:
+      return kBaseSelectPart;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return kNoControlPart;
   }
 }
@@ -424,7 +410,7 @@ inline EFillAttachment CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EFillAttachment::kScroll;
 }
 
@@ -485,7 +471,7 @@ inline EFillBox CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EFillBox::kBorder;
 }
 
@@ -522,7 +508,7 @@ inline EFillRepeat CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EFillRepeat::kRepeatFill;
 }
 
@@ -540,7 +526,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(EFillMaskMode e)
       value_id_ = CSSValueID::kMatchSource;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       value_id_ = CSSValueID::kMatchSource;
   }
 }
@@ -555,7 +541,7 @@ inline EFillMaskMode CSSIdentifierValue::ConvertTo() const {
     case CSSValueID::kMatchSource:
       return EFillMaskMode::kMatchSource;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return EFillMaskMode::kMatchSource;
   }
 }
@@ -594,7 +580,7 @@ inline BackgroundEdgeOrigin CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return BackgroundEdgeOrigin::kTop;
 }
 
@@ -637,7 +623,7 @@ inline EFloat CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EFloat::kNone;
 }
 
@@ -680,7 +666,7 @@ inline EPosition CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EPosition::kStatic;
 }
 
@@ -708,7 +694,7 @@ inline ETableLayout CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return ETableLayout::kAuto;
 }
 
@@ -773,7 +759,7 @@ inline EVerticalAlign CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EVerticalAlign::kTop;
 }
 
@@ -801,7 +787,7 @@ inline TextEmphasisFill CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return TextEmphasisFill::kFilled;
 }
 
@@ -827,7 +813,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(TextEmphasisMark mark)
     case TextEmphasisMark::kNone:
     case TextEmphasisMark::kAuto:
     case TextEmphasisMark::kCustom:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       value_id_ = CSSValueID::kNone;
       break;
   }
@@ -852,7 +838,7 @@ inline TextEmphasisMark CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return TextEmphasisMark::kNone;
 }
 
@@ -873,9 +859,12 @@ inline CSSIdentifierValue::CSSIdentifierValue(
     case FontSizeAdjust::Metric::kIcWidth:
       value_id_ = CSSValueID::kIcWidth;
       return;
+    case FontSizeAdjust::Metric::kIcHeight:
+      value_id_ = CSSValueID::kIcHeight;
+      return;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   value_id_ = CSSValueID::kAuto;
 }
 
@@ -890,11 +879,13 @@ inline FontSizeAdjust::Metric CSSIdentifierValue::ConvertTo() const {
       return FontSizeAdjust::Metric::kChWidth;
     case CSSValueID::kIcWidth:
       return FontSizeAdjust::Metric::kIcWidth;
+    case CSSValueID::kIcHeight:
+      return FontSizeAdjust::Metric::kIcHeight;
     default:
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return FontSizeAdjust::Metric::kExHeight;
 }
 
@@ -911,7 +902,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(
       return;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   value_id_ = CSSValueID::kAuto;
 }
 
@@ -927,7 +918,7 @@ inline FontDescription::FontSynthesisWeight CSSIdentifierValue::ConvertTo()
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return FontDescription::kAutoFontSynthesisWeight;
 }
 
@@ -944,7 +935,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(
       return;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   value_id_ = CSSValueID::kAuto;
 }
 
@@ -960,7 +951,7 @@ inline FontDescription::FontSynthesisStyle CSSIdentifierValue::ConvertTo()
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return FontDescription::kAutoFontSynthesisStyle;
 }
 
@@ -977,7 +968,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(
       return;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   value_id_ = CSSValueID::kAuto;
 }
 
@@ -993,7 +984,7 @@ inline FontDescription::FontSynthesisSmallCaps CSSIdentifierValue::ConvertTo()
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return FontDescription::kAutoFontSynthesisSmallCaps;
 }
 
@@ -1010,7 +1001,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(EFillSizeType fill_size)
     case EFillSizeType::kSizeNone:
     case EFillSizeType::kSizeLength:
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -1032,7 +1023,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(FontSmoothingMode smoothing)
       return;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   value_id_ = CSSValueID::kAuto;
 }
 
@@ -1051,8 +1042,49 @@ inline FontSmoothingMode CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kAutoSmoothing;
+}
+
+template <>
+inline CSSIdentifierValue::CSSIdentifierValue(FontVariantEmoji variant_emoji)
+    : CSSValue(kIdentifierClass) {
+  switch (variant_emoji) {
+    case kNormalVariantEmoji:
+      value_id_ = CSSValueID::kNormal;
+      return;
+    case kTextVariantEmoji:
+      value_id_ = CSSValueID::kText;
+      return;
+    case kEmojiVariantEmoji:
+      value_id_ = CSSValueID::kEmoji;
+      return;
+    case kUnicodeVariantEmoji:
+      value_id_ = CSSValueID::kUnicode;
+      return;
+  }
+
+  NOTREACHED_IN_MIGRATION();
+  value_id_ = CSSValueID::kNormal;
+}
+
+template <>
+inline FontVariantEmoji CSSIdentifierValue::ConvertTo() const {
+  switch (value_id_) {
+    case CSSValueID::kNormal:
+      return kNormalVariantEmoji;
+    case CSSValueID::kText:
+      return kTextVariantEmoji;
+    case CSSValueID::kEmoji:
+      return kEmojiVariantEmoji;
+    case CSSValueID::kUnicode:
+      return kUnicodeVariantEmoji;
+    default:
+      break;
+  }
+
+  NOTREACHED_IN_MIGRATION();
+  return kNormalVariantEmoji;
 }
 
 template <>
@@ -1089,7 +1121,7 @@ inline TextRenderingMode CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kAutoTextRendering;
 }
 
@@ -1104,7 +1136,7 @@ inline EOrder CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return EOrder::kLogical;
 }
 
@@ -1150,7 +1182,7 @@ inline LineCap CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kButtCap;
 }
 
@@ -1183,7 +1215,7 @@ inline LineJoin CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kMiterJoin;
 }
 
@@ -1211,7 +1243,7 @@ inline WindRule CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return RULE_NONZERO;
 }
 
@@ -1229,7 +1261,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(EPaintOrderType e)
       value_id_ = CSSValueID::kMarkers;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       value_id_ = CSSValueID::kFill;
       break;
   }
@@ -1248,7 +1280,7 @@ inline EPaintOrderType CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return PT_NONE;
 }
 
@@ -1279,7 +1311,7 @@ inline TouchAction CSSIdentifierValue::ConvertTo() const {
       break;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return TouchAction::kNone;
 }
 
@@ -1301,7 +1333,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(CSSBoxType css_box)
       break;
     case CSSBoxType::kMissing:
       // The missing box should convert to a null primitive value.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -1319,7 +1351,7 @@ inline CSSBoxType CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return CSSBoxType::kContent;
 }
 
@@ -1418,7 +1450,7 @@ inline ItemPosition CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return ItemPosition::kAuto;
 }
 
@@ -1487,7 +1519,7 @@ inline ContentPosition CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return ContentPosition::kNormal;
 }
 
@@ -1528,7 +1560,7 @@ inline ContentDistributionType CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return ContentDistributionType::kStretch;
 }
 
@@ -1559,7 +1591,7 @@ inline OverflowAlignment CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return OverflowAlignment::kUnsafe;
 }
 
@@ -1577,7 +1609,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(
     case mojom::blink::ScrollBehavior::kInstant:
       // Behavior 'instant' is only allowed in ScrollOptions arguments passed to
       // CSSOM scroll APIs.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 }
 
@@ -1591,7 +1623,7 @@ inline mojom::blink::ScrollBehavior CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return mojom::blink::ScrollBehavior::kAuto;
 }
 
@@ -1633,7 +1665,7 @@ inline cc::SnapAxis CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return cc::SnapAxis::kBoth;
 }
 
@@ -1660,7 +1692,7 @@ inline cc::SnapStrictness CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return cc::SnapStrictness::kProximity;
 }
 
@@ -1697,7 +1729,7 @@ inline cc::SnapAlignment CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return cc::SnapAlignment::kNone;
 }
 
@@ -1723,7 +1755,7 @@ inline Containment CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kContainsNone;
 }
 
@@ -1741,7 +1773,7 @@ inline EContainerType CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kContainerTypeNormal;
 }
 
@@ -1785,7 +1817,7 @@ inline CoordBox CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return CoordBox::kBorderBox;
 }
 
@@ -1834,7 +1866,7 @@ inline GeometryBox CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return GeometryBox::kBorderBox;
 }
 
@@ -1882,7 +1914,7 @@ inline TextUnderlinePosition CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return TextUnderlinePosition::kAuto;
 }
 
@@ -1914,7 +1946,7 @@ inline ScrollbarGutter CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return kScrollbarGutterAuto;
 }
 
@@ -1951,7 +1983,7 @@ inline TimelineAxis CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return TimelineAxis::kBlock;
 }
 
@@ -1983,7 +2015,7 @@ inline TimelineScroller CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return TimelineScroller::kNearest;
 }
 
@@ -2011,7 +2043,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(
       value_id_ = CSSValueID::kExitCrossing;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       value_id_ = CSSValueID::kCover;
       break;
   }
@@ -2035,7 +2067,7 @@ inline TimelineOffset::NamedRange CSSIdentifierValue::ConvertTo() const {
     default:
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return TimelineOffset::NamedRange::kCover;
 }
 
@@ -2069,7 +2101,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(ScrollStartValueType value_type)
       break;
     case ScrollStartValueType::kLengthOrPercentage:
       value_id_ = CSSValueID::kInvalid;
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 }
@@ -2094,7 +2126,7 @@ inline ScrollStartValueType CSSIdentifierValue::ConvertTo() const {
     case CSSValueID::kRight:
       return ScrollStartValueType::kRight;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return ScrollStartValueType::kAuto;
   }
 }
@@ -2120,7 +2152,7 @@ inline EScrollStartTarget CSSIdentifierValue::ConvertTo() const {
     case CSSValueID::kAuto:
       return EScrollStartTarget::kAuto;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return EScrollStartTarget::kNone;
   };
 }
@@ -2133,7 +2165,7 @@ inline CSSIdentifierValue::CSSIdentifierValue(InsetAreaRegion region)
       value_id_ = CSSValueID::kNone;
       break;
     case InsetAreaRegion::kAll:
-      value_id_ = CSSValueID::kAll;
+      value_id_ = CSSValueID::kSpanAll;
       break;
     case InsetAreaRegion::kCenter:
       value_id_ = CSSValueID::kCenter;
@@ -2149,6 +2181,30 @@ inline CSSIdentifierValue::CSSIdentifierValue(InsetAreaRegion region)
       break;
     case InsetAreaRegion::kSelfEnd:
       value_id_ = CSSValueID::kSelfEnd;
+      break;
+    case InsetAreaRegion::kInlineStart:
+      value_id_ = CSSValueID::kInlineStart;
+      break;
+    case InsetAreaRegion::kInlineEnd:
+      value_id_ = CSSValueID::kInlineEnd;
+      break;
+    case InsetAreaRegion::kSelfInlineStart:
+      value_id_ = CSSValueID::kSelfInlineStart;
+      break;
+    case InsetAreaRegion::kSelfInlineEnd:
+      value_id_ = CSSValueID::kSelfInlineEnd;
+      break;
+    case InsetAreaRegion::kBlockStart:
+      value_id_ = CSSValueID::kBlockStart;
+      break;
+    case InsetAreaRegion::kBlockEnd:
+      value_id_ = CSSValueID::kBlockEnd;
+      break;
+    case InsetAreaRegion::kSelfBlockStart:
+      value_id_ = CSSValueID::kSelfBlockStart;
+      break;
+    case InsetAreaRegion::kSelfBlockEnd:
+      value_id_ = CSSValueID::kSelfBlockEnd;
       break;
     case InsetAreaRegion::kTop:
       value_id_ = CSSValueID::kTop;
@@ -2194,7 +2250,7 @@ inline InsetAreaRegion CSSIdentifierValue::ConvertTo() const {
   switch (GetValueID()) {
     case CSSValueID::kNone:
       return InsetAreaRegion::kNone;
-    case CSSValueID::kAll:
+    case CSSValueID::kSpanAll:
       return InsetAreaRegion::kAll;
     case CSSValueID::kCenter:
       return InsetAreaRegion::kCenter;
@@ -2206,6 +2262,22 @@ inline InsetAreaRegion CSSIdentifierValue::ConvertTo() const {
       return InsetAreaRegion::kSelfStart;
     case CSSValueID::kSelfEnd:
       return InsetAreaRegion::kSelfEnd;
+    case CSSValueID::kInlineStart:
+      return InsetAreaRegion::kInlineStart;
+    case CSSValueID::kInlineEnd:
+      return InsetAreaRegion::kInlineEnd;
+    case CSSValueID::kSelfInlineStart:
+      return InsetAreaRegion::kSelfInlineStart;
+    case CSSValueID::kSelfInlineEnd:
+      return InsetAreaRegion::kSelfInlineEnd;
+    case CSSValueID::kBlockStart:
+      return InsetAreaRegion::kBlockStart;
+    case CSSValueID::kBlockEnd:
+      return InsetAreaRegion::kBlockEnd;
+    case CSSValueID::kSelfBlockStart:
+      return InsetAreaRegion::kSelfBlockStart;
+    case CSSValueID::kSelfBlockEnd:
+      return InsetAreaRegion::kSelfBlockEnd;
     case CSSValueID::kTop:
       return InsetAreaRegion::kTop;
     case CSSValueID::kBottom:
@@ -2231,9 +2303,42 @@ inline InsetAreaRegion CSSIdentifierValue::ConvertTo() const {
     case CSSValueID::kYSelfEnd:
       return InsetAreaRegion::kYSelfEnd;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return InsetAreaRegion::kNone;
   };
+}
+
+template <>
+inline CSSIdentifierValue::CSSIdentifierValue(PositionVisibility visibility)
+    : CSSValue(kIdentifierClass) {
+  switch (visibility) {
+    case PositionVisibility::kAlways:
+      value_id_ = CSSValueID::kAlways;
+      break;
+    // TODO(crbug.com/332933527): Support kAnchorsValid.
+    case PositionVisibility::kAnchorsVisible:
+      value_id_ = CSSValueID::kAnchorsVisible;
+      break;
+    case PositionVisibility::kNoOverflow:
+      value_id_ = CSSValueID::kNoOverflow;
+      break;
+  }
+}
+
+template <>
+inline PositionVisibility CSSIdentifierValue::ConvertTo() const {
+  switch (GetValueID()) {
+    case CSSValueID::kAlways:
+      return PositionVisibility::kAlways;
+    // TODO(crbug.com/332933527): Support kAnchorsValid.
+    case CSSValueID::kAnchorsVisible:
+      return PositionVisibility::kAnchorsVisible;
+    case CSSValueID::kNoOverflow:
+      return PositionVisibility::kNoOverflow;
+    default:
+      NOTREACHED_IN_MIGRATION();
+      return PositionVisibility::kAlways;
+  }
 }
 
 }  // namespace blink

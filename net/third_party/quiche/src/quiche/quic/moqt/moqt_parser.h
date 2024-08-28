@@ -38,12 +38,16 @@ class QUICHE_EXPORT MoqtParserVisitor {
   virtual void OnSubscribeOkMessage(const MoqtSubscribeOk& message) = 0;
   virtual void OnSubscribeErrorMessage(const MoqtSubscribeError& message) = 0;
   virtual void OnUnsubscribeMessage(const MoqtUnsubscribe& message) = 0;
-  virtual void OnSubscribeFinMessage(const MoqtSubscribeFin& message) = 0;
-  virtual void OnSubscribeRstMessage(const MoqtSubscribeRst& message) = 0;
+  virtual void OnSubscribeDoneMessage(const MoqtSubscribeDone& message) = 0;
+  virtual void OnSubscribeUpdateMessage(const MoqtSubscribeUpdate& message) = 0;
   virtual void OnAnnounceMessage(const MoqtAnnounce& message) = 0;
   virtual void OnAnnounceOkMessage(const MoqtAnnounceOk& message) = 0;
   virtual void OnAnnounceErrorMessage(const MoqtAnnounceError& message) = 0;
+  virtual void OnAnnounceCancelMessage(const MoqtAnnounceCancel& message) = 0;
+  virtual void OnTrackStatusRequestMessage(
+      const MoqtTrackStatusRequest& message) = 0;
   virtual void OnUnannounceMessage(const MoqtUnannounce& message) = 0;
+  virtual void OnTrackStatusMessage(const MoqtTrackStatus& message) = 0;
   virtual void OnGoAwayMessage(const MoqtGoAway& message) = 0;
 
   virtual void OnParsingError(MoqtError code, absl::string_view reason) = 0;
@@ -66,6 +70,12 @@ class QUICHE_EXPORT MoqtParser {
   // datagram rather than a stream.
   void ProcessData(absl::string_view data, bool fin);
 
+  // Provide a separate path for datagrams. Returns the payload bytes, or empty
+  // string_view on error. The caller provides the whole datagram in |data|.
+  // The function puts the object metadata in |object_metadata|.
+  static absl::string_view ProcessDatagram(absl::string_view data,
+                                           MoqtObject& object_metadata);
+
  private:
   // The central switch statement to dispatch a message to the correct
   // Process* function. Returns 0 if it could not parse the full messsage
@@ -84,13 +94,19 @@ class QUICHE_EXPORT MoqtParser {
   size_t ProcessSubscribeOk(quic::QuicDataReader& reader);
   size_t ProcessSubscribeError(quic::QuicDataReader& reader);
   size_t ProcessUnsubscribe(quic::QuicDataReader& reader);
-  size_t ProcessSubscribeFin(quic::QuicDataReader& reader);
-  size_t ProcessSubscribeRst(quic::QuicDataReader& reader);
+  size_t ProcessSubscribeDone(quic::QuicDataReader& reader);
+  size_t ProcessSubscribeUpdate(quic::QuicDataReader& reader);
   size_t ProcessAnnounce(quic::QuicDataReader& reader);
   size_t ProcessAnnounceOk(quic::QuicDataReader& reader);
   size_t ProcessAnnounceError(quic::QuicDataReader& reader);
+  size_t ProcessAnnounceCancel(quic::QuicDataReader& reader);
+  size_t ProcessTrackStatusRequest(quic::QuicDataReader& reader);
   size_t ProcessUnannounce(quic::QuicDataReader& reader);
+  size_t ProcessTrackStatus(quic::QuicDataReader& reader);
   size_t ProcessGoAway(quic::QuicDataReader& reader);
+
+  static size_t ParseObjectHeader(quic::QuicDataReader& reader,
+                                  MoqtObject& object, MoqtMessageType type);
 
   // If |error| is not provided, assumes kProtocolViolation.
   void ParseError(absl::string_view reason);
@@ -99,9 +115,6 @@ class QUICHE_EXPORT MoqtParser {
   // Reads an integer whose length is specified by a preceding VarInt62 and
   // returns it in |result|. Returns false if parsing fails.
   bool ReadVarIntPieceVarInt62(quic::QuicDataReader& reader, uint64_t& result);
-  // Read a Location field from SUBSCRIBE REQUEST
-  bool ReadLocation(quic::QuicDataReader& reader,
-                    std::optional<MoqtSubscribeLocation>& loc);
   // Read a parameter and return the value as a string_view. Returns false if
   // |reader| does not have enough data.
   bool ReadParameter(quic::QuicDataReader& reader, uint64_t& type,
@@ -118,6 +131,7 @@ class QUICHE_EXPORT MoqtParser {
   // for the most recent object.
   bool ObjectPayloadInProgress() const {
     return (object_metadata_.has_value() &&
+            object_metadata_->object_status == MoqtObjectStatus::kNormal &&
             (object_metadata_->forwarding_preference ==
                  MoqtForwardingPreference::kObject ||
              object_metadata_->forwarding_preference ==

@@ -56,7 +56,7 @@ static int64_t AVIOSeekOperation(void* opaque, int64_t offset, int whence) {
       break;
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return new_offset;
 }
@@ -78,11 +78,6 @@ static const char* GetAllowedDemuxers() {
                                                  "flac", "mp3",      "mov"};
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
     allowed_demuxers.push_back("aac");
-#if BUILDFLAG(IS_CHROMEOS)
-    if (base::FeatureList::IsEnabled(kCrOSLegacyMediaFormats)) {
-      allowed_demuxers.push_back("avi");
-    }
-#endif
 #endif
     return base::JoinString(allowed_demuxers, ",");
   }());
@@ -158,19 +153,8 @@ const char* FFmpegGlue::GetAllowedVideoDecoders() {
   // This should match the configured lists in //third_party/ffmpeg.
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
     std::vector<std::string> allowed_decoders;
-    if (base::FeatureList::IsEnabled(kTheoraVideoCodec)) {
-      allowed_decoders.push_back("theora");
-    }
-    if (base::FeatureList::IsEnabled(kFFmpegDecodeOpaqueVP8)) {
-      allowed_decoders.push_back("vp8");
-    }
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
     allowed_decoders.push_back("h264");
-#if BUILDFLAG(IS_CHROMEOS)
-    if (base::FeatureList::IsEnabled(kCrOSLegacyMediaFormats)) {
-      allowed_decoders.push_back("mpeg4");
-    }
-#endif  // BUILDFLAG(IS_CHROMEOS)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
     return base::JoinString(allowed_decoders, ",");
 #else
@@ -187,10 +171,21 @@ bool FFmpegGlue::OpenContext(bool is_local_file) {
   // destruction path to avoid double frees.
   open_called_ = true;
 
+  // We need to set the WAV decoder max size to what it had previously been set
+  // to. The auto-selectable max size ends up at 64k, which is larger than the
+  // read size from a MultiBufferDataSource, causing demuxer init to never
+  // complete.
+  AVDictionary* options = nullptr;
+  av_dict_set(&options, "max_size", "4096", 0);
+
   // By passing nullptr for the filename (second parameter) we are telling
   // FFmpeg to use the AVIO context we setup from the AVFormatContext structure.
   const int ret =
-      avformat_open_input(&format_context_, nullptr, nullptr, nullptr);
+      avformat_open_input(&format_context_, nullptr, nullptr, &options);
+
+  if (options) {
+    av_dict_free(&options);
+  }
 
   // If FFmpeg can't identify the file, read the first 8k and attempt to guess
   // at the container type ourselves. This way we can track emergent formats.
@@ -217,7 +212,7 @@ bool FFmpegGlue::OpenContext(bool is_local_file) {
     return false;
   }
 
-  // Rely on ffmpeg's parsing if we're able to succesfully open the file.
+  // Rely on ffmpeg's parsing if we're able to successfully open the file.
   if (strcmp(format_context_->iformat->name, "mov,mp4,m4a,3gp,3g2,mj2") == 0)
     container_ = container_names::MediaContainerName::kContainerMOV;
   else if (strcmp(format_context_->iformat->name, "flac") == 0)

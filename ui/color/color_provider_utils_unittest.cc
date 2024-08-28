@@ -49,7 +49,6 @@ TEST_F(ColorProviderUtilsTest, RendererColorMapGeneratesProvidersCorrectly) {
   ui::ColorMixer& mixer = color_provider.AddMixer();
   for (int i = ui::kUiColorsStart + 1; i < ui::kUiColorsEnd; ++i)
     mixer[i] = {static_cast<SkColor>(i)};
-  color_provider.GenerateColorMap();
 
   // The size of the RendererColorMap should match number of defined
   // RendererColorIds.
@@ -61,8 +60,9 @@ TEST_F(ColorProviderUtilsTest, RendererColorMapGeneratesProvidersCorrectly) {
   // also match the number of defined RendererColorIds.
   auto new_color_provider =
       ui::CreateColorProviderFromRendererColorMap(renderer_color_map);
+  new_color_provider->GenerateColorMapForTesting();
   EXPECT_EQ(kTotaltRendererColorIds,
-            new_color_provider.color_map_for_testing().size());
+            new_color_provider->color_map_for_testing().size());
 }
 
 TEST_F(ColorProviderUtilsTest, ColorProviderRendererColorMapEquivalence) {
@@ -73,21 +73,19 @@ TEST_F(ColorProviderUtilsTest, ColorProviderRendererColorMapEquivalence) {
   for (int i = ui::kUiColorsStart + 1; i < ui::kUiColorsEnd; ++i) {
     mixer[i] = {static_cast<SkColor>(i)};
   }
-  color_provider.GenerateColorMap();
 
   // A renderer color map generated from its source provider should have
   // equivalent mappings.
   ui::RendererColorMap renderer_color_map =
       ui::CreateRendererColorMap(color_provider);
   EXPECT_TRUE(
-      IsRendererColorMappingEquivalent(color_provider, renderer_color_map));
+      IsRendererColorMappingEquivalent(&color_provider, renderer_color_map));
 
   // Providers with different renderer color mappings should not be flagged as
   // equivalent.
   ui::ColorProvider new_color_provider;
-  new_color_provider.GenerateColorMap();
-  EXPECT_FALSE(
-      IsRendererColorMappingEquivalent(new_color_provider, renderer_color_map));
+  EXPECT_FALSE(IsRendererColorMappingEquivalent(&new_color_provider,
+                                                renderer_color_map));
 }
 
 TEST_F(ColorProviderUtilsTest, DefaultBlinkColorProviderColorMapsValidity) {
@@ -121,7 +119,6 @@ TEST_F(ColorProviderUtilsTest, DefaultBlinkColorProviderColorMapsValidity) {
   ui::ColorProvider random_color_provider;
   ui::ColorMixer& mixer = random_color_provider.AddMixer();
   mixer[ui::kColorPrimaryBackground] = {SK_ColorWHITE};
-  random_color_provider.GenerateColorMap();
   ui::RendererColorMap random_color_map =
       ui::CreateRendererColorMap(random_color_provider);
 

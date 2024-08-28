@@ -25,13 +25,9 @@ bool ShouldAddHelpApp(content::BrowserContext* browser_context) {
 std::vector<StaticAppId> GetDefaultPinnedApps(
     content::BrowserContext* browser_context) {
   std::vector<StaticAppId> app_ids{
-      extension_misc::kGmailAppId,
       web_app::kGmailAppId,
 
       web_app::kGoogleCalendarAppId,
-
-      // TODO(b/207576430): Once Files SWA is fully launched, remove this entry.
-      extension_misc::kFilesManagerAppId,
 
       file_manager::kFileManagerSwaAppId,
 
@@ -41,11 +37,16 @@ std::vector<StaticAppId> GetDefaultPinnedApps(
 
       arc::kPlayStoreAppId,
 
-      extension_misc::kYoutubeAppId,
       web_app::kYoutubeAppId,
 
       arc::kGooglePhotosAppId,
   };
+
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  if (chromeos::features::IsContainerAppPreinstallEnabled()) {
+    app_ids.insert(app_ids.begin(), web_app::kContainerAppId);
+  }
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
   if (chromeos::features::IsCloudGamingDeviceEnabled()) {
     app_ids.push_back(web_app::kNvidiaGeForceNowAppId);

@@ -26,6 +26,7 @@
 #include "quiche/quic/core/quic_alarm.h"
 #include "quiche/quic/core/quic_alarm_factory.h"
 #include "quiche/quic/core/quic_blocked_writer_interface.h"
+#include "quiche/quic/core/quic_blocked_writer_list.h"
 #include "quiche/quic/core/quic_buffered_packet_store.h"
 #include "quiche/quic/core/quic_connection.h"
 #include "quiche/quic/core/quic_connection_id.h"
@@ -58,10 +59,6 @@ class QUICHE_EXPORT QuicDispatcher
       public ProcessPacketInterface,
       public QuicBufferedPacketStore::VisitorInterface {
  public:
-  // Ideally we'd have a linked_hash_set: the  boolean is unused.
-  using WriteBlockedList =
-      quiche::QuicheLinkedHashMap<QuicBlockedWriterInterface*, bool>;
-
   QuicDispatcher(
       const QuicConfig* config, const QuicCryptoServerConfig* crypto_config,
       QuicVersionManager* version_manager,
@@ -160,6 +157,7 @@ class QUICHE_EXPORT QuicDispatcher
   void OnExpiredPackets(QuicConnectionId server_connection_id,
                         QuicBufferedPacketStore::BufferedPacketList
                             early_arrived_packets) override;
+  void OnPathDegrading() override {}
 
   // Create connections for previously buffered CHLOs as many as allowed.
   virtual void ProcessBufferedChlos(size_t max_connections_to_create);
@@ -316,22 +314,6 @@ class QUICHE_EXPORT QuicDispatcher
   virtual void RestorePerPacketContext(
       std::unique_ptr<QuicPerPacketContext> /*context*/) {}
 
-  // If true, our framer will change its expected connection ID length
-  // to the received destination connection ID length of all IETF long headers.
-  void SetShouldUpdateExpectedServerConnectionIdLength(
-      bool should_update_expected_server_connection_id_length) {
-    should_update_expected_server_connection_id_length_ =
-        should_update_expected_server_connection_id_length;
-  }
-
-  // If true, the dispatcher will allow incoming initial packets that have
-  // destination connection IDs shorter than 64 bits.
-  void SetAllowShortInitialServerConnectionIds(
-      bool allow_short_initial_server_connection_ids) {
-    allow_short_initial_server_connection_ids_ =
-        allow_short_initial_server_connection_ids;
-  }
-
   // Called if a packet from an unseen connection is reset or rejected.
   virtual void OnNewConnectionRejected() {}
 
@@ -418,7 +400,7 @@ class QUICHE_EXPORT QuicDispatcher
   QuicCompressedCertsCache compressed_certs_cache_;
 
   // The list of connections waiting to write.
-  WriteBlockedList write_blocked_list_;
+  QuicBlockedWriterList write_blocked_list_;
 
   ReferenceCountedSessionMap reference_counted_session_map_;
 
@@ -468,18 +450,12 @@ class QUICHE_EXPORT QuicDispatcher
   // connections), false otherwise.
   bool accept_new_connections_;
 
-  // If false, the dispatcher follows the IETF spec and rejects packets with
-  // invalid destination connection IDs lengths below 64 bits.
-  // If true they are allowed.
-  bool allow_short_initial_server_connection_ids_;
-
   // IETF short headers contain a destination connection ID but do not
   // encode its length. This variable contains the length we expect to read.
   // This is also used to signal an error when a long header packet with
-  // different destination connection ID length is received when
-  // should_update_expected_server_connection_id_length_ is false and packet's
+  // different destination connection ID length is received when packet's
   // version does not allow variable length connection ID.
-  uint8_t expected_server_connection_id_length_;
+  const uint8_t expected_server_connection_id_length_;
 
   // Records client addresses that have been recently reset.
   absl::flat_hash_set<QuicSocketAddress, QuicSocketAddressHash>
@@ -487,10 +463,6 @@ class QUICHE_EXPORT QuicDispatcher
 
   // An alarm which clear recent_stateless_reset_addresses_.
   std::unique_ptr<QuicAlarm> clear_stateless_reset_addresses_alarm_;
-
-  // If true, change expected_server_connection_id_length_ to be the received
-  // destination connection ID length of all IETF long headers.
-  bool should_update_expected_server_connection_id_length_;
 
   ConnectionIdGeneratorInterface& connection_id_generator_;
 };

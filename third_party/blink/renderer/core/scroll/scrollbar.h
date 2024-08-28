@@ -78,7 +78,6 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   void SetFrameRect(const gfx::Rect&);
   const gfx::Rect& FrameRect() const { return frame_rect_; }
 
-  ScrollbarOverlayColorTheme GetScrollbarOverlayColorTheme() const;
   bool HasTickmarks() const;
   Vector<gfx::Rect> GetTickmarks() const;
   bool IsScrollableAreaActive() const;
@@ -130,6 +129,15 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   // overflow:overlay might be deprecated soon.
   virtual bool IsOverlayScrollbar() const;
   virtual bool IsFluentOverlayScrollbarMinimalMode() const;
+
+  // Returns `true` if the scrollbar bounds are larger than the canvas'. In
+  // this scenario, the scrollbar scaling will be done by using nine-patch
+  // scaling in the compositor thread.
+  // If the scrollbar's thickness is being affected (height for horizontal
+  // scrollbars, width for vertical), the function returns `false` as scrollbars
+  // will need to re-paint the arrows.
+  bool UsesNinePatchTrackAndCanSkipRepaint(
+      const gfx::Rect& new_frame_rect) const;
 
   bool ShouldParticipateInHitTesting();
 

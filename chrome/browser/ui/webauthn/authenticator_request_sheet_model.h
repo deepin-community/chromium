@@ -55,22 +55,31 @@ class AuthenticatorRequestSheetModel {
 
   virtual bool IsManageDevicesButtonVisible() const;
   virtual bool IsOtherMechanismButtonVisible() const;
+  virtual bool IsForgotGPMPinButtonVisible() const;
+  virtual bool IsGPMPinOptionsButtonVisible() const;
   virtual std::u16string GetOtherMechanismButtonLabel() const;
 
   virtual std::u16string GetStepTitle() const = 0;
   virtual std::u16string GetStepDescription() const = 0;
   virtual std::u16string GetAdditionalDescription() const;
   virtual std::u16string GetError() const;
+  virtual std::u16string GetHint() const;
 
   virtual void OnBack() = 0;
   virtual void OnAccept() = 0;
   virtual void OnCancel() = 0;
   virtual void OnManageDevices();
+  virtual void OnForgotGPMPin() const;
+  virtual void OnGPMPinOptionChosen(bool is_arbitrary) const;
 
   // Lottie illustrations are represented by their resource ID.
   std::optional<IllustrationPair<int>> lottie_illustrations() const {
     return lottie_illustrations_;
   }
+
+  // If true, the sheet has a Google Password Manager banner at the top, which
+  // is indented the same as the title and description.
+  bool has_gpm_banner() const { return has_gpm_banner_; }
 
   std::optional<IllustrationPair<const gfx::VectorIcon&>> vector_illustrations()
       const {
@@ -80,6 +89,7 @@ class AuthenticatorRequestSheetModel {
  protected:
   std::optional<IllustrationPair<int>> lottie_illustrations_;
   std::optional<IllustrationPair<const gfx::VectorIcon&>> vector_illustrations_;
+  bool has_gpm_banner_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_WEBAUTHN_AUTHENTICATOR_REQUEST_SHEET_MODEL_H_

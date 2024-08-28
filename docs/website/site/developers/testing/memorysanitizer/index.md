@@ -43,7 +43,7 @@ You can grab fresh Chrome binaries for Linux built with MSan
 
 To set up an MSan build in GN:
 
-```none
+```shell
 gclient runhooks
 gn args out/msan
 ```
@@ -80,18 +80,27 @@ If you are trying to reproduce a test run from the [Linux ChromiumOS MSan
 Tests](https://ci.chromium.org/p/chromium/builders/ci/Linux%20ChromiumOS%20MSan%20Tests)
 build, other GN args may also be needed.
 You can look for them via your test run page, under the section "lookup builder
-GN args". Add all of them, except the goma_dir.
+GN args".
 
 **Running on gLinux locally**
 
-testing/xvfb.py out/msan/unit_tests --gtest_filter="&lt;your test filter&gt;"
+Important: the `cd` in the instructions below is load-bearing, since MSan
+binaries [require a newer libc (and consequently, a newer ld.so as
+well)](https://crrev.com/c/5513300).
+
+```shell
+cd out/msan
+../../testing/xvfb.py ./unit_tests --gtest_filter="&lt;your test filter&gt;"
+```
+
 **Running on Ubuntu Trusty**
 
 Run the resulting binaries as usual. Pipe both stderr and stdout through
 `tools/valgrind/asan/asan_symbolize.py` to get symbolized reports:
 
-```none
-./out/msan/browser_tests |& tools/valgrind/asan/asan_symbolize.py
+```shell
+cd out/msan
+./browser_tests |& tools/valgrind/asan/asan_symbolize.py
 ```
 
 ### **Disable OpenGL**
@@ -141,8 +150,7 @@ file](https://source.chromium.org/chromium/chromium/src/+/main:tools/msan/ignore
 which is applied at compile time, and is used mainly to compensate for tool
 issues. Blocklist rules do not work the way suppression rules do - rather than
 suppressing reports with matching stack traces, they change the way MSan
-instrumentation is applied to the matched function. In addition, blocklist
-changes require a full clobber to take efffect. Please refrain from making
+instrumentation is applied to the matched function. Please refrain from making
 changes to the blocklist file unless you know what you are doing.
 
 Note also that instrumented libraries use separate blocklist files.
@@ -179,24 +187,39 @@ is considered "poisoned" (i.e. uninitialized). The header file
 examine and manipulate the shadow state without changing the application memory,
 which comes in handy when debugging MSan reports.
 
+Setting a breakpoint at `__sanitizer::Die()` will stop execution in the debugger
+after MSan prints diagnostic info, but before the program terminates.
+
+Alternatively, if you'd prefer to break before printing diagnostic information,
+set a breakpoint at `__msan_warning()`, `__msan_warning_noreturn()`,
+`__msan_warning_with_origin()`, and `__msan_warning_with_origin_noreturn()`.
+Note that this list of symbols may change over time; in LLDB, use something
+like:
+
+```
+image lookup -r -n __msan_warning.*
+```
+
+to find the full list of functions to set a breakpoint at.
+
 Print the complete shadow state of a range of application memory, including the
 origins of all uninitialized values, if any. (Note: though initializedness is
 tracked on bit level, origins have 4-byte granularity.)
 
-```none
+```c++
 void __msan_print_shadow(const volatile void *x, size_t size);
 ```
 
 The following prints a more minimalistic report which shows only the shadow
 memory:
 
-```none
+```c++
 void __msan_dump_shadow(const volatile void *x, size_t size);
 ```
 
 To mark a memory range as fully uninitialized/initialized:
 
-```none
+```c++
 void __msan_poison(const volatile void *a, size_t size);
 void __msan_unpoison(const volatile void *a, size_t size);
 void __msan_unpoison_string(const volatile char *a);
@@ -205,14 +228,14 @@ void __msan_unpoison_string(const volatile char *a);
 The following forces an MSan check, i.e. if any bits in the memory range are
 uninitialized the call will crash with an MSan report.
 
-```none
+```c++
 void __msan_check_mem_is_initialized(const volatile void *x, size_t size);
 ```
 
 This milder check returns the offset of the first (at least partially) poisoned
 byte in the range, or -1 if the whole range is good:
 
-```none
+```c++
 intptr_t __msan_test_shadow(const volatile void *x, size_t size);
 ```
 
@@ -223,13 +246,3 @@ The complete interface can be found in
 `src/third_party/llvm-build/Release+Asserts/lib/clang/3.6.0/include/sanitizer/msan_interface.h`.
 Functions such as `__msan_unpoison()` can also be used to permanently annotate
 your code for MSan, but please CC eugenis@ if you intend to do so.
-
-## Reproducing ClusterFuzz Bugs
-
-Because MSan only supports Ubuntu Precise/Trusty and not Rodete, the
-[ClusterFuzz reproduce tool](https://github.com/google/clusterfuzz-tools) cannot
-reproduce bugs found using MSan (on Rodete).
-
-If you are on Rodete, you can try to reproduce them manually using docker to run
-MSan by following [these
-instructions](/developers/testing/memorysanitizer#TOC-Running-on-other-distros-using-Docker).

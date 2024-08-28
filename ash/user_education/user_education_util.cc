@@ -31,10 +31,11 @@ namespace ash::user_education_util {
 namespace {
 
 // Keys used in `user_education::HelpBubbleParams::ExtendedProperties`.
+constexpr char kHelpBubbleAccessibleNameKey[] = "helpBubbleAccessibleName";
 constexpr char kHelpBubbleBodyIconKey[] = "helpBubbleBodyIcon";
+constexpr char kHelpBubbleBodyTextKey[] = "helpBubbleBodyText";
 constexpr char kHelpBubbleIdKey[] = "helpBubbleId";
 constexpr char kHelpBubbleModalTypeKey[] = "helpBubbleModalType";
-constexpr char kHelpBubbleStyleKey[] = "helpBubbleStyle";
 
 // Helpers ---------------------------------------------------------------------
 
@@ -102,14 +103,6 @@ user_education::HelpBubbleParams::ExtendedProperties CreateExtendedProperties(
 }
 
 user_education::HelpBubbleParams::ExtendedProperties CreateExtendedProperties(
-    HelpBubbleStyle help_bubble_style) {
-  user_education::HelpBubbleParams::ExtendedProperties extended_properties;
-  extended_properties.values().Set(kHelpBubbleStyleKey,
-                                   static_cast<int>(help_bubble_style));
-  return extended_properties;
-}
-
-user_education::HelpBubbleParams::ExtendedProperties CreateExtendedProperties(
     ui::ModalType modal_type) {
   user_education::HelpBubbleParams::ExtendedProperties extended_properties;
   extended_properties.values().Set(kHelpBubbleModalTypeKey,
@@ -117,8 +110,34 @@ user_education::HelpBubbleParams::ExtendedProperties CreateExtendedProperties(
   return extended_properties;
 }
 
+user_education::HelpBubbleParams::ExtendedProperties
+CreateExtendedPropertiesWithAccessibleName(const std::string& accessible_name) {
+  user_education::HelpBubbleParams::ExtendedProperties extended_properties;
+  extended_properties.values().Set(kHelpBubbleAccessibleNameKey,
+                                   accessible_name);
+  return extended_properties;
+}
+
+user_education::HelpBubbleParams::ExtendedProperties
+CreateExtendedPropertiesWithBodyText(const std::string& body_text) {
+  user_education::HelpBubbleParams::ExtendedProperties extended_properties;
+  extended_properties.values().Set(kHelpBubbleBodyTextKey, body_text);
+  return extended_properties;
+}
+
 const AccountId& GetAccountId(const UserSession* user_session) {
   return user_session ? user_session->user_info.account_id : EmptyAccountId();
+}
+
+std::optional<std::string> GetHelpBubbleAccessibleName(
+    const user_education::HelpBubbleParams::ExtendedProperties&
+        extended_properties) {
+  if (const std::string* help_bubble_accessible_name =
+          extended_properties.values().FindString(
+              kHelpBubbleAccessibleNameKey)) {
+    return *help_bubble_accessible_name;
+  }
+  return std::nullopt;
 }
 
 std::optional<std::reference_wrapper<const gfx::VectorIcon>>
@@ -131,6 +150,16 @@ GetHelpBubbleBodyIcon(
     auto it = registry.find(*body_icon);
     CHECK(it != registry.end());
     return *it->second;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> GetHelpBubbleBodyText(
+    const user_education::HelpBubbleParams::ExtendedProperties&
+        extended_properties) {
+  if (const std::string* help_bubble_body_text =
+          extended_properties.values().FindString(kHelpBubbleBodyTextKey)) {
+    return *help_bubble_body_text;
   }
   return std::nullopt;
 }
@@ -150,16 +179,6 @@ ui::ModalType GetHelpBubbleModalType(
     return static_cast<ui::ModalType>(model_type.value());
   }
   return ui::MODAL_TYPE_NONE;
-}
-
-std::optional<HelpBubbleStyle> GetHelpBubbleStyle(
-    const user_education::HelpBubbleParams::ExtendedProperties&
-        extended_properties) {
-  if (std::optional<int> help_bubble_style =
-          extended_properties.values().FindInt(kHelpBubbleStyleKey)) {
-    return static_cast<HelpBubbleStyle>(help_bubble_style.value());
-  }
-  return std::nullopt;
 }
 
 views::View* GetMatchingViewInRootWindow(int64_t display_id,

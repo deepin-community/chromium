@@ -32,6 +32,8 @@ constexpr char kProxyBTokenSpendRateHistogram[] =
     "NetworkService.IpProtection.ProxyB.TokenSpendRate";
 constexpr char kProxyBTokenExpirationRateHistogram[] =
     "NetworkService.IpProtection.ProxyB.TokenExpirationRate";
+constexpr char kTokenBatchGenerationTimeHistogram[] =
+    "NetworkService.IpProtection.TokenBatchGenerationTime";
 const base::TimeDelta kTokenRateMeasurementInterval = base::Minutes(5);
 
 struct ExpectedTryGetAuthTokensCall {
@@ -103,10 +105,12 @@ class MockIpProtectionConfigGetter
 }  // namespace
 
 struct HistogramState {
-  // Number of successful requests (true).
+  // Number of successful calls to GetAuthToken (true).
   int success;
-  // Number of failed requests (false).
+  // Number of failed calls to GetAuthToken (false).
   int failure;
+  // Number of successful token batch generations.
+  int generated;
 };
 
 class IpProtectionTokenCacheManagerImplTest : public testing::Test {
@@ -138,6 +142,8 @@ class IpProtectionTokenCacheManagerImplTest : public testing::Test {
                                         state.success);
     histogram_tester_.ExpectBucketCount(kGetAuthTokenResultHistogram, false,
                                         state.failure);
+    histogram_tester_.ExpectTotalCount(kTokenBatchGenerationTimeHistogram,
+                                       state.generated);
   }
 
   // Create a batch of tokens.
@@ -147,7 +153,8 @@ class IpProtectionTokenCacheManagerImplTest : public testing::Test {
     std::vector<network::mojom::BlindSignedAuthTokenPtr> tokens;
     for (int i = 0; i < count; i++) {
       tokens.emplace_back(network::mojom::BlindSignedAuthToken::New(
-          base::StringPrintf("token-%d", i), expiration));
+          base::StringPrintf("token-%d", i), expiration,
+          network::mojom::GeoHint::New("US", "US-AL", "ALABASTER")));
     }
     return tokens;
   }
@@ -251,7 +258,8 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, GetAuthTokenTrue) {
   ASSERT_TRUE(token);
   EXPECT_EQ((*token)->token, "token-0");
   EXPECT_EQ((*token)->expiration, kFutureExpiration);
-  ExpectHistogramState(HistogramState{.success = 1, .failure = 0});
+  ExpectHistogramState(
+      HistogramState{.success = 1, .failure = 0, .generated = 1});
 }
 
 // `GetAuthToken()` returns nullopt on a cache containing expired tokens.
@@ -261,7 +269,8 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, GetAuthTokenFalseExpired) {
   CallTryGetAuthTokensAndWait(network::mojom::IpProtectionProxyLayer::kProxyA);
   ASSERT_TRUE(mock_.GotAllExpectedMockCalls());
   EXPECT_FALSE(ipp_proxy_a_token_cache_manager_->GetAuthToken());
-  ExpectHistogramState(HistogramState{.success = 0, .failure = 1});
+  ExpectHistogramState(
+      HistogramState{.success = 0, .failure = 1, .generated = 1});
 }
 
 // If `TryGetAuthTokens()` returns an empty batch, the cache remains empty.
@@ -273,7 +282,26 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, EmptyBatch) {
 
   ASSERT_FALSE(ipp_proxy_a_token_cache_manager_->IsAuthTokenAvailable());
   ASSERT_FALSE(ipp_proxy_a_token_cache_manager_->GetAuthToken());
-  ExpectHistogramState(HistogramState{.success = 0, .failure = 1});
+  ExpectHistogramState(
+      HistogramState{.success = 0, .failure = 1, .generated = 1});
+}
+
+// If `TryGetAuthTokens()` returns a batch smaller than the low-water mark, the
+// cache does not immediately refill.
+TEST_F(IpProtectionTokenCacheManagerImplTest, SmallBatch) {
+  mock_.ExpectTryGetAuthTokensCall(
+      expected_batch_size_,
+      TokenBatch(cache_low_water_mark_ - 1, kFutureExpiration));
+  CallTryGetAuthTokensAndWait(network::mojom::IpProtectionProxyLayer::kProxyA);
+  ASSERT_TRUE(mock_.GotAllExpectedMockCalls());
+
+  ASSERT_TRUE(ipp_proxy_a_token_cache_manager_->IsAuthTokenAvailable());
+  ASSERT_TRUE(ipp_proxy_a_token_cache_manager_->GetAuthToken());
+  ASSERT_TRUE(ipp_proxy_a_token_cache_manager_
+                  ->try_get_auth_tokens_after_for_testing() >
+              base::Time::Now());
+  ExpectHistogramState(
+      HistogramState{.success = 1, .failure = 0, .generated = 1});
 }
 
 // If `TryGetAuthTokens()` returns an backoff due to an error, the cache remains
@@ -287,7 +315,8 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, ErrorBatch) {
 
   ASSERT_FALSE(ipp_proxy_a_token_cache_manager_->IsAuthTokenAvailable());
   ASSERT_FALSE(ipp_proxy_a_token_cache_manager_->GetAuthToken());
-  ExpectHistogramState(HistogramState{.success = 0, .failure = 1});
+  ExpectHistogramState(
+      HistogramState{.success = 0, .failure = 1, .generated = 0});
 }
 
 // `GetAuthToken()` skips expired tokens and returns a non-expired token,
@@ -296,7 +325,8 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, SkipExpiredTokens) {
   std::vector<network::mojom::BlindSignedAuthTokenPtr> tokens =
       TokenBatch(10, kPastExpiration);
   tokens.emplace_back(network::mojom::BlindSignedAuthToken::New(
-      "good-token", kFutureExpiration));
+      "good-token", kFutureExpiration,
+      network::mojom::GeoHint::New("US", "US-AL", "ALABASTER")));
   mock_.ExpectTryGetAuthTokensCall(expected_batch_size_, std::move(tokens));
   CallTryGetAuthTokensAndWait(network::mojom::IpProtectionProxyLayer::kProxyA);
   ASSERT_TRUE(mock_.GotAllExpectedMockCalls());
@@ -304,7 +334,8 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, SkipExpiredTokens) {
   auto got_token = ipp_proxy_a_token_cache_manager_->GetAuthToken();
   EXPECT_EQ(got_token.value()->token, "good-token");
   EXPECT_EQ(got_token.value()->expiration, kFutureExpiration);
-  ExpectHistogramState(HistogramState{.success = 1, .failure = 0});
+  ExpectHistogramState(
+      HistogramState{.success = 1, .failure = 0, .generated = 1});
 }
 
 TEST_F(IpProtectionTokenCacheManagerImplTest, TokenExpirationFuzzed) {
@@ -332,7 +363,8 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, NullGetter) {
   EXPECT_FALSE(ipp_proxy_a_token_cache_manager_->IsAuthTokenAvailable());
   auto token = ipp_token_cache_manager.GetAuthToken();
   ASSERT_FALSE(token);
-  ExpectHistogramState(HistogramState{.success = 0, .failure = 1});
+  ExpectHistogramState(
+      HistogramState{.success = 0, .failure = 1, .generated = 0});
 }
 
 // Verify that the token spend rate for ProxyA is measured correctly.
@@ -546,13 +578,16 @@ TEST_F(IpProtectionTokenCacheManagerImplTest, RefillAfterExpiration) {
   base::Time expiration2 = base::Time::Now() + base::Minutes(15);
   base::Time expiration3 = base::Time::Now() + base::Minutes(20);
   for (int i = 0; i < expected_batch_size_ - 2; i++) {
-    tokens.emplace_back(
-        network::mojom::BlindSignedAuthToken::New("exp2", expiration2));
+    tokens.emplace_back(network::mojom::BlindSignedAuthToken::New(
+        "exp2", expiration2,
+        network::mojom::GeoHint::New("US", "US-AL", "ALABASTER")));
   }
-  tokens.emplace_back(
-      network::mojom::BlindSignedAuthToken::New("exp3", expiration3));
-  tokens.emplace_back(
-      network::mojom::BlindSignedAuthToken::New("exp1", expiration1));
+  tokens.emplace_back(network::mojom::BlindSignedAuthToken::New(
+      "exp3", expiration3,
+      network::mojom::GeoHint::New("US", "US-AL", "ALABASTER")));
+  tokens.emplace_back(network::mojom::BlindSignedAuthToken::New(
+      "exp1", expiration1,
+      network::mojom::GeoHint::New("US", "US-AL", "ALABASTER")));
   mock_.ExpectTryGetAuthTokensCall(expected_batch_size_, std::move(tokens));
   ipp_proxy_a_token_cache_manager_->EnableCacheManagementForTesting();
   WaitForTryGetAuthTokensCompletion(

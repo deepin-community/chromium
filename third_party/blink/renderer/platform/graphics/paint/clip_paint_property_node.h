@@ -11,7 +11,6 @@
 #include "base/check_op.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/geometry/float_rounded_rect.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/paint/float_clip_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/geometry_mapper_clip_cache.h"
@@ -35,8 +34,8 @@ class PropertyTreeState;
 class ClipPaintPropertyNode;
 
 class PLATFORM_EXPORT ClipPaintPropertyNodeOrAlias
-    : public PaintPropertyNode<ClipPaintPropertyNodeOrAlias,
-                               ClipPaintPropertyNode> {
+    : public PaintPropertyNodeBase<ClipPaintPropertyNodeOrAlias,
+                                   ClipPaintPropertyNode> {
  public:
   // Checks if the accumulated clip from |this| to |relative_to_state.Clip()|
   // has changed, at least significance of |change|, in the space of
@@ -50,28 +49,20 @@ class PLATFORM_EXPORT ClipPaintPropertyNodeOrAlias
       const PropertyTreeState& relative_to_state,
       const TransformPaintPropertyNodeOrAlias* transform_not_to_check) const;
 
+  // See PaintPropertyNode::ChangedSequenceNumber().
   void ClearChangedToRoot(int sequence_number) const;
 
-  void AddChanged(PaintPropertyChangeType changed) {
+  void AddChanged(PaintPropertyChangeType changed) final {
     DCHECK_NE(PaintPropertyChangeType::kUnchanged, changed);
     GeometryMapperClipCache::ClearCache();
-    PaintPropertyNode::AddChanged(changed);
+    PaintPropertyNodeBase::AddChanged(changed);
   }
 
  protected:
-  using PaintPropertyNode::PaintPropertyNode;
-
- private:
-  template <bool (TransformPaintPropertyNodeOrAlias::*ChangedMethod)(
-      PaintPropertyChangeType,
-      const TransformPaintPropertyNodeOrAlias&) const>
-  bool ChangedInternal(
-      PaintPropertyChangeType change,
-      const PropertyTreeState& relative_to_state,
-      const TransformPaintPropertyNodeOrAlias* transform_not_to_check) const;
+  using PaintPropertyNodeBase::PaintPropertyNodeBase;
 };
 
-class ClipPaintPropertyNodeAlias : public ClipPaintPropertyNodeOrAlias {
+class ClipPaintPropertyNodeAlias final : public ClipPaintPropertyNodeOrAlias {
  public:
   static scoped_refptr<ClipPaintPropertyNodeAlias> Create(
       const ClipPaintPropertyNodeOrAlias& parent) {
@@ -84,7 +75,7 @@ class ClipPaintPropertyNodeAlias : public ClipPaintPropertyNodeOrAlias {
       : ClipPaintPropertyNodeOrAlias(parent, kParentAlias) {}
 };
 
-class PLATFORM_EXPORT ClipPaintPropertyNode
+class PLATFORM_EXPORT ClipPaintPropertyNode final
     : public ClipPaintPropertyNodeOrAlias {
  public:
   // To make it less verbose and more readable to construct and update a node,
@@ -197,12 +188,9 @@ class PLATFORM_EXPORT ClipPaintPropertyNode
     return GetClipCache().NearestPixelMovingFilterClip();
   }
 
-  std::unique_ptr<JSONObject> ToJSON() const;
+  std::unique_ptr<JSONObject> ToJSON() const final;
 
  private:
-  friend class PaintPropertyNode<ClipPaintPropertyNodeOrAlias,
-                                 ClipPaintPropertyNode>;
-
   ClipPaintPropertyNode(const ClipPaintPropertyNodeOrAlias* parent,
                         State&& state)
       : ClipPaintPropertyNodeOrAlias(parent), state_(std::move(state)) {}

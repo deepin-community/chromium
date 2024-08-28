@@ -131,6 +131,7 @@ base::TimeDelta GetWaitTimeout() {
 
 // static
 std::string SyncConsentScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::NEXT:
       return "Next";
@@ -139,6 +140,7 @@ std::string SyncConsentScreen::GetResultString(Result result) {
     case Result::NOT_APPLICABLE:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 // static
@@ -282,7 +284,7 @@ void SyncConsentScreen::MaybeEnableSyncForSkip() {
   switch (behavior_) {
     case SyncScreenBehavior::kUnknown:
     case SyncScreenBehavior::kShow:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
     case SyncScreenBehavior::kSkipNonGaiaAccount:
     case SyncScreenBehavior::kSkipPublicAccount:

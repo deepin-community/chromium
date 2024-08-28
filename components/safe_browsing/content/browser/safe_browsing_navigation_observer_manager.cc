@@ -6,9 +6,9 @@
 
 #include <iterator>
 #include <memory>
+#include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
@@ -20,6 +20,7 @@
 #include "components/safe_browsing/content/browser/safe_browsing_navigation_observer.h"
 #include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager_util.h"
 #include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/utils.h"
@@ -128,10 +129,12 @@ const char ReferrerChainData::kDownloadReferrerChainDataKey[] =
     "referrer_chain_data_key";
 
 ReferrerChainData::ReferrerChainData(
+    ReferrerChainProvider::AttributionResult attribution_result,
     std::unique_ptr<ReferrerChain> referrer_chain,
     size_t referrer_chain_length,
     size_t recent_navigations_to_collect)
-    : referrer_chain_(std::move(referrer_chain)),
+    : attribution_result_(attribution_result),
+      referrer_chain_(std::move(referrer_chain)),
       referrer_chain_length_(referrer_chain_length),
       recent_navigations_to_collect_(recent_navigations_to_collect) {}
 
@@ -564,6 +567,17 @@ SafeBrowsingNavigationObserverManager::IdentifyReferrerChainByEventURL(
 }
 
 SafeBrowsingNavigationObserverManager::AttributionResult
+SafeBrowsingNavigationObserverManager::IdentifyReferrerChainByEventURL(
+    const GURL& event_url,
+    SessionID event_tab_id,
+    int user_gesture_count_limit,
+    ReferrerChain* out_referrer_chain) {
+  return IdentifyReferrerChainByEventURL(
+      event_url, event_tab_id, content::GlobalRenderFrameHostId(),
+      user_gesture_count_limit, out_referrer_chain);
+}
+
+SafeBrowsingNavigationObserverManager::AttributionResult
 SafeBrowsingNavigationObserverManager::IdentifyReferrerChainByPendingEventURL(
     const GURL& event_url,
     int user_gesture_count_limit,
@@ -817,7 +831,7 @@ void SafeBrowsingNavigationObserverManager::CleanUpUserGestures() {
 
 void SafeBrowsingNavigationObserverManager::CleanUpIpAddresses() {
   for (auto it = host_to_ip_map_.begin(); it != host_to_ip_map_.end();) {
-    base::EraseIf(it->second, [](const ResolvedIPAddress& resolved_ip) {
+    std::erase_if(it->second, [](const ResolvedIPAddress& resolved_ip) {
       return IsEventExpired(resolved_ip.timestamp, GetNavigationFootprintTTL());
     });
     if (it->second.empty())
@@ -877,7 +891,9 @@ void SafeBrowsingNavigationObserverManager::RecordNotificationNavigationEvent(
     const GURL& script_url,
     const GURL& url) {
   // Push notifications are tied to the https scheme.
-  if (!script_url.SchemeIs(url::kHttpsScheme)) {
+  // We also care about notifications from Chrome extensions.
+  if (!script_url.SchemeIs(url::kHttpsScheme) &&
+      !script_url.SchemeIs("chrome-extension")) {
     return;
   }
   // We only collect notification referrers for ESB users.
@@ -892,8 +908,6 @@ void SafeBrowsingNavigationObserverManager::RecordNotificationNavigationEvent(
           std::move(nav_event);
   UMA_HISTOGRAM_BOOLEAN(
       "SafeBrowsing.NavigationObserver.NotificationNavigationEventAdded", true);
-  base::UmaHistogramBoolean("SafeBrowsing.NavigationObserver.IsScriptUrlValid",
-                            script_url.is_valid());
 }
 
 void SafeBrowsingNavigationObserverManager::MaybeAddToReferrerChain(

@@ -45,6 +45,7 @@
 #include "src/tint/lang/wgsl/ast/transform/direct_variable_access.h"
 #include "src/tint/lang/wgsl/ast/transform/disable_uniformity_analysis.h"
 #include "src/tint/lang/wgsl/ast/transform/expand_compound_assignment.h"
+#include "src/tint/lang/wgsl/ast/transform/fold_constants.h"
 #include "src/tint/lang/wgsl/ast/transform/manager.h"
 #include "src/tint/lang/wgsl/ast/transform/multiplanar_external_texture.h"
 #include "src/tint/lang/wgsl/ast/transform/preserve_padding.h"
@@ -64,9 +65,12 @@ SanitizedResult Sanitize(const Program& in, const Options& options) {
     ast::transform::Manager manager;
     ast::transform::DataMap data;
 
+    manager.Add<ast::transform::FoldConstants>();
+
     if (options.clamp_frag_depth) {
         manager.Add<ast::transform::ClampFragDepth>();
-        data.Add<ast::transform::ClampFragDepth::Config>(tint::DepthRangeOffsets{0, 4});
+        data.Add<ast::transform::ClampFragDepth::Config>(
+            ast::transform::ClampFragDepth::RangeOffsets{0, 4});
     }
 
     manager.Add<ast::transform::DisableUniformityAnalysis>();
@@ -106,9 +110,9 @@ SanitizedResult Sanitize(const Program& in, const Options& options) {
         data.Add<ast::transform::Robustness::Config>(config);
     }
 
-    ExternalTextureOptions external_texture_options{};
+    tint::transform::multiplanar::BindingsMap multiplanar_map{};
     RemapperData remapper_data{};
-    PopulateRemapperAndMultiplanarOptions(options, remapper_data, external_texture_options);
+    PopulateRemapperAndMultiplanarOptions(options, remapper_data, multiplanar_map);
 
     manager.Add<ast::transform::BindingRemapper>();
     data.Add<ast::transform::BindingRemapper::Remappings>(
@@ -116,8 +120,7 @@ SanitizedResult Sanitize(const Program& in, const Options& options) {
         /* allow_collisions */ false);
 
     // Note: it is more efficient for MultiplanarExternalTexture to come after Robustness
-    data.Add<ast::transform::MultiplanarExternalTexture::NewBindingPoints>(
-        external_texture_options.bindings_map);
+    data.Add<ast::transform::MultiplanarExternalTexture::NewBindingPoints>(multiplanar_map);
     manager.Add<ast::transform::MultiplanarExternalTexture>();
 
     {  // Builtin polyfills

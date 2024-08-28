@@ -4,6 +4,9 @@
 
 package org.chromium.chrome.browser.hub;
 
+import android.view.View;
+
+import org.chromium.base.Callback;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
@@ -27,11 +30,24 @@ class HubToolbarProperties {
     // Hold a value from @HubColorScheme.
     public static final WritableIntPropertyKey COLOR_SCHEME = new WritableIntPropertyKey();
 
+    public static final WritableBooleanPropertyKey MENU_BUTTON_VISIBLE =
+            new WritableBooleanPropertyKey();
+
+    @FunctionalInterface
+    public interface PaneButtonLookup {
+        View get(int index);
+    }
+
+    public static final WritableObjectPropertyKey<Callback<PaneButtonLookup>>
+            PANE_BUTTON_LOOKUP_CALLBACK = new WritableObjectPropertyKey();
+
     static final PropertyKey[] ALL_KEYS = {
         ACTION_BUTTON_DATA,
         SHOW_ACTION_BUTTON_TEXT,
         PANE_SWITCHER_BUTTON_DATA,
         PANE_SWITCHER_INDEX,
-        COLOR_SCHEME
+        COLOR_SCHEME,
+        MENU_BUTTON_VISIBLE,
+        PANE_BUTTON_LOOKUP_CALLBACK,
     };
 }

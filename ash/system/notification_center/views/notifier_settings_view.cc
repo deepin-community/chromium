@@ -50,6 +50,7 @@
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/message_center/vector_icons.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
@@ -128,7 +129,8 @@ class NotifierButtonWrapperView : public views::View {
 
   // views::View:
   void Layout(PassKey) override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnFocus() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
@@ -166,7 +168,8 @@ void NotifierButtonWrapperView::Layout(PassKey) {
                                            : FocusBehavior::NEVER);
 }
 
-gfx::Size NotifierButtonWrapperView::CalculatePreferredSize() const {
+gfx::Size NotifierButtonWrapperView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kWidth, kNotifierButtonWrapperHeight);
 }
 
@@ -435,7 +438,7 @@ NotifierSettingsView::NotifierButton::NotifierButton(
 
   checkbox->SetChecked(notifier.enabled);
   checkbox->SetFocusBehavior(FocusBehavior::NEVER);
-  checkbox->SetAccessibleName(notifier.name);
+  checkbox->GetViewAccessibility().SetName(notifier.name);
 
   if (notifier.enforced) {
     Button::SetEnabled(false);
@@ -801,7 +804,8 @@ gfx::Size NotifierSettingsView::GetMinimumSize() const {
   return size;
 }
 
-gfx::Size NotifierSettingsView::CalculatePreferredSize() const {
+gfx::Size NotifierSettingsView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   gfx::Size header_size = header_view_->GetPreferredSize();
   // |scroller_| and |no_notifiers_view_| do not exist when notifications
   // settings are split out of the notifier_settings_view.

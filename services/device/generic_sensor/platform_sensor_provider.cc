@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "services/device/generic_sensor/platform_sensor_provider.h"
 
 #include <utility>
@@ -41,6 +46,19 @@ constexpr uint64_t kSharedBufferSizeInBytes =
 PlatformSensorProvider::PlatformSensorProvider() = default;
 
 PlatformSensorProvider::~PlatformSensorProvider() {
+  // Invoke pending CreateSensor callbacks with nullptr.
+  auto requests_map = std::move(requests_map_);
+  for (auto& [type, callback_queue] : requests_map) {
+    for (auto& callback : callback_queue) {
+      std::move(callback).Run(nullptr);
+    }
+  }
+  // Notify sensors that the provider is about to be destroyed. Sensors hold a
+  // pointer to the shared sensor reading buffer that must not dangle.
+  auto sensor_map = std::move(sensor_map_);
+  for (auto& [type, sensor] : sensor_map) {
+    sensor->SensorReplaced();
+  }
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 }
 
@@ -74,9 +92,7 @@ void PlatformSensorProvider::CreateSensor(mojom::SensorType type,
     return;
   }
 
-  SensorReadingSharedBuffer* reading_buffer =
-      GetSensorReadingSharedBufferForType(type);
-  if (!reading_buffer) {
+  if (!GetSensorReadingSharedBufferForType(type)) {
     std::move(callback).Run(nullptr);
     return;
   }
@@ -87,9 +103,8 @@ void PlatformSensorProvider::CreateSensor(mojom::SensorType type,
   if (callback_queue_was_empty) {
     // This is the first CreateSensor call.
     CreateSensorInternal(
-        type, reading_buffer,
-        base::BindOnce(&PlatformSensorProvider::NotifySensorCreated,
-                       base::Unretained(this), type));
+        type, base::BindOnce(&PlatformSensorProvider::NotifySensorCreated,
+                             AsWeakPtr(), type));
   }
 }
 

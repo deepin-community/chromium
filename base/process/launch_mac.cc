@@ -238,14 +238,14 @@ Process LaunchProcess(const std::vector<std::string>& argv,
     argv_cstr.push_back(const_cast<char*>(arg.c_str()));
   argv_cstr.push_back(nullptr);
 
-  std::unique_ptr<char*[]> owned_environ;
+  base::HeapArray<char*> owned_environ;
   char* empty_environ = nullptr;
   char** new_environ =
       options.clear_environment ? &empty_environ : *_NSGetEnviron();
   if (!options.environment.empty()) {
     owned_environ =
         internal::AlterEnvironment(new_environ, options.environment);
-    new_environ = owned_environ.get();
+    new_environ = owned_environ.data();
   }
 
   const char* executable_path = !options.real_path.empty()
@@ -277,20 +277,28 @@ Process LaunchProcess(const std::vector<std::string>& argv,
   int rv;
   pid_t pid;
   {
+    const bool has_mach_ports_for_rendezvous =
+        !options.mach_ports_for_rendezvous.empty();
+#if BUILDFLAG(IS_IOS)
+    // This code is only used for the iOS simulator to launch tests. We do not
+    // support setting MachPorts on launch. You should look at
+    // content::ChildProcessLauncherHelper (for iOS) if you are trying to spawn
+    // a non-test and need ports.
+    CHECK(!has_mach_ports_for_rendezvous);
+#else
     // If |options.mach_ports_for_rendezvous| is specified : the server's lock
     // must be held for the duration of posix_spawnp() so that new child's PID
     // can be recorded with the set of ports.
-    const bool has_mach_ports_for_rendezvous =
-        !options.mach_ports_for_rendezvous.empty();
     AutoLockMaybe rendezvous_lock(
         has_mach_ports_for_rendezvous
             ? &MachPortRendezvousServer::GetInstance()->GetLock()
             : nullptr);
-
+#endif
     // Use posix_spawnp as some callers expect to have PATH consulted.
     rv = posix_spawnp(&pid, executable_path, file_actions.get(), attr.get(),
                       &argv_cstr[0], new_environ);
 
+#if !BUILDFLAG(IS_IOS)
     if (has_mach_ports_for_rendezvous) {
       if (rv == 0) {
         MachPortRendezvousServer::GetInstance()->GetLock().AssertAcquired();
@@ -307,6 +315,7 @@ Process LaunchProcess(const std::vector<std::string>& argv,
         }
       }
     }
+#endif
   }
 
 #if !BUILDFLAG(IS_MAC)

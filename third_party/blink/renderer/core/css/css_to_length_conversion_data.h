@@ -38,12 +38,14 @@
 #include "third_party/blink/renderer/core/css/css_primitive_value.h"
 #include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/core/style/inset_area.h"
 #include "third_party/blink/renderer/platform/text/writing_mode.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
 
+class AnchorEvaluator;
 class ComputedStyle;
 class Element;
 class Font;
@@ -226,12 +228,16 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
 
     std::optional<double> Width() const;
     std::optional<double> Height() const;
+    std::optional<double> Width(const ScopedCSSName&) const;
+    std::optional<double> Height(const ScopedCSSName&) const;
 
    private:
     void CacheSizeIfNeeded(PhysicalAxes, std::optional<double>& cache) const;
+    std::optional<double> FindNamedSize(const ScopedCSSName&,
+                                        PhysicalAxes) const;
 
     Member<Element> context_element_;
-    mutable PhysicalAxes cached_physical_axes_{kPhysicalAxisNone};
+    mutable PhysicalAxes cached_physical_axes_{kPhysicalAxesNone};
     mutable std::optional<double> cached_width_;
     mutable std::optional<double> cached_height_;
   };
@@ -245,11 +251,19 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
 
    public:
     AnchorData() = default;
-    explicit AnchorData(Length::AnchorEvaluator*);
-    Length::AnchorEvaluator* GetEvaluator() const { return evaluator_; }
+    AnchorData(AnchorEvaluator*,
+               const ScopedCSSName* position_anchor,
+               const std::optional<InsetAreaOffsets>&);
+    AnchorEvaluator* GetEvaluator() const { return evaluator_; }
+    const ScopedCSSName* GetPositionAnchor() const { return position_anchor_; }
+    const std::optional<InsetAreaOffsets>& GetInsetAreaOffsets() const {
+      return inset_area_offsets_;
+    }
 
    private:
-    Length::AnchorEvaluator* evaluator_ = nullptr;
+    AnchorEvaluator* evaluator_ = nullptr;
+    const ScopedCSSName* position_anchor_ = nullptr;
+    std::optional<InsetAreaOffsets> inset_area_offsets_;
   };
 
   using Flags = uint16_t;
@@ -273,10 +287,13 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
     kDynamicViewport = 1u << 5,
     // cq*
     kContainerRelative = 1u << 6,
-    // calc() includes tree scoped reference to an anchor
-    kAnchorRelative = 1u << 7,
+    // https://drafts.csswg.org/css-scoping-1/#css-tree-scoped-reference
+    kTreeScopedReference = 1u << 7,
     // vi, vb, cqi, cqb, etc
     kLogicalDirectionRelative = 1u << 8,
+    // anchor(), anchor-size()
+    // https://drafts.csswg.org/css-anchor-position-1
+    kAnchorRelative = 1u << 9,
     // Adjust the Flags type above if adding more bits below.
   };
 
@@ -332,16 +349,29 @@ class CORE_EXPORT CSSToLengthConversionData : public CSSLengthResolver {
   double DynamicViewportHeight() const override;
   double ContainerWidth() const override;
   double ContainerHeight() const override;
+  double ContainerWidth(const ScopedCSSName&) const override;
+  double ContainerHeight(const ScopedCSSName&) const override;
   WritingMode GetWritingMode() const override;
-  void ReferenceAnchor() const override;
+  void ReferenceTreeScope() const override;
 
   void SetFontSizes(const FontSizes& font_sizes) { font_sizes_ = font_sizes; }
   void SetLineHeightSize(const LineHeightSize& line_height_size) {
     line_height_size_ = line_height_size;
   }
+  void SetAnchorData(const AnchorData& anchor_data) {
+    anchor_data_ = anchor_data;
+  }
 
-  Length::AnchorEvaluator* AnchorEvaluator() const override {
+  void ReferenceAnchor() const override;
+
+  AnchorEvaluator* GetAnchorEvaluator() const override {
     return anchor_data_.GetEvaluator();
+  }
+  const ScopedCSSName* GetPositionAnchor() const override {
+    return anchor_data_.GetPositionAnchor();
+  }
+  std::optional<InsetAreaOffsets> GetInsetAreaOffsets() const override {
+    return anchor_data_.GetInsetAreaOffsets();
   }
 
   // See ContainerSizes::PreCachedCopy.

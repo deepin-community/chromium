@@ -113,6 +113,9 @@ class CORE_EXPORT DocumentSpeculationRules
   // Populates |selectors_| and notifies the StyleEngine.
   void UpdateSelectors();
 
+  // Called when LCP is predicted.
+  void OnLCPPredicted(const Element* lcp_candidate);
+
   // Tracks when the next update to speculation candidates is scheduled to
   // occur. See `SetPendingUpdateState` for details.
   enum class PendingUpdateState : uint8_t {
@@ -137,11 +140,6 @@ class CORE_EXPORT DocumentSpeculationRules
            pending_update_state_ ==
                PendingUpdateState::kMicrotaskQueuedWithForcedStyleUpdate;
   }
-
-  // Checks the RuntimeEnabledFeature to see if the feature is enabled. If the
-  // feature is found to be enabled once, it is considered to be enabled for the
-  // rest of the document's lifetime.
-  bool SelectorMatchesEnabled();
 
   HeapVector<Member<SpeculationRuleSet>> rule_sets_;
   HeapMojoRemote<mojom::blink::SpeculationHost> host_;
@@ -172,8 +170,6 @@ class CORE_EXPORT DocumentSpeculationRules
   HeapVector<Member<StyleRule>> selectors_;
 
   bool initialized_ = false;
-  bool sent_is_part_of_no_vary_search_trial_ = false;
-  bool was_selector_matches_enabled_ = false;
   PendingUpdateState pending_update_state_ = PendingUpdateState::kNoUpdate;
 
   // Set to true if the EventHandlerRegistry has recorded this object's need to

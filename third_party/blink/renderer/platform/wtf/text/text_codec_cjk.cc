@@ -23,6 +23,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/wtf/text/text_codec_cjk.h"
 
 #include <utility>
@@ -286,7 +291,7 @@ Vector<uint8_t> EncodeShiftJis(StringView string,
     }
 
     DCHECK(range.first + 3 >= range.second);
-    for (auto* pair = range.first; pair < range.second; pair++) {
+    for (auto pair = range.first; pair < range.second; pair++) {
       uint16_t pointer = pair->second;
       if (pointer >= 8272 && pointer <= 8835)
         continue;
@@ -391,7 +396,7 @@ std::optional<UChar32> IndexGb18030RangesCodePoint(uint32_t pointer) {
     return 0xE7C7;
 
   const auto& gb18030_ranges = Gb18030Ranges();
-  auto* upper_bound =
+  auto upper_bound =
       std::upper_bound(gb18030_ranges.begin(), gb18030_ranges.end(),
                        MakeFirstAdapter(pointer), CompareFirst{});
   DCHECK(upper_bound != gb18030_ranges.begin());
@@ -404,7 +409,7 @@ std::optional<UChar32> IndexGb18030RangesCodePoint(uint32_t pointer) {
 uint32_t Gb18030RangesPointer(UChar32 code_point) {
   if (code_point == 0xE7C7)
     return 7457;
-  auto* upper_bound =
+  auto upper_bound =
       std::upper_bound(Gb18030Ranges().begin(), Gb18030Ranges().end(),
                        MakeSecondAdapter(code_point), CompareSecond{});
   DCHECK(upper_bound != Gb18030Ranges().begin());
@@ -512,8 +517,6 @@ Vector<uint8_t> EncodeGbShared(StringView string,
                                IsGbk is_gbk) {
   Vector<uint8_t> result;
   result.ReserveInitialCapacity(string.length());
-  const bool gb18030_2022_enabled =
-      base::FeatureList::IsEnabled(blink::features::kGb18030_2022Enabled);
 
   for (UChar32 code_point : string) {
     if (IsASCII(code_point)) {
@@ -529,7 +532,7 @@ Vector<uint8_t> EncodeGbShared(StringView string,
         result.push_back(0x80);
         continue;
       }
-    } else if (gb18030_2022_enabled) {
+    } else {
       if (auto encoded = Gb18030_2022Encode(code_point)) {
         result.push_back(*encoded >> 24);
         result.push_back(*encoded >> 16);
@@ -927,10 +930,7 @@ class EucKrDecoder : public TextCodecCJK::Decoder {
 // Note that the same decoder is used for GB18030 and GBK.
 class Gb18030Decoder : public TextCodecCJK::Decoder {
  public:
-  Gb18030Decoder() {
-    gb18030_2022_enabled_ =
-        base::FeatureList::IsEnabled(blink::features::kGb18030_2022Enabled);
-  }
+  Gb18030Decoder() = default;
 
   String Decode(const uint8_t* bytes,
                 wtf_size_t length,
@@ -967,11 +967,9 @@ class Gb18030Decoder : public TextCodecCJK::Decoder {
       uint8_t first = std::exchange(first_, 0x00);
       uint8_t second = std::exchange(second_, 0x00);
       uint8_t third = std::exchange(third_, 0x00);
-      if (gb18030_2022_enabled_) {
-        if (auto codePoint = Gb18030_2022Decode(first, second, third, byte)) {
-          result.Append(*codePoint);
-          return SawError::kNo;
-        }
+      if (auto codePoint = Gb18030_2022Decode(first, second, third, byte)) {
+        result.Append(*codePoint);
+        return SawError::kNo;
       }
       if (auto code_point = IndexGb18030RangesCodePoint(
               ((first - 0x81) * 10 * 126 * 10) + ((second - 0x30) * 10 * 126) +
@@ -1050,7 +1048,6 @@ class Gb18030Decoder : public TextCodecCJK::Decoder {
   // I do not think it is safe to keep the reference after
   // `TextCodecCJK::Decode` finishes.
   bool* saw_error_;
-  bool gb18030_2022_enabled_ = false;
 };
 
 }  // namespace
@@ -1130,7 +1127,7 @@ std::unique_ptr<TextCodec> TextCodecCJK::Create(const TextEncoding& encoding,
   if (!strcmp(name, kCanonicalNameGb18030)) {
     return base::WrapUnique(new TextCodecCJK(Encoding::kGb18030));
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 }
 
@@ -1231,7 +1228,7 @@ Vector<uint8_t> TextCodecCJK::EncodeCommon(StringView string,
     case Encoding::kGb18030:
       return EncodeGb18030(string, handling);
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 

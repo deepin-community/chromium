@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
 
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/observer_list.h"
 #include "base/ranges/algorithm.h"
@@ -131,11 +130,6 @@ void SidePanelRegistry::SetActiveEntry(SidePanelEntry* entry) {
 
 void SidePanelRegistry::OnEntryShown(SidePanelEntry* entry) {
   active_entry_ = entry;
-}
-
-void SidePanelRegistry::OnEntryIconUpdated(SidePanelEntry* entry) {
-  for (SidePanelRegistryObserver& observer : observers_)
-    observer.OnEntryIconUpdated(entry);
 }
 
 std::unique_ptr<SidePanelEntry> SidePanelRegistry::RemoveEntry(

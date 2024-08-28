@@ -41,6 +41,7 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -67,8 +68,7 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
 
   // Test relies on browser window activation, while platform such as Linux's
   // window activation is asynchronous.
-  views::test::WidgetActivationWaiter waiter(widget, true);
-  waiter.Wait();
+  views::test::WaitForWidgetActive(widget, true);
 
   // Send focus to the toolbar as if the user pressed Alt+Shift+T. This should
   // happen after the browser window activation.
@@ -186,8 +186,8 @@ IN_PROC_BROWSER_TEST_F(ToolbarViewTest, BackButtonHoverThenClick) {
   EXPECT_FALSE(back_button->GetEnabled());
 }
 
-// TODO(crbug.com/1405449): The ui test utils do not seem to adequately simulate
-// mouse hovering on Mac.
+// TODO(crbug.com/40252318): The ui test utils do not seem to adequately
+// simulate mouse hovering on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_BackButtonHoverMetricsLogged DISABLED_BackButtonHoverMetricsLogged
 #else
@@ -241,7 +241,7 @@ IN_PROC_BROWSER_TEST_F(ToolbarViewTest,
   EXPECT_NE(nullptr, extensions_container);
 }
 
-// TODO(crbug.com/991596): Setup test profiles properly for CrOS.
+// TODO(crbug.com/41474891): Setup test profiles properly for CrOS.
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #define MAYBE_ExtensionsToolbarContainerForGuest \
   DISABLED_ExtensionsToolbarContainerForGuest
@@ -284,6 +284,11 @@ IN_PROC_BROWSER_TEST_F(ToolbarViewTest, BackButtonMenu) {
       MoveMouseTo(kToolbarBackButtonElementId), ClickMouse(ui_controls::RIGHT),
       Log("Logging to probe crbug.com/1489499. Waiting for back button menu."),
       WaitForShow(kToolbarBackButtonMenuElementId),
+#if BUILDFLAG(IS_MAC)
+      Log("Skipping remainder of test because native Mac context menus steal "
+          "the event loop making testing unreliable. See b/40074126 for full "
+          "description."));
+#else
       // Don't try to send an event to the menu before it's fully shown.
       FlushEvents(),
       // Dismiss the context menu by clicking on it.
@@ -292,4 +297,5 @@ IN_PROC_BROWSER_TEST_F(ToolbarViewTest, BackButtonMenu) {
       Log("Clicking mouse to dismiss."), ClickMouse(),
       Log("Waiting for menu to dismiss."),
       WaitForHide(kToolbarBackButtonMenuElementId), Log("Menu dismissed."));
+#endif
 }

@@ -243,8 +243,7 @@ void BookmarkManagerPrivateEventRouter::DispatchEvent(
 
 void BookmarkManagerPrivateEventRouter::BookmarkModelChanged() {}
 
-void BookmarkManagerPrivateEventRouter::BookmarkModelBeingDeleted(
-    BookmarkModel* model) {
+void BookmarkManagerPrivateEventRouter::BookmarkModelBeingDeleted() {
   bookmark_model_ = nullptr;
 }
 
@@ -374,8 +373,9 @@ ExtensionFunction::ResponseValue ClipboardBookmarkManagerFunction::CopyOrCut(
     return Error(bookmark_keys::kModifyManagedError);
   if (cut && HasPermanentNodes(nodes))
     return Error(bookmark_keys::kModifySpecialError);
-  bookmarks::CopyToClipboard(
-      model, nodes, cut, bookmarks::metrics::BookmarkEditSource::kExtension);
+  bookmarks::CopyToClipboard(model, nodes, cut,
+                             bookmarks::metrics::BookmarkEditSource::kExtension,
+                             GetProfile()->IsOffTheRecord());
   return NoArguments();
 }
 
@@ -753,12 +753,12 @@ void BookmarkManagerPrivateIOFunction::ShowSelectFileDialog(
   // |web_contents| can be nullptr (for background pages), which is fine. In
   // such a case if file-selection dialogs are forbidden by policy, we will not
   // show an InfoBar, which is better than letting one appear out of the blue.
-  select_file_dialog_->SelectFile(
-      type, std::u16string(), default_path, &file_type_info, 0,
-      base::FilePath::StringType(), owning_window, nullptr);
+  select_file_dialog_->SelectFile(type, std::u16string(), default_path,
+                                  &file_type_info, 0,
+                                  base::FilePath::StringType(), owning_window);
 }
 
-void BookmarkManagerPrivateIOFunction::FileSelectionCanceled(void* params) {
+void BookmarkManagerPrivateIOFunction::FileSelectionCanceled() {
   select_file_dialog_.reset();
   Release();  // Balanced in BookmarkManagerPrivateIOFunction::SelectFile()
 }
@@ -769,8 +769,8 @@ BookmarkManagerPrivateImportFunction::RunOnReady() {
     return Error(bookmark_api_constants::kEditBookmarksDisabled);
   ShowSelectFileDialog(ui::SelectFileDialog::SELECT_OPEN_FILE,
                        base::FilePath());
-  // TODO(crbug.com/1073255): This will respond before a file is selected, which
-  // seems incorrect. Waiting and responding until after
+  // TODO(crbug.com/40127463): This will respond before a file is selected,
+  // which seems incorrect. Waiting and responding until after
   // ui::SelectFileDialog::Listener is fired should be right thing to do, but
   // that requires auditing bookmark page callsites.
   return NoArguments();
@@ -778,8 +778,7 @@ BookmarkManagerPrivateImportFunction::RunOnReady() {
 
 void BookmarkManagerPrivateImportFunction::FileSelected(
     const ui::SelectedFileInfo& file,
-    int index,
-    void* params) {
+    int index) {
   // Deletes itself.
   ExternalProcessImporterHost* importer_host = new ExternalProcessImporterHost;
   importer::SourceProfile source_profile;
@@ -809,8 +808,8 @@ BookmarkManagerPrivateExportFunction::RunOnReady() {
       base::BindOnce(&GetDefaultFilepathForBookmarkExport),
       base::BindOnce(&BookmarkManagerPrivateIOFunction::ShowSelectFileDialog,
                      this, ui::SelectFileDialog::SELECT_SAVEAS_FILE));
-  // TODO(crbug.com/1073255): This will respond before a file is selected, which
-  // seems incorrect. Waiting and responding until after
+  // TODO(crbug.com/40127463): This will respond before a file is selected,
+  // which seems incorrect. Waiting and responding until after
   // ui::SelectFileDialog::Listener is fired should be right thing to do, but
   // that requires auditing bookmark page callsites.
   return NoArguments();
@@ -818,8 +817,7 @@ BookmarkManagerPrivateExportFunction::RunOnReady() {
 
 void BookmarkManagerPrivateExportFunction::FileSelected(
     const ui::SelectedFileInfo& file,
-    int index,
-    void* params) {
+    int index) {
   bookmark_html_writer::WriteBookmarks(GetProfile(), file.path(), nullptr);
   select_file_dialog_.reset();
   Release();  // Balanced in BookmarkManagerPrivateIOFunction::SelectFile()

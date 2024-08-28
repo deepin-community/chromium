@@ -1,9 +1,10 @@
 include_rules = [
   "+components/endpoint_fetcher",
   "+components/signin/public/identity_manager",
-  "+net/android",
+  "+components/sync/base",
+  "+components/sync/protocol",
+  "+components/sync/test",
   "+net/http",
-  "+net/traffic_annotation",
   "+services/network/public/cpp",
   "+services/network/test",
 ]

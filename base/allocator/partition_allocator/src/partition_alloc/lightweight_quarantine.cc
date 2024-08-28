@@ -9,22 +9,51 @@
 #include "partition_alloc/partition_root.h"
 
 namespace partition_alloc::internal {
+namespace {
+
+// An utility to lock only if a condition is met.
+class PA_SCOPED_LOCKABLE ConditionalScopedGuard {
+ public:
+  PA_ALWAYS_INLINE ConditionalScopedGuard(bool condition, Lock& lock)
+      PA_EXCLUSIVE_LOCK_FUNCTION(lock)
+      : condition_(condition), lock_(lock) {
+    if (condition_) {
+      lock_.Acquire();
+    }
+  }
+  PA_ALWAYS_INLINE ~ConditionalScopedGuard() PA_UNLOCK_FUNCTION() {
+    if (condition_) {
+      lock_.Release();
+    }
+  }
+
+ private:
+  const bool condition_;
+  Lock& lock_;
+};
+
+}  // namespace
 
 LightweightQuarantineBranch LightweightQuarantineRoot::CreateBranch(
-    bool lock_required) {
-  return LightweightQuarantineBranch(*this, lock_required);
+    const LightweightQuarantineBranchConfig& config) {
+  return LightweightQuarantineBranch(*this, config);
 }
 
-LightweightQuarantineBranch::LightweightQuarantineBranch(Root& root,
-                                                         bool lock_required)
-    : root_(root), lock_required_(lock_required) {}
+LightweightQuarantineBranch::LightweightQuarantineBranch(
+    Root& root,
+    const LightweightQuarantineBranchConfig& config)
+    : root_(root),
+      lock_required_(config.lock_required),
+      branch_capacity_in_bytes_(config.branch_capacity_in_bytes) {}
 
 LightweightQuarantineBranch::LightweightQuarantineBranch(
     LightweightQuarantineBranch&& b)
     : root_(b.root_),
       lock_required_(b.lock_required_),
       slots_(std::move(b.slots_)),
-      branch_size_in_bytes_(b.branch_size_in_bytes_) {
+      branch_size_in_bytes_(b.branch_size_in_bytes_),
+      branch_capacity_in_bytes_(
+          b.branch_capacity_in_bytes_.load(std::memory_order_relaxed)) {
   b.branch_size_in_bytes_ = 0;
 }
 
@@ -35,19 +64,17 @@ LightweightQuarantineBranch::~LightweightQuarantineBranch() {
 
 bool LightweightQuarantineBranch::Quarantine(void* object,
                                              SlotSpanMetadata* slot_span,
-                                             uintptr_t slot_start) {
-  const auto usable_size = root_.allocator_root_.GetSlotUsableSize(slot_span);
+                                             uintptr_t slot_start,
+                                             size_t usable_size) {
+  PA_DCHECK(usable_size == root_.allocator_root_.GetSlotUsableSize(slot_span));
 
   const size_t capacity_in_bytes =
-      root_.capacity_in_bytes_.load(std::memory_order_relaxed);
+      branch_capacity_in_bytes_.load(std::memory_order_relaxed);
 
   {
     ConditionalScopedGuard guard(lock_required_, lock_);
 
-    const size_t size_in_bytes_held_by_others =
-        root_.size_in_bytes_.load(std::memory_order_relaxed) -
-        branch_size_in_bytes_;
-    if (capacity_in_bytes < size_in_bytes_held_by_others + usable_size) {
+    if (capacity_in_bytes < usable_size) {
       // Even if this branch dequarantines all entries held by it, this entry
       // cannot fit within the capacity.
       root_.allocator_root_.FreeNoHooksImmediate(object, slot_span, slot_start);
@@ -58,11 +85,9 @@ bool LightweightQuarantineBranch::Quarantine(void* object,
     // Dequarantine some entries as required.
     PurgeInternal(capacity_in_bytes - usable_size);
 
-    // Update stats (locked).
+    // Put the entry onto the list.
     branch_size_in_bytes_ += usable_size;
-    PA_DCHECK(branch_size_in_bytes_ <= capacity_in_bytes);
-
-    slots_.emplace_back(slot_start, usable_size);
+    slots_.push_back({slot_start, usable_size});
 
     // Swap randomly so that the quarantine list remain shuffled.
     // This is not uniformly random, but sufficiently random.
@@ -81,7 +106,8 @@ bool LightweightQuarantineBranch::Quarantine(void* object,
 
 bool LightweightQuarantineBranch::IsQuarantinedForTesting(void* object) {
   ConditionalScopedGuard guard(lock_required_, lock_);
-  uintptr_t slot_start = root_.allocator_root_.ObjectToSlotStart(object);
+  uintptr_t slot_start =
+      root_.allocator_root_.ObjectToSlotStartUnchecked(object);
   for (const auto& slot : slots_) {
     if (slot.slot_start == slot_start) {
       return true;
@@ -90,13 +116,23 @@ bool LightweightQuarantineBranch::IsQuarantinedForTesting(void* object) {
   return false;
 }
 
-void LightweightQuarantineBranch::PurgeInternal(size_t target_size_in_bytes) {
-  size_t size_in_bytes = root_.size_in_bytes_.load(std::memory_order_acquire);
+void LightweightQuarantineBranch::SetCapacityInBytes(size_t capacity_in_bytes) {
+  branch_capacity_in_bytes_.store(capacity_in_bytes, std::memory_order_relaxed);
+}
+
+void LightweightQuarantineBranch::Purge() {
+  ConditionalScopedGuard guard(lock_required_, lock_);
+  PurgeInternal(0);
+  slots_.shrink_to_fit();
+}
+
+PA_ALWAYS_INLINE void LightweightQuarantineBranch::PurgeInternal(
+    size_t target_size_in_bytes) {
   int64_t freed_count = 0;
   int64_t freed_size_in_bytes = 0;
 
   // Dequarantine some entries as required.
-  while (!slots_.empty() && target_size_in_bytes < size_in_bytes) {
+  while (!slots_.empty() && target_size_in_bytes < branch_size_in_bytes_) {
     // As quarantined entries are shuffled, picking last entry is equivalent
     // to picking random entry.
     const auto& to_free = slots_.back();
@@ -112,15 +148,14 @@ void LightweightQuarantineBranch::PurgeInternal(size_t target_size_in_bytes) {
 
     freed_count++;
     freed_size_in_bytes += to_free_size;
-    size_in_bytes -= to_free_size;
+    branch_size_in_bytes_ -= to_free_size;
 
     slots_.pop_back();
   }
 
-  branch_size_in_bytes_ -= freed_size_in_bytes;
-  root_.count_.fetch_sub(freed_count, std::memory_order_relaxed);
   root_.size_in_bytes_.fetch_sub(freed_size_in_bytes,
-                                 std::memory_order_release);
+                                 std::memory_order_relaxed);
+  root_.count_.fetch_sub(freed_count, std::memory_order_relaxed);
 }
 
 }  // namespace partition_alloc::internal

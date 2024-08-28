@@ -11,7 +11,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/commands/fetch_manifest_and_install_command.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
@@ -22,6 +22,7 @@
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
@@ -51,7 +52,7 @@ std::vector<apps::FileHandler::AcceptEntry> GetAcceptEntriesForFileHandler(
 }  // namespace
 
 class ExternallyManagedInstallCommandBrowserTest
-    : public WebAppControllerBrowserTest {
+    : public WebAppBrowserTestBase {
  public:
   ExternallyManagedInstallCommandBrowserTest() = default;
   ExternallyManagedInstallCommandBrowserTest(
@@ -289,7 +290,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyManagedInstallCommandBrowserTest,
       browser()->tab_strip_model()->GetActiveWebContents()->GetWeakPtr(),
       base::BindOnce(test::TestAcceptDialogCallback),
       future_first_install.GetCallback(),
-      /*use_fallback=*/false);
+      FallbackBehavior::kCraftedManifestOnly);
 
   const webapps::AppId& first_app_id = future_first_install.Get<0>();
   webapps::InstallResultCode first_install_code = future_first_install.Get<1>();

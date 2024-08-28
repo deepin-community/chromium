@@ -137,6 +137,10 @@ TEST_P(Texture3DTests, Sampling) {
 // Regression test for crbug.com/dawn/2072 where the WSize of D3D UAV descriptor ends up being 0.
 // (which is invalid as noted by the debug layers)
 TEST_P(Texture3DTests, LatestMipClampsDepthSizeForStorageTextures) {
+    // TODO(crbug.com/345758016): VVL produces a false-positive WAR hazard for this test.
+    // Remove this suppression once the issue is fixed.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsBackendValidationEnabled());
+
     wgpu::TextureDescriptor tDesc;
     tDesc.dimension = wgpu::TextureDimension::e3D;
     tDesc.size = {2, 2, 1};
@@ -174,7 +178,7 @@ TEST_P(Texture3DTests, LatestMipClampsDepthSizeForStorageTextures) {
 
 // Test 3d texture slices used as render attachments.
 TEST_P(Texture3DTests, Rendering) {
-    // TODO(crbug.com/dawn/1217): D3D12 debug layer reports the same subresource of 3d texture
+    // TODO(crbug.com/dawn/2275): D3D12 debug layer reports the same subresource of 3d texture
     // cannot be written at the same time, which is a bug of D3D12 debug layer.
     // Remove this suppression once the issue is fixed.
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsBackendValidationEnabled());

@@ -32,7 +32,7 @@ bool PlatformMimeUtil::GetPlatformMimeTypeFromExtension(
     ext_nodot.erase(ext_nodot.begin());
   }
 
-  // TODO(crbug.com/1227419): Remove iOS availability check when cronet
+  // TODO(crbug.com/40189213): Remove iOS availability check when cronet
   // deployment target is bumped to 14.
   if (@available(macOS 11, iOS 14, *)) {
     UTType* uttype =
@@ -72,7 +72,7 @@ bool PlatformMimeUtil::GetPlatformMimeTypeFromExtension(
     return true;
   }
 #else
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 #endif  // (BUILDFLAG(IS_MAC) && MAC_OS_X_VERSION_MIN_REQUIRED <
         // MAC_OS_VERSION_11_0) || (BUILDFLAG(IS_IOS) &&
@@ -82,7 +82,7 @@ bool PlatformMimeUtil::GetPlatformMimeTypeFromExtension(
 bool PlatformMimeUtil::GetPlatformPreferredExtensionForMimeType(
     const std::string& mime_type,
     base::FilePath::StringType* ext) const {
-  // TODO(crbug.com/1227419): Remove iOS availability check when cronet
+  // TODO(crbug.com/40189213): Remove iOS availability check when cronet
   // deployment target is bumped to 14.
   if (@available(macOS 11, iOS 14, *)) {
     UTType* uttype =
@@ -121,7 +121,7 @@ bool PlatformMimeUtil::GetPlatformPreferredExtensionForMimeType(
   }
 
 #else
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 #endif  // (BUILDFLAG(IS_MAC) && MAC_OS_X_VERSION_MIN_REQUIRED <
         // MAC_OS_VERSION_11_0) || (BUILDFLAG(IS_IOS) &&
@@ -131,7 +131,7 @@ bool PlatformMimeUtil::GetPlatformPreferredExtensionForMimeType(
 void PlatformMimeUtil::GetPlatformExtensionsForMimeType(
     const std::string& mime_type,
     std::unordered_set<base::FilePath::StringType>* extensions) const {
-  // TODO(crbug.com/1227419): Remove iOS availability check when cronet
+  // TODO(crbug.com/40189213): Remove iOS availability check when cronet
   // deployment target is bumped to 14.
   if (@available(macOS 11, iOS 14, *)) {
     NSArray<UTType*>* types =

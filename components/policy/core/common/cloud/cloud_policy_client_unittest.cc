@@ -21,8 +21,10 @@
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "base/time/time.h"
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -99,12 +101,15 @@ constexpr char kOsName[] = "fake-os-name";
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 constexpr char kIdToken[] = "id_token";
+constexpr char kOidcState[] = "fake-oidc-state";
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || \
     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
-constexpr char kEnrollmentToken[] = "enrollment_token";
+constexpr char kBrowserEnrollmentToken[] = "browser_enrollment_token";
 #endif
+
+constexpr char kFlexEnrollmentToken[] = "flex_enrollment_token";
 
 constexpr char kRequisition[] = "fake-requisition";
 constexpr char kStateKey[] = "fake-state-key";
@@ -236,6 +241,14 @@ em::DeviceManagementResponse GetRegistrationResponse() {
   return registration_response;
 }
 
+em::DeviceManagementResponse GetTokenBasedRegistrationResponse() {
+  em::DeviceManagementResponse registration_response;
+  registration_response.mutable_token_based_device_register_response()
+      ->mutable_device_register_response()
+      ->set_device_management_token(kDMToken);
+  return registration_response;
+}
+
 em::DeviceManagementRequest GetReregistrationRequest() {
   em::DeviceManagementRequest request;
 
@@ -257,6 +270,24 @@ em::DeviceManagementRequest GetReregistrationRequest() {
   reregister_request->set_reregister(true);
   reregister_request->set_reregistration_dm_token(kDMToken);
 
+  return request;
+}
+
+em::DeviceManagementRequest GetTokenBasedDeviceRegistrationRequest() {
+  em::DeviceManagementRequest request;
+  em::DeviceRegisterRequest* register_request =
+      request.mutable_token_based_device_register_request()
+          ->mutable_device_register_request();
+  register_request->set_type(em::DeviceRegisterRequest::DEVICE);
+  register_request->set_machine_id(kMachineID);
+  register_request->set_machine_model(kMachineModel);
+  register_request->set_brand_code(kBrandCode);
+  register_request->set_ethernet_mac_address(kEthernetMacAddressStr);
+  register_request->set_dock_mac_address(kDockMacAddressStr);
+  register_request->set_lifetime(
+      em::DeviceRegisterRequest::LIFETIME_INDEFINITE);
+  register_request->set_flavor(
+      em::DeviceRegisterRequest::FLAVOR_ENROLLMENT_TOKEN_INITIAL_SERVER_FORCED);
   return request;
 }
 
@@ -405,6 +436,13 @@ em::DeviceManagementResponse GetRobotAuthCodeFetchResponse() {
   return robot_auth_code_fetch_response;
 }
 
+em::DeviceManagementResponse GetFmRegistrationTokenUploadResponse() {
+  em::DeviceManagementResponse fm_registration_token_upload_response;
+  fm_registration_token_upload_response
+      .mutable_fm_registration_token_upload_response();
+  return fm_registration_token_upload_response;
+}
+
 em::DeviceManagementResponse GetEmptyResponse() {
   return em::DeviceManagementResponse();
 }
@@ -430,8 +468,8 @@ class CloudPolicyClientTest : public testing::Test {
         client_id_(kClientID),
         policy_type_(dm_protocol::kChromeUserPolicyType) {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-    fake_statistics_provider_.SetMachineStatistic(
-        ash::system::kSerialNumberKeyForTest, "fake_serial_number");
+    fake_statistics_provider_.SetMachineStatistic(ash::system::kSerialNumberKey,
+                                                  "fake_serial_number");
 #endif
   }
 
@@ -455,27 +493,11 @@ class CloudPolicyClientTest : public testing::Test {
 
   void RegisterClient() { RegisterClient(kDeviceDMToken); }
 
-  void CreateClient() {
-    service_.ScheduleInitialization(0);
-    base::RunLoop().RunUntilIdle();
+  void CreateClient() { CreateClient(kAttestedDeviceId, kManufactureDate); }
 
-    if (client_) {
-      client_->RemoveObserver(&observer_);
-    }
-
-    shared_url_loader_factory_ =
-        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
-            &url_loader_factory_);
-    client_ = std::make_unique<CloudPolicyClient>(
-        kMachineID, kMachineModel, kBrandCode, kAttestedDeviceId,
-        kEthernetMacAddress, kDockMacAddress, kManufactureDate, &service_,
-        shared_url_loader_factory_,
-        base::BindRepeating(
-            &MockDeviceDMTokenCallbackObserver::OnDeviceDMTokenRequested,
-            base::Unretained(&device_dmtoken_callback_observer_)));
-    client_->AddPolicyTypeToFetch(policy_type_, std::string());
-    client_->AddObserver(&observer_);
-  }
+  // Flex devices don't have VPD so will not have attested device ID or
+  // manufacture date.
+  void CreateFlexClient() { CreateClient("", ""); }
 
   base::Value::Dict MakeDefaultRealtimeReport() {
     base::Value::Dict context;
@@ -566,6 +588,29 @@ class CloudPolicyClientTest : public testing::Test {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   ash::system::ScopedFakeStatisticsProvider fake_statistics_provider_;
 #endif
+ private:
+  void CreateClient(std::string_view attested_device_id,
+                    std::string_view manufacture_date) {
+    service_.ScheduleInitialization(0);
+    base::RunLoop().RunUntilIdle();
+
+    if (client_) {
+      client_->RemoveObserver(&observer_);
+    }
+
+    shared_url_loader_factory_ =
+        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+            &url_loader_factory_);
+    client_ = std::make_unique<CloudPolicyClient>(
+        kMachineID, kMachineModel, kBrandCode, attested_device_id,
+        kEthernetMacAddress, kDockMacAddress, manufacture_date, &service_,
+        shared_url_loader_factory_,
+        base::BindRepeating(
+            &MockDeviceDMTokenCallbackObserver::OnDeviceDMTokenRequested,
+            base::Unretained(&device_dmtoken_callback_observer_)));
+    client_->AddPolicyTypeToFetch(policy_type_, std::string());
+    client_->AddObserver(&observer_);
+  }
 };
 
 // CloudPolicyClient tests that need multiple threads.
@@ -583,6 +628,8 @@ TEST_F(CloudPolicyClientTest, Init) {
 }
 
 TEST_F(CloudPolicyClientTest, SetupRegistrationAndPolicyFetch) {
+  base::HistogramTester histogram_tester;
+
   const em::DeviceManagementResponse policy_response = GetPolicyResponse();
 
   EXPECT_CALL(observer_, OnRegistrationStateChanged);
@@ -605,6 +652,12 @@ TEST_F(CloudPolicyClientTest, SetupRegistrationAndPolicyFetch) {
             GetPolicyRequest().SerializePartialAsString());
   EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
   CheckPolicyResponse(policy_response);
+
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DMServerCloudPolicyRequestStatus.UserPolicy",
+      DM_STATUS_SUCCESS, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DMServerCloudPolicyRequestStatus", DM_STATUS_SUCCESS, 1);
 }
 
 class CloudPolicyClientWithFetchReasonTest
@@ -618,6 +671,7 @@ class CloudPolicyClientWithFetchReasonTest
 };
 
 TEST_P(CloudPolicyClientWithFetchReasonTest, FetchReason) {
+  base::HistogramTester histogram_tester;
   RegisterClient();
   ExpectAndCaptureJob(GetPolicyResponse());
 
@@ -625,6 +679,8 @@ TEST_P(CloudPolicyClientWithFetchReasonTest, FetchReason) {
   client_->FetchPolicy(GetReason());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(job_request_.policy_request().reason(), GetProtoReason());
+  EXPECT_THAT(histogram_tester.GetAllSamples(kPolicyFetchingTimeHistogramName),
+              ElementsAre(_));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -792,7 +848,7 @@ TEST_F(CloudPolicyClientTest, SetupRegistrationAndPolicyFetchWithOAuthToken) {
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || \
     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
-TEST_F(CloudPolicyClientTest, RegistrationWithTokenAndPolicyFetch) {
+TEST_F(CloudPolicyClientTest, BrowserRegistrationWithTokenAndPolicyFetch) {
   const em::DeviceManagementResponse policy_response = GetPolicyResponse();
 
   ExpectAndCaptureJob(GetRegistrationResponse());
@@ -802,11 +858,13 @@ TEST_F(CloudPolicyClientTest, RegistrationWithTokenAndPolicyFetch) {
                   /*user_affiliation_ids=*/std::vector<std::string>()))
       .WillOnce(Return(kDeviceDMToken));
   FakeClientDataDelegate client_data_delegate;
-  client_->RegisterWithToken(kEnrollmentToken, "device_id",
-                             client_data_delegate, /*is_mandatory=*/true);
+  client_->RegisterBrowserWithEnrollmentToken(kBrowserEnrollmentToken,
+                                              "device_id", client_data_delegate,
+                                              /*is_mandatory=*/true);
   base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_TOKEN_ENROLLMENT,
-            job_type_);
+  EXPECT_EQ(
+      DeviceManagementService::JobConfiguration::TYPE_BROWSER_REGISTRATION,
+      job_type_);
   EXPECT_EQ(job_request_.SerializePartialAsString(),
             GetEnrollmentRequest().SerializePartialAsString());
   EXPECT_TRUE(client_->is_registered());
@@ -827,7 +885,7 @@ TEST_F(CloudPolicyClientTest, RegistrationWithTokenAndPolicyFetch) {
   CheckPolicyResponse(policy_response);
 }
 
-TEST_F(CloudPolicyClientTest, RegistrationWithTokenTestTimeout) {
+TEST_F(CloudPolicyClientTest, BrowserRegistrationWithTokenTestTimeout) {
   ExpectAndCaptureJob(GetRegistrationResponse());
   EXPECT_CALL(observer_, OnRegistrationStateChanged);
   EXPECT_CALL(device_dmtoken_callback_observer_,
@@ -835,8 +893,9 @@ TEST_F(CloudPolicyClientTest, RegistrationWithTokenTestTimeout) {
                   /*user_affiliation_ids=*/std::vector<std::string>()))
       .WillOnce(Return(kDeviceDMToken));
   FakeClientDataDelegate client_data_delegate;
-  client_->RegisterWithToken(kEnrollmentToken, "device_id",
-                             client_data_delegate, /*is_mandatory=*/false);
+  client_->RegisterBrowserWithEnrollmentToken(kBrowserEnrollmentToken,
+                                              "device_id", client_data_delegate,
+                                              /*is_mandatory=*/false);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(base::Seconds(30), timeout_);
 }
@@ -883,6 +942,51 @@ TEST_F(CloudPolicyClientTest, RegistrationWithOidcAndPolicyFetch) {
   CheckPolicyResponse(policy_response);
 }
 
+TEST_F(CloudPolicyClientTest, RegistrationWithOidcAndPolicyFetchWithOidcState) {
+  const em::DeviceManagementResponse policy_response = GetPolicyResponse();
+  em::DeviceManagementRequest registration_request = GetRegistrationRequest();
+  registration_request.mutable_register_request()
+      ->set_oidc_profile_enrollment_state(kOidcState);
+  ExpectAndCaptureJob(GetRegistrationResponse());
+  EXPECT_CALL(observer_, OnRegistrationStateChanged);
+  EXPECT_CALL(device_dmtoken_callback_observer_,
+              OnDeviceDMTokenRequested(
+                  /*user_affiliation_ids=*/std::vector<std::string>()))
+      .WillOnce(Return(kDeviceDMToken));
+
+  CloudPolicyClient::RegistrationParameters register_parameters(
+      em::DeviceRegisterRequest::USER,
+      em::DeviceRegisterRequest::FLAVOR_USER_REGISTRATION);
+  register_parameters.oidc_state = kOidcState;
+
+  client_->RegisterWithOidcResponse(register_parameters, kOAuthToken, kIdToken,
+                                    std::string() /* no client_id*/);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_OIDC_REGISTRATION,
+            job_type_);
+  EXPECT_EQ(job_request_.SerializePartialAsString(),
+            registration_request.SerializePartialAsString());
+  EXPECT_EQ(auth_data_, DMAuth::FromOidcResponse(kIdToken));
+  EXPECT_THAT(query_params_,
+              Not(Contains(Pair(dm_protocol::kParamOAuthToken, kOAuthToken))));
+  EXPECT_TRUE(client_->is_registered());
+  EXPECT_FALSE(client_->GetPolicyFor(policy_type_, std::string()));
+  EXPECT_EQ(base::Seconds(0), timeout_);
+  EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
+
+  ExpectAndCaptureJob(policy_response);
+  EXPECT_CALL(observer_, OnPolicyFetched);
+  client_->FetchPolicy(kReason);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_POLICY_FETCH,
+            job_type_);
+  EXPECT_EQ(auth_data_, DMAuth::FromDMToken(kDMToken));
+  EXPECT_EQ(job_request_.SerializePartialAsString(),
+            GetPolicyRequest().SerializePartialAsString());
+  EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
+  CheckPolicyResponse(policy_response);
+}
+
 TEST_F(CloudPolicyClientTest, OidcRegistrationFailure) {
   DeviceManagementService::JobConfiguration::JobType job_type;
   EXPECT_CALL(job_creation_handler_, OnJobCreation)
@@ -906,6 +1010,8 @@ TEST_F(CloudPolicyClientTest, OidcRegistrationFailure) {
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 TEST_F(CloudPolicyClientTest, RegistrationAndPolicyFetch) {
+  base::HistogramTester histogram_tester;
+
   const em::DeviceManagementResponse policy_response = GetPolicyResponse();
 
   ExpectAndCaptureJob(GetRegistrationResponse());
@@ -942,6 +1048,12 @@ TEST_F(CloudPolicyClientTest, RegistrationAndPolicyFetch) {
             GetPolicyRequest().SerializePartialAsString());
   EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
   CheckPolicyResponse(policy_response);
+
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DMServerCloudPolicyRequestStatus.UserPolicy",
+      DM_STATUS_SUCCESS, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DMServerCloudPolicyRequestStatus", DM_STATUS_SUCCESS, 1);
 }
 
 TEST_F(CloudPolicyClientTest, RegistrationAndPolicyFetchWithOAuthToken) {
@@ -1031,6 +1143,75 @@ TEST_F(CloudPolicyClientTest, RegistrationWithCertificateAndPolicyFetch) {
   CheckPolicyResponse(policy_response);
 }
 
+TEST_F(CloudPolicyClientTest,
+       FlexDeviceRegistrationWithEnrollmentTokenAndPolicyFetch) {
+  CreateFlexClient();
+
+  const em::DeviceManagementResponse policy_response = GetPolicyResponse();
+
+  EXPECT_CALL(device_dmtoken_callback_observer_,
+              OnDeviceDMTokenRequested(
+                  /*user_affiliation_ids=*/std::vector<std::string>()))
+      .WillOnce(Return(kDeviceDMToken));
+  EXPECT_CALL(observer_, OnRegistrationStateChanged);
+  ExpectAndCaptureJob(GetTokenBasedRegistrationResponse());
+  CloudPolicyClient::RegistrationParameters params(
+      em::DeviceRegisterRequest::DEVICE,
+      em::DeviceRegisterRequest::FLAVOR_ENROLLMENT_TOKEN_INITIAL_SERVER_FORCED);
+
+  client_->RegisterDeviceWithEnrollmentToken(
+      params, /*client_id=*/std::string(),
+      DMAuth::FromEnrollmentToken(kFlexEnrollmentToken));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(DeviceManagementService::JobConfiguration::
+                TYPE_TOKEN_BASED_DEVICE_REGISTRATION,
+            job_type_);
+  EXPECT_TRUE(job_request_.has_token_based_device_register_request());
+  EXPECT_EQ(
+      job_request_.SerializePartialAsString(),
+      GetTokenBasedDeviceRegistrationRequest().SerializePartialAsString());
+  EXPECT_TRUE(client_->is_registered());
+  EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
+
+  ExpectAndCaptureJob(policy_response);
+  EXPECT_CALL(observer_, OnPolicyFetched);
+  client_->FetchPolicy(kReason);
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_POLICY_FETCH,
+            job_type_);
+  EXPECT_EQ(auth_data_, DMAuth::FromDMToken(kDMToken));
+  EXPECT_EQ(job_request_.SerializePartialAsString(),
+            GetPolicyRequest().SerializePartialAsString());
+  EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
+  CheckPolicyResponse(policy_response);
+}
+
+// TODO(b/329271128): Add tests or modify this one to test specific errors
+// returned for token-based (Flex) enrollment.
+TEST_F(CloudPolicyClientTest,
+       FlexDeviceRegistrationWithEnrollmentTokenFailure) {
+  CreateFlexClient();
+  ExpectAndCaptureJobReplyFailure(net::ERR_FAILED,
+                                  DeviceManagementService::kInvalidArgument);
+  EXPECT_CALL(observer_, OnClientError);
+  CloudPolicyClient::RegistrationParameters params(
+      em::DeviceRegisterRequest::DEVICE,
+      em::DeviceRegisterRequest::FLAVOR_ENROLLMENT_TOKEN_INITIAL_SERVER_FORCED);
+
+  client_->RegisterDeviceWithEnrollmentToken(
+      params, /*client_id=*/std::string(),
+      DMAuth::FromEnrollmentToken(kFlexEnrollmentToken));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(DeviceManagementService::JobConfiguration::
+                TYPE_TOKEN_BASED_DEVICE_REGISTRATION,
+            job_type_);
+  EXPECT_FALSE(client_->is_registered());
+  EXPECT_FALSE(client_->GetPolicyFor(policy_type_, std::string()));
+  EXPECT_EQ(DM_STATUS_REQUEST_FAILED, client_->last_dm_status());
+}
+
 TEST_F(CloudPolicyClientTest, DemoModeRegistration) {
   EXPECT_CALL(device_dmtoken_callback_observer_,
               OnDeviceDMTokenRequested(
@@ -1113,7 +1294,7 @@ TEST_F(CloudPolicyClientTest, RegistrationParametersPassedThrough) {
   EXPECT_EQ(kClientID, client_id_);
 }
 
-TEST_F(CloudPolicyClientTest, RegistrationNoToken) {
+TEST_F(CloudPolicyClientTest, RegistrationNoDMTokenInResponse) {
   em::DeviceManagementResponse registration_response =
       GetRegistrationResponse();
   registration_response.mutable_register_response()
@@ -1448,6 +1629,8 @@ TEST_F(CloudPolicyClientTest, BadPolicyResponse) {
 }
 
 TEST_F(CloudPolicyClientTest, PolicyRequestFailure) {
+  base::HistogramTester histogram_tester;
+
   RegisterClient();
 
   DeviceManagementService::JobConfiguration::JobType job_type;
@@ -1463,6 +1646,13 @@ TEST_F(CloudPolicyClientTest, PolicyRequestFailure) {
             job_type);
   EXPECT_EQ(DM_STATUS_REQUEST_FAILED, client_->last_dm_status());
   EXPECT_FALSE(client_->GetPolicyFor(policy_type_, std::string()));
+
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DMServerCloudPolicyRequestStatus.UserPolicy",
+      DM_STATUS_REQUEST_FAILED, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Enterprise.DMServerCloudPolicyRequestStatus", DM_STATUS_REQUEST_FAILED,
+      1);
 }
 
 TEST_F(CloudPolicyClientTest, PolicyFetchWithExtensionPolicy) {
@@ -1598,6 +1788,17 @@ TEST_F(CloudPolicyClientTest, UploadEnterpriseMachineCertificateEmpty) {
   EXPECT_EQ(job_request_.SerializePartialAsString(),
             GetUploadMachineCertificateRequest().SerializePartialAsString());
   EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
+}
+
+TEST_F(CloudPolicyClientTest, UploadEnterpriseMachineCertificateNotRegistered) {
+  base::test::TestFuture<CloudPolicyClient::Result> result_future;
+
+  client_->UploadEnterpriseMachineCertificate(kMachineCertificate,
+                                              result_future.GetCallback());
+
+  const CloudPolicyClient::Result& result = result_future.Get();
+  EXPECT_EQ(result,
+            CloudPolicyClient::Result(CloudPolicyClient::NotRegistered()));
 }
 
 TEST_F(CloudPolicyClientTest, UploadEnterpriseEnrollmentCertificateEmpty) {
@@ -2132,7 +2333,7 @@ TEST_P(CloudPolicyClientUploadSecurityEventTest, Test) {
 TEST_F(CloudPolicyClientTest, RealtimeReportMerge) {
   auto config = std::make_unique<RealtimeReportingJobConfiguration>(
       client_.get(), service_.configuration()->GetRealtimeReportingServerUrl(),
-      /*include_device_info*/ true, /*add_connector_url_params=*/false,
+      /*include_device_info*/ true,
       RealtimeReportingJobConfiguration::UploadCompleteCallback());
 
   // Add one report to the config.
@@ -2887,6 +3088,39 @@ TEST_F(CloudPolicyClientTest,
   EXPECT_EQ(DeviceManagementService::JobConfiguration::TYPE_POLICY_FETCH,
             job_type_);
   EXPECT_EQ(auth_data_, DMAuth::FromDMToken(kDMToken));
+}
+
+TEST_F(CloudPolicyClientTest, UploadFmRegistrationTokenRequest) {
+  RegisterClient();
+
+  em::FmRegistrationTokenUploadRequest request;
+  request.set_token("fake token");
+  request.set_protocol_version(101);
+  request.set_token_type(em::FmRegistrationTokenUploadRequest::USER);
+  request.set_expiration_timestamp_ms(
+      (base::Time::Now() + base::Minutes(5)).InMillisecondsSinceUnixEpoch());
+
+  em::DeviceManagementRequest expected_request;
+  expected_request.mutable_fm_registration_token_upload_request()->CopyFrom(
+      request);
+
+  ExpectAndCaptureJob(GetFmRegistrationTokenUploadResponse());
+  EXPECT_CALL(result_callback_observer_,
+              OnCallbackComplete(CloudPolicyClient::Result(DM_STATUS_SUCCESS)))
+      .Times(1);
+  CloudPolicyClient::ResultCallback callback =
+      base::BindOnce(&MockResultCallbackObserver::OnCallbackComplete,
+                     base::Unretained(&result_callback_observer_));
+
+  client_->UploadFmRegistrationToken(std::move(request), std::move(callback));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(DeviceManagementService::JobConfiguration::
+                TYPE_UPLOAD_FM_REGISTRATION_TOKEN,
+            job_type_);
+  EXPECT_EQ(job_request_.SerializePartialAsString(),
+            expected_request.SerializePartialAsString());
+  EXPECT_EQ(DM_STATUS_SUCCESS, client_->last_dm_status());
 }
 
 struct MockClientCertProvisioningRequestCallbackObserver {

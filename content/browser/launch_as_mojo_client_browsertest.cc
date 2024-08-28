@@ -30,7 +30,7 @@
 #include "ui/ozone/public/ozone_switches.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS_ASH) || defined(MEMORY_SANITIZER)
 #include "ui/gl/gl_switches.h"
 #endif
 
@@ -66,7 +66,7 @@ class LaunchAsMojoClientBrowserTest : public ContentBrowserTest {
   base::CommandLine MakeShellCommandLine() {
     base::CommandLine command_line(
         GetFilePathNextToCurrentExecutable(kShellExecutableName));
-    command_line.AppendSwitchPath(switches::kContentShellDataPath,
+    command_line.AppendSwitchPath(switches::kContentShellUserDataDir,
                                   temp_dir_.GetPath());
 #if BUILDFLAG(IS_OZONE)
     const base::CommandLine& cmdline = *base::CommandLine::ForCurrentProcess();
@@ -82,6 +82,15 @@ class LaunchAsMojoClientBrowserTest : public ContentBrowserTest {
                                    gl::kGLImplementationANGLEName);
     command_line.AppendSwitchASCII(switches::kUseANGLE,
                                    gl::kANGLEImplementationSwiftShaderName);
+#endif
+
+#if defined(MEMORY_SANITIZER)
+    // MSan and GL do not get along so avoid using the GPU with MSan. Normally,
+    // BrowserTestBase::SetUp() forces browser tests to use software GL for
+    // tests (in both non-MSan and MSan builds), but since this test builds a
+    // command line to launch the shell directly, that logic needs to be
+    // replicated here.
+    command_line.AppendSwitch(switches::kOverrideUseSoftwareGLForTests);
 #endif
 
     const auto& current_command_line = *base::CommandLine::ForCurrentProcess();
@@ -187,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(LaunchAsMojoClientBrowserTest, LaunchAndBindInterface) {
 #endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// TODO(crbug.com/1259557): This test implementation fundamentally conflicts
+// TODO(crbug.com/40057593): This test implementation fundamentally conflicts
 // with a fix for the linked bug because it causes a browser process to behave
 // partially as a broker and partially as a non-broker. This can be re-enabled
 // when we migrate away from the current Mojo implementation. It's OK to disable

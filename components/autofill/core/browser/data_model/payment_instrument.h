@@ -22,6 +22,7 @@ class PaymentInstrument;
 // CreditCard etc.
 class PaymentInstrument {
  public:
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.autofill.payments
   // A payment rail can loosely represent the different ways in which Chrome can
   // intercept a user's payment journey and assist in completing it. For
   // example: Pix, UPI, Card number, IBAN etc.
@@ -30,6 +31,14 @@ class PaymentInstrument {
     // Payment Rail used in Brazil.
     kPix = 1,
     kMaxValue = kPix,
+  };
+
+  // This value represents the type of instrument_detail in the payment
+  // instrument's proto. Values are persisted, don't change or re-use them.
+  enum class PaymentInstrumentType {
+    kUnknown = 0,
+    kBankAccount = 1,
+    kIban = 2,
   };
 
   PaymentInstrument(int64_t instrument_id,

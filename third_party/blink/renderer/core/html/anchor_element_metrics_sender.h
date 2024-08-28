@@ -58,6 +58,8 @@ class CORE_EXPORT AnchorElementMetricsSender final
  public:
   static const char kSupplementName[];
 
+  using AnchorId = uint32_t;
+
   explicit AnchorElementMetricsSender(Document&);
   AnchorElementMetricsSender(const AnchorElementMetricsSender&) = delete;
   AnchorElementMetricsSender& operator=(const AnchorElementMetricsSender&) =
@@ -86,16 +88,16 @@ class CORE_EXPORT AnchorElementMetricsSender final
   // Report the on-hover event and anchor element pointer data to the browser
   // process.
   void MaybeReportAnchorElementPointerDataOnHoverTimerFired(
-      uint32_t anchor_id,
+      AnchorId anchor_id,
       mojom::blink::AnchorElementPointerDataPtr mouse_data);
 
-  // Adds an anchor element to |anchor_elements_|.
   void AddAnchorElement(HTMLAnchorElement& element);
+  void RemoveAnchorElement(HTMLAnchorElement& element);
 
-  HeapMojoRemote<mojom::blink::AnchorElementMetricsHost>* MetricsHost();
   void SetTickClockForTesting(const base::TickClock* clock);
   void SetNowAsNavigationStartForTesting();
   void FireUpdateTimerForTesting();
+  IntersectionObserver* GetIntersectionObserverForTesting();
 
   // Creates AnchorElementMetrics from anchor element if possible. Then records
   // the metrics, and sends them to the browser process.
@@ -105,6 +107,15 @@ class CORE_EXPORT AnchorElementMetricsSender final
   // Report the pointer event for the anchor element.
   void MaybeReportAnchorElementPointerEvent(HTMLAnchorElement& element,
                                             const PointerEvent& pointer_event);
+
+  // Record and send metrics to the browser process about the position of
+  // tracked anchor elements in the viewport.
+  void MaybeReportAnchorElementsPositionOnScrollEnd();
+
+  // Called when a pointerdown is about to be dispatched to any Node in |this|'s
+  // document or local subframes. Record the location of the pointer event for
+  // future metrics computation.
+  void RecordPointerDown(const PointerEvent& pointer_event);
 
   void Trace(Visitor*) const override;
 
@@ -134,15 +145,43 @@ class CORE_EXPORT AnchorElementMetricsSender final
 
   void SetShouldSkipUpdateDelays(bool should_skip_for_testing);
 
-  base::TimeTicks NavigationStart(const HTMLAnchorElement& element);
+  base::TimeTicks NavigationStart() const;
 
   void RegisterForLifecycleNotifications();
+
+  void PositionUpdateTimerFired(TimerBase*);
+
+  void ComputeAnchorElementsPositionUpdates();
 
   // Mock timestamp for navigation start used for testing.
   std::optional<base::TimeTicks> mock_navigation_start_for_testing_;
 
+  // `anchor_elements_to_report_` and `removed_anchors_to_report_` store anchor
+  // insertions and removals that have happened since the last layout. Upon
+  // layout, they will be used to populate `metrics_` and
+  // `metrics_removed_anchors_`.
   // Use WeakMember to make sure we don't leak memory on long-lived pages.
   HeapHashSet<WeakMember<HTMLAnchorElement>> anchor_elements_to_report_;
+  WTF::Vector<AnchorId> removed_anchors_to_report_;
+
+  // `metrics_` and `metrics_removed_anchors_` buffer metrics updates that are
+  // scheduled to be sent to the browser.
+  WTF::Vector<mojom::blink::AnchorElementMetricsPtr> metrics_;
+  WTF::Vector<AnchorId> metrics_removed_anchors_;
+  // Contains the sizes of `metrics_` and `metrics_removed_anchors_`,
+  // respectively, at the completion of each layout.
+  //
+  // This allows buffering the outcomes of potentially multiple layouts
+  // before reporting to the browser, while still representing the
+  // coherent state of each. For example, if this contains:
+  //   [(x0, y0), (x1, y1), (x2, y2)]
+  // Then this conceptually contains the following updates:
+  //   metrics_[0..x0],  metrics_removed_anchors_[0..y0]
+  //   metrics_[x0..x1], metrics_removed_anchors_[y0..y1]
+  //   metrics_[x1..x2], metrics_removed_anchors_[y1..y2]
+  // This data is consolidated into a single report representing the
+  // net change before reporting to the browser.
+  WTF::Vector<std::pair<wtf_size_t, wtf_size_t>> metrics_partitions_;
 
   HeapMojoRemote<mojom::blink::AnchorElementMetricsHost> metrics_host_;
 
@@ -152,16 +191,17 @@ class CORE_EXPORT AnchorElementMetricsSender final
   // is no longer done.
   bool should_skip_update_delays_for_testing_ = false;
 
-  WTF::Vector<mojom::blink::AnchorElementMetricsPtr> metrics_;
-
+  // Cached field trial param values.
   const int random_anchor_sampling_period_;
+  const wtf_size_t max_number_of_observations_;
+  const base::TimeDelta intersection_observer_delay_;
 
   Member<IntersectionObserver> intersection_observer_;
+  HeapHashSet<WeakMember<const HTMLAnchorElement>> anchors_in_viewport_;
 
   WTF::Vector<mojom::blink::AnchorElementEnteredViewportPtr>
       entered_viewport_messages_;
 
-  using AnchorId = uint32_t;
   struct AnchorElementTimingStats {
     bool entered_viewport_should_be_enqueued_{true};
     std::optional<base::TimeTicks> viewport_entry_time_;
@@ -173,11 +213,28 @@ class CORE_EXPORT AnchorElementMetricsSender final
   WTF::Vector<mojom::blink::AnchorElementLeftViewportPtr>
       left_viewport_messages_;
 
+  WTF::Vector<mojom::blink::AnchorElementPositionUpdatePtr>
+      position_update_messages_;
+
   WTF::Vector<mojom::blink::AnchorElementClickPtr> clicked_messages_;
 
   const base::TickClock* clock_;
 
   bool is_registered_for_lifecycle_notifications_ = false;
+
+  bool intersection_observer_limit_exceeded_ = false;
+
+  // The y-coordinate of the last pointerdown (in the visual viewport coordinate
+  // space and offset by the height of the browser top-controls), reported in
+  // |RecordPointerDown|. Used to compute |position_update_messages_|.
+  std::optional<float> last_pointer_down_ = std::nullopt;
+  // Indicates that we should populate |position_update_messages_| in
+  // |DidFinishLifecycleUpdate|.
+  bool should_compute_positions_after_next_lifecycle_update_ = false;
+  // Used to timeout waiting for |UpdateVisibleAnchors| being called after
+  // |MaybeReportAnchorElementsPositionOnScrollEnd| is called. The timer is
+  // stopped when |UpdateVisibleAnchors| is called.
+  HeapTaskRunnerTimer<AnchorElementMetricsSender> position_update_timer_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

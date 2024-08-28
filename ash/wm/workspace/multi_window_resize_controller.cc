@@ -49,11 +49,12 @@ constexpr int kShortSide = 52;
 // Returns the widget init params needed to create the resize widget.
 views::Widget::InitParams CreateWidgetParams(aura::Window* parent_window,
                                              const std::string& widget_name) {
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
   params.parent = parent_window;
   params.name = widget_name;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   return params;
 }
 
@@ -112,7 +113,7 @@ bool PointOnWindowEdge(aura::Window* window,
     case HTBOTTOM:
       return ContainsX(window, p.x()) && p.y() == window->bounds().height();
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return false;
   }
 }
@@ -138,7 +139,8 @@ class MultiWindowResizeController::ResizeView : public views::View {
   ~ResizeView() override = default;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     const bool vert = direction_ == Direction::kLeftRight;
     return gfx::Size(vert ? kLongSide : kShortSide,
                      vert ? kShortSide : kLongSide);
@@ -547,7 +549,7 @@ aura::Window* MultiWindowResizeController::FindWindowTouching(
         }
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
   return nullptr;

@@ -7,7 +7,7 @@ import {dispatchSimpleEvent, getPropertyDescriptor, PropertyKind} from 'chrome:/
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 
 import {maybeShowTooltip} from '../../../common/js/dom_utils.js';
-import {compareLabelAndGroupBottomEntries, compareName, isComputersEntry, isDescendantEntry, isEntryInsideDrive, isOneDrive, isOneDriveId, isRecentRootType, isSameEntry, isSharedDriveEntry} from '../../../common/js/entry_utils.js';
+import {compareLabelAndGroupBottomEntries, compareName, isComputersEntry, isDescendantEntry, isInsideDrive, isOneDrive, isOneDriveId, isRecentRootType, isSameEntry, isSharedDriveEntry} from '../../../common/js/entry_utils.js';
 import {getIconOverrides} from '../../../common/js/file_type.js';
 import {FilesAppDirEntry} from '../../../common/js/files_app_entry_types.js';
 import {vmTypeToIconName} from '../../../common/js/icon_util.js';
@@ -94,8 +94,8 @@ DirectoryItemTreeBaseMethods.getItemByEntry = function(entry) {
  * Finds a parent directory of the {@code entry} in {@code this}, and
  * invokes the DirectoryItem.selectByEntry() of the found directory.
  *
- * @param {!DirectoryEntry|!FilesAppDirEntry} entry The entry to be searched
- *     for. Can be a fake.
+ * @param {!DirectoryEntry|!FilesAppDirEntry|undefined} entry The entry to be
+ *     searched for. Can be a fake.
  * @return {!Promise<boolean>} True if the parent item is found.
  * @this {(DirectoryItem|VolumeItem|DirectoryTree)}
  */
@@ -113,17 +113,17 @@ DirectoryItemTreeBaseMethods.searchAndSelectByEntry = async function(entry) {
     // Team drives are descendants of the Drive root volume item "Google Drive".
     // When we looking for an item in team drives, recursively search inside the
     // "Google Drive" root item.
-    if (isSharedDriveEntry(entry) && item instanceof DriveVolumeItem) {
+    if (entry && isSharedDriveEntry(entry) && item instanceof DriveVolumeItem) {
       await item.selectByEntry(entry);
       return true;
     }
 
-    if (isComputersEntry(entry) && item instanceof DriveVolumeItem) {
+    if (entry && isComputersEntry(entry) && item instanceof DriveVolumeItem) {
       await item.selectByEntry(entry);
       return true;
     }
 
-    if (isDescendantEntry(item.entry, entry) ||
+    if (entry && isDescendantEntry(item.entry, entry) ||
         isSameEntry(item.entry, entry)) {
       await item.selectByEntry(entry);
       return true;
@@ -404,7 +404,7 @@ export class DirectoryItem extends FilesTreeItem {
   get insideDrive() {
     // @ts-ignore: error TS2345: Argument of type '{ rootType: string | null; }'
     // is not assignable to parameter of type 'FileData'.
-    return isEntryInsideDrive({rootType: this.rootType});
+    return isInsideDrive({rootType: this.rootType});
   }
 
   /**
@@ -553,8 +553,8 @@ export class DirectoryItem extends FilesTreeItem {
   /**
    * Calls DirectoryItemTreeBaseMethods.updateSubElementsFromList().
    *
-   * @param {!DirectoryEntry|!FilesAppDirEntry} entry The entry to be searched
-   *     for. Can be a fake.
+   * @param {!DirectoryEntry|!FilesAppDirEntry|undefined} entry The entry to be
+   *     searched for. Can be a fake.
    * @return {!Promise<boolean>} True if the parent item is found.
    */
   async searchAndSelectByEntry(entry) {
@@ -2634,8 +2634,8 @@ export class DirectoryTree extends Tree {
    * Finds a parent directory of the {@code entry} in {@code this}, and
    * invokes the DirectoryItem.selectByEntry() of the found directory.
    *
-   * @param {!DirectoryEntry|!FilesAppDirEntry} entry The entry to be searched
-   *     for. Can be a fake.
+   * @param {!DirectoryEntry|!FilesAppDirEntry|undefined} entry The entry to be
+   *     searched for. Can be a fake.
    * @return {!Promise<boolean>} True if the parent item is found.
    */
   async searchAndSelectByEntry(entry) {
@@ -2666,8 +2666,8 @@ export class DirectoryTree extends Tree {
 
   /**
    * Select the item corresponding to the given entry.
-   * @param {!DirectoryEntry|!FilesAppDirEntry} entry The directory entry to be
-   *     selected. Can be a fake.
+   * @param {!DirectoryEntry|!FilesAppDirEntry|undefined} entry The directory
+   *     entry to be selected. Can be a fake.
    * @return {!Promise<void>}
    */
   async selectByEntry(entry) {
@@ -2680,6 +2680,11 @@ export class DirectoryTree extends Tree {
     }
 
     this.updateSubDirectories(false /* recursive */);
+
+    if (!entry) {
+      return;
+    }
+
     const currentSequence = ++this.sequence_;
     const volumeInfo = this.volumeManager_.getVolumeInfo(entry);
     if (!volumeInfo) {

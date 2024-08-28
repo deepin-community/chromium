@@ -24,29 +24,20 @@ namespace viz {
 
 class VIZ_SERVICE_EXPORT OutputPresenterGL : public OutputPresenter {
  public:
-  static const uint32_t kDefaultSharedImageUsage;
-
   OutputPresenterGL(
       scoped_refptr<gl::Presenter> presenter,
       SkiaOutputSurfaceDependency* deps,
       gpu::SharedImageFactory* factory,
-      gpu::SharedImageRepresentationFactory* representation_factory,
-      uint32_t shared_image_usage = kDefaultSharedImageUsage);
+      gpu::SharedImageRepresentationFactory* representation_factory);
   ~OutputPresenterGL() override;
 
   // OutputPresenter implementation:
   void InitializeCapabilities(OutputSurface::Capabilities* capabilities) final;
-  bool Reshape(const SkImageInfo& image_info,
-               const gfx::ColorSpace& color_space,
-               int sample_count,
-               float device_scale_factor,
-               gfx::OverlayTransform transform) final;
+  bool Reshape(const ReshapeParams& params) final;
   std::vector<std::unique_ptr<Image>> AllocateImages(
       gfx::ColorSpace color_space,
       gfx::Size image_size,
       size_t num_images) final;
-  std::unique_ptr<Image> AllocateSingleImage(gfx::ColorSpace color_space,
-                                             gfx::Size image_size) final;
   void Present(SwapCompletionCallback completion_callback,
                BufferPresentedCallback presentation_callback,
                gfx::FrameData data) final;
@@ -59,8 +50,9 @@ class VIZ_SERVICE_EXPORT OutputPresenterGL : public OutputPresenter {
       ScopedOverlayAccess* access,
       std::unique_ptr<gfx::GpuFence> acquire_fence) final;
   void SetVSyncDisplayID(int64_t display_id) final;
+
 #if BUILDFLAG(IS_APPLE)
-  void SetCALayerErrorCode(gfx::CALayerResult ca_layer_error_code) final;
+  void SetMaxPendingSwaps(int max_pending_swaps) final;
 #endif
 
  private:
@@ -73,11 +65,6 @@ class VIZ_SERVICE_EXPORT OutputPresenterGL : public OutputPresenter {
   const raw_ptr<gpu::SharedImageFactory> shared_image_factory_;
   const raw_ptr<gpu::SharedImageRepresentationFactory>
       shared_image_representation_factory_;
-  uint32_t shared_image_usage_;
-
-#if BUILDFLAG(IS_APPLE)
-  gfx::CALayerResult ca_layer_error_code_ = gfx::kCALayerSuccess;
-#endif
 };
 
 }  // namespace viz

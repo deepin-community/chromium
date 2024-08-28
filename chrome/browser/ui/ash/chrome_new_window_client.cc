@@ -12,7 +12,6 @@
 #include "apps/launcher.h"
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/internal_app_id_constants.h"
-#include "ash/public/cpp/keyboard_shortcut_viewer.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/window_properties.h"
@@ -35,7 +34,9 @@
 #include "chrome/browser/ash/system_web_apps/apps/camera_app/chrome_camera_app_ui_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/chromeos/arc/arc_web_contents_data.h"
+#include "chrome/browser/chromeos/network/network_portal_signin_window.h"
 #include "chrome/browser/extensions/extension_util.h"
+#include "chrome/browser/platform_util.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
@@ -60,8 +61,6 @@
 #include "chrome/browser/ui/webui/tab_strip/tab_strip_ui_util.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_id_constants.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
-#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
@@ -113,18 +112,18 @@ std::string GetPathAndQuery(const GURL& url) {
   return result;
 }
 
-chrome::FeedbackSource MapToChromeSource(
+feedback::FeedbackSource MapToChromeSource(
     ash::NewWindowDelegate::FeedbackSource source) {
   switch (source) {
     case ash::NewWindowDelegate::FeedbackSource::kFeedbackSourceAsh:
-      return chrome::FeedbackSource::kFeedbackSourceAsh;
+      return feedback::FeedbackSource::kFeedbackSourceAsh;
     case ash::NewWindowDelegate::FeedbackSource::kFeedbackSourceAssistant:
-      return chrome::FeedbackSource::kFeedbackSourceAssistant;
+      return feedback::FeedbackSource::kFeedbackSourceAssistant;
     case ash::NewWindowDelegate::FeedbackSource::kFeedbackSourceQuickAnswers:
-      return chrome::FeedbackSource::kFeedbackSourceQuickAnswers;
+      return feedback::FeedbackSource::kFeedbackSourceQuickAnswers;
     case ash::NewWindowDelegate::FeedbackSource::
         kFeedbackSourceChannelIndicator:
-      return chrome::FeedbackSource::kFeedbackSourceChannelIndicator;
+      return feedback::FeedbackSource::kFeedbackSourceChannelIndicator;
   }
 }
 
@@ -291,7 +290,7 @@ void ChromeNewWindowClient::NewWindowForDetachingTab(
     return;
   }
 
-  // TODO(https://crbug.com/1069869): evaluate whether the above
+  // TODO(crbug.com/40126106): evaluate whether the above
   // failures can happen in valid states, and if so whether we need to
   // reflect failure in UX.
 
@@ -371,7 +370,7 @@ void ChromeNewWindowClient::OpenUrl(const GURL& url,
         navigate_params.browser->window()->GetNativeWindow());
   }
 
-  auto* tab = navigate_params.navigated_or_inserted_contents;
+  auto* tab = navigate_params.navigated_or_inserted_contents.get();
   if (from == OpenUrlFrom::kArc && tab) {
     // Add a flag to remember this tab originated in the ARC context.
     tab->SetUserData(&arc::ArcWebContentsData::kArcTransitionFlag,
@@ -490,10 +489,6 @@ void ChromeNewWindowClient::RestoreTab() {
   }
 }
 
-void ChromeNewWindowClient::ShowKeyboardShortcutViewer() {
-  ShowShortcutCustomizationApp();
-}
-
 void ChromeNewWindowClient::ShowShortcutCustomizationApp() {
   chrome::ShowShortcutCustomizationApp(ProfileManager::GetActiveUserProfile());
 }
@@ -516,6 +511,17 @@ void ChromeNewWindowClient::OpenFeedbackPage(
 void ChromeNewWindowClient::OpenPersonalizationHub() {
   Profile* const profile = ProfileManager::GetActiveUserProfile();
   ash::LaunchSystemWebAppAsync(profile, ash::SystemWebAppType::PERSONALIZATION);
+}
+
+void ChromeNewWindowClient::OpenCaptivePortalSignin(const GURL& url) {
+  chromeos::NetworkPortalSigninWindow::Get()->Show(url);
+}
+
+void ChromeNewWindowClient::OpenFile(const base::FilePath& file_path) {
+  Profile* profile = ProfileManager::GetActiveUserProfile();
+  platform_util::OpenItem(profile, file_path,
+                          platform_util::OpenItemType::OPEN_FILE,
+                          platform_util::OpenOperationCallback());
 }
 
 void ChromeNewWindowClient::LaunchCameraApp(const std::string& queries,

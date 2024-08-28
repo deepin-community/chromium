@@ -21,12 +21,13 @@ struct CONTENT_EXPORT CookieAccessDetails {
       Type type,
       const GURL& url,
       const GURL& first_party_url,
-      const net::CookieList& list,
+      const net::CookieAccessResultList& cookie_access_result_list,
       size_t count,
       bool blocked_by_policy = false,
       bool is_ad_tagged = false,
       const net::CookieSettingOverrides& cookie_setting_overrides =
-          net::CookieSettingOverrides());
+          net::CookieSettingOverrides(),
+      const net::SiteForCookies& site_for_cookies = net::SiteForCookies());
   ~CookieAccessDetails();
 
   CookieAccessDetails(const CookieAccessDetails&);
@@ -35,7 +36,7 @@ struct CONTENT_EXPORT CookieAccessDetails {
   Type type;
   GURL url;
   GURL first_party_url;
-  net::CookieList cookie_list;
+  net::CookieAccessResultList cookie_access_result_list;
   // CookieAccessDetails may be deduplicated to reduce IPC costs. In this case,
   // |count| refers to the number of instances that are duplicates of |this|
   // that would have been sent (including |this|).
@@ -43,6 +44,12 @@ struct CONTENT_EXPORT CookieAccessDetails {
   bool blocked_by_policy;
   bool is_ad_tagged = false;
   net::CookieSettingOverrides cookie_setting_overrides;
+  // SiteForCookies is propagated to
+  // PageSpecificContentSettings::OnCookiesAccessed which checks if cookies
+  // that are same-site with the top-level frame but are accessed in a context
+  // with a cross-site ancestor (aka ABA embeds) are blocked due to third-party
+  // cookie blocking.
+  net::SiteForCookies site_for_cookies;
 };
 
 }  // namespace content

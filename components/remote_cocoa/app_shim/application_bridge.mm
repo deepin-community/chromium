@@ -9,7 +9,6 @@
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "components/remote_cocoa/app_shim/alert.h"
-#include "components/remote_cocoa/app_shim/color_panel_bridge.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_host_helper.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
@@ -52,7 +51,7 @@ class NativeWidgetBridgeOwner : public NativeWidgetNSWindowHostHelper {
   // NativeWidgetNSWindowHostHelper:
   id GetNativeViewAccessible() override {
     if (!remote_accessibility_element_) {
-      int64_t browser_pid = 0;
+      base::ProcessId browser_pid = base::kNullProcessId;
       std::vector<uint8_t> element_token;
       host_remote_->GetRootViewAccessibilityToken(&browser_pid, &element_token);
       [NSAccessibilityRemoteUIElement
@@ -127,13 +126,6 @@ void ApplicationBridge::CreateAlert(
     mojo::PendingReceiver<mojom::AlertBridge> bridge_receiver) {
   // The resulting object manages its own lifetime.
   std::ignore = new AlertBridge(std::move(bridge_receiver));
-}
-
-void ApplicationBridge::ShowColorPanel(
-    mojo::PendingReceiver<mojom::ColorPanel> receiver,
-    mojo::PendingRemote<mojom::ColorPanelHost> host) {
-  mojo::MakeSelfOwnedReceiver(
-      std::make_unique<ColorPanelBridge>(std::move(host)), std::move(receiver));
 }
 
 void ApplicationBridge::CreateNativeWidgetNSWindow(

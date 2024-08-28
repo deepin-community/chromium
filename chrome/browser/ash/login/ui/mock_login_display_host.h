@@ -43,10 +43,8 @@ class MockLoginDisplayHost : public LoginDisplayHost {
   MOCK_METHOD(void, BeforeSessionStart, (), (override));
 
   MOCK_METHOD(void, FinalizeImmediately, (), (override));
-  MOCK_METHOD(void, SetStatusAreaVisible, (bool), (override));
   MOCK_METHOD(void, StartWizard, (OobeScreenId), (override));
   MOCK_METHOD(WizardController*, GetWizardController, (), (override));
-  MOCK_METHOD(KioskLaunchController*, GetKioskLaunchController, (), (override));
   MOCK_METHOD(bool, IsFinalizing, (), (override));
 
   MOCK_METHOD(void, CancelUserAdding, (), (override));
@@ -72,8 +70,6 @@ class MockLoginDisplayHost : public LoginDisplayHost {
               (const AccountId&, const std::optional<user_manager::UserType>&),
               (override));
   MOCK_METHOD(void, CancelPasswordChangedFlow, (), (override));
-  MOCK_METHOD(void, MigrateUserData, (const std::string&), (override));
-  MOCK_METHOD(void, ResyncUserData, (), (override));
   MOCK_METHOD(bool,
               HandleAccelerator,
               (LoginAcceleratorAction action),

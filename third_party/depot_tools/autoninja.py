@@ -4,16 +4,17 @@
 # found in the LICENSE file.
 """
 This script (intended to be invoked by autoninja or autoninja.bat) detects
-whether a build is accelerated using a service like goma. If so, it runs with a
+whether a build is accelerated using a service like RBE. If so, it runs with a
 large -j value, and otherwise it chooses a small one. This auto-adjustment
 makes using remote build acceleration simpler and safer, and avoids errors that
-can cause slow goma builds or swap-storms on unaccelerated builds.
+can cause slow RBE builds, or swap-storms on unaccelerated builds.
 
 autoninja tries to detect relevant build settings such as use_remoteexec, and it
 does handle import statements, but it can't handle conditional setting of build
 settings.
 """
 
+import logging
 import json
 import multiprocessing
 import os
@@ -30,15 +31,18 @@ import warnings
 import google.auth
 from google.auth.transport.requests import AuthorizedSession
 
-import autosiso
+import build_telemetry
+import gn_helper
 import ninja
-import ninja_reclient
+import ninjalog_uploader
+import reclient_helper
 import siso
 
 if sys.platform in ["darwin", "linux"]:
     import resource
 
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+_NINJALOG_UPLOADER = os.path.join(_SCRIPT_DIR, "ninjalog_uploader.py")
 
 # See [1] and [2] for the painful details of this next section, which handles
 # escaping command lines so that they can be copied and pasted into a cmd
@@ -96,6 +100,25 @@ def _gcloud_auth_account():
     return None
 
 
+def _luci_auth_account():
+    """Returns active account authenticated with `luci-auth login -scopes-context`."""
+    if shutil.which("luci-auth") is None:
+        return None
+
+    # First line returned should be "Logged in as account@domain.com."
+    # Extract the account@domain.com from that line.
+    try:
+        info = subprocess.check_output("luci-auth info -scopes-context",
+                                       shell=True,
+                                       stderr=subprocess.STDOUT,
+                                       text=True).split('\n')[0]
+        if info.startswith("Logged in as "):
+            return info[len("Logged in as "):-1]
+    except subprocess.CalledProcessError:
+        return None
+    return None
+
+
 def _is_google_corp_machine():
     """This assumes that corp machine has gcert binary in known location."""
     return shutil.which("gcert") is not None
@@ -113,7 +136,7 @@ def _is_google_corp_machine_using_external_account():
     if not _is_google_corp_machine():
         return False
 
-    with shelve.open(os.path.join(SCRIPT_DIR, ".autoninja")) as db:
+    with shelve.open(os.path.join(_SCRIPT_DIR, ".autoninja")) as db:
         last_false = db.get("last_false")
         now = time.time()
         if last_false is not None and now < last_false + 12 * 60 * 60:
@@ -121,6 +144,10 @@ def _is_google_corp_machine_using_external_account():
             return False
 
         account = _adc_account()
+        if account and not account.endswith("@google.com"):
+            return True
+
+        account = _luci_auth_account()
         if account and not account.endswith("@google.com"):
             return True
 
@@ -159,31 +186,12 @@ def _print_cmd(cmd):
     print(*[shell_quoter(arg) for arg in cmd], file=sys.stderr)
 
 
-def _gn_lines(output_dir, path):
-    """
-    Generator function that returns args.gn lines one at a time, following
-    import directives as needed.
-    """
-    import_re = re.compile(r'\s*import\("(.*)"\)')
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            match = import_re.match(line)
-            if match:
-                raw_import_path = match.groups()[0]
-                if raw_import_path[:2] == "//":
-                    import_path = os.path.normpath(
-                        os.path.join(output_dir, "..", "..",
-                                     raw_import_path[2:]))
-                else:
-                    import_path = os.path.normpath(
-                        os.path.join(os.path.dirname(path), raw_import_path))
-                for import_line in _gn_lines(output_dir, import_path):
-                    yield import_line
-            else:
-                yield line
-
-
-def main(args):
+def main(args, should_collect_logs=False):
+    # if user doesn't set PYTHONPYCACHEPREFIX and PYTHONDONTWRITEBYTECODE
+    # set PYTHONDONTWRITEBYTECODE=1 not to create many *.pyc in workspace
+    # and keep workspace clean.
+    if not os.environ.get("PYTHONPYCACHEPREFIX"):
+        os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     # The -t tools are incompatible with -j
     t_specified = False
     j_specified = False
@@ -198,8 +206,7 @@ def main(args):
     # separated by spaces. When this case is detected we need to do argument
     # splitting ourselves. This means that arguments containing actual spaces
     # are not supported by autoninja, but that is not a real limitation.
-    if (sys.platform.startswith("win") and len(args) == 2
-            and input_args[1].count(" ") > 0):
+    if sys.platform.startswith("win") and len(args) == 2:
         input_args = args[:1] + args[1].split()
 
     # Ninja uses getopt_long, which allow to intermix non-option arguments.
@@ -218,45 +225,40 @@ def main(args):
             output_dir = arg[2:]
         elif arg in ("-o", "--offline"):
             offline = True
-        elif arg == "-h":
+        elif arg in ("-h", "--help"):
             print(
-                "autoninja: Use -o/--offline to temporary disable goma.",
+                "autoninja: Use -o/--offline to temporary disable remote execution.",
                 file=sys.stderr,
             )
             print(file=sys.stderr)
 
-    use_goma = False
     use_remoteexec = False
+    use_reclient = None
     use_siso = False
 
     # Attempt to auto-detect remote build acceleration. We support gn-based
     # builds, where we look for args.gn in the build tree, and cmake-based
     # builds where we look for rules.ninja.
-    if os.path.exists(os.path.join(output_dir, "args.gn")):
-        for line in _gn_lines(output_dir, os.path.join(output_dir, "args.gn")):
-            # use_goma, or use_remoteexec will activate build
-            # acceleration.
+    if gn_helper.exists(output_dir):
+        for k, v in gn_helper.args(output_dir):
+            # use_remoteexec will activate build acceleration.
             #
             # This test can match multi-argument lines. Examples of this
-            # are: is_debug=false use_goma=true is_official_build=false
-            # use_goma=false# use_goma=true This comment is ignored
+            # are: is_debug=false use_remoteexec=true is_official_build=false
+            # use_remoteexec=false# use_remoteexec=true This comment is ignored
             #
             # Anything after a comment is not consider a valid argument.
-            line_without_comment = line.split("#")[0]
-            if re.search(r"(^|\s)(use_goma)\s*=\s*true($|\s)",
-                         line_without_comment):
-                use_goma = True
-                continue
-            if re.search(
-                    r"(^|\s)(use_remoteexec)\s*=\s*true($|\s)",
-                    line_without_comment,
-            ):
+            if k == "use_remoteexec" and v == "true":
                 use_remoteexec = True
                 continue
-            if re.search(r"(^|\s)(use_siso)\s*=\s*true($|\s)",
-                         line_without_comment):
+            if k == "use_siso" and v == "true":
                 use_siso = True
                 continue
+            if k == "use_reclient" and v == "false":
+                use_reclient = False
+                continue
+        if use_reclient is None:
+            use_reclient = use_remoteexec
 
         if use_remoteexec:
             if _is_google_corp_machine_using_external_account():
@@ -272,7 +274,7 @@ def main(args):
 
         siso_marker = os.path.join(output_dir, ".siso_deps")
         if use_siso:
-            # autosiso generates a .ninja_log file so the mere existence of a
+            # siso generates a .ninja_log file so the mere existence of a
             # .ninja_log file doesn't imply that a ninja build was done. However
             # if there is a .ninja_log but no .siso_deps then that implies a
             # ninja build.
@@ -284,15 +286,18 @@ def main(args):
                     file=sys.stderr,
                 )
                 return 1
-            if use_goma:
-                print("Siso does not support Goma.", file=sys.stderr)
-                print(
-                    "Do not use use_siso=true and use_goma=true",
-                    file=sys.stderr,
-                )
-                return 1
             if use_remoteexec:
-                return autosiso.main(["autosiso"] + input_args[1:])
+                if use_reclient:
+                    return reclient_helper.run_siso(
+                        [
+                            'siso',
+                            'ninja',
+                            # Do not authenticate when using Reproxy.
+                            '-project=',
+                            '-reapi_instance=',
+                        ] + input_args[1:],
+                        should_collect_logs)
+                return siso.main(["siso", "ninja"] + input_args[1:])
             return siso.main(["siso", "ninja", "--offline"] + input_args[1:])
 
         if os.path.exists(siso_marker):
@@ -303,105 +308,10 @@ def main(args):
             )
             return 1
 
-    else:
-        for relative_path in [
-                "",  # GN keeps them in the root of output_dir
-                "CMakeFiles",
-        ]:
-            path = os.path.join(output_dir, relative_path, "rules.ninja")
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as file_handle:
-                    for line in file_handle:
-                        if re.match(r"^\s*command\s*=\s*\S+gomacc", line):
-                            use_goma = True
-                            break
-
     # Strip -o/--offline so ninja doesn't see them.
     input_args = [arg for arg in input_args if arg not in ("-o", "--offline")]
 
-    # If GOMA_DISABLED is set to "true", "t", "yes", "y", or "1"
-    # (case-insensitive) then gomacc will use the local compiler instead of
-    # doing a goma compile. This is convenient if you want to briefly disable
-    # goma. It avoids having to rebuild the world when transitioning between
-    # goma/non-goma builds. However, it is not as fast as doing a "normal"
-    # non-goma build because an extra process is created for each compile step.
-    # Checking this environment variable ensures that autoninja uses an
-    # appropriate -j value in this situation.
-    goma_disabled_env = os.environ.get("GOMA_DISABLED", "0").lower()
-    if offline or goma_disabled_env in ["true", "t", "yes", "y", "1"]:
-        use_goma = False
-
-    if use_goma:
-        gomacc_file = ("gomacc.exe"
-                       if sys.platform.startswith("win") else "gomacc")
-        goma_dir = os.environ.get("GOMA_DIR",
-                                  os.path.join(SCRIPT_DIR, ".cipd_bin"))
-        gomacc_path = os.path.join(goma_dir, gomacc_file)
-        # Don't invoke gomacc if it doesn't exist.
-        if os.path.exists(gomacc_path):
-            # Check to make sure that goma is running. If not, don't start the
-            # build.
-            status = subprocess.call(
-                [gomacc_path, "port"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-            )
-            if status == 1:
-                print(
-                    'Goma is not running. Use "goma_ctl ensure_start" to start '
-                    "it.",
-                    file=sys.stderr,
-                )
-                if sys.platform.startswith("win"):
-                    # Set an exit code of 1 in the batch file.
-                    print('cmd "/c exit 1"')
-                else:
-                    # Set an exit code of 1 by executing 'false' in the bash
-                    # script.
-                    print("false")
-                sys.exit(1)
-        # Display a warning that goma is being deprecated, every time a build
-        # is executed with 'use_goma.
-        # Further changes to encourage switching may follow.
-        if sys.platform.startswith("win"):
-            print(
-                "The gn arg use_goma=true will be deprecated by EOY 2023. "
-                "Please use `use_remoteexec=true` instead. See "
-                "https://chromium.googlesource.com/chromium/src/+/main/docs/"
-                "windows_build_instructions.md#use-reclient "
-                "for setup instructions.",
-                file=sys.stderr,
-            )
-        elif sys.platform == "darwin":
-            print(
-                "The gn arg use_goma=true will be removed on Feb 7th 2024. "
-                "Please use `use_remoteexec=true` instead. "
-                "If you are a googler see http://go/building-chrome-mac"
-                "#using-remote-execution for setup instructions. ",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                "The gn arg use_goma=true will be removed on Feb 7th 2024. "
-                "Please use `use_remoteexec=true` instead. See "
-                "https://chromium.googlesource.com/chromium/src/+/main/docs/"
-                "linux/build_instructions.md#use-reclient for setup instructions.",
-                file=sys.stderr,
-            )
-        if not sys.platform.startswith("win"):
-            # Artificial build delay is for linux/mac for now.
-            t = 5
-            while t > 0:
-                print(
-                    f"The build will start in {t} seconds.",
-                    file=sys.stderr,
-                )
-                time.sleep(1)
-                t = t - 1
-
-
-    # A large build (with or without goma) tends to hog all system resources.
+    # A large build (with or without RBE) tends to hog all system resources.
     # Depending on the operating system, we might have mechanisms available
     # to run at a lower priority, which improves this situation.
     if os.environ.get("NINJA_BUILD_IN_BACKGROUND") == "1":
@@ -412,10 +322,14 @@ def main(args):
             # spawn later.
             os.nice(10)
 
-    # Tell goma or reclient to do local compiles.
+    # If --offline is set, then reclient will use the local compiler instead of
+    # doing a remote compile. This is convenient if you want to briefly disable
+    # remote compile. It avoids having to rebuild the world when transitioning
+    # between RBE/non-RBE builds. However, it is not as fast as doing a "normal"
+    # non-RBE build because an extra process is created for each compile step.
     if offline:
+        # Tell reclient to do local compiles.
         os.environ["RBE_remote_disabled"] = "1"
-        os.environ["GOMA_DISABLED"] = "1"
 
     # On macOS and most Linux distributions, the default limit of open file
     # descriptors is too low (256 and 1024, respectively).
@@ -435,19 +349,10 @@ def main(args):
             fileno_limit, hard_limit = resource.getrlimit(
                 resource.RLIMIT_NOFILE)
 
-    # Call ninja.py so that it can find ninja binary installed by DEPS or one in
-    # PATH.
-    ninja_path = os.path.join(SCRIPT_DIR, "ninja.py")
-    # If using remoteexec, use ninja_reclient.py which wraps ninja.py with
-    # starting and stopping reproxy.
-    if use_remoteexec:
-        ninja_path = os.path.join(SCRIPT_DIR, "ninja_reclient.py")
-
-    args = [sys.executable, ninja_path] + input_args[1:]
-
+    args = ['ninja']
     num_cores = multiprocessing.cpu_count()
     if not j_specified and not t_specified:
-        if not offline and (use_goma or use_remoteexec):
+        if not offline and use_remoteexec:
             args.append("-j")
             default_core_multiplier = 80
             if platform.machine() in ("x86_64", "AMD64"):
@@ -485,17 +390,40 @@ def main(args):
     if summarize_build:
         # Enable statistics collection in Ninja.
         args += ["-d", "stats"]
+
+    args += input_args[1:]
+
+    if summarize_build:
         # Print the command-line to reassure the user that the right settings
         # are being used.
         _print_cmd(args)
 
-    if use_remoteexec:
-        return ninja_reclient.main(args[1:])
-    return ninja.main(args[1:])
+    if use_reclient:
+        return reclient_helper.run_ninja(args, should_collect_logs)
+    return ninja.main(args)
+
+
+def _upload_ninjalog(args):
+    # Run upload script without wait.
+    creationflags = 0
+    if platform.system() == "Windows":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen(
+        [sys.executable, _NINJALOG_UPLOADER, "--cmdline"] + args[1:],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creationflags,
+    )
 
 
 if __name__ == "__main__":
+    # Check the log collection opt-in/opt-out status, and display notice if necessary.
+    _should_collect_logs = build_telemetry.enabled()
     try:
-        sys.exit(main(sys.argv))
+        exit_code = main(sys.argv, _should_collect_logs)
     except KeyboardInterrupt:
-        sys.exit(1)
+        exit_code = 1
+    finally:
+        if _should_collect_logs:
+            _upload_ninjalog(sys.argv)
+    sys.exit(exit_code)

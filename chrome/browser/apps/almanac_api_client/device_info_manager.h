@@ -21,6 +21,11 @@ class Profile;
 namespace apps {
 
 struct VersionInfo {
+  VersionInfo();
+  VersionInfo(const VersionInfo& other);
+  VersionInfo& operator=(const VersionInfo& other);
+  ~VersionInfo();
+
   // The ash Chrome browser version of the device. e.g. "107.0.5296.0"
   std::string ash_chrome;
   // The ChromeOS platform version of the device. e.g. "15088.0.0"
@@ -28,6 +33,10 @@ struct VersionInfo {
   std::string platform;
   // The channel of the build.
   version_info::Channel channel = version_info::Channel::UNKNOWN;
+  // ARC SDK version set to non-zero if ARC is enabled.
+  int arc_sdk = 0;
+  // 'TRUE' if steam is enabled.
+  std::string steam_client;
 };
 
 struct DeviceInfo {
@@ -85,20 +94,20 @@ class DeviceInfoManager {
   ~DeviceInfoManager();
 
   // Asynchronously fetches device information. Must be called from the UI
-  // thread. DeviceInfo is not expected to change over the lifetime of a
-  // Profile, so it is okay (and more efficient) to store the DeviceInfo instead
-  // of repeatedly querying this method.
+  // thread. The fetched DeviceInfo is cached inside this DeviceInfoManager, so
+  // the `callback` may be called immediately if the DeviceInfo is already
+  // available.
   void GetDeviceInfo(base::OnceCallback<void(DeviceInfo)> callback);
 
  private:
-  void OnLoadedVersionAndCustomLabel(
-      base::OnceCallback<void(DeviceInfo)> callback,
-      DeviceInfo device_info);
-  void OnModelInfo(base::OnceCallback<void(DeviceInfo)> callback,
-                   DeviceInfo device_info,
+  void OnLoadedVersionAndCustomLabel(DeviceInfo device_info);
+  void OnModelInfo(DeviceInfo device_info,
                    base::SysInfo::HardwareInfo hardware_info);
 
   raw_ptr<Profile, DanglingUntriaged> profile_;
+
+  std::optional<DeviceInfo> cached_info_;
+  std::vector<base::OnceCallback<void(DeviceInfo)>> pending_callbacks_;
 
   // |weak_ptr_factory_| must be the last member of this class.
   base::WeakPtrFactory<DeviceInfoManager> weak_ptr_factory_{this};

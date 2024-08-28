@@ -31,7 +31,7 @@ double ClampParameter(double value, FilterOperation::OperationType type) {
       return value;
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return 0;
   }
 }
@@ -40,7 +40,10 @@ double ClampParameter(double value, FilterOperation::OperationType type) {
 // static
 InterpolableFilter* InterpolableFilter::MaybeCreate(
     const FilterOperation& filter,
-    double zoom) {
+    const CSSProperty& property,
+    double zoom,
+    mojom::blink::ColorScheme color_scheme,
+    const ui::ColorProvider* color_provider) {
   InterpolableValue* value = nullptr;
   FilterOperation::OperationType type = filter.GetType();
   switch (type) {
@@ -62,19 +65,21 @@ InterpolableFilter* InterpolableFilter::MaybeCreate(
 
     case FilterOperation::OperationType::kBlur:
       value = InterpolableLength::MaybeConvertLength(
-          To<BlurFilterOperation>(filter).StdDeviation(), zoom);
+          To<BlurFilterOperation>(filter).StdDeviation(), property, zoom,
+          /*interpolate_size=*/std::nullopt);
       break;
 
     case FilterOperation::OperationType::kDropShadow:
       value = InterpolableShadow::Create(
-          To<DropShadowFilterOperation>(filter).Shadow(), zoom);
+          To<DropShadowFilterOperation>(filter).Shadow(), zoom, color_scheme,
+          color_provider);
       break;
 
     case FilterOperation::OperationType::kReference:
       return nullptr;
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return nullptr;
   }
 
@@ -85,7 +90,9 @@ InterpolableFilter* InterpolableFilter::MaybeCreate(
 
 // static
 InterpolableFilter* InterpolableFilter::MaybeConvertCSSValue(
-    const CSSValue& css_value) {
+    const CSSValue& css_value,
+    mojom::blink::ColorScheme color_scheme,
+    const ui::ColorProvider* color_provider) {
   if (css_value.IsURIValue())
     return nullptr;
 
@@ -115,11 +122,12 @@ InterpolableFilter* InterpolableFilter::MaybeConvertCSSValue(
       break;
 
     case FilterOperation::OperationType::kDropShadow:
-      value = InterpolableShadow::MaybeConvertCSSValue(filter.Item(0));
+      value = InterpolableShadow::MaybeConvertCSSValue(
+          filter.Item(0), color_scheme, color_provider);
       break;
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return nullptr;
   }
 
@@ -158,7 +166,7 @@ InterpolableFilter* InterpolableFilter::CreateInitialValue(
       break;
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return nullptr;
   }
 
@@ -201,7 +209,7 @@ FilterOperation* InterpolableFilter::CreateFilterOperation(
     }
 
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return nullptr;
   }
 }

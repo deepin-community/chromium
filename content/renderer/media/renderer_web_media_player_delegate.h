@@ -50,7 +50,7 @@ class CONTENT_EXPORT RendererWebMediaPlayerDelegate final
   bool has_played_media() const { return has_played_media_; }
 
   // blink::WebMediaPlayerDelegate implementation.
-  bool IsFrameHidden() override;
+  bool IsPageHidden() override;
   int AddObserver(Observer* observer) override;
   void RemoveObserver(int player_id) override;
   void DidMediaMetadataChange(int player_id,
@@ -134,7 +134,7 @@ class CONTENT_EXPORT RendererWebMediaPlayerDelegate final
 
   // Clock used for calculating when players have become stale. May be
   // overridden for testing.
-  raw_ptr<const base::TickClock, ExperimentalRenderer> tick_clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
 
   // Players with a video track.
   base::flat_set<int> players_with_video_;

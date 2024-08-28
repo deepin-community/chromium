@@ -14,6 +14,7 @@
 #include "chrome/browser/ash/arc/input_overlay/ui/action_view.h"
 #include "chrome/browser/ash/arc/input_overlay/util.h"
 #include "ui/aura/window.h"
+#include "ui/display/screen.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
@@ -433,7 +434,7 @@ std::optional<ui::TouchEvent> Action::GetTouchCanceledEvent() {
     return std::nullopt;
   }
   auto touch_event = std::make_optional<ui::TouchEvent>(
-      ui::EventType::ET_TOUCH_CANCELLED, last_touch_root_location_,
+      ui::EventType::kTouchCancelled, last_touch_root_location_,
       last_touch_root_location_, ui::EventTimeForNow(),
       ui::PointerDetails(ui::EventPointerType::kTouch, touch_id_.value()));
   ui::Event::DispatcherApi(&*touch_event).set_target(touch_injector_->window());
@@ -447,7 +448,7 @@ std::optional<ui::TouchEvent> Action::GetTouchReleasedEvent() {
     return std::nullopt;
   }
   auto touch_event = std::make_optional<ui::TouchEvent>(
-      ui::EventType::ET_TOUCH_RELEASED, last_touch_root_location_,
+      ui::EventType::kTouchReleased, last_touch_root_location_,
       last_touch_root_location_, ui::EventTimeForNow(),
       ui::PointerDetails(ui::EventPointerType::kTouch, touch_id_.value()));
   ui::Event::DispatcherApi(&*touch_event).set_target(touch_injector_->window());
@@ -498,29 +499,29 @@ bool Action::CreateTouchPressedEvent(const base::TimeTicks& time_stamp,
     return false;
   }
 
-  CreateTouchEvent(ui::EventType::ET_TOUCH_PRESSED, time_stamp, touch_events);
+  CreateTouchEvent(ui::EventType::kTouchPressed, time_stamp, touch_events);
   return true;
 }
 
 void Action::CreateTouchMovedEvent(const base::TimeTicks& time_stamp,
                                    std::list<ui::TouchEvent>& touch_events) {
-  CreateTouchEvent(ui::EventType::ET_TOUCH_MOVED, time_stamp, touch_events);
+  CreateTouchEvent(ui::EventType::kTouchMoved, time_stamp, touch_events);
 }
 
 void Action::CreateTouchReleasedEvent(const base::TimeTicks& time_stamp,
                                       std::list<ui::TouchEvent>& touch_events) {
-  CreateTouchEvent(ui::EventType::ET_TOUCH_RELEASED, time_stamp, touch_events);
+  CreateTouchEvent(ui::EventType::kTouchReleased, time_stamp, touch_events);
   OnTouchReleased();
 }
 
 bool Action::IsRepeatedKeyEvent(const ui::KeyEvent& key_event) {
   if ((key_event.flags() & ui::EF_IS_REPEAT) &&
-      (key_event.type() == ui::ET_KEY_PRESSED)) {
+      (key_event.type() == ui::EventType::kKeyPressed)) {
     return true;
   }
 
   // TODO (b/200210666): Can remove this after the bug is fixed.
-  if (key_event.type() == ui::ET_KEY_PRESSED &&
+  if (key_event.type() == ui::EventType::kKeyPressed &&
       keys_pressed_.contains(key_event.code())) {
     return true;
   }
@@ -530,8 +531,7 @@ bool Action::IsRepeatedKeyEvent(const ui::KeyEvent& key_event) {
 
 bool Action::VerifyOnKeyRelease(ui::DomCode code) {
   if (!touch_id_) {
-    LOG(ERROR) << "There should be a touch ID for the release {"
-               << ui::KeycodeConverter::DomCodeToCodeString(code) << "}.";
+    // The simulated touch events may be released by other events forcely.
     DCHECK_EQ(keys_pressed_.size(), 0u);
     return false;
   }
@@ -610,6 +610,17 @@ void Action::UpdateTouchDownPositions() {
     return;
   }
 
+  auto* window = touch_injector_->window();
+  auto* host = window->GetHost();
+  // It is possible for the host to be null while
+  // the target window is transitioning from immmersive mode to
+  // floating. In this scenario, the parent window of the target
+  // window is temporarily set to null when this function is called.
+  const float scale = host ? host->device_scale_factor()
+                           : display::Screen::GetScreen()
+                                 ->GetDisplayNearestWindow(window)
+                                 .device_scale_factor();
+
   touch_down_positions_.clear();
   const auto& content_bounds = touch_injector_->content_bounds_f();
   for (size_t i = 0; i < original_positions_.size(); i++) {
@@ -617,7 +628,6 @@ void Action::UpdateTouchDownPositions() {
     const auto calculated_point = point.ToString();
     point.Offset(content_bounds.origin().x(), content_bounds.origin().y());
     const auto root_point = point.ToString();
-    float scale = touch_injector_->window()->GetHost()->device_scale_factor();
     point.Scale(scale);
 
     VLOG(1) << "Calculate touch position for location at index " << i
@@ -632,7 +642,7 @@ void Action::UpdateTouchDownPositions() {
   }
 
   on_left_or_middle_side_ =
-      touch_down_positions_[0].x() <= content_bounds.width() / 2 ? true : false;
+      touch_down_positions_[0].x() <= content_bounds.width() / 2;
 
   DCHECK_EQ(touch_down_positions_.size(), original_positions_.size());
 }

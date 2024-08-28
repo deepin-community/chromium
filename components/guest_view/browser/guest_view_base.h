@@ -212,7 +212,7 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   // for an extension, returns the host of its URL, which is an extension ID. If
   // the owner RenderFrameHost is a non-extension embedder of a Controlled
   // Frame, returns its serialized origin.
-  // TODO(crbug.com/1517391): Expose this information as a url::Origin.
+  // TODO(crbug.com/41490369): Expose this information as a url::Origin.
   std::string owner_host() const { return owner_host_; }
 
   // Whether the guest view is inside a plugin document.
@@ -275,9 +275,8 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   content::RenderFrameHost* GetProspectiveOuterDocument() override;
 
   // WebContentsDelegate implementation.
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
   bool PreHandleGestureEvent(content::WebContents* source,
                              const blink::WebGestureEvent& event) override;
 
@@ -331,6 +330,10 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   // only ever fire if IsPreferredSizeSupported returns true.
   virtual void OnPreferredSizeChanged(const gfx::Size& pref_size) {}
 
+  // This method is invoked when the owner contents audio muted state changes to
+  // give the container an opportunity to adjust their muted state.
+  virtual void OnOwnerAudioMutedStateUpdated(bool muted);
+
   // Signals that the guest view is ready.  The default implementation signals
   // immediately, but derived class can override this if they need to do
   // asynchronous setup.
@@ -363,7 +366,7 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   class OwnerContentsObserver;
   class OpenerLifetimeObserver;
 
-  // TODO(533069): Remove since BrowserPlugin has been removed.
+  // TODO(crbug.com/40436245): Remove since BrowserPlugin has been removed.
   void DidAttach();
 
   // BrowserPluginGuestDelegate implementation.
@@ -376,8 +379,7 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   // WebContentsDelegate implementation.
   void ActivateContents(content::WebContents* contents) final;
   void ContentsMouseEvent(content::WebContents* source,
-                          bool motion,
-                          bool exited) final;
+                          const ui::Event& event) final;
   void ContentsZoomChange(bool zoom_in) final;
   void LoadingStateChanged(content::WebContents* source,
                            bool should_show_loading_ui) final;
@@ -479,15 +481,15 @@ class GuestViewBase : public content::BrowserPluginGuestDelegate,
   // element may not match the size of the guest.
   gfx::Size guest_size_;
 
-  // When the guest is created, a guest WebContents is created and we take
-  // ownership of it here until it's ready to be attached. On attachment,
-  // ownership of the guest WebContents is taken by the embedding WebContents.
-  std::unique_ptr<content::WebContents> owned_guest_contents_;
-
   // Before attachment a GuestViewBase is owned with a unique_ptr. After
   // attachment, a GuestViewBase is self-owned and scoped to the lifetime of the
   // guest WebContents.
   bool self_owned_ = false;
+
+  // When the guest is created, a guest WebContents is created and we take
+  // ownership of it here until it's ready to be attached. On attachment,
+  // ownership of the guest WebContents is taken by the embedding WebContents.
+  std::unique_ptr<content::WebContents> owned_guest_contents_;
 
   // The params used when creating the guest contents. These are saved here in
   // case we need to recreate the guest contents. Not all guest types need to

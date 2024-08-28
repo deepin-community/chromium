@@ -39,6 +39,7 @@
 #include "chrome/browser/ui/views/tabs/alert_indicator_button.h"
 #include "chrome/browser/ui/views/tabs/browser_tab_strip_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_close_button.h"
+#include "chrome/browser/ui/views/tabs/tab_drag_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_hover_card_bubble_view.h"
 #include "chrome/browser/ui/views/tabs/tab_icon.h"
 #include "chrome/browser/ui/views/tabs/tab_slot_controller.h"
@@ -63,7 +64,6 @@
 #include "ui/base/pointer/touch_ui_controller.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/theme_provider.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/compositor/clip_recorder.h"
 #include "ui/compositor/compositor.h"
 #include "ui/gfx/animation/tween.h"
@@ -109,8 +109,11 @@ constexpr int kPinnedTabExtraWidthToRenderAsNormal = 30;
 // Additional padding of close button to the right of the tab
 // indicator when `extra_alert_indicator_padding_` is true.
 constexpr int kTabAlertIndicatorCloseButtonPaddingAdjustmentTouchUI = 8;
-constexpr int kTabAlertIndicatorCloseButtonPaddingAdjustment = 6;
-constexpr int kTabAlertIndicatorCloseButtonPaddingAdjustmentRefresh = 4;
+constexpr int kTabAlertIndicatorCloseButtonPaddingAdjustment = 4;
+
+// When the DiscardRingImprovements feature is enabled, increase the radius of
+// the discard ring by this amount if there is enough space.
+constexpr int kIncreasedDiscardIndicatorRadiusDp = 2;
 
 bool g_show_hover_card_on_mouse_hover = true;
 
@@ -226,16 +229,10 @@ Tab::Tab(TabSlotController* controller)
   // |title_| paints on top of an opaque region (the tab background) of a
   // non-opaque layer (the tabstrip's layer), which cannot currently be detected
   // by the subpixel-rendering opacity check.
-  // TODO(https://crbug.com/1139395): Improve the check so that this case doen't
+  // TODO(crbug.com/40725997): Improve the check so that this case doen't
   // need a manual suppression by detecting cases where the text is painted onto
   // onto opaque parts of a not-entirely-opaque layer.
   title_->SetSkipSubpixelRenderingOpacityCheck(true);
-
-  if (features::IsChromeRefresh2023() &&
-      base::FeatureList::IsEnabled(features::kChromeRefresh2023TopChromeFont)) {
-    title_->SetTextContext(views::style::CONTEXT_LABEL);
-    title_->SetTextStyle(views::style::STYLE_BODY_4_EMPHASIS);
-  }
 
   AddChildView(title_.get());
 
@@ -308,23 +305,12 @@ void Tab::Layout(PassKey) {
   const bool was_showing_icon = showing_icon_;
   UpdateIconVisibility();
 
-  int start = contents_rect.x();
-
-  // ChromeRefresh doesnt respect this extra padding since it has exact values
-  // for left/right padding.
-  if (extra_padding_before_content_ && !features::IsChromeRefresh2023()) {
-    constexpr int kExtraLeftPaddingToBalanceCloseButtonPadding = 4;
-    start += kExtraLeftPaddingToBalanceCloseButtonPadding;
-  }
+  const int start = contents_rect.x();
 
   // The bounds for the favicon will include extra width for the attention
   // indicator, but visually it will be smaller at kFaviconSize wide.
   gfx::Rect favicon_bounds(start, contents_rect.y(), 0, 0);
   if (showing_icon_) {
-    // Height should go to the bottom of the tab for the crashed tab animation
-    // to pop out of the bottom.
-    favicon_bounds.set_y(contents_rect.y() +
-                         Center(contents_rect.height(), gfx::kFaviconSize));
     if (center_icon_) {
       // When centering the favicon, the favicon is allowed to escape the normal
       // contents rect.
@@ -332,6 +318,17 @@ void Tab::Layout(PassKey) {
     } else {
       MaybeAdjustLeftForPinnedTab(&favicon_bounds, gfx::kFaviconSize);
     }
+
+    if (base::FeatureList::IsEnabled(
+            performance_manager::features::kDiscardRingImprovements)) {
+      icon_->EnlargeDiscardIndicatorRadius(
+          controller()->GetInactiveTabWidth() -
+                      2 * tab_style()->GetBottomCornerRadius() >=
+                  gfx::kFaviconSize + 2 * kIncreasedDiscardIndicatorRadiusDp
+              ? kIncreasedDiscardIndicatorRadiusDp
+              : 0);
+    }
+
     // Add space for insets outside the favicon bounds.
     favicon_bounds.Inset(-icon_->GetInsets());
     favicon_bounds.set_size(icon_->GetPreferredSize());
@@ -379,12 +376,9 @@ void Tab::Layout(PassKey) {
     if (showing_close_button_) {
       right = close_x;
       if (extra_alert_indicator_padding_) {
-        right -=
-            ui::TouchUiController::Get()->touch_ui()
-                ? kTabAlertIndicatorCloseButtonPaddingAdjustmentTouchUI
-                : (features::IsChromeRefresh2023()
-                       ? kTabAlertIndicatorCloseButtonPaddingAdjustmentRefresh
-                       : kTabAlertIndicatorCloseButtonPaddingAdjustment);
+        right -= ui::TouchUiController::Get()->touch_ui()
+                     ? kTabAlertIndicatorCloseButtonPaddingAdjustmentTouchUI
+                     : kTabAlertIndicatorCloseButtonPaddingAdjustment;
       }
     }
     const gfx::Size image_size = alert_indicator_button_->GetPreferredSize();
@@ -463,7 +457,8 @@ bool Tab::OnKeyPressed(const ui::KeyEvent& event) {
       ui::EF_CONTROL_DOWN;
 #endif
 
-  if (event.type() == ui::ET_KEY_PRESSED && (event.flags() & kModifiedFlag)) {
+  if (event.type() == ui::EventType::kKeyPressed &&
+      (event.flags() & kModifiedFlag)) {
     const bool is_right = event.key_code() == ui::VKEY_RIGHT;
     const bool is_left = event.key_code() == ui::VKEY_LEFT;
     if (is_right || is_left) {
@@ -614,14 +609,17 @@ void Tab::OnMouseEntered(const ui::MouseEvent& event) {
 }
 
 void Tab::MaybeUpdateHoverStatus(const ui::MouseEvent& event) {
-  if (mouse_hovered_ || !GetWidget()->IsMouseEventsEnabled()) {
+  // During system-DnD-based tab dragging we sometimes receive mouse events, but
+  // we shouldn't update the hover status during a drag.
+  if (mouse_hovered_ || !GetWidget()->IsMouseEventsEnabled() ||
+      TabDragController::IsActive()) {
     return;
   }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // Move the hit test area for hovering up so that it is not overlapped by tab
   // hover cards when they are shown.
-  // TODO(crbug.com/978134): Once Linux/CrOS widget transparency is solved,
+  // TODO(crbug.com/41467565): Once Linux/CrOS widget transparency is solved,
   // remove that case.
   constexpr int kHoverCardOverlap = 6;
   if (event.location().y() >= height() - kHoverCardOverlap) {
@@ -653,7 +651,7 @@ void Tab::OnGestureEvent(ui::GestureEvent* event) {
   controller_->UpdateHoverCard(nullptr,
                                TabSlotController::HoverCardUpdateType::kEvent);
   switch (event->type()) {
-    case ui::ET_GESTURE_TAP_DOWN: {
+    case ui::EventType::kGestureTapDown: {
       // TAP_DOWN is only dispatched for the first touch point.
       DCHECK_EQ(1, event->details().touch_points());
 
@@ -714,7 +712,8 @@ void Tab::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   }
 }
 
-gfx::Size Tab::CalculatePreferredSize() const {
+gfx::Size Tab::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(tab_style()->GetStandardWidth(),
                    GetLayoutConstant(TAB_HEIGHT));
 }
@@ -951,13 +950,14 @@ void Tab::SetTabNeedsAttention(bool attention) {
   SchedulePaint();
 }
 
-void Tab::SetFreezingVoteToken(
-    std::unique_ptr<performance_manager::freezing::FreezingVoteToken> token) {
-  freezing_token_ = std::move(token);
+void Tab::CreateFreezingVote(content::WebContents* contents) {
+  if (!freezing_vote_.has_value()) {
+    freezing_vote_.emplace(contents);
+  }
 }
 
-void Tab::ReleaseFreezingVoteToken() {
-  freezing_token_.reset();
+void Tab::ReleaseFreezingVote() {
+  freezing_vote_.reset();
 }
 
 // static
@@ -985,6 +985,10 @@ std::optional<TabAlertState> Tab::GetAlertStateToShow(
   return alert_states[0];
 }
 
+void Tab::SetShouldShowDiscardIndicator(bool enabled) {
+  icon_->SetShouldShowDiscardIndicator(enabled);
+}
+
 void Tab::MaybeAdjustLeftForPinnedTab(gfx::Rect* bounds,
                                       int visual_width) const {
   if (ShouldRenderAsNormalTab()) {
@@ -993,8 +997,8 @@ void Tab::MaybeAdjustLeftForPinnedTab(gfx::Rect* bounds,
   const int pinned_width = tab_style()->GetPinnedWidth();
   const int ideal_delta = width() - pinned_width;
   const int ideal_x = (pinned_width - visual_width) / 2;
-  // TODO(crbug.com/533570): This code is broken when the current width is less
-  // than the pinned width.
+  // TODO(crbug.com/40436434): This code is broken when the current width is
+  // less than the pinned width.
   bounds->set_x(
       bounds->x() +
       base::ClampRound(
@@ -1013,7 +1017,6 @@ void Tab::UpdateIconVisibility() {
   // a non-narrow tab.
   if (!closing_) {
     center_icon_ = false;
-    extra_padding_before_content_ = false;
   }
 
   showing_icon_ = showing_alert_indicator_ = false;
@@ -1041,7 +1044,6 @@ void Tab::UpdateIconVisibility() {
     // While animating to or from the pinned state, pinned tabs are rendered as
     // normal tabs. Force the extra padding on so the favicon doesn't jitter
     // left and then back right again as it resizes through layout regimes.
-    extra_padding_before_content_ = true;
     extra_alert_indicator_padding_ = true;
     return;
   }
@@ -1106,16 +1108,6 @@ void Tab::UpdateIconVisibility() {
     }
   }
 
-  // Don't update padding while the tab is closing, to avoid glitchy-looking
-  // behaviour when the close animation causes the tab to get very small
-  if (!closing_) {
-    // The extra padding is intended to visually balance the close button, so
-    // only include it when the close button is shown or will be shown on hover.
-    // We also check this for active tabs so that the extra padding doesn't pop
-    // in and out as you switch tabs.
-    extra_padding_before_content_ = large_enough_for_close_button;
-  }
-
   extra_alert_indicator_padding_ = showing_alert_indicator_ &&
                                    showing_close_button_ &&
                                    large_enough_for_close_button;
@@ -1173,7 +1165,7 @@ void Tab::CloseButtonPressed(const ui::Event& event) {
     base::RecordAction(UserMetricsAction("CloseTab_RecordingIndicator"));
   }
 
-  const bool from_mouse = event.type() == ui::ET_MOUSE_RELEASED &&
+  const bool from_mouse = event.type() == ui::EventType::kMouseReleased &&
                           !(event.flags() & ui::EF_FROM_TOUCH);
   controller_->CloseTab(
       this, from_mouse ? CLOSE_TAB_FROM_MOUSE : CLOSE_TAB_FROM_TOUCH);

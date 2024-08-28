@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2019, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -247,7 +247,9 @@ static AOM_INLINE void unsharp(const AV1_COMP *const cpi,
 
 // 8-tap Gaussian convolution filter with sigma = 1.0, sums to 128,
 // all co-efficients must be even.
-DECLARE_ALIGNED(16, static const int16_t, gauss_filter[8]) = { 0,  8, 30, 52,
+// The array is of size 9 to allow passing gauss_filter + 1 to
+// _mm_loadu_si128() in prepare_coeffs_6t().
+DECLARE_ALIGNED(16, static const int16_t, gauss_filter[9]) = { 0,  8, 30, 52,
                                                                30, 8, 0,  0 };
 static AOM_INLINE void gaussian_blur(const int bit_depth,
                                      const YV12_BUFFER_CONFIG *source,

@@ -12,12 +12,17 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
+#include "base/time/time.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/dips/dips_service.h"
 #include "chrome/browser/first_party_sets/first_party_sets_policy_service.h"
 #include "chrome/browser/first_party_sets/first_party_sets_policy_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/webid/federated_identity_auto_reauthn_permission_context.h"
+#include "chrome/browser/webid/federated_identity_auto_reauthn_permission_context_factory.h"
+#include "chrome/browser/webid/federated_identity_permission_context.h"
+#include "chrome/browser/webid/federated_identity_permission_context_factory.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -31,7 +36,9 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/runtime_feature_state/runtime_feature_state_document_data.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/content_features.h"
 #include "net/base/schemeful_site.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/site_for_cookies.h"
@@ -40,7 +47,9 @@
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
+#include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_read_context.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-shared.h"
+#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 
 namespace {
 
@@ -53,55 +62,52 @@ static int implicit_grant_limit = 0;
 constexpr base::TimeDelta kStorageAccessAPITopLevelUserInteractionBound =
     base::Days(30);
 
-// `kPermissionStorageAccessAPI` enables StorageAccessAPIwithPrompts
-// (https://chromestatus.com/feature/5085655327047680), which should not
-// auto-deny if FPS is irrelevant.
-bool ShouldAutoDenyOutsideFPS() {
-  return !base::FeatureList::IsEnabled(
-      permissions::features::kPermissionStorageAccessAPI);
-}
-
-// Returns true if the request wasn't answered by the user explicitly.
-bool IsImplicitOutcome(RequestOutcome outcome) {
+// Returns true if the request was answered by the user explicitly. Note that
+// this is only called when persisting a permission grant.
+bool IsUserDecidedPersistableOutcome(RequestOutcome outcome) {
   switch (outcome) {
-    case RequestOutcome::kAllowedByCookieSettings:
-    case RequestOutcome::kAllowedBySameSite:
-    case RequestOutcome::kDeniedByCookieSettings:
-    case RequestOutcome::kDeniedByFirstPartySet:
+    case RequestOutcome::kGrantedByFirstPartySet:
+    case RequestOutcome::kGrantedByAllowance:
+    case RequestOutcome::kDismissedByUser:
+    case RequestOutcome::kReusedPreviousDecision:
+    case RequestOutcome::kReusedImplicitGrant:
+      return false;
+    case RequestOutcome::kGrantedByUser:
+    case RequestOutcome::kDeniedByUser:
+      return true;
+
     case RequestOutcome::kDeniedByPrerequisites:
     case RequestOutcome::kDeniedByTopLevelInteractionHeuristic:
-    case RequestOutcome::kDismissedByUser:
-    case RequestOutcome::kGrantedByAllowance:
-    case RequestOutcome::kGrantedByFirstPartySet:
-    case RequestOutcome::kReusedImplicitGrant:
-    case RequestOutcome::kReusedPreviousDecision:
+    case RequestOutcome::kAllowedByCookieSettings:
+    case RequestOutcome::kDeniedByCookieSettings:
+    case RequestOutcome::kAllowedBySameSite:
     case RequestOutcome::kDeniedAborted:
-      return true;
-    case RequestOutcome::kDeniedByUser:
-    case RequestOutcome::kGrantedByUser:
-      return false;
+    case RequestOutcome::kAllowedByFedCM:
+      NOTREACHED_NORETURN();
   }
 }
 
 // Returns true if the request outcome should be displayed in the omnibox.
 bool ShouldDisplayOutcomeInOmnibox(RequestOutcome outcome) {
   switch (outcome) {
+    case RequestOutcome::kGrantedByUser:
     case RequestOutcome::kDeniedByUser:
     case RequestOutcome::kDismissedByUser:
-    case RequestOutcome::kGrantedByUser:
     case RequestOutcome::kReusedPreviousDecision:
       return true;
-    case RequestOutcome::kAllowedByCookieSettings:
-    case RequestOutcome::kAllowedBySameSite:
-    case RequestOutcome::kDeniedByCookieSettings:
-    case RequestOutcome::kDeniedByFirstPartySet:
-    case RequestOutcome::kDeniedByTopLevelInteractionHeuristic:
-    case RequestOutcome::kGrantedByAllowance:
     case RequestOutcome::kGrantedByFirstPartySet:
+    case RequestOutcome::kGrantedByAllowance:
+    case RequestOutcome::kDeniedByTopLevelInteractionHeuristic:
     case RequestOutcome::kReusedImplicitGrant:
-    case RequestOutcome::kDeniedByPrerequisites:
-    case RequestOutcome::kDeniedAborted:
       return false;
+
+    case RequestOutcome::kDeniedByPrerequisites:
+    case RequestOutcome::kAllowedByCookieSettings:
+    case RequestOutcome::kDeniedByCookieSettings:
+    case RequestOutcome::kAllowedBySameSite:
+    case RequestOutcome::kDeniedAborted:
+    case RequestOutcome::kAllowedByFedCM:
+      NOTREACHED_NORETURN();
   }
 }
 
@@ -129,59 +135,130 @@ void RecordOutcomeSample(RequestOutcome outcome) {
 }
 
 content_settings::ContentSettingConstraints ComputeConstraints(
-    RequestOutcome outcome) {
-  content_settings::ContentSettingConstraints constraints;
+    RequestOutcome outcome,
+    base::Time now) {
+  content_settings::ContentSettingConstraints constraints(now);
   switch (outcome) {
     case RequestOutcome::kGrantedByFirstPartySet:
       constraints.set_lifetime(
           permissions::kStorageAccessAPIRelatedWebsiteSetsLifetime);
       constraints.set_session_model(
-          content_settings::SessionModel::NonRestorableUserSession);
+          content_settings::mojom::SessionModel::NON_RESTORABLE_USER_SESSION);
       return constraints;
+
     case RequestOutcome::kGrantedByAllowance:
       constraints.set_lifetime(
           permissions::kStorageAccessAPIImplicitPermissionLifetime);
       constraints.set_session_model(
-          content_settings::SessionModel::UserSession);
+          content_settings::mojom::SessionModel::USER_SESSION);
       return constraints;
-    case RequestOutcome::kDismissedByUser:
-    case RequestOutcome::kDeniedByFirstPartySet:
-    case RequestOutcome::kDeniedByPrerequisites:
-    case RequestOutcome::kReusedPreviousDecision:
-    case RequestOutcome::kReusedImplicitGrant:
-    case RequestOutcome::kDeniedByTopLevelInteractionHeuristic:
-    case RequestOutcome::kAllowedByCookieSettings:
-    case RequestOutcome::kDeniedByCookieSettings:
-    case RequestOutcome::kAllowedBySameSite:
-    case RequestOutcome::kDeniedAborted:
-      NOTREACHED_NORETURN();
+
     case RequestOutcome::kGrantedByUser:
     case RequestOutcome::kDeniedByUser:
       constraints.set_lifetime(
           permissions::kStorageAccessAPIExplicitPermissionLifetime);
-      constraints.set_session_model(content_settings::SessionModel::Durable);
+      constraints.set_session_model(
+          content_settings::mojom::SessionModel::DURABLE);
       return constraints;
+
+    case RequestOutcome::kDeniedByPrerequisites:
+    case RequestOutcome::kDismissedByUser:
+    case RequestOutcome::kReusedPreviousDecision:
+    case RequestOutcome::kDeniedByTopLevelInteractionHeuristic:
+    case RequestOutcome::kAllowedByCookieSettings:
+    case RequestOutcome::kReusedImplicitGrant:
+    case RequestOutcome::kDeniedByCookieSettings:
+    case RequestOutcome::kAllowedBySameSite:
+    case RequestOutcome::kDeniedAborted:
+    case RequestOutcome::kAllowedByFedCM:
+      NOTREACHED_NORETURN();
   }
 }
 
-bool ShouldPersistSetting(bool permission_allowed,
-                          RequestOutcome outcome,
-                          bool persist) {
-  // Regardless of how the result was obtained, the permissions code determined
-  // the result should not be persisted; respect that determination.
-  if (!persist) {
-    return false;
-  }
-  // Explicit responses to a prompt should be persisted to avoid user annoyance
-  // or prompt spam.
-  if (!IsImplicitOutcome(outcome)) {
+bool ShouldPersistSetting(bool permission_allowed, RequestOutcome outcome) {
+  // User responses to a prompt should be persisted to avoid user annoyance or
+  // prompt spam.
+  if (IsUserDecidedPersistableOutcome(outcome)) {
     return true;
   }
-  // Implicit denials are not persisted, since they can be re-derived easily and
-  // don't have any user-facing concerns, so persistence just adds complexity.
-  // Grants, however, should be persisted to ensure the associated behavioral
-  // changes stick.
+  // UA-generated denials are not persisted, since they can be re-derived easily
+  // and don't have any user-facing concerns, so persistence just adds
+  // complexity. UA-generated grants, however, should be persisted to ensure the
+  // associated behavioral changes stick.
   return permission_allowed;
+}
+
+// Returns true if the user/field trials have enabled FedCM/SAA autogrants
+// globally via the flag/Feature, or "locally" via the origin trial.
+//
+// Feature state overrides take precedence over origin trial state.
+bool AreFedCmAutograntsEnabled(content::RenderFrameHost* rfh) {
+  if (std::optional<bool> state = base::FeatureList::GetStateIfOverridden(
+          blink::features::kFedCmWithStorageAccessAPI);
+      state.has_value()) {
+    return state.value();
+  }
+  content::RuntimeFeatureStateDocumentData* document_data =
+      content::RuntimeFeatureStateDocumentData::GetForCurrentDocument(rfh);
+  CHECK(document_data);
+
+  return document_data->runtime_feature_state_read_context()
+      .IsFedCmWithStorageAccessAPIEnabled();
+}
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class AutograntViaFedCmOutcome {
+  kAllowed,
+  kDeniedByPermissionsPolicy,
+  kDeniedByPermission,
+  kDeniedByPreventSilentAccess,
+
+  kMaxValue = kDeniedByPreventSilentAccess,
+};
+
+void RecordAutograntViaFedCmOutcomeSample(AutograntViaFedCmOutcome outcome) {
+  base::UmaHistogramEnumeration("API.StorageAccess.AutograntViaFedCm", outcome);
+}
+
+FederatedIdentityPermissionContext* IsAutograntViaFedCmAllowed(
+    content::BrowserContext* browser_context,
+    content::RenderFrameHost* rfh,
+    const url::Origin& embedding_origin,
+    const net::SchemefulSite& embedding_site,
+    const net::SchemefulSite& requesting_site) {
+  CHECK(browser_context);
+  CHECK(base::FeatureList::IsEnabled(
+      blink::features::kFedCmWithStorageAccessAPI));
+  if (!rfh->IsFeatureEnabled(
+          blink::mojom::PermissionsPolicyFeature::kIdentityCredentialsGet)) {
+    RecordAutograntViaFedCmOutcomeSample(
+        AutograntViaFedCmOutcome::kDeniedByPermissionsPolicy);
+    return nullptr;
+  }
+  FederatedIdentityPermissionContext* fedcm_context =
+      FederatedIdentityPermissionContextFactory::GetForProfile(browser_context);
+  if (!fedcm_context || !fedcm_context->HasSharingPermission(
+                            /*relying_party_embedder=*/embedding_site,
+                            /*identity_provider=*/requesting_site)) {
+    RecordAutograntViaFedCmOutcomeSample(
+        AutograntViaFedCmOutcome::kDeniedByPermission);
+    return nullptr;
+  }
+
+  if (FederatedIdentityAutoReauthnPermissionContext* reauth_context =
+          FederatedIdentityAutoReauthnPermissionContextFactory::GetForProfile(
+              browser_context);
+      !reauth_context ||
+      reauth_context->RequiresUserMediation(embedding_origin)) {
+    RecordAutograntViaFedCmOutcomeSample(
+        AutograntViaFedCmOutcome::kDeniedByPreventSilentAccess);
+    return nullptr;
+  }
+
+  RecordAutograntViaFedCmOutcomeSample(AutograntViaFedCmOutcome::kAllowed);
+  RecordOutcomeSample(RequestOutcome::kAllowedByFedCM);
+  return fedcm_context;
 }
 
 }  // namespace
@@ -268,8 +345,10 @@ void StorageAccessGrantPermissionContext::DecidePermission(
     return;
   }
 
-  net::SchemefulSite requesting_site(request_data.requesting_origin);
-  net::SchemefulSite embedding_site(request_data.embedding_origin);
+  const net::SchemefulSite requesting_site(request_data.requesting_origin);
+  const url::Origin embedding_origin =
+      url::Origin::Create(request_data.embedding_origin);
+  const net::SchemefulSite embedding_site(embedding_origin);
 
   // Return early without prompting users if the requesting frame is same-site
   // with the top-level frame.
@@ -301,6 +380,21 @@ void StorageAccessGrantPermissionContext::DecidePermission(
       return;
     }
     CHECK_EQ(existing_setting, CONTENT_SETTING_ASK);
+  }
+
+  // FedCM grants (and the appropriate permissions policy) may allow the call to
+  // auto-resolve (without granting a new permission).
+  if (AreFedCmAutograntsEnabled(rfh)) {
+    if (FederatedIdentityPermissionContext* fedcm_context =
+            IsAutograntViaFedCmAllowed(browser_context(), rfh, embedding_origin,
+                                       embedding_site, requesting_site);
+        fedcm_context) {
+      fedcm_context->MarkStorageAccessEligible(
+          /*relying_party_embedder=*/embedding_site,
+          /*identity_provider=*/requesting_site,
+          base::BindOnce(std::move(callback), CONTENT_SETTING_ALLOW));
+      return;
+    }
   }
 
   if (!request_data.user_gesture) {
@@ -342,14 +436,6 @@ void StorageAccessGrantPermissionContext::CheckForAutoGrantOrAutoDenial(
         break;
     }
   }
-  if (ShouldAutoDenyOutsideFPS()) {
-    NotifyPermissionSetInternal(request_data.id, request_data.requesting_origin,
-                                request_data.embedding_origin,
-                                std::move(callback),
-                                /*persist=*/true, CONTENT_SETTING_BLOCK,
-                                RequestOutcome::kDeniedByFirstPartySet);
-    return;
-  }
 
   // Get all of our implicit grants and see which ones apply to our
   // |requesting_origin|.
@@ -360,7 +446,7 @@ void StorageAccessGrantPermissionContext::CheckForAutoGrantOrAutoDenial(
     ContentSettingsForOneType implicit_grants =
         settings_map->GetSettingsForOneType(
             ContentSettingsType::STORAGE_ACCESS,
-            content_settings::SessionModel::UserSession);
+            content_settings::mojom::SessionModel::USER_SESSION);
 
     const int existing_implicit_grants = base::ranges::count_if(
         implicit_grants, [&request_data](const auto& entry) {
@@ -479,18 +565,20 @@ void StorageAccessGrantPermissionContext::NotifyPermissionSet(
                             ContentSettingsType::STORAGE_ACCESS, &info);
 
     switch (info.metadata.session_model()) {
-      case content_settings::SessionModel::NonRestorableUserSession:
-      case content_settings::SessionModel::UserSession:
+      case content_settings::mojom::SessionModel::NON_RESTORABLE_USER_SESSION:
+      case content_settings::mojom::SessionModel::USER_SESSION:
         outcome = RequestOutcome::kReusedImplicitGrant;
         break;
-      case content_settings::SessionModel::Durable:
-      case content_settings::SessionModel::OneTime:
+      case content_settings::mojom::SessionModel::DURABLE:
+      case content_settings::mojom::SessionModel::ONE_TIME:
         break;
     }
   }
-  NotifyPermissionSetInternal(id, requesting_origin, embedding_origin,
-                              std::move(callback), persist, content_setting,
-                              outcome);
+  NotifyPermissionSetInternal(
+      id, requesting_origin, embedding_origin, std::move(callback),
+      persist && ShouldPersistSetting(content_setting == CONTENT_SETTING_ALLOW,
+                                      outcome),
+      content_setting, outcome);
 }
 
 void StorageAccessGrantPermissionContext::NotifyPermissionSetInternal(
@@ -519,7 +607,7 @@ void StorageAccessGrantPermissionContext::NotifyPermissionSetInternal(
     }
   }
 
-  if (!ShouldPersistSetting(permission_allowed, outcome, persist)) {
+  if (!persist) {
     if (content_setting == CONTENT_SETTING_DEFAULT) {
       content_setting = CONTENT_SETTING_ASK;
     }
@@ -532,10 +620,10 @@ void StorageAccessGrantPermissionContext::NotifyPermissionSetInternal(
   // `Permissions.Action.StorageAccess` histogram. Because implicitly denied
   // results return early, in practice this means that an implicit result at
   // this point means a grant was generated.
-  CHECK(!IsImplicitOutcome(outcome) || permission_allowed);
+  CHECK(IsUserDecidedPersistableOutcome(outcome) || permission_allowed);
   if (permission_allowed) {
     base::UmaHistogramBoolean("API.StorageAccess.GrantIsImplicit",
-                              IsImplicitOutcome(outcome));
+                              !IsUserDecidedPersistableOutcome(outcome));
   }
   HostContentSettingsMap* settings_map =
       HostContentSettingsMapFactory::GetForProfile(browser_context());
@@ -544,12 +632,12 @@ void StorageAccessGrantPermissionContext::NotifyPermissionSetInternal(
 
   settings_map->SetContentSettingDefaultScope(
       requesting_origin, embedding_origin, ContentSettingsType::STORAGE_ACCESS,
-      content_setting, ComputeConstraints(outcome));
+      content_setting, ComputeConstraints(outcome, settings_map->Now()));
 
   ContentSettingsForOneType grants =
       settings_map->GetSettingsForOneType(ContentSettingsType::STORAGE_ACCESS);
 
-  // TODO(https://crbug.com/989663): Ensure that this update of settings doesn't
+  // TODO(crbug.com/40638427): Ensure that this update of settings doesn't
   // cause a double update with
   // ProfileNetworkContextService::OnContentSettingChanged.
 

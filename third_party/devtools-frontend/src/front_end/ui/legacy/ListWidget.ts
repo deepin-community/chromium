@@ -4,6 +4,7 @@
 
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
+import * as Buttons from '../../ui/components/buttons/buttons.js';
 import * as VisualLogging from '../visual_logging/visual_logging.js';
 
 import * as ARIAUtils from './ARIAUtils.js';
@@ -113,8 +114,11 @@ export class ListWidget<T> extends VBox {
     if (this.isTable) {
       element.role = 'rowgroup';
     }
-    element.setAttribute('jslog', `${VisualLogging.item()}`);
-    element.appendChild(this.delegate.renderItem(item, editable));
+    const content = this.delegate.renderItem(item, editable);
+    if (!content.hasAttribute('jslog')) {
+      element.setAttribute('jslog', `${VisualLogging.item()}`);
+    }
+    element.appendChild(content);
     if (editable) {
       element.classList.add('editable');
       element.tabIndex = 0;
@@ -295,8 +299,8 @@ export type EditorControl<T = string> = (HTMLInputElement|HTMLSelectElement|Cust
 export class Editor<T> {
   element: HTMLDivElement;
   private readonly contentElementInternal: HTMLElement;
-  private commitButton: HTMLButtonElement;
-  private readonly cancelButton: HTMLButtonElement;
+  private commitButton: Buttons.Button.Button;
+  private readonly cancelButton: Buttons.Button.Button;
   private errorMessageContainer: HTMLElement;
   private readonly controls: EditorControl[];
   private readonly controlByName: Map<string, EditorControl>;
@@ -309,6 +313,7 @@ export class Editor<T> {
   constructor() {
     this.element = document.createElement('div');
     this.element.classList.add('editor-container');
+    this.element.setAttribute('jslog', `${VisualLogging.pane('editor').track({resize: true})}`);
     this.element.addEventListener(
         'keydown', onKeyDown.bind(null, Platform.KeyboardUtilities.isEscKey, this.cancelClicked.bind(this)), false);
 
@@ -325,17 +330,17 @@ export class Editor<T> {
     }, this.commitClicked.bind(this)), false);
 
     const buttonsRow = this.element.createChild('div', 'editor-buttons');
-    this.commitButton = createTextButton('', this.commitClicked.bind(this), {
-      jslogContext: 'commit',
-      primary: true,
-    });
-    buttonsRow.appendChild(this.commitButton);
     this.cancelButton = createTextButton(i18nString(UIStrings.cancelString), this.cancelClicked.bind(this), {
       jslogContext: 'cancel',
-      primary: true,
+      variant: Buttons.Button.Variant.OUTLINED,
     });
     this.cancelButton.setAttribute('jslog', `${VisualLogging.action('cancel').track({click: true})}`);
     buttonsRow.appendChild(this.cancelButton);
+    this.commitButton = createTextButton('', this.commitClicked.bind(this), {
+      jslogContext: 'commit',
+      variant: Buttons.Button.Variant.PRIMARY,
+    });
+    buttonsRow.appendChild(this.commitButton);
 
     this.errorMessageContainer = this.element.createChild('div', 'list-widget-input-validation-error');
     ARIAUtils.markAsAlert(this.errorMessageContainer);
@@ -367,7 +372,7 @@ export class Editor<T> {
     const input = (createInput('', type) as HTMLInputElement);
     input.placeholder = title;
     input.addEventListener('input', this.validateControls.bind(this, false), false);
-    input.setAttribute('jslog', `${VisualLogging.textField().track({keydown: true}).context(name)}`);
+    input.setAttribute('jslog', `${VisualLogging.textField().track({change: true, keydown: 'Enter'}).context(name)}`);
     ARIAUtils.setLabel(input, title);
     this.controlByName.set(name, input);
     this.controls.push(input);
@@ -385,6 +390,8 @@ export class Editor<T> {
       const option = (select.createChild('option') as HTMLOptionElement);
       option.value = options[index];
       option.textContent = options[index];
+      option.setAttribute(
+          'jslog', `${VisualLogging.item(Platform.StringUtilities.toKebabCase(options[index])).track({click: true})}`);
     }
     if (title) {
       Tooltip.install(select, title);

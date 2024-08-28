@@ -110,7 +110,7 @@
   }
 
   #scroller {
-    /* TODO(crbug.com/1158670): Fix the plugin to properly support RTL painting
+    /* TODO(crbug.com/40737077): Fix the plugin to properly support RTL painting
      * of PDF contents, such that content is aligned to the top-right corner.
      * Until then force LTR even in RTL languages, so scrolling of the content
      * can originate in the top-left corner, consistent with the expectations of
@@ -133,18 +133,21 @@
     embedded-viewer="[[embedded_]]" page-no="[[pageNo_]]"
     load-progress="[[loadProgress_]]" has-edits="[[hasEdits_]]"
     has-entered-annotation-mode="[[hasEnteredAnnotationMode_]]"
+<if expr="enable_pdf_ink2">
+    has-ink2-edits="[[hasInk2Edits_]]"
+</if>
     printing-enabled="[[printingEnabled_]]"
     rotated="[[isRotated_(clockwiseRotations_)]]"
     is-form-field-focused="[[isFormFieldFocused_]]"
     sidenav-collapsed="[[sidenavCollapsed_]]"
     two-up-view-enabled="[[twoUpViewEnabled_]]"
     viewport-zoom="[[viewportZoom_]]" zoom-bounds="[[zoomBounds_]]"
-<if expr="enable_ink">
+<if expr="enable_ink or enable_pdf_ink2">
     annotation-available="[[annotationAvailable_]]"
     pdf-annotations-enabled="[[pdfAnnotationsEnabled_]]"
 </if>
-<if expr="enable_screen_ai_service">
-    pdf-ocr-enabled="[[pdfOcrEnabled_]]"
+<if expr="enable_pdf_ink2">
+    pdf-ink2-enabled="[[pdfInk2Enabled_]]"
 </if>
     on-change-page="onChangePage_"
     on-display-annotations-changed="onDisplayAnnotationsChanged_"
@@ -156,10 +159,14 @@
     on-two-up-view-changed="onTwoUpViewChanged_"
     on-zoom-changed="onZoomChanged" on-zoom-in="onZoomIn"
     on-zoom-out="onZoomOut" on-rotate-left="rotateCounterclockwise"
-<if expr="enable_ink">
+<if expr="enable_ink or enable_pdf_ink2">
     on-annotation-mode-toggled="onAnnotationModeToggled_"
 </if>
-    on-print="onPrint_" on-save="onToolbarSave_" hidden>
+    on-print="onPrint_" on-save="onToolbarSave_"
+<if expr="enable_pdf_ink2">
+    on-can-undo-changed="onCanUndoChanged_"
+</if>
+    hidden>
 </viewer-toolbar>
 
 <div id="container">
@@ -180,6 +187,11 @@
     </div>
     <div id="content-focus-rectangle" hidden$="[[!documentHasFocus_]]"></div>
   </div>
+  <if expr="enable_pdf_ink2">
+    <template is="dom-if" if="[[inInk2AnnotationMode_(annotationMode_)]]">
+      <viewer-side-panel></viewer-side-panel>
+    </template>
+  </if>
 </div>
 
 <template is="dom-if" if="[[showErrorDialog]]" on-dom-change="onErrorDialog_">

@@ -10,7 +10,6 @@ import "mojo/public/mojom/base/time.mojom";
 import
   "third_party/blink/public/mojom/loader/javascript_framework_detection.mojom";
 import "services/network/public/mojom/request_priority.mojom";
-import "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom";
 import "third_party/blink/public/mojom/use_counter/use_counter_feature.mojom";
 
 // TimeDeltas below relative to navigation start.
@@ -22,18 +21,20 @@ struct DocumentTiming {
   mojo_base.mojom.TimeDelta? load_event_start;
 };
 
+struct LcpResourceLoadTimings {
+  // Time when the underlying LCP resource is requested.
+  mojo_base.mojom.TimeDelta? discovery_time;
+
+  // Time when the underlying LCP resource starts loading.
+  mojo_base.mojom.TimeDelta? load_start;
+
+  // Time when the underlying LCP resource finishes loading.
+  mojo_base.mojom.TimeDelta? load_end;
+};
+
 struct LargestContentfulPaintTiming {
   // Time when the page's largest image is painted.
   mojo_base.mojom.TimeDelta? largest_image_paint;
-
-  // Time when the page's largest image is requested.
-  mojo_base.mojom.TimeDelta? largest_image_discovery_time;
-
-  // Time when the page's largest image starts loading.
-  mojo_base.mojom.TimeDelta? largest_image_load_start;
-
-  // Time when the page's largest image finishes loading.
-  mojo_base.mojom.TimeDelta? largest_image_load_end;
 
   // Size of the largest image of the largest image paint, by
   // Size = Height * Width. Removed images are excluded.
@@ -45,6 +46,8 @@ struct LargestContentfulPaintTiming {
   // Size of the largest text of the largest text paint, by
   // Size = Height * Width. Removed text is excluded.
   uint64 largest_text_paint_size;
+
+  LcpResourceLoadTimings resource_load_timings;
 
   // These are packed blink::LargestContentfulPaintType enums, indicating
   // the largest LCP candidate's type characteristics.
@@ -58,7 +61,7 @@ struct LargestContentfulPaintTiming {
   // When the priority is not available or the LCP is a video,
   // `image_request_priority_valid` is false.
   // Otherwise, `image_request_priority_value` contains the priority.
-  // TODO(crbug.com/657632): Use an optional enum.
+  // TODO(crbug.com/40489779): Use an optional enum.
   bool image_request_priority_valid = false;
   network.mojom.RequestPriority image_request_priority_value;
 
@@ -95,9 +98,6 @@ struct PaintTiming {
   // (Experimental) Time when first input or scroll is received, causing the
   // largest contentful paint algorithm to stop.
   mojo_base.mojom.TimeDelta? first_input_or_scroll_notified_timestamp;
-
-  // Time when the first paint happens after a portal activation.
-  mojo_base.mojom.TimeTicks? portal_activated_paint;
 };
 
 // TimeDeltas below represent durations of time during the page load.
@@ -152,6 +152,13 @@ struct InteractiveTiming {
 
   // The timestamp of the user's first scroll after a navigation.
   mojo_base.mojom.TimeDelta? first_scroll_timestamp;
+};
+
+struct CustomUserTimingMark {
+  // The mark name from performance.mark().
+  string mark_name;
+  // The startTime from performance.mark().
+  mojo_base.mojom.TimeDelta start_time;
 };
 
 // PageLoadTiming contains timing metrics associated with a page load. Many of
@@ -406,6 +413,30 @@ struct ServiceWorkerSubresourceLoadMetrics {
   // e.g. if there are two resources, and one is handed by the service worker,
   // and one did not, this flag will be true because one was network fallback.
   bool dictionary_fallback;
+
+  // Total number of sub-resources which were matched to
+  // `RouterSourceEnum.cache` in ServiceWorker Static Routing API, from
+  // navigation start until onload event.
+  uint32 matched_cache_router_source_count = 0;
+
+  // Total number of sub-resources which were matched to
+  // `RouterSourceEnum.fetch-event` in ServiceWorker Static Routing API, from
+  // navigation start until onload event.
+  uint32 matched_fetch_event_router_source_count = 0;
+
+  // Total number of sub-resources which were matched to
+  // `RouterSourceEnum.network` in ServiceWorker Static Routing API, from
+  // navigation start until onload event.
+  uint32 matched_network_router_source_count = 0;
+
+  // Total number of sub-resources which were matched to the
+  // `RouterSourceEnum.race-network-and-fetch-handler` in ServiceWorker Static
+  // Routing API, from navigation start till onload event.
+  uint32 matched_race_network_and_fetch_router_source_count = 0;
+
+  // Total router evaluation time of ServiceWorker Static Routing API for
+  // sub-resources.
+  mojo_base.mojom.TimeDelta total_router_evaluation_time_for_subresources;
 };
 
 // Enumeration of distinct cache types.
@@ -498,7 +529,7 @@ struct InputTiming {
   // Includes an array of max_event_duration which is the longest input event
   // duration within a user interaction. The unit of duration is ms. Currently,
   // we send this array to the browser process behind a Finch flag.
-  // TODO(crbug.com/1252179): Once the experiment is done, we could simplify
+  // TODO(crbug.com/40198645): Once the experiment is done, we could simplify
   // this part.
   UserInteractionLatencies max_event_durations;
 };
@@ -555,6 +586,17 @@ interface PageLoadMetrics {
   // //cc/metrics/ukm_smoothness_data.h
   SetUpSharedMemoryForSmoothness(
       mojo_base.mojom.ReadOnlySharedMemoryRegion shared_memory);
+
+  // Called when performance entries are added via `performance.mark()` from the
+  // outermost main frame in renderer, except for the case when standard
+  // UserTiming marks `mark_fully_loaded`, `mark_fully_visible`, and
+  // `mark_interactive` occur. Unlike `UpdateTiming`, this calls are not
+  // buffered, and expects it always contains the user timing entry which is not
+  // sent yet before.
+  //
+  // `AddCustomUserTiming` should be used when the expected transport data size
+  // can be larger. Otherwise `UpdateTiming` is recommended.
+  AddCustomUserTiming(CustomUserTimingMark custom_user_timing);
 };
 
 // TimeDelta below relative to the navigation start of the navigation restoring

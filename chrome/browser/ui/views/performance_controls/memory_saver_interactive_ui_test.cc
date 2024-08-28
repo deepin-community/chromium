@@ -5,9 +5,9 @@
 #include "base/callback_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -15,6 +15,7 @@
 #include "chrome/browser/resource_coordinator/tab_manager.h"
 #include "chrome/browser/resource_coordinator/utils.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/performance_controls/test_support/memory_saver_interactive_test_mixin.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -25,13 +26,16 @@
 #include "chrome/browser/ui/views/performance_controls/memory_saver_resource_view.h"
 #include "chrome/browser/ui/views/tabs/tab_icon.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
+#include "chrome/browser/ui/webui/test_support/webui_interactive_test_mixin.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "chrome/test/user_education/interactive_feature_promo_test.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/feature_list.h"
 #include "components/feature_engagement/test/scoped_iph_feature_list.h"
 #include "components/performance_manager/public/decorators/process_metrics_decorator.h"
@@ -57,6 +61,7 @@
 namespace {
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kFirstTabContents);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSecondTabContents);
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kThirdTabContents);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPerformanceSettingsTab);
 DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kAudioIsAudible);
 
@@ -193,6 +198,13 @@ IN_PROC_BROWSER_TEST_F(MemorySaverDiscardPolicyInteractiveTest,
 // Check that tabs with enabled notifications won't be discarded
 IN_PROC_BROWSER_TEST_F(MemorySaverDiscardPolicyInteractiveTest,
                        TabWithNotificationNotDiscarded) {
+  // HTTPS because only secure origins can get the notification permission.
+  net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
+  https_server.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
+  https_server.ServeFilesFromSourceDirectory(GetChromeTestDataDir());
+  ASSERT_TRUE(https_server.Start());
+
+  // Grant notification permission by default (only works for secure origins).
   HostContentSettingsMapFactory::GetForProfile(browser()->profile())
       ->SetDefaultContentSetting(ContentSettingsType::NOTIFICATIONS,
                                  ContentSetting::CONTENT_SETTING_ALLOW);
@@ -200,7 +212,8 @@ IN_PROC_BROWSER_TEST_F(MemorySaverDiscardPolicyInteractiveTest,
       InstrumentTab(kFirstTabContents, 0),
       NavigateWebContents(
           kFirstTabContents,
-          GetURL("example.com", "/notifications/notification_tester.html")),
+          https_server.GetURL("a.test",
+                              "/notifications/notification_tester.html")),
       AddInstrumentedTab(kSecondTabContents, GURL(chrome::kChromeUINewTabURL)),
       TryDiscardTab(0), CheckTabIsDiscarded(0, false));
 }
@@ -211,13 +224,6 @@ class MemorySaverChipInteractiveTest
  public:
   MemorySaverChipInteractiveTest() = default;
   ~MemorySaverChipInteractiveTest() override = default;
-
-  void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        performance_manager::features::kDiscardExceptionsImprovements);
-
-    MemorySaverInteractiveTestMixin<InteractiveBrowserTest>::SetUp();
-  }
 
   void SetUpOnMainThread() override {
     MemorySaverInteractiveTestMixin::SetUpOnMainThread();
@@ -262,9 +268,6 @@ class MemorySaverChipInteractiveTest
                            -> views::View* { return tab_strip->tab_at(index); },
                        index));
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Page Action Chip should appear expanded the first three times a tab is
@@ -476,8 +479,9 @@ IN_PROC_BROWSER_TEST_F(MemorySaverChipInteractiveTest,
       Check(base::BindLambdaForTesting(
           [&]() { return browser()->tab_strip_model()->GetTabCount() == 3; })),
       InstrumentTab(kPerformanceSettingsTab, 2),
-      WaitForWebContentsReady(kPerformanceSettingsTab,
-                              GURL(chrome::kChromeUIPerformanceSettingsURL)));
+      WaitForWebContentsReady(
+          kPerformanceSettingsTab,
+          GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage))));
 }
 
 // Memory Saver Dialog bubble's cancel button's state should be preserved
@@ -549,7 +553,8 @@ IN_PROC_BROWSER_TEST_F(MemorySaverChipInteractiveTest,
       WaitForShow(
           MemorySaverBubbleView::kMemorySaverDialogResourceViewElementId),
       Screenshot(MemorySaverBubbleView::kMemorySaverDialogResourceViewElementId,
-                 "MemorySaverResourceView", "5280502"));
+                 /*screenshot_name=*/"MemorySaverResourceView",
+                 /*baseline_cl=*/"5280502"));
 }
 
 class MemorySaverFaviconTreatmentTest
@@ -557,6 +562,12 @@ class MemorySaverFaviconTreatmentTest
  public:
   MemorySaverFaviconTreatmentTest() = default;
   ~MemorySaverFaviconTreatmentTest() override = default;
+
+  void SetUp() override {
+    scoped_feature_list_.InitAndDisableFeature(
+        performance_manager::features::kDiscardRingImprovements);
+    InteractiveBrowserTest::SetUp();
+  }
 
   void SetUpOnMainThread() override {
     MemorySaverInteractiveTestMixin::SetUpOnMainThread();
@@ -569,6 +580,9 @@ class MemorySaverFaviconTreatmentTest
   TabIcon* GetTabIcon(int tab_index) {
     return GetTabStrip()->tab_at(tab_index)->GetTabIconForTesting();
   }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(MemorySaverFaviconTreatmentTest,
@@ -588,5 +602,111 @@ IN_PROC_BROWSER_TEST_F(MemorySaverFaviconTreatmentTest,
                  return views::AsViewClass<views::View>(GetTabIcon(0));
                })),
       WaitForEvent(kFirstTabFavicon, kDiscardAnimationFinishes), FlushEvents(),
-      Screenshot(kFirstTabFavicon, "FadeSmallFaviconOnDiscard", "4786929"));
+      Screenshot(kFirstTabFavicon,
+                 /*screenshot_name=*/"FadeSmallFaviconOnDiscard",
+                 /*baseline_cl=*/"4786929"));
+}
+
+class MemorySaverDiscardIndicatorIPHTest
+    : public MemorySaverInteractiveTestMixin<InteractiveFeaturePromoTest> {
+ public:
+  MemorySaverDiscardIndicatorIPHTest()
+      : MemorySaverInteractiveTestMixin(
+            InteractiveFeaturePromoTestApi::UseDefaultTrackerAllowingPromos(
+                {feature_engagement::kIPHDiscardRingFeature})) {}
+  ~MemorySaverDiscardIndicatorIPHTest() override = default;
+
+  void SetUpOnMainThread() override {
+    MemorySaverInteractiveTestMixin::SetUpOnMainThread();
+    SetMemorySaverModeEnabled(true);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(MemorySaverDiscardIndicatorIPHTest,
+                       IPHAppearsWhenTabIsDiscarded) {
+  RunTestSequence(
+      InstrumentTab(kFirstTabContents, 0),
+      NavigateWebContents(kFirstTabContents, GetURL()),
+      AddInstrumentedTab(kSecondTabContents, GURL(chrome::kChromeUINewTabURL)),
+      TryDiscardTab(0), CheckTabIsDiscarded(0, true),
+      WaitForPromo(feature_engagement::kIPHDiscardRingFeature),
+      PressNonDefaultPromoButton(), InstrumentTab(kThirdTabContents, 2),
+      WaitForWebContentsReady(
+          kThirdTabContents,
+          GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage))));
+}
+
+class MemorySaverImprovedFaviconTreatmentTest
+    : public WebUiInteractiveTestMixin<MemorySaverFaviconTreatmentTest> {
+ public:
+  void SetUp() override {
+    scoped_feature_list_.InitAndEnableFeature(
+        performance_manager::features::kDiscardRingImprovements);
+    InteractiveBrowserTest::SetUp();
+  }
+
+  static auto IsShowingDiscardIndicator(bool showing) {
+    return [showing](TabIcon* tab_icon) {
+      return showing == tab_icon->GetShowingDiscardIndicator();
+    };
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(MemorySaverImprovedFaviconTreatmentTest,
+                       FaviconTreatmentOnDiscard) {
+  constexpr char kFirstTabFavicon[] = "first_tab_favicon";
+
+  RunTestSequence(
+      SetOnIncompatibleAction(OnIncompatibleAction::kSkipTest,
+                              kSkipPixelTestsReason),
+      InstrumentTab(kFirstTabContents, 0),
+      NavigateWebContents(kFirstTabContents, GetURL()),
+      AddInstrumentedTab(kSecondTabContents, GURL(chrome::kChromeUINewTabURL)),
+      Do(base::BindLambdaForTesting(
+          [=]() { GetTabStrip()->StopAnimating(true); })),
+      TryDiscardTab(0), CheckTabIsDiscarded(0, true),
+      NameView(kFirstTabFavicon, base::BindLambdaForTesting([&]() {
+                 return views::AsViewClass<views::View>(GetTabIcon(0));
+               })),
+      WaitForEvent(kFirstTabFavicon, kDiscardAnimationFinishes), FlushEvents(),
+      Screenshot(kFirstTabFavicon,
+                 /*screenshot_name=*/"NoFadeSlightlySmallerFaviconOnDiscard",
+                 /*baseline_cl=*/"5493847"));
+}
+
+IN_PROC_BROWSER_TEST_F(MemorySaverImprovedFaviconTreatmentTest,
+                       DiscardRingTreatmentSetting) {
+  constexpr char kFirstTabFavicon[] = "first_tab_favicon";
+  const WebContentsInteractionTestUtil::DeepQuery
+      discard_ring_treatment_setting = {
+          "settings-ui",
+          "settings-main",
+          "settings-basic-page",
+          "settings-performance-page",
+          "settings-toggle-button#discardRingTreatmentToggleButton",
+          "cr-toggle#control"};
+  g_browser_process->local_state()->SetBoolean(
+      performance_manager::user_tuning::prefs::kDiscardRingTreatmentEnabled,
+      true);
+  RunTestSequence(
+      InstrumentTab(kFirstTabContents, 0),
+      NavigateWebContents(kFirstTabContents, GetURL()),
+      AddInstrumentedTab(
+          kPerformanceSettingsTab,
+          GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage))),
+      Do(base::BindLambdaForTesting(
+          [=]() { GetTabStrip()->StopAnimating(true); })),
+      TryDiscardTab(0), CheckTabIsDiscarded(0, true),
+      NameView(kFirstTabFavicon, base::BindLambdaForTesting([&]() {
+                 return views::AsViewClass<views::View>(GetTabIcon(0));
+               })),
+      CheckView(kFirstTabFavicon, IsShowingDiscardIndicator(true)),
+      ClickElement(kPerformanceSettingsTab, discard_ring_treatment_setting),
+      WaitForButtonStateChange(kPerformanceSettingsTab,
+                               discard_ring_treatment_setting, false),
+      CheckView(kFirstTabFavicon, IsShowingDiscardIndicator(false)),
+      ClickElement(kPerformanceSettingsTab, discard_ring_treatment_setting),
+      WaitForButtonStateChange(kPerformanceSettingsTab,
+                               discard_ring_treatment_setting, true),
+      CheckView(kFirstTabFavicon, IsShowingDiscardIndicator(true)));
 }

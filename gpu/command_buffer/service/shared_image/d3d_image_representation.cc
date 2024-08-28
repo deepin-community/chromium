@@ -64,16 +64,17 @@ void GLTexturePassthroughD3DImageRepresentation::EndAccess() {
   d3d_image_backing->EndAccessD3D11(d3d11_device_);
 }
 
-#if BUILDFLAG(USE_DAWN)
 DawnD3DImageRepresentation::DawnD3DImageRepresentation(
     SharedImageManager* manager,
     SharedImageBacking* backing,
     MemoryTypeTracker* tracker,
     const wgpu::Device& device,
-    wgpu::BackendType backend_type)
+    wgpu::BackendType backend_type,
+    std::vector<wgpu::TextureFormat> view_formats)
     : DawnImageRepresentation(manager, backing, tracker),
       device_(device),
-      backend_type_(backend_type) {
+      backend_type_(backend_type),
+      view_formats_(view_formats) {
   DCHECK(device_);
 }
 
@@ -82,9 +83,11 @@ DawnD3DImageRepresentation::~DawnD3DImageRepresentation() {
 }
 
 wgpu::Texture DawnD3DImageRepresentation::BeginAccess(
-    wgpu::TextureUsage usage) {
+    wgpu::TextureUsage usage,
+    wgpu::TextureUsage internal_usage) {
   D3DImageBacking* d3d_image_backing = static_cast<D3DImageBacking*>(backing());
-  texture_ = d3d_image_backing->BeginAccessDawn(device_, backend_type_, usage);
+  texture_ = d3d_image_backing->BeginAccessDawn(device_, backend_type_, usage,
+                                                internal_usage, view_formats_);
   return texture_;
 }
 
@@ -97,12 +100,31 @@ void DawnD3DImageRepresentation::EndAccess() {
   D3DImageBacking* d3d_image_backing = static_cast<D3DImageBacking*>(backing());
   d3d_image_backing->EndAccessDawn(device_, texture_);
 
-  // All further operations on the textures are errors (they would be racy
-  // with other backings).
-  texture_.Destroy();
   texture_ = nullptr;
 }
-#endif  // BUILDFLAG(USE_DAWN)
+
+// Enabling this functionality reduces overhead in the compositor by lowering
+// the frequency of begin/end access pairs. The semantic constraints for a
+// representation being able to return true are the following:
+// * It is valid to call BeginScopedReadAccess() concurrently on two
+//   different representations of the same image
+// * The backing supports true concurrent read access rather than emulating
+//   concurrent reads by "pausing" a first read when a second read of a
+//   different representation type begins, which requires that the second
+//   representation's read finish within the scope of its GPU task in order
+//   to ensure that nothing actually accesses the first representation
+//   while it is paused. Some backings that support only exclusive access
+//   from the SI perspective do the latter (e.g.,
+//   ExternalVulkanImageBacking as its "support" of concurrent GL and
+//   Vulkan access). SupportsMultipleConcurrentReadAccess() results in the
+//   compositor's read access being long-lived (i.e., beyond the scope of
+//   a single GPU task).
+// The Graphite Skia representation returns true if the underlying Dawn
+// representation does so. This representation meets both of the above
+// constraints.
+bool DawnD3DImageRepresentation::SupportsMultipleConcurrentReadAccess() {
+  return true;
+}
 
 OverlayD3DImageRepresentation::OverlayD3DImageRepresentation(
     SharedImageManager* manager,

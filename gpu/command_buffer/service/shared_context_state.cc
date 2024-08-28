@@ -10,6 +10,7 @@
 #include "base/immediate_crash.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
+#include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
@@ -33,7 +34,10 @@
 #include "gpu/ipc/common/gpu_client_ids.h"
 #include "gpu/vulkan/buildflags.h"
 #include "skia/buildflags.h"
+#include "skia/ext/skia_trace_memory_dump_impl.h"
+#include "third_party/skia/include/gpu/GrBackendSemaphore.h"
 #include "third_party/skia/include/gpu/GrTypes.h"
+#include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/gl/GrGLDirectContext.h"
 #include "third_party/skia/include/gpu/graphite/Context.h"
 #include "third_party/skia/include/gpu/mock/GrMockTypes.h"
@@ -136,6 +140,7 @@ SkiaBackendType FindSkiaBackendType(SharedContextState* context) {
       // Graphite/Metal isn't expected to be used outside tests.
       return SkiaBackendType::kUnknown;
     case gpu::GrContextType::kGraphiteDawn: {
+#if BUILDFLAG(SKIA_USE_DAWN)
       if (!context->dawn_context_provider()) {
         // TODO(kylechar): Bail out of GPU process earlier if
         // DawnContextProvider initialization fails.
@@ -153,6 +158,9 @@ SkiaBackendType FindSkiaBackendType(SharedContextState* context) {
         default:
           break;
       }
+#else
+      break;
+#endif
     }
   }
   return SkiaBackendType::kUnknown;
@@ -169,6 +177,9 @@ void SharedContextState::compileError(const char* shader,
                << "------------------------\n"
                << shader << "\nErrors:\n"
                << errors;
+
+    static crash_reporter::CrashKeyString<8192> shader_key("skia-error-shader");
+    shader_key.Set(shader);
 
     static crash_reporter::CrashKeyString<2048> error_key("skia-compile-error");
     error_key.Set(errors);
@@ -274,7 +285,6 @@ SharedContextState::SharedContextState(
       share_group_(std::move(share_group)),
       context_(context),
       real_context_(std::move(context)),
-      surface_(std::move(surface)),
       sk_surface_cache_(MaxNumSkSurface()) {
   if (gr_context_type_ == GrContextType::kVulkan) {
     if (vk_context_provider_) {
@@ -284,6 +294,11 @@ SharedContextState::SharedContextState(
       use_virtualized_gl_contexts_ = false;
     }
   }
+
+  DCHECK(context_ && surface && context_->default_surface());
+  // |this| no longer stores the |surface| as that one must be stored by the
+  // context. Do a sanity check that it is true.
+  DCHECK(context_->default_surface() == surface);
 
   if (base::SingleThreadTaskRunner::HasCurrentDefault()) {
     base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
@@ -315,28 +330,27 @@ SharedContextState::~SharedContextState() {
   // and also when using Graphite.
   DCHECK(!owned_gr_context_ || owned_gr_context_->unique());
 
-  // GPU memory allocations except skia_gr_cache_size_ tracked by this
+  // GPU memory allocations except skia_resource_cache_size_ tracked by this
   // memory_tracker_observer_ should have been released.
-  DCHECK_EQ(skia_gr_cache_size_, memory_tracker_observer_.GetMemoryUsage());
+  DCHECK_EQ(skia_resource_cache_size_,
+            memory_tracker_observer_.GetMemoryUsage());
   // gr_context_ and all resources owned by it will be released soon, so set it
-  // to null, and UpdateSkiaOwnedMemorySize() will update skia memory usage to
-  // 0, to ensure that PeakGpuMemoryMonitor sees 0 allocated memory.
+  // to null.
   gr_context_ = nullptr;
+
+  // Null out `graphite_context_` as well to ensure that the below call clears
+  // memory usage.
+  graphite_context_ = nullptr;
+
+  // UpdateSkiaOwnedMemorySize() will update skia memory usage to 0, to ensure
+  // that PeakGpuMemoryMonitor sees 0 allocated memory.
   UpdateSkiaOwnedMemorySize();
 
   // Delete the GrContext. This will either do cleanup if the context is
   // current, or the GrContext was already abandoned if the GLContext was lost.
   owned_gr_context_.reset();
 
-  // |surface_| needs to be destroyed while there is a current GL context if
-  // using GL, as some implementations make calls to the GL bindings. Any such
-  // implementations will themselves ensure that the context is current in their
-  // destructor (we cannot blindly make the context current here, as there are
-  // other implementations that crash if the context is made current at this
-  // point :\). However, we drop our reference to |surface_| before releasing
-  // the context below so that the release has the intended effect.
   last_current_surface_ = nullptr;
-  surface_.reset();
 
   if (context_->IsCurrent(nullptr))
     context_->ReleaseCurrent(nullptr);
@@ -349,6 +363,27 @@ bool SharedContextState::IsUsingGL() const {
   // to hold a GL context.
   return gr_context_type_ == GrContextType::kGL ||
          gr_context_type_ == GrContextType::kNone;
+}
+
+bool SharedContextState::IsGraphiteDawnMetal() const {
+#if BUILDFLAG(SKIA_USE_DAWN)
+  return gr_context_type_ == GrContextType::kGraphiteDawn &&
+         dawn_context_provider_ &&
+         dawn_context_provider_->backend_type() == wgpu::BackendType::Metal;
+#else
+  return false;
+#endif
+}
+
+bool SharedContextState::IsGraphiteDawnD3D() const {
+#if BUILDFLAG(SKIA_USE_DAWN)
+  return gr_context_type_ == GrContextType::kGraphiteDawn &&
+         dawn_context_provider_ &&
+         (dawn_context_provider_->backend_type() == wgpu::BackendType::D3D11 ||
+          dawn_context_provider_->backend_type() == wgpu::BackendType::D3D12);
+#else
+  return false;
+#endif
 }
 
 bool SharedContextState::IsGraphiteDawnVulkan() const {
@@ -501,18 +536,17 @@ bool SharedContextState::InitializeGanesh(
       base::BindRepeating(&SharedContextState::ScheduleSkiaCleanup,
                           base::Unretained(this)));
   gr_cache_controller_ = std::make_unique<raster::GrCacheController>(this);
+  is_drdc_enabled_ = features::IsDrDcEnabled() && !workarounds.disable_drdc;
   return true;
 }
 
 bool SharedContextState::InitializeGraphite(
     const GpuPreferences& gpu_preferences,
     const GpuDriverBugWorkarounds& workarounds) {
-  [[maybe_unused]] skgpu::graphite::ContextOptions context_options =
-      GetDefaultGraphiteContextOptions(workarounds);
   if (gr_context_type_ == GrContextType::kGraphiteDawn) {
 #if BUILDFLAG(SKIA_USE_DAWN)
-    if (dawn_context_provider_ &&
-        dawn_context_provider_->InitializeGraphiteContext(context_options)) {
+    CHECK(dawn_context_provider_);
+    if (dawn_context_provider_->InitializeGraphiteContext(workarounds)) {
       graphite_context_ = dawn_context_provider_->GetGraphiteContext();
     } else {
       // There is currently no way for the GPU process to gracefully handle
@@ -528,7 +562,8 @@ bool SharedContextState::InitializeGraphite(
     CHECK_EQ(gr_context_type_, GrContextType::kGraphiteMetal);
 #if BUILDFLAG(SKIA_USE_METAL)
     if (metal_context_provider_ &&
-        metal_context_provider_->InitializeGraphiteContext(context_options)) {
+        metal_context_provider_->InitializeGraphiteContext(
+            GetDefaultGraphiteContextOptions(workarounds))) {
       graphite_context_ = metal_context_provider_->GetGraphiteContext();
     } else {
       DLOG(ERROR) << "Failed to create Graphite Context for Metal";
@@ -649,7 +684,7 @@ bool SharedContextState::InitializeGL(
     auto virtual_context = base::MakeRefCounted<GLContextVirtual>(
         share_group_.get(), real_context_.get(),
         weak_ptr_factory_.GetWeakPtr());
-    if (!virtual_context->Initialize(surface_.get(), gl::GLContextAttribs())) {
+    if (!virtual_context->Initialize(surface(), gl::GLContextAttribs())) {
       LOG(ERROR) << "SharedContextState::InitializeGL failure Initialize "
                     "virtual context failed";
       feature_info_ = nullptr;
@@ -720,6 +755,113 @@ bool SharedContextState::InitializeGL(
   return true;
 }
 
+void SharedContextState::FlushGraphiteRecorder() {
+  auto recording = gpu_main_graphite_recorder()->snap();
+  if (recording) {
+    skgpu::graphite::InsertRecordingInfo info = {};
+    info.fRecording = recording.get();
+    graphite_context()->insertRecording(info);
+  }
+}
+
+void SharedContextState::FlushAndSubmit(bool sync_to_cpu) {
+  if (graphite_context()) {
+    FlushGraphiteRecorder();
+    graphite_context()->submit(sync_to_cpu ? skgpu::graphite::SyncToCpu::kYes
+                                           : skgpu::graphite::SyncToCpu::kNo);
+  } else if (gr_context()) {
+    gr_context()->flushAndSubmit(sync_to_cpu ? GrSyncCpu::kYes
+                                             : GrSyncCpu::kNo);
+  }
+}
+
+void SharedContextState::FlushWriteAccess(
+    SkiaImageRepresentation::ScopedWriteAccess* access) {
+  static int flush_count = 0;
+  const base::TimeTicks start = base::TimeTicks::Now();
+  if (graphite_context()) {
+    // The only way to flush GPU work with Graphite is to snap and insert a
+    // recording here. It's also necessary to submit before dropping the scoped
+    // access since we want the Dawn texture to be alive on submit, but that's
+    // handled in SubmitIfNecessary.
+    FlushGraphiteRecorder();
+  } else {
+    if (access->HasBackendSurfaceEndState()) {
+      access->ApplyBackendSurfaceEndState();
+      // ApplyBackendSurfaceEndState flushes the surfaces so skip flushing here.
+    } else if (access->has_surfaces()) {
+      // Flush surfaces only if the write access was created with surfaces.
+      int num_planes = access->representation()->format().NumberOfPlanes();
+      for (int plane_index = 0; plane_index < num_planes; plane_index++) {
+        auto* surface = access->surface(plane_index);
+        DCHECK(surface);
+        skgpu::ganesh::Flush(surface);
+      }
+    }
+  }
+  if (flush_count < 100) {
+    ++flush_count;
+    base::UmaHistogramCustomMicrosecondsTimes(
+        "GPU.RasterDecoder.TimeToFlush", base::TimeTicks::Now() - start,
+        base::Microseconds(1), base::Seconds(1), 100);
+  }
+}
+
+void SharedContextState::SubmitIfNecessary(
+    std::vector<GrBackendSemaphore> signal_semaphores) {
+  if (graphite_context()) {
+    // It's necessary to submit before dropping a scoped access since we want
+    // the Dawn texture to be alive on submit.
+    // NOTE: Graphite uses Dawn and the Graphite SharedImage representation does
+    // not set semaphores.
+    // TODO(crbug.com/328104159): Skip submit if supported by the shared image
+    // and DrDC is not enabled.
+    CHECK(signal_semaphores.empty());
+    graphite_context()->submit(skgpu::graphite::SyncToCpu::kNo);
+    return;
+  }
+
+  // Do nothing here if there is no context.
+  if (!gr_context()) {
+    return;
+  }
+
+  // Note that when DrDc is enabled, we need to call
+  // AddVulkanCleanupTaskForSkiaFlush() on gpu main thread and do skia flush.
+  // This will ensure that vulkan memory allocated on gpu main thread will be
+  // cleaned up.
+  if (!signal_semaphores.empty() || is_drdc_enabled_) {
+    // NOTE: The Graphite SharedImage representation does not set semaphores,
+    // and we are not enabling DrDC with Graphite.
+    CHECK(gr_context());
+    GrFlushInfo flush_info = {
+        .fNumSemaphores = signal_semaphores.size(),
+        .fSignalSemaphores = signal_semaphores.data(),
+    };
+    gpu::AddVulkanCleanupTaskForSkiaFlush(vk_context_provider(), &flush_info);
+
+    auto result = gr_context()->flush(flush_info);
+    DCHECK_EQ(result, GrSemaphoresSubmitted::kYes);
+  }
+
+  bool sync_cpu = gpu::ShouldVulkanSyncCpuForSkiaSubmit(vk_context_provider());
+
+  // If DrDc is enabled, submit the gr_context() to ensure correct ordering
+  // of vulkan commands between raster and display compositor.
+  // TODO(vikassoni): This submit could be happening more often than
+  // intended resulting in perf penalty. Explore ways to reduce it by
+  // trying to issue submit only once per draw call for both gpu main and
+  // drdc thread gr_context. Also add metric to see how often submits are
+  // happening per frame.
+  const bool need_submit =
+      sync_cpu || !signal_semaphores.empty() || is_drdc_enabled_;
+
+  if (need_submit) {
+    CHECK(gr_context());
+    gr_context()->submit(sync_cpu ? GrSyncCpu::kYes : GrSyncCpu::kNo);
+  }
+}
+
 bool SharedContextState::MakeCurrent(gl::GLSurface* surface, bool needs_gl) {
   if (context_lost()) {
     LOG(ERROR) << "Failed to make current since context is marked as lost";
@@ -728,8 +870,9 @@ bool SharedContextState::MakeCurrent(gl::GLSurface* surface, bool needs_gl) {
 
   const bool using_gl = IsUsingGL() || needs_gl;
   if (using_gl) {
-    gl::GLSurface* dont_care_surface =
-        last_current_surface_ ? last_current_surface_.get() : surface_.get();
+    gl::GLSurface* dont_care_surface = last_current_surface_
+                                           ? last_current_surface_.get()
+                                           : context_->default_surface();
     surface = surface ? surface : dont_care_surface;
 
     if (!context_->MakeCurrent(surface)) {
@@ -773,7 +916,7 @@ void SharedContextState::MarkContextLost(error::ContextLostReason reason) {
 
     // Only abandon the GrContext if it is owned by SharedContextState, because
     // the passed in GrContext will be reused.
-    // TODO(https://crbug.com/1048692): always abandon GrContext to release all
+    // TODO(crbug.com/40672147): always abandon GrContext to release all
     // resources when chrome goes into background with low end device.
     if (owned_gr_context_) {
       owned_gr_context_->abandonContext();
@@ -799,14 +942,29 @@ bool SharedContextState::IsCurrent(gl::GLSurface* surface, bool needs_gl) {
 bool SharedContextState::OnMemoryDump(
     const base::trace_event::MemoryDumpArgs& args,
     base::trace_event::ProcessMemoryDump* pmd) {
-  if (!gr_context_)
-    return true;
-
-  if (args.level_of_detail ==
-      base::trace_event::MemoryDumpLevelOfDetail::kBackground) {
-    raster::DumpBackgroundGrMemoryStatistics(gr_context_, pmd);
-  } else {
-    raster::DumpGrMemoryStatistics(gr_context_, pmd, std::nullopt);
+  bool background = args.level_of_detail ==
+                    base::trace_event::MemoryDumpLevelOfDetail::kBackground;
+  if (gr_context()) {
+    if (background) {
+      raster::DumpBackgroundGrMemoryStatistics(gr_context(), pmd);
+    } else {
+      raster::DumpGrMemoryStatistics(gr_context(), pmd, std::nullopt);
+    }
+  } else if (graphite_context()) {
+    // NOTE: We cannot dump the memory statistics of the Viz compositor
+    // recorder here because it can be called only on the Viz thread. Instead,
+    // we dump it in SkiaOutputSurfaceImpl.
+    if (background) {
+      DumpBackgroundGraphiteMemoryStatistics(graphite_context(),
+                                             gpu_main_graphite_recorder(), pmd);
+    } else {
+      // Note: The image provider's allocations are already counted in Skia's
+      // unbudgeted (client) resource allocations so we skip emitted them here.
+      skia::SkiaTraceMemoryDumpImpl trace_memory_dump(args.level_of_detail,
+                                                      pmd);
+      graphite_context()->dumpMemoryStatistics(&trace_memory_dump);
+      gpu_main_graphite_recorder()->dumpMemoryStatistics(&trace_memory_dump);
+    }
   }
 
   return true;
@@ -822,9 +980,6 @@ void SharedContextState::RemoveContextLostObserver(ContextLostObserver* obs) {
 
 void SharedContextState::PurgeMemory(
     base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
-  if (!gr_context_)
-    return;
-
   // Ensure the context is current before doing any GPU cleanup.
   if (!MakeCurrent(nullptr))
     return;
@@ -835,8 +990,12 @@ void SharedContextState::PurgeMemory(
     case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE:
       // With moderate pressure, clear any unlocked resources.
       sk_surface_cache_.Clear();
-      gr_context_->purgeUnlockedResources(
-          GrPurgeResourceOptions::kScratchResourcesOnly);
+      if (gr_context_) {
+        gr_context_->purgeUnlockedResources(
+            GrPurgeResourceOptions::kScratchResourcesOnly);
+      } else if (gpu_main_graphite_cache_controller_) {
+        gpu_main_graphite_cache_controller_->CleanUpScratchResources();
+      }
       UpdateSkiaOwnedMemorySize();
       scratch_deserialization_buffer_.resize(
           kInitialScratchDeserializationBufferSize);
@@ -851,7 +1010,11 @@ void SharedContextState::PurgeMemory(
         // while accessing GrShaderCache. Note that since the actual client_id
         // here does not matter, we are using gpu::kDisplayCompositorClientId.
         UseShaderCache(cache_use, kDisplayCompositorClientId);
-        gr_context_->freeGpuResources();
+        if (gr_context_) {
+          gr_context_->freeGpuResources();
+        } else if (gpu_main_graphite_cache_controller_) {
+          gpu_main_graphite_cache_controller_->CleanUpAllResources();
+        }
       }
       UpdateSkiaOwnedMemorySize();
       scratch_deserialization_buffer_.resize(0u);
@@ -869,20 +1032,32 @@ uint64_t SharedContextState::GetMemoryUsage() {
 }
 
 void SharedContextState::UpdateSkiaOwnedMemorySize() {
-  if (!gr_context_) {
-    memory_tracker_observer_.OnMemoryAllocatedChange(CommandBufferId(),
-                                                     skia_gr_cache_size_, 0u);
-    skia_gr_cache_size_ = 0u;
+  // NOTE: If `graphite_context_` is null, then either (a) it was not
+  // successfully created or (b) this instance is being destroyed. In the former
+  // case, the Graphite GPU main recorder will also not have been created, while
+  // in the latter case, it will imminently be destroyed.
+  if (!gr_context_ && !graphite_context_) {
+    memory_tracker_observer_.OnMemoryAllocatedChange(
+        CommandBufferId(), skia_resource_cache_size_, 0u);
+    skia_resource_cache_size_ = 0u;
     return;
   }
   size_t new_size;
-  gr_context_->getResourceCacheUsage(nullptr /* resourceCount */, &new_size);
+  if (gr_context_) {
+    gr_context_->getResourceCacheUsage(nullptr /* resourceCount */, &new_size);
+  } else {
+    // NOTE: If `graphite_context_` is non-null, the GPU main recorder is
+    // guaranteed to be non-null as well.
+    new_size = graphite_context_->currentBudgetedBytes() +
+               gpu_main_graphite_recorder_->currentBudgetedBytes();
+  }
   // Skia does not have a CommandBufferId. PeakMemoryMonitor currently does not
   // use CommandBufferId to identify source, so use zero here to separate
   // prevent confusion.
   memory_tracker_observer_.OnMemoryAllocatedChange(
-      CommandBufferId(), skia_gr_cache_size_, static_cast<uint64_t>(new_size));
-  skia_gr_cache_size_ = static_cast<uint64_t>(new_size);
+      CommandBufferId(), skia_resource_cache_size_,
+      static_cast<uint64_t>(new_size));
+  skia_resource_cache_size_ = static_cast<uint64_t>(new_size);
 }
 
 void SharedContextState::PessimisticallyResetGrContext() const {
@@ -914,8 +1089,14 @@ void SharedContextState::UseShaderCache(
   }
 }
 
+gl::GLSurface* SharedContextState::surface() const {
+  return context_->default_surface();
+}
+
 gl::GLDisplay* SharedContextState::display() {
-  return surface_.get()->GetGLDisplay();
+  auto* gl_surface = surface();
+  DCHECK(gl_surface);
+  return gl_surface->GetGLDisplay();
 }
 
 bool SharedContextState::initialized() const {
@@ -1072,7 +1253,7 @@ std::optional<error::ContextLostReason> SharedContextState::GetResetStatus(
     case GL_UNKNOWN_CONTEXT_RESET_ARB:
       return error::kUnknown;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   return std::nullopt;
@@ -1153,7 +1334,7 @@ Microsoft::WRL::ComPtr<ID3D11Device> SharedContextState::GetD3D11Device()
       return dawn_context_provider_->GetD3D11Device();
 #endif
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return nullptr;
   }
 }

@@ -28,7 +28,6 @@
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/signin/account_reconcilor_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/signin/signin_features.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
@@ -45,7 +44,7 @@
 #include "components/keyed_service/core/keyed_service_shutdown_notifier.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/prefs/pref_service.h"
-#include "components/search_engines/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_pref_names.h"
@@ -175,7 +174,7 @@ void TurnSyncOnHelper::Delegate::ShowLoginErrorForBrowser(
     const SigninUIError& error,
     Browser* browser) {
   if (!browser) {
-    // TODO(crbug.com/1374315): Make sure we do something or log an error if
+    // TODO(crbug.com/40242414): Make sure we do something or log an error if
     // opening a browser window was not possible.
     return;
   }
@@ -229,14 +228,21 @@ TurnSyncOnHelper::TurnSyncOnHelper(
     signin_metrics::AccessPoint signin_access_point,
     signin_metrics::PromoAction signin_promo_action,
     const CoreAccountId& account_id,
-    SigninAbortedMode signin_aborted_mode)
-    : TurnSyncOnHelper(profile,
-                       signin_access_point,
-                       signin_promo_action,
-                       account_id,
-                       signin_aborted_mode,
-                       std::make_unique<TurnSyncOnHelperDelegateImpl>(browser),
-                       base::OnceClosure()) {}
+    SigninAbortedMode signin_aborted_mode,
+    bool is_sync_promo)
+    : TurnSyncOnHelper(
+          profile,
+          signin_access_point,
+          signin_promo_action,
+          account_id,
+          signin_aborted_mode,
+          std::make_unique<TurnSyncOnHelperDelegateImpl>(browser,
+                                                         is_sync_promo),
+          base::OnceClosure()) {
+  // If this is a promo, the account should not be removed on abort.
+  CHECK(!is_sync_promo ||
+        signin_aborted_mode == SigninAbortedMode::KEEP_ACCOUNT);
+}
 
 TurnSyncOnHelper::~TurnSyncOnHelper() {
   DCHECK_EQ(this, GetCurrentTurnSyncOnHelper(profile_));
@@ -310,7 +316,7 @@ void TurnSyncOnHelper::OnMergeAccountConfirmation(signin::SigninChoice choice) {
       AbortAndDelete();
       break;
     case signin::SIGNIN_CHOICE_SIZE:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       AbortAndDelete();
       break;
   }
@@ -342,7 +348,7 @@ void TurnSyncOnHelper::OnEnterpriseAccountConfirmation(
       CreateNewSignedInProfile();
       break;
     case signin::SIGNIN_CHOICE_SIZE:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       AbortAndDelete();
       break;
   }
@@ -528,7 +534,7 @@ void TurnSyncOnHelper::SigninAndShowSyncConfirmationUI() {
     // Take a SyncSetupInProgressHandle, so that the UI code can use
     // IsFirstSyncSetupInProgress() as a way to know if there is a signin in
     // progress.
-    // TODO(https://crbug.com/811211): Remove this handle.
+    // TODO(crbug.com/41369996): Remove this handle.
     sync_blocker_ = sync_service->GetSetupInProgressHandle();
     sync_service->SetSyncFeatureRequested();
 
@@ -574,7 +580,7 @@ void TurnSyncOnHelper::OnSyncStartupStateChanged(
     SyncStartupTracker::ServiceStartupState state) {
   switch (state) {
     case SyncStartupTracker::ServiceStartupState::kPending:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     case SyncStartupTracker::ServiceStartupState::kTimeout:
       DVLOG(1) << "Waiting for Sync Service to start timed out.";
@@ -622,7 +628,7 @@ void TurnSyncOnHelper::ShowSyncConfirmationUI() {
     return;
   }
 
-  // TODO(crbug.com/1398463): Once we stop completing the Sync opt-in when it's
+  // TODO(crbug.com/40249681): Once we stop completing the Sync opt-in when it's
   // disabled, we also should stop recording opt-in start events.
   signin_metrics::LogSyncOptInStarted(signin_access_point_);
 
@@ -688,8 +694,7 @@ void TurnSyncOnHelper::FinishSyncSetupAndDelete(
       if (signin_util::IsForceSigninEnabled() &&
           !chrome::enterprise_util::UserAcceptedAccountManagement(profile_)) {
         primary_account_mutator->ClearPrimaryAccount(
-            signin_metrics::ProfileSignout::kAbortSignin,
-            signin_metrics::SignoutDelete::kIgnoreMetric);
+            signin_metrics::ProfileSignout::kAbortSignin);
       }
 
       // No explicit action when the ui gets closed. No final callback is sent.
@@ -783,12 +788,10 @@ void TurnSyncOnHelper::RemoveAccount() {
     if (signin_aborted_mode_ == SigninAbortedMode::KEEP_ACCOUNT_ON_WEB_ONLY) {
       primary_account_mutator->RemovePrimaryAccountButKeepTokens(
           signin_metrics::ProfileSignout::
-              kCancelSyncConfirmationOnWebOnlySignedIn,
-          signin_metrics::SignoutDelete::kIgnoreMetric);
+              kCancelSyncConfirmationOnWebOnlySignedIn);
     } else {
       primary_account_mutator->ClearPrimaryAccount(
-          signin_metrics::ProfileSignout::kCancelSyncConfirmationRemoveAccount,
-          signin_metrics::SignoutDelete::kIgnoreMetric);
+          signin_metrics::ProfileSignout::kCancelSyncConfirmationRemoveAccount);
     }
     return;
   }

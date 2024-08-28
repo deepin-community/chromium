@@ -7,6 +7,7 @@
 #include "base/debug/dump_without_crashing.h"
 #include "third_party/blink/renderer/core/editing/bidi_adjustment.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
+#include "third_party/blink/renderer/core/layout/geometry/writing_mode_converter.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_items_builder.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_caret_position.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
@@ -113,12 +114,30 @@ FragmentItem::FragmentItem(const PhysicalLineBoxFragment& line)
       const_type_(kLine),
       sub_type_(static_cast<unsigned>(line.GetLineBoxType())),
       style_variant_(static_cast<unsigned>(line.GetStyleVariant())),
-      is_hidden_for_paint_(false),
+      is_hidden_for_paint_(line.IsHiddenForPaint()),
       text_direction_(static_cast<unsigned>(line.BaseDirection())),
       ink_overflow_type_(static_cast<unsigned>(InkOverflow::Type::kNotSet)),
       is_dirty_(false),
       is_last_for_node_(true) {
   DCHECK(!IsFormattingContextRoot());
+}
+
+FragmentItem::FragmentItem(const PhysicalSize& size,
+                           const PhysicalLineBoxFragment& base_line)
+    : line_({nullptr, /* descendants_count */ 1}),
+      rect_({PhysicalOffset(), size}),
+      layout_object_(base_line.ContainerLayoutObject()),
+      const_type_(kLine),
+      sub_type_(
+          static_cast<unsigned>(FragmentItem::LineBoxType::kNormalLineBox)),
+      style_variant_(static_cast<unsigned>(base_line.GetStyleVariant())),
+      is_hidden_for_paint_(false),
+      text_direction_(static_cast<unsigned>(base_line.BaseDirection())),
+      ink_overflow_type_(static_cast<unsigned>(InkOverflow::Type::kNotSet)),
+      is_dirty_(false),
+      is_last_for_node_(true) {
+  DCHECK(!IsFormattingContextRoot());
+  DCHECK(RuntimeEnabledFeatures::RubyLineBreakableEnabled());
 }
 
 FragmentItem::FragmentItem(const PhysicalBoxFragment& box,
@@ -150,6 +169,8 @@ FragmentItem::FragmentItem(LogicalLineItem&& line_item,
           line_item.text_content,
           ToPhysicalSize(line_item.MarginSize(), writing_mode),
           line_item.is_hidden_for_paint);
+      has_over_annotation_ = line_item.has_over_annotation;
+      has_under_annotation_ = line_item.has_under_annotation;
       return;
     }
 
@@ -158,6 +179,8 @@ FragmentItem::FragmentItem(LogicalLineItem&& line_item,
                      line_item.text_offset,
                      ToPhysicalSize(line_item.MarginSize(), writing_mode),
                      line_item.is_hidden_for_paint);
+    has_over_annotation_ = line_item.has_over_annotation;
+    has_under_annotation_ = line_item.has_under_annotation;
     return;
   }
 
@@ -180,7 +203,7 @@ FragmentItem::FragmentItem(LogicalLineItem&& line_item,
   }
 
   // CanCreateFragmentItem()
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   CHECK(false);
 }
 
@@ -195,6 +218,8 @@ FragmentItem::FragmentItem(const FragmentItem& source)
       style_variant_(source.style_variant_),
       is_hidden_for_paint_(source.is_hidden_for_paint_),
       text_direction_(source.text_direction_),
+      has_over_annotation_(source.has_over_annotation_),
+      has_under_annotation_(source.has_under_annotation_),
       ink_overflow_type_(static_cast<unsigned>(InkOverflow::Type::kNotSet)),
       is_dirty_(source.is_dirty_),
       is_last_for_node_(source.is_last_for_node_) {
@@ -234,6 +259,8 @@ FragmentItem::FragmentItem(FragmentItem&& source)
       style_variant_(source.style_variant_),
       is_hidden_for_paint_(source.is_hidden_for_paint_),
       text_direction_(source.text_direction_),
+      has_over_annotation_(source.has_over_annotation_),
+      has_under_annotation_(source.has_under_annotation_),
       ink_overflow_type_(source.ink_overflow_type_),
       is_dirty_(source.is_dirty_),
       is_last_for_node_(source.is_last_for_node_) {
@@ -282,7 +309,7 @@ bool FragmentItem::IsInlineBox() const {
     if (const PhysicalBoxFragment* box = BoxFragment()) {
       return box->IsInlineBox();
     }
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
   return false;
 }
@@ -344,7 +371,7 @@ bool FragmentItem::IsListMarker() const {
 
 LayoutObject& FragmentItem::BlockInInline() const {
   DCHECK(IsBlockInInline());
-  auto* const block = To<LayoutNGBlockFlow>(GetLayoutObject())->FirstChild();
+  auto* const block = To<LayoutBlockFlow>(GetLayoutObject())->FirstChild();
   DCHECK(block) << this;
   return *block;
 }
@@ -522,7 +549,7 @@ const ShapeResultView* FragmentItem::TextShapeResult() const {
     return text_.shape_result.Get();
   if (Type() == kGeneratedText)
     return generated_text_.shape_result.Get();
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 }
 
@@ -531,7 +558,7 @@ TextOffsetRange FragmentItem::TextOffset() const {
     return text_.text_offset;
   if (Type() == kGeneratedText)
     return {0, generated_text_.text.length()};
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -551,7 +578,7 @@ unsigned FragmentItem::StartOffsetInContainer(
     if (current->Type() == kBox && !current->IsInlineBox())
       break;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return 0;
 }
 
@@ -562,7 +589,7 @@ StringView FragmentItem::Text(const FragmentItems& items) const {
   }
   if (Type() == kGeneratedText)
     return GeneratedText();
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return StringView();
 }
 
@@ -576,7 +603,7 @@ TextFragmentPaintInfo FragmentItem::TextPaintInfo(
     return {generated_text_.text, 0, generated_text_.text.length(),
             generated_text_.shape_result.Get()};
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -841,7 +868,7 @@ void FragmentItem::RecalcInkOverflow(const InlineCursor& cursor,
   if (UNLIKELY(IsLayoutObjectDestroyedOrMoved())) {
     // TODO(crbug.com/1099613): This should not happen, as long as it is really
     // layout-clean. It looks like there are cases where the layout is dirty.
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return;
   }
 
@@ -915,6 +942,12 @@ void FragmentItem::RecalcInkOverflow(const InlineCursor& cursor,
   }
 
   if (Type() == kLine) {
+    if (!LineBoxFragment()) {
+      // InlinePaintContext::ScopedLineBox doesn't support nested scopes.
+      // Nested kLine items are placed at the end of the base line. So it's ok
+      // to clear the current line before handling nested lines.
+      inline_context->ClearLineBox();
+    }
     InlinePaintContext::ScopedLineBox scoped_line_box(cursor, inline_context);
     PhysicalRect contents_rect =
         RecalcInkOverflowForDescendantsOf(cursor, inline_context);
@@ -929,7 +962,7 @@ void FragmentItem::RecalcInkOverflow(const InlineCursor& cursor,
     return;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 PhysicalRect FragmentItem::RecalcInkOverflowForDescendantsOf(
@@ -1074,7 +1107,7 @@ PhysicalRect FragmentItem::LocalRect(StringView text,
     case WritingMode::kSidewaysLr:
       return {LayoutUnit(), height - end_position, width, inline_size};
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -1130,9 +1163,10 @@ PositionWithAffinity FragmentItem::PositionForPointInText(
 unsigned FragmentItem::TextOffsetForPoint(const PhysicalOffset& point,
                                           const FragmentItems& items) const {
   DCHECK_EQ(Type(), kText);
-  const ComputedStyle& style = Style();
-  const LayoutUnit& point_in_line_direction =
-      style.IsHorizontalWritingMode() ? point.left : point.top;
+  WritingModeConverter converter({GetWritingMode(), TextDirection::kLtr},
+                                 Size());
+  const LayoutUnit point_in_line_direction =
+      converter.ToLogical(point, PhysicalSize()).inline_offset;
   if (const ShapeResultView* shape_result = TextShapeResult()) {
     float scaled_offset = ScaleInlineOffset(point_in_line_direction);
     // TODO(layout-dev): Move caret logic out of ShapeResult into separate
@@ -1147,7 +1181,7 @@ unsigned FragmentItem::TextOffsetForPoint(const PhysicalOffset& point,
   DCHECK(IsFlowControl());
 
   // Zero-inline-size objects such as newline always return the start offset.
-  LogicalSize size = Size().ConvertToLogical(style.GetWritingMode());
+  LogicalSize size = converter.ToLogical(Size());
   if (!size.inline_size)
     return StartOffset();
 

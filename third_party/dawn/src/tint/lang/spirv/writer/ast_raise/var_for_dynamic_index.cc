@@ -27,8 +27,6 @@
 
 #include "src/tint/lang/spirv/writer/ast_raise/var_for_dynamic_index.h"
 
-#include <utility>
-
 #include "src/tint/lang/wgsl/ast/transform/hoist_to_decl_before.h"
 #include "src/tint/lang/wgsl/program/clone_context.h"
 #include "src/tint/lang/wgsl/program/program_builder.h"
@@ -71,8 +69,6 @@ ast::transform::Transform::ApplyResult VarForDynamicIndex::Apply(const Program& 
             return true;
         }
 
-        // TODO(bclayton): group multiple accesses in the same object.
-        // e.g. arr[i] + arr[i+1] // Don't create two vars for this
         return hoist_to_decl_before.Add(indexed, object_expr,
                                         ast::transform::HoistToDeclBefore::VariableKind::kVar,
                                         "var_for_index");

@@ -31,11 +31,12 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 #include "third_party/blink/renderer/core/layout/geometry/transform_state.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
-#include "third_party/blink/renderer/core/layout/layout_ng_block_flow.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -49,6 +50,7 @@
 #include "third_party/blink/renderer/core/paint/object_painter.h"
 #include "third_party/blink/renderer/core/paint/outline_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
 #include "ui/gfx/geometry/quad_f.h"
 
@@ -67,6 +69,18 @@ bool CanBeHitTestTargetPseudoNodeStyle(const ComputedStyle& style) {
     default:
       return false;
   }
+}
+
+bool IsInChildRubyText(const LayoutInline& start_object,
+                       const LayoutObject* target) {
+  if (!target || !start_object.IsInlineRuby() || &start_object == target) {
+    return false;
+  }
+  const LayoutObject* start_child = target;
+  while (start_child->Parent() != &start_object) {
+    start_child = start_child->Parent();
+  }
+  return start_child->IsInlineRubyText();
 }
 
 }  // anonymous namespace
@@ -301,6 +315,23 @@ void LayoutInline::AddChild(LayoutObject* new_child,
   return AddChildIgnoringContinuation(new_child, before_child);
 }
 
+void LayoutInline::BlockInInlineBecameFloatingOrOutOfFlow(
+    LayoutBlockFlow* anonymous_block_child) {
+  NOT_DESTROYED();
+  // Look for in-flow children. Any in-flow child will prevent the wrapper from
+  // being deleted.
+  for (const LayoutObject* grandchild = anonymous_block_child->FirstChild();
+       grandchild; grandchild = grandchild->NextSibling()) {
+    if (!grandchild->IsFloating() && !grandchild->IsOutOfFlowPositioned()) {
+      return;
+    }
+  }
+  // There are no longer any in-flow children inside the anonymous block wrapper
+  // child. Get rid of it.
+  anonymous_block_child->MoveAllChildrenTo(this, anonymous_block_child);
+  anonymous_block_child->Destroy();
+}
+
 void LayoutInline::AddChildIgnoringContinuation(LayoutObject* new_child,
                                                 LayoutObject* before_child) {
   NOT_DESTROYED();
@@ -400,7 +431,7 @@ LayoutBox* LayoutInline::CreateAnonymousBoxToSplit(
 
 void LayoutInline::Paint(const PaintInfo& paint_info) const {
   NOT_DESTROYED();
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 template <typename PhysicalRectCollector>
@@ -416,7 +447,9 @@ void LayoutInline::CollectLineBoxRects(
   InlineCursor cursor;
   cursor.MoveToIncludingCulledInline(*this);
   for (; cursor; cursor.MoveToNextForSameLayoutObject()) {
-    yield(cursor.CurrentRectInBlockFlow());
+    if (!IsInChildRubyText(*this, cursor.Current().GetLayoutObject())) {
+      yield(cursor.CurrentRectInBlockFlow());
+    }
   }
 }
 
@@ -552,11 +585,12 @@ static LayoutUnit ComputeMargin(const LayoutInline* layout_object,
                                 const Length& margin) {
   if (margin.IsFixed())
     return LayoutUnit(margin.Value());
-  if (margin.IsPercentOrCalc())
+  if (margin.IsPercent() || margin.IsCalculated()) {
     return MinimumValueForLength(
         margin,
         std::max(LayoutUnit(),
                  layout_object->ContainingBlock()->AvailableLogicalWidth()));
+  }
   return LayoutUnit();
 }
 
@@ -589,7 +623,7 @@ bool LayoutInline::NodeAtPoint(HitTestResult& result,
     // TODO(crbug.com/965976): We should fix the root cause of the missed
     // layout.
     if (UNLIKELY(NeedsLayout())) {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return false;
     }
 
@@ -929,7 +963,7 @@ gfx::RectF LayoutInline::LocalBoundingBoxRectForAccessibility() const {
   return gfx::RectF(collector.Rect());
 }
 
-void LayoutInline::AddAnnotatedRegions(Vector<AnnotatedRegionValue>& regions) {
+void LayoutInline::AddDraggableRegions(Vector<DraggableRegionValue>& regions) {
   NOT_DESTROYED();
   // Convert the style regions to absolute coordinates.
   if (StyleRef().Visibility() != EVisibility::kVisible)
@@ -938,7 +972,7 @@ void LayoutInline::AddAnnotatedRegions(Vector<AnnotatedRegionValue>& regions) {
   if (StyleRef().DraggableRegionMode() == EDraggableRegionMode::kNone)
     return;
 
-  AnnotatedRegionValue region;
+  DraggableRegionValue region;
   region.draggable =
       StyleRef().DraggableRegionMode() == EDraggableRegionMode::kDrag;
   region.bounds = PhysicalLinesBoundingBox();

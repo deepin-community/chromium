@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 
 #include <algorithm>
@@ -116,7 +121,7 @@ class ShellView : public views::BoxLayoutView,
 
     // Resize the widget, keeping the same origin.
     gfx::Rect bounds = GetWidget()->GetWindowBoundsInScreen();
-    bounds.set_size(GetWidget()->GetRootView()->GetPreferredSize());
+    bounds.set_size(GetWidget()->GetRootView()->GetPreferredSize({}));
     GetWidget()->SetBounds(bounds);
 
     // Resizing a widget on chromeos doesn't automatically resize the root, need
@@ -144,7 +149,7 @@ class ShellView : public views::BoxLayoutView,
   void InitShellWindow() {
     auto toolbar_button_rule = [](const views::View* view,
                                   const views::SizeBounds& size_bounds) {
-      gfx::Size preferred_size = view->GetPreferredSize();
+      gfx::Size preferred_size = view->GetPreferredSize({});
       if (size_bounds != views::SizeBounds() &&
           size_bounds.width().is_bounded()) {
         preferred_size.set_width(std::max(
@@ -251,8 +256,8 @@ class ShellView : public views::BoxLayoutView,
                        const std::u16string& new_contents) override {}
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& key_event) override {
-    if (key_event.type() == ui::ET_KEY_PRESSED && sender == url_entry_ &&
-        key_event.key_code() == ui::VKEY_RETURN) {
+    if (key_event.type() == ui::EventType::kKeyPressed &&
+        sender == url_entry_ && key_event.key_code() == ui::VKEY_RETURN) {
       std::string text = base::UTF16ToUTF8(url_entry_->GetText());
       GURL url(text);
       if (!url.has_scheme()) {
@@ -365,7 +370,8 @@ void ShellPlatformDelegate::CreatePlatformWindow(
       gfx::Rect(initial_size));
 #else
   shell_data.window_widget = new views::Widget();
-  views::Widget::InitParams params;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   params.bounds = gfx::Rect(initial_size);
   params.delegate = delegate.release();
   params.wm_class_class = "chromium-content_shell";

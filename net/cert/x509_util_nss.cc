@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/cert/x509_util_nss.h"
 
 #include <cert.h>  // Must be included before certdb.h
@@ -439,8 +444,10 @@ SHA256HashValue CalculateFingerprint256(CERTCertificate* cert) {
   return sha256;
 }
 
-int ImportUserCert(CERTCertificate* cert) {
-  return mozilla_security_manager::ImportUserCert(cert);
+int ImportUserCert(CERTCertificate* cert,
+                   crypto::ScopedPK11Slot preferred_slot) {
+  return mozilla_security_manager::ImportUserCert(cert,
+                                                  std::move(preferred_slot));
 }
 
 }  // namespace net::x509_util

@@ -16,8 +16,8 @@
 #include "content/public/browser/speech_recognition_manager.h"
 #include "content/public/browser/speech_recognition_session_config.h"
 #include "content/public/browser/speech_recognition_session_context.h"
+#include "media/mojo/mojom/speech_recognition_error.mojom.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-forward.h"
-#include "third_party/blink/public/mojom/speech/speech_recognition_error.mojom.h"
 
 namespace media {
 class AudioSystem;
@@ -43,8 +43,8 @@ class SpeechRecognizer;
 // The SpeechRecognitionManager has the following responsibilities:
 //  - Handles requests received from various render frames and makes sure only
 //    one of them accesses the audio device at any given time.
-//  - Handles the instantiation of SpeechRecognitionEngine objects when
-//    requested by SpeechRecognitionSessions.
+//  - Handles the instantiation of NetworkSpeechRecognitionEngineImpl objects
+//    when requested by SpeechRecognitionSessions.
 //  - Relays recognition results/status/error events of each session to the
 //    corresponding listener (demuxing on the base of their session_id).
 //  - Relays also recognition results/status/error events of every session to
@@ -56,6 +56,11 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   // Returns the current SpeechRecognitionManagerImpl or NULL if the call is
   // issued when it is not created yet or destroyed (by BrowserMainLoop).
   static SpeechRecognitionManagerImpl* GetInstance();
+
+#if !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_ANDROID)
+  static bool IsOnDeviceSpeechRecognitionAvailable(
+      const SpeechRecognitionSessionConfig& config);
+#endif  // !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_ANDROID)
 
   // SpeechRecognitionManager implementation.
   int CreateSession(const SpeechRecognitionSessionConfig& config) override;
@@ -71,18 +76,17 @@ class CONTENT_EXPORT SpeechRecognitionManagerImpl
   // SpeechRecognitionEventListener methods.
   void OnRecognitionStart(int session_id) override;
   void OnAudioStart(int session_id) override;
-  void OnEnvironmentEstimationComplete(int session_id) override;
   void OnSoundStart(int session_id) override;
   void OnSoundEnd(int session_id) override;
   void OnAudioEnd(int session_id) override;
   void OnRecognitionEnd(int session_id) override;
   void OnRecognitionResults(
       int session_id,
-      const std::vector<blink::mojom::SpeechRecognitionResultPtr>& result)
+      const std::vector<media::mojom::WebSpeechRecognitionResultPtr>& result)
       override;
   void OnRecognitionError(
       int session_id,
-      const blink::mojom::SpeechRecognitionError& error) override;
+      const media::mojom::SpeechRecognitionError& error) override;
   void OnAudioLevelsChange(int session_id,
                            float volume,
                            float noise_volume) override;

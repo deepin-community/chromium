@@ -22,7 +22,6 @@ import android.content.Intent;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
@@ -35,11 +34,9 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.CollectionUtil;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Batch;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.JniMocker;
 import org.chromium.chrome.browser.password_manager.PasswordCheckupClientHelper.PasswordCheckBackendException;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
 import org.chromium.chrome.browser.settings.SettingsActivity;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
@@ -54,6 +51,8 @@ import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.components.user_prefs.UserPrefsJni;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modaldialog.ModalDialogProperties;
+import org.chromium.ui.modelutil.PropertyModel;
 
 import java.lang.ref.WeakReference;
 
@@ -65,7 +64,6 @@ public class PasswordCheckupLauncherTest {
     private static final String TEST_EMAIL_ADDRESS = "test@email.com";
     private static final String TEST_NO_EMAIL_ADDRESS = null;
 
-    @Rule public TestRule mProcessor = new Features.JUnitProcessor();
     @Rule public JniMocker mJniMocker = new JniMocker();
 
     @Spy private Context mContext = RuntimeEnvironment.application.getApplicationContext();
@@ -106,8 +104,9 @@ public class PasswordCheckupLauncherTest {
         MockitoAnnotations.initMocks(this);
         mJniMocker.mock(UserPrefsJni.TEST_HOOKS, mMockUserPrefsJni);
         mJniMocker.mock(PasswordManagerUtilBridgeJni.TEST_HOOKS, mMockPasswordManagerUtilBridgeJni);
+        when(mMockPasswordManagerUtilBridgeJni.areMinUpmRequirementsMet()).thenReturn(true);
 
-        ProfileManager.setLastUsedProfileForTesting(mProfile);
+        when(mProfile.getOriginalProfile()).thenReturn(mProfile);
         when(mMockUserPrefsJni.get(mProfile)).thenReturn(mPrefService);
 
         SyncServiceFactory.setInstanceForTesting(mMockSyncService);
@@ -150,7 +149,7 @@ public class PasswordCheckupLauncherTest {
             throws PendingIntent.CanceledException {
         when(mMockSyncService.getSelectedTypes())
                 .thenReturn(CollectionUtil.newHashSet(UserSelectableType.PASSWORDS));
-        when(mMockPasswordManagerUtilBridgeJni.canUseUPMBackend(true, mPrefService))
+        when(mMockPasswordManagerUtilBridgeJni.shouldUseUpmWiring(mMockSyncService, mPrefService))
                 .thenReturn(true);
 
         PasswordCheckupLauncher.launchCheckupOnDevice(
@@ -162,7 +161,7 @@ public class PasswordCheckupLauncherTest {
     @Test
     public void testLaunchCheckupOnDeviceShowsPasswordCheckupForLocalWhenNotSyncing()
             throws PendingIntent.CanceledException {
-        when(mMockPasswordManagerUtilBridgeJni.canUseUPMBackend(false, mPrefService))
+        when(mMockPasswordManagerUtilBridgeJni.shouldUseUpmWiring(mMockSyncService, mPrefService))
                 .thenReturn(true);
 
         PasswordCheckupLauncher.launchCheckupOnDevice(
@@ -178,7 +177,7 @@ public class PasswordCheckupLauncherTest {
         // stored only in the local store, even though the user is syncing passwords.
         when(mMockSyncService.getSelectedTypes())
                 .thenReturn(CollectionUtil.newHashSet(UserSelectableType.PASSWORDS));
-        when(mMockPasswordManagerUtilBridgeJni.canUseUPMBackend(true, mPrefService))
+        when(mMockPasswordManagerUtilBridgeJni.shouldUseUpmWiring(mMockSyncService, mPrefService))
                 .thenReturn(true);
 
         PasswordCheckupLauncher.launchCheckupOnDevice(
@@ -188,11 +187,31 @@ public class PasswordCheckupLauncherTest {
     }
 
     @Test
+    public void testLaunchPasswordCheckShowsUpdateGmsDialog()
+            throws PendingIntent.CanceledException {
+        when(mMockPasswordManagerUtilBridgeJni.shouldUseUpmWiring(mMockSyncService, mPrefService))
+                .thenReturn(true);
+        when(mMockPasswordManagerUtilBridgeJni.isGmsCoreUpdateRequired(
+                        mPrefService, mMockSyncService))
+                .thenReturn(true);
+
+        PasswordCheckupLauncher.launchCheckupOnDevice(
+                mProfile, mMockWindowAndroid, LEAK_DIALOG, TEST_NO_EMAIL_ADDRESS);
+
+        verify(mMockPendingIntentForLocalCheckup, times(0)).send();
+        verify(mMockPendingIntentForAccountCheckup, times(0)).send();
+        PropertyModel dialogModel = mModalDialogManager.getCurrentDialogForTest();
+        assertThat(
+                dialogModel.get(ModalDialogProperties.MESSAGE_PARAGRAPH_1),
+                is(mContext.getString(R.string.password_manager_outdated_gms_dialog_description)));
+    }
+
+    @Test
     public void testLaunchSafetyCheckOpensSafetyCheckInChromeSettings()
             throws PendingIntent.CanceledException {
         when(mMockSyncService.getSelectedTypes())
                 .thenReturn(CollectionUtil.newHashSet(UserSelectableType.PASSWORDS));
-        when(mMockPasswordManagerUtilBridgeJni.canUseUPMBackend(true, mPrefService))
+        when(mMockPasswordManagerUtilBridgeJni.shouldUseUpmWiring(mMockSyncService, mPrefService))
                 .thenReturn(true);
 
         PasswordCheckupLauncher.launchSafetyCheck(mMockWindowAndroid);

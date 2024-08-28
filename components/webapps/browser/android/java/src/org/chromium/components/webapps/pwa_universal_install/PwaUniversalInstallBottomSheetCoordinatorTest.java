@@ -4,6 +4,7 @@
 
 package org.chromium.components.webapps.pwa_universal_install;
 
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 
 import android.app.Activity;
@@ -22,11 +23,12 @@ import org.mockito.MockitoAnnotations;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.LooperMode;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.webapps.R;
 import org.chromium.content_public.browser.test.mock.MockWebContents;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.url.GURL;
 
 /** Instrumentation tests for PWA Universal Install bottom sheet. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -40,12 +42,12 @@ public class PwaUniversalInstallBottomSheetCoordinatorTest {
     public void setUp() {
         MockitoAnnotations.initMocks(this);
 
-        PwaUniversalInstallBottomSheetCoordinator.sEnableManualIconFetching = true;
+        PwaUniversalInstallBottomSheetCoordinator.sEnableManualIconFetchingForTesting = true;
     }
 
     @After
     public void tearDown() {
-        PwaUniversalInstallBottomSheetCoordinator.sEnableManualIconFetching = false;
+        PwaUniversalInstallBottomSheetCoordinator.sEnableManualIconFetchingForTesting = false;
     }
 
     private void onInstallCalled() {}
@@ -61,6 +63,9 @@ public class PwaUniversalInstallBottomSheetCoordinatorTest {
 
         // Setup the coordinator with a mocked WebContents object.
         MockWebContents webContents = mock(MockWebContents.class);
+        GURL url = new GURL("http://www.example.com");
+        doReturn(url).when(webContents).getLastCommittedUrl();
+
         PwaUniversalInstallBottomSheetCoordinator coordinator =
                 new PwaUniversalInstallBottomSheetCoordinator(
                         activity,
@@ -75,7 +80,7 @@ public class PwaUniversalInstallBottomSheetCoordinatorTest {
                         /* shortcutOverlayId= */ 0);
 
         View view = coordinator.getBottomSheetViewForTesting();
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     Assert.assertEquals(
                             "Add to home screen",

@@ -196,7 +196,7 @@ std::u16string DownloadShelfContextMenu::GetLabelForCommandId(
       break;
     case DownloadCommands::COPY_TO_CLIPBOARD:
       // This command is implemented only for the Download notification.
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
     case DownloadCommands::DEEP_SCAN:
       id = IDS_DOWNLOAD_MENU_DEEP_SCAN;
@@ -211,7 +211,9 @@ std::u16string DownloadShelfContextMenu::GetLabelForCommandId(
     case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
     case DownloadCommands::OPEN_SAFE_BROWSING_SETTING:
     case DownloadCommands::BYPASS_DEEP_SCANNING:
-      NOTREACHED();
+    case DownloadCommands::OPEN_WITH_MEDIA_APP:
+    case DownloadCommands::EDIT_WITH_MEDIA_APP:
+      NOTREACHED_IN_MIGRATION();
       break;
   }
   CHECK(id != -1);

@@ -11,6 +11,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_testing_pref_service.h"
 #include "components/autofill/core/browser/data_model/autofill_offer_data.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/autofill_wallet_usage_data.h"
@@ -24,9 +25,10 @@
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
-#include "components/autofill/core/browser/ui/popup_item_ids.h"
 #include "components/autofill/core/browser/ui/suggestion.h"
+#include "components/autofill/core/browser/ui/suggestion_type.h"
 #include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
 
 class PrefService;
 
@@ -39,11 +41,13 @@ namespace autofill {
 class AutofillExternalDelegate;
 class AutofillProfile;
 class BankAccount;
-struct FormData;
-struct FormFieldData;
+class FormData;
+class FormFieldData;
 struct FormDataPredictions;
 struct FormFieldDataPredictions;
 class PaymentsAutofillTable;
+class TestAutofillClient;
+class TestPersonalDataManager;
 
 // Defined by pair-wise equality of all members.
 bool operator==(const FormFieldDataPredictions& a,
@@ -85,7 +89,7 @@ inline constexpr char kEmptyOrigin[] = "";
 // have to be constructed manually (e.g., in unit tests within Autofill core
 // code). The returned PrefService has had Autofill preferences registered on
 // its associated registry.
-std::unique_ptr<PrefService> PrefServiceForTesting();
+std::unique_ptr<AutofillTestingPrefService> PrefServiceForTesting();
 std::unique_ptr<PrefService> PrefServiceForTesting(
     user_prefs::PrefRegistrySyncable* registry);
 
@@ -98,10 +102,12 @@ std::unique_ptr<PrefService> PrefServiceForTesting(
 AutofillProfile GetFullValidProfileForCanada();
 
 // Returns a profile full of dummy info.
-AutofillProfile GetFullProfile();
+AutofillProfile GetFullProfile(
+    AddressCountryCode country_code = AddressCountryCode("US"));
 
 // Returns a profile full of dummy info, different to the above.
-AutofillProfile GetFullProfile2();
+AutofillProfile GetFullProfile2(
+    AddressCountryCode country_code = AddressCountryCode("US"));
 
 // Returns a profile full of dummy info, different to the above.
 AutofillProfile GetFullCanadianProfile();
@@ -206,6 +212,19 @@ CreditCardFlatRateBenefit GetActiveCreditCardFlatRateBenefit();
 CreditCardCategoryBenefit GetActiveCreditCardCategoryBenefit();
 CreditCardMerchantBenefit GetActiveCreditCardMerchantBenefit();
 
+// Returns a set of merchant origin webpages used for a merchant credit card
+// benefit.
+base::flat_set<url::Origin> GetOriginsForMerchantBenefit();
+
+// Adds `card` with a set `benefit` and `issuer_id` to `personal_data`. Also
+// configures a category benefit with the `optimization_guide`.
+void SetUpCreditCardAndBenefitData(
+    CreditCard& card,
+    const CreditCardBenefit& benefit,
+    const std::string& issuer_id,
+    TestPersonalDataManager& personal_data,
+    AutofillOptimizationGuide* optimization_guide);
+
 // A unit testing utility that is common to a number of the Autofill unit
 // tests.  |SetProfileInfo| provides a quick way to populate a profile with
 // c-strings.
@@ -294,30 +313,18 @@ void ReenableSystemServices();
 void SetServerCreditCards(PaymentsAutofillTable* table,
                           const std::vector<CreditCard>& cards);
 
-// Adds an element at the end of |possible_field_types| and
-// |possible_field_types_validities| given |possible_type| and their
-// corresponding |validity_state|.
-void InitializePossibleTypesAndValidities(
-    std::vector<FieldTypeSet>& possible_field_types,
-    std::vector<FieldTypeValidityStatesMap>& possible_field_types_validities,
-    const std::vector<FieldType>& possible_type,
-    const std::vector<AutofillDataModel::ValidityState>& validity_state = {});
+// Adds `possible_types` at the end of `possible_field_types`.
+void InitializePossibleTypes(std::vector<FieldTypeSet>& possible_field_types,
+                             const std::vector<FieldType>& possible_types);
 
 // Fills the upload |field| with the information passed by parameter.
 void FillUploadField(AutofillUploadContents::Field* field,
                      unsigned signature,
-                     unsigned autofill_type,
-                     unsigned validity_state = 0);
+                     unsigned autofill_type);
 
 void FillUploadField(AutofillUploadContents::Field* field,
                      unsigned signature,
-                     const std::vector<unsigned>& autofill_type,
-                     const std::vector<unsigned>& validity_state = {});
-
-void FillUploadField(AutofillUploadContents::Field* field,
-                     unsigned signature,
-                     unsigned autofill_type,
-                     const std::vector<unsigned>& validity_states);
+                     const std::vector<unsigned>& autofill_type);
 
 // Creates the structure of signatures that would be encoded by
 // `EncodeUploadRequest()` and `EncodeAutofillPageQueryRequest()`
@@ -378,12 +385,20 @@ void AddFieldPredictionsToForm(
     ::autofill::AutofillQueryResponse_FormSuggestion* form_suggestion);
 
 Suggestion CreateAutofillSuggestion(
-    PopupItemId popup_item_id,
+    SuggestionType type,
     const std::u16string& main_text_value = std::u16string(),
     const Suggestion::Payload& payload = Suggestion::Payload());
 
 // Returns a bank account enabled for Pix with fake data.
 BankAccount CreatePixBankAccount(int64_t instrument_id);
+
+// Returns a payment instrument with a bank account filled with fake data.
+sync_pb::PaymentInstrument CreatePaymentInstrumentWithBankAccount(
+    int64_t instrument_id);
+
+// Returns a payment instrument with an IBAN filled with fake data.
+sync_pb::PaymentInstrument CreatePaymentInstrumentWithIban(
+    int64_t instrument_id);
 
 }  // namespace test
 }  // namespace autofill

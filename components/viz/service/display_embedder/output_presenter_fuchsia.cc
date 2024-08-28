@@ -47,7 +47,6 @@ OutputPresenterFuchsia::OutputPresenterFuchsia(
     SkiaOutputSurfaceDependency* deps)
     : window_surface_(window_surface), dependency_(deps) {
   CHECK(window_surface_);
-  CHECK(features::ShouldRendererAllocateImages());
 }
 
 OutputPresenterFuchsia::~OutputPresenterFuchsia() = default;
@@ -59,17 +58,13 @@ void OutputPresenterFuchsia::InitializeCapabilities(
   capabilities->supports_post_sub_buffer = false;
   capabilities->supports_surfaceless = true;
 
-  capabilities->sk_color_types[static_cast<int>(gfx::BufferFormat::RGBA_8888)] =
+  capabilities->sk_color_type_map[SinglePlaneFormat::kRGBA_8888] =
       kRGBA_8888_SkColorType;
-  capabilities->sk_color_types[static_cast<int>(gfx::BufferFormat::BGRA_8888)] =
+  capabilities->sk_color_type_map[SinglePlaneFormat::kBGRA_8888] =
       kRGBA_8888_SkColorType;
 }
 
-bool OutputPresenterFuchsia::Reshape(const SkImageInfo& image_info,
-                                     const gfx::ColorSpace& color_space,
-                                     int sample_count,
-                                     float device_scale_factor,
-                                     gfx::OverlayTransform transform) {
+bool OutputPresenterFuchsia::Reshape(const ReshapeParams& params) {
   return true;
 }
 
@@ -77,7 +72,7 @@ std::vector<std::unique_ptr<OutputPresenter::Image>>
 OutputPresenterFuchsia::AllocateImages(gfx::ColorSpace color_space,
                                        gfx::Size image_size,
                                        size_t num_images) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -101,7 +96,7 @@ void OutputPresenterFuchsia::SchedulePrimaryPlane(
     const OverlayProcessorInterface::OutputSurfaceOverlayPlane& plane,
     Image* image,
     bool is_submitted) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 void OutputPresenterFuchsia::ScheduleOverlayPlane(
@@ -118,7 +113,6 @@ void OutputPresenterFuchsia::ScheduleOverlayPlane(
   if (!next_frame_)
     next_frame_.emplace();
 
-  DCHECK(overlay_plane_candidate.mailbox.IsSharedImage());
   auto pixmap = access ? access->GetNativePixmap() : nullptr;
 
   if (!pixmap) {

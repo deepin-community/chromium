@@ -70,10 +70,11 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
   void BeforeUnload(bool is_reload, BeforeUnloadCallback callback) override;
   void MediaPlayerActionAt(const gfx::Point& location,
                            blink::mojom::MediaPlayerActionPtr action) override;
-  void RequestVideoFrameAt(const gfx::Point& window_point,
-                           const gfx::Size& max_size,
-                           int max_area,
-                           RequestVideoFrameAtCallback callback) override;
+  void RequestVideoFrameAtWithBoundsHint(
+      const gfx::Point& window_point,
+      const gfx::Size& max_size,
+      int max_area,
+      RequestVideoFrameAtWithBoundsHintCallback callback) override;
   void PluginActionAt(const gfx::Point& location,
                       blink::mojom::PluginActionType action) override;
   void AdvanceFocusInFrame(blink::mojom::FocusType focus_type,
@@ -154,8 +155,11 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
       const std::string& page_state,
       bool is_browser_initiated) override;
   void SnapshotDocumentForViewTransition(
-      blink::mojom::PageConcealEventParamsPtr,
+      const blink::ViewTransitionToken& transition_token,
+      blink::mojom::PageSwapEventParamsPtr,
       SnapshotDocumentForViewTransitionCallback callback) override;
+  void NotifyViewTransitionAbortedToOldDocument() override;
+  void DispatchPageSwap(blink::mojom::PageSwapEventParamsPtr) override;
   void AddResourceTimingEntryForFailedSubframeNavigation(
       const ::blink::FrameToken& subframe_token,
       const GURL& initial_url,
@@ -172,7 +176,8 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
       bool is_validated,
       const std::string& normalized_server_timing,
       const ::network::URLLoaderCompletionStatus& completion_status) override;
-  void RequestFullscreenDocumentElement() override;
+  void UpdatePrerenderURL(const ::GURL& matched_url,
+                          UpdatePrerenderURLCallback callback) override;
 
  private:
   void BindFrameHostReceiver(mojo::ScopedInterfaceEndpointHandle handle);

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef BASE_TRACE_EVENT_BUILTIN_CATEGORIES_H_
 #define BASE_TRACE_EVENT_BUILTIN_CATEGORIES_H_
 
@@ -32,6 +37,7 @@
   /* The rest of the list is in alphabetical order */                    \
   X("accessibility")                                                     \
   X("AccountFetcherService")                                             \
+  X("android.adpf")                                                      \
   X("android.ui.jank")                                                   \
   X("android_webview")                                                   \
   X("android_webview.timeline")                                          \
@@ -163,7 +169,6 @@
   X("service_manager")                                                   \
   X("sharing")                                                           \
   X("shell")                                                             \
-  X("shortcut_viewer")                                                   \
   X("shutdown")                                                          \
   X("skia")                                                              \
   X("sql")                                                               \
@@ -230,6 +235,9 @@
   X(TRACE_DISABLED_BY_DEFAULT("devtools.timeline.layers"))               \
   X(TRACE_DISABLED_BY_DEFAULT("devtools.timeline.picture"))              \
   X(TRACE_DISABLED_BY_DEFAULT("devtools.timeline.stack"))                \
+  X(TRACE_DISABLED_BY_DEFAULT("devtools.target-rundown"))                \
+  X(TRACE_DISABLED_BY_DEFAULT("devtools.v8-source-rundown"))             \
+  X(TRACE_DISABLED_BY_DEFAULT("devtools.v8-source-rundown-sources"))     \
   X(TRACE_DISABLED_BY_DEFAULT("file"))                                   \
   X(TRACE_DISABLED_BY_DEFAULT("fonts"))                                  \
   X(TRACE_DISABLED_BY_DEFAULT("gpu_cmd_queue"))                          \
@@ -357,6 +365,7 @@
   X("input,rail")                                                             \
   X("input,input.scrolling")                                                  \
   X("input,views")                                                            \
+  X("interactions,input.scrolling")                                           \
   X("interactions,startup")                                                   \
   X("ipc,security")                                                           \
   X("ipc,toplevel")                                                           \
@@ -385,6 +394,7 @@
   X("v8," TRACE_DISABLED_BY_DEFAULT("v8.compile"))                            \
   X("v8,devtools.timeline")                                                   \
   X("v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"))          \
+  X("viz,android.adpf")                                                       \
   X("viz,benchmark")                                                          \
   X("viz,benchmark,graphics.pipeline")                                        \
   X("wakeup.flow,toplevel.flow")                                              \
@@ -401,7 +411,6 @@
 
 #define INTERNAL_TRACE_INIT_CATEGORY(name) {0, 0, name},
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 PERFETTO_DEFINE_TEST_CATEGORY_PREFIXES("cat",
                                        "foo",
                                        "test",
@@ -427,7 +436,6 @@ PERFETTO_USE_CATEGORIES_FROM_NAMESPACE(base);
 
 #undef INTERNAL_CATEGORY
 #undef INTERNAL_CATEGORY_GROUP
-#endif  // BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 
 namespace base {
 namespace trace_event {

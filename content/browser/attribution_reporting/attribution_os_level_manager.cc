@@ -14,11 +14,11 @@
 #include "base/no_destructor.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "components/attribution_reporting/os_registration.h"
 #include "content/browser/attribution_reporting/os_registration.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/global_routing_id.h"
-#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
 
 namespace content {
@@ -43,24 +43,6 @@ const base::SequenceChecker& GetSequenceChecker() {
 std::optional<ApiState> g_state GUARDED_BY_CONTEXT(GetSequenceChecker());
 
 }  // namespace
-
-// static
-bool AttributionOsLevelManager::ShouldUseOsWebSource(
-    GlobalRenderFrameHostId render_frame_id) {
-  return GetContentClient()
-      ->browser()
-      ->ShouldUseOsWebSourceAttributionReporting(
-          RenderFrameHost::FromID(render_frame_id));
-}
-
-// static
-bool AttributionOsLevelManager::ShouldUseOsWebTrigger(
-    GlobalRenderFrameHostId render_frame_id) {
-  return GetContentClient()
-      ->browser()
-      ->ShouldUseOsWebTriggerAttributionReporting(
-          RenderFrameHost::FromID(render_frame_id));
-}
 
 // static
 bool AttributionOsLevelManager::ShouldInitializeApiState() {
@@ -96,6 +78,14 @@ void AttributionOsLevelManager::SetApiState(std::optional<ApiState> state) {
   WebContentsImpl::UpdateAttributionSupportAllRenderers();
 }
 
+// static
+ContentBrowserClient::AttributionReportingOsRegistrars
+AttributionOsLevelManager::GetAttributionReportingOsRegistrars(
+    WebContents* web_contents) {
+  return GetContentClient()->browser()->GetAttributionReportingOsRegistrars(
+      web_contents);
+}
+
 ScopedApiStateForTesting::ScopedApiStateForTesting(
     std::optional<ApiState> state)
     : previous_(g_state) {
@@ -112,7 +102,8 @@ void NoOpAttributionOsLevelManager::Register(
     OsRegistration registration,
     const std::vector<bool>& is_debug_key_allowed,
     RegisterCallback callback) {
-  std::move(callback).Run(registration, false);
+  std::move(callback).Run(
+      registration, std::vector<bool>(registration.registration_items.size()));
 }
 
 void NoOpAttributionOsLevelManager::ClearData(

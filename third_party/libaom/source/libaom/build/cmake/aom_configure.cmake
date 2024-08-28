@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, Alliance for Open Media. All rights reserved
+# Copyright (c) 2016, Alliance for Open Media. All rights reserved.
 #
 # This source code is subject to the terms of the BSD 2 Clause License and the
 # Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License was
@@ -190,7 +190,7 @@ elseif(AOM_TARGET_CPU MATCHES "arm")
     set(AOM_AS_FLAGS -arch ${AOM_TARGET_CPU} -isysroot ${CMAKE_OSX_SYSROOT})
   elseif(AOM_TARGET_SYSTEM STREQUAL "Windows")
     if(NOT CMAKE_ASM_COMPILER)
-      set(CMAKE_ASM_COMPILER ${CMAKE_C_COMPILER} -c -mimplicit-it=always)
+      set(CMAKE_ASM_COMPILER ${CMAKE_C_COMPILER} "-c -mimplicit-it=always")
     endif()
   else()
     if(NOT CMAKE_ASM_COMPILER)

@@ -8,7 +8,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include "base/containers/enum_set.h"
 #include "base/functional/callback.h"
@@ -94,7 +93,7 @@ class SyncSetupInProgressHandle {
 //
 //      When a datatype is in the process of becoming active, it may be
 //      in some intermediate state. Those finer-grained intermediate states
-//      are differentiated by the DataTypeController state, but not exposed.
+//      are differentiated by the ModelTypeController state, but not exposed.
 //
 // Sync Configuration:
 //
@@ -178,8 +177,8 @@ class SyncService : public KeyedService {
 
   // Error states that prevent Sync from working well or working at all, usually
   // displayed to the user.
-  // TODO(crbug.com/1412320): Add new cases that are missing, ideally unify with
-  // other enums like AvatarSyncErrorType.
+  // TODO(crbug.com/40890809): Add new cases that are missing, ideally unify
+  // with other enums like AvatarSyncErrorType.
   enum class UserActionableError {
     // No errors.
     kNone,
@@ -205,10 +204,6 @@ class SyncService : public KeyedService {
     // Same as above, but for the case where data loss may affect all
     // encryptable datatypes.
     kTrustedVaultRecoverabilityDegradedForEverything,
-    // Same as DISABLE_REASON_UNRECOVERABLE_ERROR.
-    // TODO(crbug.com/1412320): Consider removing this value and use disable
-    // reasons instead.
-    kGenericUnrecoverableError,
   };
 
   enum class ModelTypeDownloadStatus {
@@ -248,7 +243,7 @@ class SyncService : public KeyedService {
   // Indicates the the user wants Sync-the-Feature to run. It should get invoked
   // early in the Sync setup flow, after the user has pressed "turn on Sync" but
   // before they have actually confirmed the settings.
-  // TODO(crbug.com/1219990): Remove this API once the internal sync-requested
+  // TODO(crbug.com/40772592): Remove this API once the internal sync-requested
   // bit is fully removed and rollback/killswitch safe. Note that it also
   // requires finding an alternative solution to resolving
   // IsSyncFeatureDisabledViaDashboard(), tracked in crbug.com/1443446.
@@ -265,8 +260,7 @@ class SyncService : public KeyedService {
 
   // Returns the set of reasons that are keeping Sync disabled, as a bitmask of
   // DisableReason enum entries.
-  // Note: This refers to Sync-the-feature. Sync-the-transport may be running
-  // even in the presence of disable reasons.
+  // Note: These refer to both Sync-the-feature and Sync-the-transport.
   virtual DisableReasonSet GetDisableReasons() const = 0;
   // Helper that returns whether GetDisableReasons() contains the given |reason|
   // (possibly among others).
@@ -310,8 +304,8 @@ class SyncService : public KeyedService {
   // in combination with GetAuthError(), if you need to know if the user's
   // refresh token is really valid: Before a Sync cycle has been completed,
   // Sync hasn't tried using the refresh token, so doesn't know if it's valid.
-  // TODO(crbug.com/831579): If Chrome would persist auth errors, this would not
-  // be necessary.
+  // TODO(crbug.com/41382444): If Chrome would persist auth errors, this would
+  // not be necessary.
   bool HasCompletedSyncCycle() const;
 
   // The last persistent authentication error that was encountered by the
@@ -321,7 +315,7 @@ class SyncService : public KeyedService {
 
   // Returns true if the Chrome client is too old and needs to be updated for
   // Sync to work.
-  // TODO(crbug.com/1412320): Remove this API and use GetUserActionableError()
+  // TODO(crbug.com/40890809): Remove this API and use GetUserActionableError()
   // instead.
   virtual bool RequiresClientUpgrade() const = 0;
 
@@ -349,12 +343,11 @@ class SyncService : public KeyedService {
   bool IsEngineInitialized() const;
 
   // Returns whether Sync-the-feature can (attempt to) start. This means that
-  // there is a Sync-consented account and no disable reasons. It does *not*
-  // require first-time Sync setup to be complete, because that can only happen
-  // after the engine has started.
+  // there is a ConsentLevel::kSync account and no disable reasons. It does
+  // *not* require first-time Sync setup to be complete.
   // Note: This refers to Sync-the-feature. Sync-the-transport may be running
   // even if this is false.
-  // TODO(crbug.com/1444344): Remove this API, in favor of
+  // TODO(crbug.com/40911804): Remove this API, in favor of
   // IsSyncFeatureEnabled().
   // TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is
   // deleted from the codebase. See ConsentLevel::kSync documentation for
@@ -395,7 +388,7 @@ class SyncService : public KeyedService {
 
   // Returns the set of types which are preferred for enabling. This is a
   // superset of the active types (see GetActiveDataTypes()).
-  // TODO(crbug.com/1429249): Deprecated, DO NOT USE! You probably want
+  // TODO(crbug.com/40262598): Deprecated, DO NOT USE! You probably want
   // `GetUserSettings()->GetSelectedTypes()` instead.
   virtual ModelTypeSet GetPreferredDataTypes() const = 0;
 
@@ -426,6 +419,7 @@ class SyncService : public KeyedService {
   // `types` is available.
   // Note: Only data types that are enabled and support this functionality are
   // part of the response.
+  // Note: Only data types that are ready for migration are returned.
   virtual void GetLocalDataDescriptions(
       ModelTypeSet types,
       base::OnceCallback<void(std::map<ModelType, LocalDataDescription>)>
@@ -451,7 +445,7 @@ class SyncService : public KeyedService {
   // ASAP, presumably because a local change event has occurred but we're
   // still in deferred start mode, meaning the SyncableService hasn't been
   // told to MergeDataAndStartSyncing yet.
-  // TODO(crbug.com/1429293): Remove this API.
+  // TODO(crbug.com/40901006): Remove this API.
   virtual void OnDataTypeRequestsSyncStartup(ModelType type) = 0;
 
   // Triggers a GetUpdates call for the specified |types|, pulling any new data
@@ -476,7 +470,7 @@ class SyncService : public KeyedService {
 
   // Necessary condition for SendExplicitPassphraseToPlatformClient() (not
   // sufficient).
-  // TODO(crbug.com/1524184): Stop exposing this when UPM unenrollment is gone.
+  // TODO(crbug.com/41497129): Stop exposing this when UPM unenrollment is gone.
   virtual bool SupportsExplicitPassphrasePlatformClient() = 0;
 
   // Shares the explicit passphrase content with layers outside of the browser
@@ -492,8 +486,13 @@ class SyncService : public KeyedService {
   // OBSERVERS
   //////////////////////////////////////////////////////////////////////////////
 
-  // Adds/removes an observer. SyncService does not take ownership of the
-  // observer.
+  // Adds/removes an observer.
+  // IMPORTANT: Observers must be removed before SyncService::Shutdown() gets
+  // called (during the KeyedServices shutdown sequence). If your observer is
+  // tied to a KeyedService itself, declare an appropriate DependsOn()
+  // relation and remove the observer in your service's Shutdown(). Otherwise,
+  // implement SyncServiceObserver::OnSyncShutdown() and remove the observer
+  // there.
   virtual void AddObserver(SyncServiceObserver* observer) = 0;
   virtual void RemoveObserver(SyncServiceObserver* observer) = 0;
 
@@ -533,9 +532,11 @@ class SyncService : public KeyedService {
   // constructing that page.
   virtual base::Value::List GetTypeStatusMapForDebugging() const = 0;
 
-  // Retrieves the TypeEntitiesCount for all registered data types.
+  // Retrieves the TypeEntitiesCount for all registered data types. The
+  // `callback` will be invoked for every data type, as soon as it has
+  // computed its counts.
   virtual void GetEntityCountsForDebugging(
-      base::OnceCallback<void(const std::vector<TypeEntitiesCount>&)> callback)
+      base::RepeatingCallback<void(const TypeEntitiesCount&)> callback)
       const = 0;
 
   virtual const GURL& GetSyncServiceUrlForDebugging() const = 0;
@@ -560,12 +561,6 @@ class SyncService : public KeyedService {
   // called for real data types only.
   virtual ModelTypeDownloadStatus GetDownloadStatusFor(
       ModelType type) const = 0;
-
-  // TODO(crbug.com/1425071): remove once investigation of timeouts complete.
-  // Records the reason if the `type` is waiting for updates to be downloaded.
-  virtual void RecordReasonIfWaitingForUpdates(
-      ModelType type,
-      const std::string& histogram_name) const = 0;
 };
 
 }  // namespace syncer

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2019, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -1761,7 +1761,7 @@ void av1_prune_partitions_by_max_min_bsize(SuperBlockEnc *sb_enc,
 
 // Decide whether to evaluate the AB partition specified by part_type based on
 // split and HORZ/VERT info
-int evaluate_ab_partition_based_on_split(
+static int evaluate_ab_partition_based_on_split(
     const PC_TREE *pc_tree, PARTITION_TYPE rect_part,
     const RD_RECT_PART_WIN_INFO *rect_part_win_info, int qindex, int split_idx1,
     int split_idx2) {

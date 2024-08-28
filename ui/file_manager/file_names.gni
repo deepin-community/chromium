@@ -28,7 +28,6 @@ static_js_files = [
 ts_files = [
   # Common:
   "file_manager/common/js/api.ts",
-  "file_manager/common/js/app_util.ts",
   "file_manager/common/js/array_data_model.ts",
   "file_manager/common/js/async_util.ts",
   "file_manager/common/js/cr_ui.ts",
@@ -59,6 +58,7 @@ ts_files = [
   "file_manager/common/js/trash.ts",
   "file_manager/common/js/trusted_script_url_policy_util.ts",
   "file_manager/common/js/tslib_shim.ts",
+  "file_manager/common/js/uma.ts",
   "file_manager/common/js/url_constants.ts",
   "file_manager/common/js/util.ts",
   "file_manager/common/js/volume_manager_types.ts",
@@ -78,6 +78,7 @@ ts_files = [
   "file_manager/state/ducks/drive.ts",
   "file_manager/state/ducks/folder_shortcuts.ts",
   "file_manager/state/ducks/launch_params.ts",
+  "file_manager/state/ducks/materialized_views.ts",
   "file_manager/state/ducks/navigation.ts",
   "file_manager/state/ducks/preferences.ts",
   "file_manager/state/ducks/search.ts",
@@ -177,6 +178,7 @@ ts_files = [
   "file_manager/foreground/js/ui/banners/holding_space_welcome_banner.ts",
   "file_manager/foreground/js/ui/banners/invalid_usb_filesystem_banner.ts",
   "file_manager/foreground/js/ui/banners/local_disk_low_space_banner.ts",
+  "file_manager/foreground/js/ui/banners/files_migrating_to_cloud_banner.ts",
   "file_manager/foreground/js/ui/banners/photos_welcome_banner.ts",
   "file_manager/foreground/js/ui/banners/shared_with_crostini_pluginvm_banner.ts",
   "file_manager/foreground/js/ui/banners/state_banner.ts",
@@ -214,6 +216,7 @@ ts_files = [
   "file_manager/foreground/js/constants.ts",
   "file_manager/foreground/js/crossover_search_utils.ts",
   "file_manager/foreground/js/crostini_controller.ts",
+  "file_manager/foreground/js/one_drive_controller.ts",
   "file_manager/foreground/js/deferred_elements.ts",
   "file_manager/foreground/js/dialog_action_controller.ts",
   "file_manager/foreground/js/directory_contents.ts",
@@ -329,6 +332,7 @@ ts_templates = [
   "file_manager/foreground/js/ui/banners/holding_space_welcome_banner.html",
   "file_manager/foreground/js/ui/banners/invalid_usb_filesystem_banner.html",
   "file_manager/foreground/js/ui/banners/local_disk_low_space_banner.html",
+  "file_manager/foreground/js/ui/banners/files_migrating_to_cloud_banner.html",
   "file_manager/foreground/js/ui/banners/photos_welcome_banner.html",
   "file_manager/foreground/js/ui/banners/shared_with_crostini_pluginvm_banner.html",
   "file_manager/foreground/js/ui/banners/state_banner.html",
@@ -517,6 +521,7 @@ other_dts_files = [
   "//tools/typescript/definitions/webview_tag.d.ts",
   "//ui/file_manager/file_manager/definitions/file_manager_private.d.ts",
   "//ui/file_manager/image_loader/image_loader_private.d.ts",
+  "//ui/file_manager/image_loader/overrides.d.ts",
 ]
 
 generated_js_files = [

@@ -98,7 +98,8 @@ class ASH_EXPORT LockScreenMediaControlsView
   ~LockScreenMediaControlsView() override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void Layout(PassKey) override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
@@ -121,6 +122,11 @@ class ASH_EXPORT LockScreenMediaControlsView
   void MediaControllerImageChanged(
       media_session::mojom::MediaSessionImageType type,
       const SkBitmap& bitmap) override;
+  // This view is used before `media::kGlobalMediaControlsCrOSUpdatedUI` is
+  // enabled. So we don't need to implement this method since there's no chapter
+  // images in this view.
+  void MediaControllerChapterImageChanged(int chapter_index,
+                                          const SkBitmap& bitmap) override {}
 
   // ui::ImplicitAnimationObserver:
   void OnImplicitAnimationsCompleted() override;

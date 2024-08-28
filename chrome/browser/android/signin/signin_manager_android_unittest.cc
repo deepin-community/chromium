@@ -24,10 +24,11 @@
 #include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/test/base/scoped_testing_local_state.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
-#include "components/browsing_data/content/cache_storage_helper.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/keyed_service/core/simple_factory_key.h"
@@ -82,18 +83,21 @@ class SigninManagerAndroidTest : public ::testing::Test {
   void SetUp() override {
     TestingProfile::Builder profile_builder;
     profile_builder.AddTestingFactories(
-        {{BookmarkModelFactory::GetInstance(),
-          BookmarkModelFactory::GetDefaultFactory()},
-         {ProfilePasswordStoreFactory::GetInstance(),
-          base::BindRepeating(&password_manager::BuildPasswordStore<
-                              content::BrowserContext,
-                              password_manager::TestPasswordStore>)},
-         {AccountPasswordStoreFactory::GetInstance(),
-          base::BindRepeating(
-              &password_manager::BuildPasswordStoreWithArgs<
-                  content::BrowserContext, password_manager::TestPasswordStore,
-                  password_manager::IsAccountStore>,
-              password_manager::IsAccountStore(true))}});
+        {TestingProfile::TestingFactory{
+             BookmarkModelFactory::GetInstance(),
+             BookmarkModelFactory::GetDefaultFactory()},
+         TestingProfile::TestingFactory{
+             ProfilePasswordStoreFactory::GetInstance(),
+             base::BindRepeating(&password_manager::BuildPasswordStore<
+                                 content::BrowserContext,
+                                 password_manager::TestPasswordStore>)},
+         TestingProfile::TestingFactory{
+             AccountPasswordStoreFactory::GetInstance(),
+             base::BindRepeating(&password_manager::BuildPasswordStoreWithArgs<
+                                     content::BrowserContext,
+                                     password_manager::TestPasswordStore,
+                                     password_manager::IsAccountStore>,
+                                 password_manager::IsAccountStore(true))}});
     profile_ = profile_builder.Build();
 
     background_tracing_manager_ =
@@ -104,7 +108,7 @@ class SigninManagerAndroidTest : public ::testing::Test {
     offline_pages::OfflinePageModelFactory::GetInstance()->SetTestingFactory(
         profile_->GetProfileKey(), base::BindRepeating(&BuildOfflinePageModel));
 
-    // TODO(crbug.com/748484): Remove requirement for this delegate in
+    // TODO(crbug.com/41335519): Remove requirement for this delegate in
     // unit_tests.
     DownloadCoreServiceFactory::GetForBrowserContext(profile_.get())
         ->SetDownloadManagerDelegateForTesting(
@@ -153,74 +157,12 @@ class SigninManagerAndroidTest : public ::testing::Test {
 
  private:
   content::BrowserTaskEnvironment task_environment_;
+  ScopedTestingLocalState local_state_{TestingBrowserProcess::GetGlobal()};
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<content::BackgroundTracingManager>
       background_tracing_manager_;
   base::test::ScopedFeatureList feature_list_;
 };
-
-// TODO(crbug.com/929456): This test does not actually test anything; the
-// CannedCacheStorageHelper isn't hooked up to observe any deletions. Disabled
-// to allow refactoring of browsing data code.
-TEST_F(SigninManagerAndroidTest, DISABLED_DeleteGoogleServiceWorkerCaches) {
-  struct TestCase {
-    std::string worker_url;
-    bool should_be_deleted;
-  } kTestCases[] = {
-      // A Google domain.
-      {"https://google.com/foo/bar", true},
-
-      // A Google domain with long TLD.
-      {"https://plus.google.co.uk/?query_params", true},
-
-      // Youtube.
-      {"https://youtube.com", false},
-
-      // A random domain.
-      {"https://a.b.c.example.com", false},
-
-      // Another Google domain.
-      {"https://www.google.de/worker.html", true},
-
-      // Ports don't matter, only TLDs.
-      {"https://google.com:8444/worker.html", true},
-  };
-
-  // TODO(crbug.com/929456): This helper is not attached anywhere to
-  // be able to observe deletions.
-  // Add service workers.
-  auto helper = base::MakeRefCounted<browsing_data::CannedCacheStorageHelper>(
-      profile()->GetDefaultStoragePartition());
-
-  for (const TestCase& test_case : kTestCases)
-    helper->Add(blink::StorageKey::CreateFirstParty(
-        url::Origin::Create(GURL(test_case.worker_url))));
-
-  ASSERT_EQ(std::size(kTestCases), helper->GetCount());
-
-  // Delete service workers and wait for completion.
-  base::RunLoop run_loop;
-  SigninManagerAndroid::WipeData(profile(),
-                                 false /* only Google service worker caches */,
-                                 run_loop.QuitClosure());
-  run_loop.Run();
-
-  // Test whether the correct service worker caches were deleted.
-  std::set<blink::StorageKey> remaining_cache_storages =
-      helper->GetStorageKeys();
-
-  // TODO(crbug.com/929456): If deleted, the key should not be present.
-  for (const TestCase& test_case : kTestCases) {
-    EXPECT_EQ(test_case.should_be_deleted,
-              base::Contains(remaining_cache_storages,
-                             blink::StorageKey::CreateFromStringForTesting(
-                                 test_case.worker_url)))
-        << test_case.worker_url << " should "
-        << (test_case.should_be_deleted ? "" : "NOT ")
-        << "be deleted, but it was"
-        << (test_case.should_be_deleted ? "NOT" : "") << ".";
-  }
-}
 
 // Tests that wiping all data also deletes bookmarks.
 TEST_F(SigninManagerAndroidTest, DeleteBookmarksWhenWipingAllData) {
@@ -250,8 +192,7 @@ TEST_F(SigninManagerAndroidTest, WipePasswordsIfLocalUpmOff) {
 
   WipeData(/*all_data=*/true);
 
-  EXPECT_THAT(profile_password_store()->stored_passwords(),
-              UnorderedElementsAre(Pair(form.signon_realm, IsEmpty())));
+  EXPECT_THAT(profile_password_store()->stored_passwords(), IsEmpty());
 }
 
 class SigninManagerAndroidWithLocalUpmTest : public SigninManagerAndroidTest {

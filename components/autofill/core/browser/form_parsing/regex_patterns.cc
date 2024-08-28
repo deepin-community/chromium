@@ -26,7 +26,7 @@ base::span<const MatchPatternRef> GetMatchPatterns(
     std::string_view name,
     std::string_view language_code,
     PatternSource pattern_source) {
-  auto* it = kPatternMap.find(std::make_pair(name, language_code));
+  auto it = kPatternMap.find(std::make_pair(name, language_code));
   if (!language_code.empty() && it == kPatternMap.end())
     it = kPatternMap.find(std::make_pair(name, ""));
   CHECK(it != kPatternMap.end());
@@ -38,8 +38,6 @@ base::span<const MatchPatternRef> GetMatchPatterns(
       return it->second[1];
     case PatternSource::kExperimental:
       return it->second[2];
-    case PatternSource::kNextGen:
-      return it->second[3];
   }
 #else
   switch (pattern_source) {
@@ -47,7 +45,7 @@ base::span<const MatchPatternRef> GetMatchPatterns(
       return it->second[0];
   }
 #endif
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -86,9 +84,9 @@ MatchingPattern MatchPatternRef::operator*() const {
       .positive_pattern = p.positive_pattern,
       .negative_pattern = p.negative_pattern,
       .positive_score = p.positive_score,
-      .match_field_attributes =
-          is_supplementary() ? DenseSet<MatchAttribute>{MatchAttribute::kName}
-                             : p.match_field_attributes,
+      .match_field_attributes = is_supplementary()
+                                    ? DenseSet({MatchAttribute::kName})
+                                    : p.match_field_attributes,
       .form_control_types = p.form_control_types,
   };
 }

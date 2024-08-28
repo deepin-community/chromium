@@ -327,10 +327,6 @@ struct CrxComponent {
   // match ^[-.,;+_=$a-zA-Z0-9]{0,256}$ .
   InstallerAttributes installer_attributes;
 
-  // Specifies that the CRX can be background-downloaded in some cases.
-  // The default for this value is |true|.
-  bool allows_background_download = true;
-
   // Specifies that the update checks and pings associated with this component
   // require confidentiality. The default for this value is |true|. As a side
   // note, the confidentiality of the downloads is enforced by the server,
@@ -464,6 +460,7 @@ class UpdateClient : public base::RefCountedThreadSafe<UpdateClient> {
     int result = 0;
     int error_code = 0;
     int extra_code1 = 0;
+    std::string app_command_id;
   };
 
   // Adds an observer for this class. An observer should not be added more

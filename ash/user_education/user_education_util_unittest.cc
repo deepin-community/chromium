@@ -66,10 +66,10 @@ TEST_F(UserEducationUtilTest, CreateExtendedProperties) {
   const user_education::HelpBubbleParams::ExtendedProperties
       extended_properties = CreateExtendedProperties(
           CreateExtendedProperties(HelpBubbleId::kTest),
-          CreateExtendedProperties(HelpBubbleStyle::kNudge));
+          CreateExtendedProperties(ui::MODAL_TYPE_SYSTEM));
 
   EXPECT_EQ(GetHelpBubbleId(extended_properties), HelpBubbleId::kTest);
-  EXPECT_EQ(GetHelpBubbleStyle(extended_properties), HelpBubbleStyle::kNudge);
+  EXPECT_EQ(GetHelpBubbleModalType(extended_properties), ui::MODAL_TYPE_SYSTEM);
 }
 
 // Verifies that `CreateExtendedProperties()` can be used to create extended
@@ -108,16 +108,33 @@ TEST_F(UserEducationUtilTest, CreateExtendedPropertiesWithModalType) {
             ui::MODAL_TYPE_NONE);
 }
 
-// Verifies that `CreateExtendedProperties()` can be used to create extended
-// properties for a help bubble having set style, and `GetHelpBubbleStyle()` can
-// be used to retrieve help bubble style from extended properties.
-TEST_F(UserEducationUtilTest, ExtendedPropertiesWithStyle) {
-  EXPECT_EQ(
-      GetHelpBubbleStyle(CreateExtendedProperties(HelpBubbleStyle::kNudge)),
-      HelpBubbleStyle::kNudge);
+// Verifies that `CreateExtendedPropertiesWithAccessibleName()` can be used to
+// create extended properties for a help bubble having set accessible name, and
+// that `GetHelpBubbleAccessibleName()` can be used to retrieve help bubble
+// accessible name from extended properties.
+TEST_F(UserEducationUtilTest, ExtendedPropertiesWithAccessibleName) {
+  std::string accessible_name = "Accessible Name";
+  EXPECT_EQ(GetHelpBubbleAccessibleName(
+                CreateExtendedPropertiesWithAccessibleName(accessible_name)),
+            accessible_name);
 
-  // It is permissible to query help bubble style even when absent.
-  EXPECT_EQ(GetHelpBubbleStyle(HelpBubbleParams::ExtendedProperties()),
+  // It is permissible to query help bubble accessible name even when absent.
+  EXPECT_EQ(GetHelpBubbleAccessibleName(HelpBubbleParams::ExtendedProperties()),
+            std::nullopt);
+}
+
+// Verifies that `CreateExtendedPropertiesWithBodyText()` can be used to create
+// extended properties for a help bubble having set body text, and that
+// `GetHelpBubbleBodyText()` can be used to retrieve help bubble body text from
+// extended properties.
+TEST_F(UserEducationUtilTest, ExtendedPropertiesWithBodyText) {
+  std::string body_text = "Body Text";
+  EXPECT_EQ(
+      GetHelpBubbleBodyText(CreateExtendedPropertiesWithBodyText(body_text)),
+      body_text);
+
+  // It is permissible to query help bubble body text even when absent.
+  EXPECT_EQ(GetHelpBubbleBodyText(HelpBubbleParams::ExtendedProperties()),
             std::nullopt);
 }
 

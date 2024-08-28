@@ -31,7 +31,7 @@
 #include <utility>
 #include <vector>
 
-#include "dawn/native/CreatePipelineAsyncTask.h"
+#include "dawn/native/CreatePipelineAsyncEvent.h"
 #include "dawn/native/vulkan/DeviceVk.h"
 #include "dawn/native/vulkan/FencedDeleter.h"
 #include "dawn/native/vulkan/PipelineCacheVk.h"
@@ -90,7 +90,7 @@ MaybeError ComputePipeline::InitializeImpl() {
 
     if (IsFullSubgroupsRequired()) {
         // Workgroup size validation is handled in ValidateComputeStageWorkgroupSize when compiling
-        // shader module. Vulkan device that support ChromiumExperimentalSubgroups must support
+        // shader module. Vulkan device that support Subgroups feature must support
         // computeFullSubgroups.
         DAWN_ASSERT(device->GetDeviceInfo().subgroupSizeControlFeatures.computeFullSubgroups);
         createInfo.stage.flags |= VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT |
@@ -99,9 +99,9 @@ MaybeError ComputePipeline::InitializeImpl() {
 
     createInfo.stage.pSpecializationInfo = nullptr;
 
+    VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroupSizeInfo = {};
     PNextChainBuilder stageExtChain(&createInfo.stage);
 
-    VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroupSizeInfo = {};
     uint32_t computeSubgroupSize = device->GetComputeSubgroupSize();
     // If experimental full subgroups is required, pipeline is created with varying subgroup size
     // enabled, and thus do not use explicit subgroup size control.
@@ -159,15 +159,6 @@ void ComputePipeline::DestroyImpl() {
 
 VkPipeline ComputePipeline::GetHandle() const {
     return mHandle;
-}
-
-void ComputePipeline::InitializeAsync(Ref<ComputePipelineBase> computePipeline,
-                                      WGPUCreateComputePipelineAsyncCallback callback,
-                                      void* userdata) {
-    std::unique_ptr<CreateComputePipelineAsyncTask> asyncTask =
-        std::make_unique<CreateComputePipelineAsyncTask>(std::move(computePipeline), callback,
-                                                         userdata);
-    CreateComputePipelineAsyncTask::RunAsync(std::move(asyncTask));
 }
 
 }  // namespace dawn::native::vulkan

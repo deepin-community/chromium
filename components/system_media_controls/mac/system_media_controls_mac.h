@@ -11,6 +11,10 @@
 #include "components/system_media_controls/mac/remote_command_center_delegate.h"
 #include "components/system_media_controls/system_media_controls.h"
 
+namespace remote_cocoa {
+class ApplicationHost;
+}
+
 namespace system_media_controls {
 
 class SystemMediaControlsObserver;
@@ -21,7 +25,8 @@ namespace internal {
 // The combination of those two form the full SystemMediaControls API.
 class SystemMediaControlsMac : public SystemMediaControls {
  public:
-  SystemMediaControlsMac();
+  explicit SystemMediaControlsMac(
+      remote_cocoa::ApplicationHost* application_host);
   SystemMediaControlsMac(const SystemMediaControlsMac&) = delete;
   SystemMediaControlsMac& operator=(const SystemMediaControlsMac&) = delete;
   ~SystemMediaControlsMac() override;
@@ -44,6 +49,7 @@ class SystemMediaControlsMac : public SystemMediaControls {
   void ClearThumbnail() override {}
   void ClearMetadata() override;
   void UpdateDisplay() override {}
+  bool GetVisibilityForTesting() const override;
 
  private:
   // Gives media playback state and metadata to the MPNowPlayingInfoCenter.

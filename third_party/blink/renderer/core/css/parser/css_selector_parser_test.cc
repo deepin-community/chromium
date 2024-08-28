@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/css/parser/css_selector_parser.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
@@ -114,9 +119,8 @@ TEST(CSSSelectorParserTest, ValidANPlusB) {
 
     std::pair<int, int> ab;
     CSSTokenizer tokenizer(StringView(test_case.input));
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
-    bool passed = CSSSelectorParser::ConsumeANPlusB(range, ab);
+    CSSParserTokenStream stream(tokenizer);
+    bool passed = CSSSelectorParser::ConsumeANPlusB(stream, ab);
     EXPECT_TRUE(passed);
     EXPECT_EQ(test_case.a, ab.first);
     EXPECT_EQ(test_case.b, ab.second);
@@ -138,9 +142,8 @@ TEST(CSSSelectorParserTest, InvalidANPlusB) {
 
     std::pair<int, int> ab;
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
-    bool passed = CSSSelectorParser::ConsumeANPlusB(range, ab);
+    CSSParserTokenStream stream(tokenizer);
+    bool passed = CSSSelectorParser::ConsumeANPlusB(stream, ab);
     EXPECT_FALSE(passed);
   }
 }
@@ -159,10 +162,9 @@ TEST(CSSSelectorParserTest, PseudoElementsInCompoundLists) {
   HeapVector<CSSSelector> arena;
   for (StringView test_case : test_cases) {
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -176,6 +178,8 @@ TEST(CSSSelectorParserTest, ValidSimpleAfterPseudoElementInCompound) {
   test::TaskEnvironment task_environment;
   const char* test_cases[] = {"::-webkit-volume-slider:hover",
                               "::selection:window-inactive",
+                              "::search-text:current",
+                              "::search-text:not(:current)",
                               "::-webkit-scrollbar:disabled",
                               "::-webkit-volume-slider:not(:hover)",
                               "::-webkit-scrollbar:not(:horizontal)",
@@ -185,10 +189,9 @@ TEST(CSSSelectorParserTest, ValidSimpleAfterPseudoElementInCompound) {
   HeapVector<CSSSelector> arena;
   for (StringView test_case : test_cases) {
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -206,6 +209,9 @@ TEST(CSSSelectorParserTest, InvalidSimpleAfterPseudoElementInCompound) {
       ".class::content::before",
       "::shadow.class",
       "::selection:window-inactive::before",
+      "::search-text.class",
+      "::search-text::before",
+      "::search-text:hover",
       "::-webkit-volume-slider.class",
       "::before:not(.a)",
       "::shadow:not(::after)",
@@ -223,10 +229,9 @@ TEST(CSSSelectorParserTest, InvalidSimpleAfterPseudoElementInCompound) {
   HeapVector<CSSSelector> arena;
   for (StringView test_case : test_cases) {
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -270,10 +275,9 @@ TEST(CSSSelectorParserTest, TransitionPseudoStyles) {
   for (const auto& test_case : test_cases) {
     SCOPED_TRACE(test_case.selector);
     CSSTokenizer tokenizer(StringView(test_case.selector));
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -310,10 +314,9 @@ TEST(CSSSelectorParserTest, WorkaroundForInvalidCustomPseudoInUAStyle) {
   HeapVector<CSSSelector> arena;
   for (StringView test_case : test_cases) {
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kUASheetMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -332,10 +335,9 @@ TEST(CSSSelectorParserTest, InvalidPseudoElementInNonRightmostCompound) {
   HeapVector<CSSSelector> arena;
   for (StringView test_case : test_cases) {
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -356,10 +358,9 @@ TEST(CSSSelectorParserTest, UnresolvedNamespacePrefix) {
   HeapVector<CSSSelector> arena;
   for (StringView test_case : test_cases) {
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range, context, CSSNestingType::kNone,
+        stream, context, CSSNestingType::kNone,
         /*parent_rule_for_nesting=*/nullptr, /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, sheet, arena);
     EXPECT_EQ(vector.size(), 0u);
@@ -377,10 +378,9 @@ TEST(CSSSelectorParserTest, UnexpectedPipe) {
   HeapVector<CSSSelector> arena;
   for (StringView test_case : test_cases) {
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range, context, CSSNestingType::kNone,
+        stream, context, CSSNestingType::kNone,
         /*parent_rule_for_nesting=*/nullptr, /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, sheet, arena);
     EXPECT_EQ(vector.size(), 0u);
@@ -410,10 +410,9 @@ TEST(CSSSelectorParserTest, SerializedUniversal) {
   for (auto** test_case : test_cases) {
     SCOPED_TRACE(test_case[0]);
     CSSTokenizer tokenizer(StringView{test_case[0]});
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range, context, CSSNestingType::kNone,
+        stream, context, CSSNestingType::kNone,
         /*parent_rule_for_nesting=*/nullptr, /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, sheet, arena);
     CSSSelectorList* list = CSSSelectorList::AdoptSelectorVector(vector);
@@ -434,10 +433,9 @@ TEST(CSSSelectorParserTest, AttributeSelectorUniversalInvalid) {
   for (String test_case : test_cases) {
     SCOPED_TRACE(test_case);
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range, context, CSSNestingType::kNone,
+        stream, context, CSSNestingType::kNone,
         /*parent_rule_for_nesting=*/nullptr, /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, sheet, arena);
     EXPECT_EQ(vector.size(), 0u);
@@ -459,27 +457,69 @@ TEST(CSSSelectorParserTest, InternalPseudo) {
   HeapVector<CSSSelector> arena;
   for (String test_case : test_cases) {
     SCOPED_TRACE(test_case);
-    CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    {
+      CSSTokenizer tokenizer(test_case);
+      CSSParserTokenStream stream(tokenizer);
+      base::span<CSSSelector> author_vector = CSSSelectorParser::ParseSelector(
+          stream,
+          MakeGarbageCollected<CSSParserContext>(
+              kHTMLStandardMode, SecureContextMode::kInsecureContext),
+          CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
+          /*is_within_scope=*/false,
+          /*semicolon_aborts_nested_selector=*/false, nullptr, arena);
+      EXPECT_EQ(author_vector.size(), 0u);
+    }
 
-    base::span<CSSSelector> author_vector = CSSSelectorParser::ParseSelector(
-        range,
+    {
+      CSSTokenizer tokenizer(test_case);
+      CSSParserTokenStream stream(tokenizer);
+      base::span<CSSSelector> ua_vector = CSSSelectorParser::ParseSelector(
+          stream,
+          MakeGarbageCollected<CSSParserContext>(
+              kUASheetMode, SecureContextMode::kInsecureContext),
+          CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
+          /*is_within_scope=*/false,
+          /*semicolon_aborts_nested_selector=*/false, nullptr, arena);
+      EXPECT_GT(ua_vector.size(), 0u);
+    }
+  }
+}
+
+TEST(CSSSelectorParserTest, ScrollMarkerPseudos) {
+  test::TaskEnvironment task_environment;
+  struct TestCase {
+    const char* selector;
+    CSSSelector::PseudoType type;
+  };
+
+  TestCase test_cases[] = {
+      {"ul::scroll-marker-group", CSSSelector::kPseudoScrollMarkerGroup},
+      {"li::scroll-marker", CSSSelector::kPseudoScrollMarker},
+  };
+
+  HeapVector<CSSSelector> arena;
+  for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(test_case.selector);
+    CSSTokenizer tokenizer(StringView(test_case.selector));
+    CSSParserTokenStream stream(tokenizer);
+    base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
         /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, nullptr, arena);
-    EXPECT_EQ(author_vector.size(), 0u);
+    EXPECT_TRUE(!vector.empty());
 
-    base::span<CSSSelector> ua_vector = CSSSelectorParser::ParseSelector(
-        range,
-        MakeGarbageCollected<CSSParserContext>(
-            kUASheetMode, SecureContextMode::kInsecureContext),
-        CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
-        /*is_within_scope=*/false,
-        /*semicolon_aborts_nested_selector=*/false, nullptr, arena);
-    EXPECT_GT(ua_vector.size(), 0u);
+    CSSSelectorList* list = CSSSelectorList::AdoptSelectorVector(vector);
+    ASSERT_TRUE(list->HasOneSelector());
+
+    const CSSSelector* selector = list->First();
+    while (selector->NextSimpleSelector()) {
+      selector = selector->NextSimpleSelector();
+    }
+
+    EXPECT_EQ(selector->GetPseudoType(), test_case.type);
   }
 }
 
@@ -544,7 +584,6 @@ static const SelectorTestCase is_where_nesting_data[] = {
     {"::part(foo):is(:hover, :where(.a))",
      "::part(foo):is(:hover, :where())"},
     {"::part(foo):is(:hover, .a)", "::part(foo):is(:hover)"},
-    {"::part(foo):is(:--bar, .a)", "::part(foo):is(:--bar)"},
     {"::part(foo):is(:state(bar), .a)", "::part(foo):is(:state(bar))"},
     {"::part(foo):is(:enabled)", "::part(foo):is()"},
     // Only scrollbar pseudos after kPseudoScrollbar:
@@ -586,7 +625,6 @@ static const SelectorTestCase is_where_nesting_data[] = {
     {"::part(foo):is(:is(:hover))"},
     {"::part(foo):is(:focus, :hover)"},
     {"::part(foo):is(:focus, :is(:hover))"},
-    {"::part(foo):is(:focus, :--bar)"},
     {"::part(foo):is(:focus, :state(bar))"},
     {"::-webkit-scrollbar:is(:enabled)"},
     {"::selection:is(:window-inactive)"},
@@ -668,10 +706,9 @@ TEST(CSSSelectorParserTest, ASCIILowerHTMLStrict) {
   for (auto test_case : test_cases) {
     SCOPED_TRACE(test_case.input);
     CSSTokenizer tokenizer(StringView(test_case.input));
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range, context, CSSNestingType::kNone,
+        stream, context, CSSNestingType::kNone,
         /*parent_rule_for_nesting=*/nullptr, /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, sheet, arena);
     EXPECT_GT(vector.size(), 0u);
@@ -699,10 +736,9 @@ TEST(CSSSelectorParserTest, ASCIILowerHTMLQuirks) {
   for (auto test_case : test_cases) {
     SCOPED_TRACE(test_case.input);
     CSSTokenizer tokenizer(StringView(test_case.input));
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range, context, CSSNestingType::kNone,
+        stream, context, CSSNestingType::kNone,
         /*parent_rule_for_nesting=*/nullptr, /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, sheet, arena);
     EXPECT_GT(vector.size(), 0u);
@@ -723,10 +759,9 @@ TEST(CSSSelectorParserTest, ShadowPartPseudoElementValid) {
   for (String test_case : test_cases) {
     SCOPED_TRACE(test_case);
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -748,10 +783,9 @@ TEST(CSSSelectorParserTest, ShadowPartAndBeforeAfterPseudoElementValid) {
   for (String test_case : test_cases) {
     SCOPED_TRACE(test_case);
     CSSTokenizer tokenizer(test_case);
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range,
+        stream,
         MakeGarbageCollected<CSSParserContext>(
             kHTMLStandardMode, SecureContextMode::kInsecureContext),
         CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
@@ -777,10 +811,9 @@ static bool IsCounted(const char* selector,
   DCHECK(!doc->IsUseCounted(feature));
 
   CSSTokenizer tokenizer(StringView{selector});
-  const auto tokens = tokenizer.TokenizeToEOF();
-  CSSParserTokenRange range(tokens);
+  CSSParserTokenStream stream(tokenizer);
   HeapVector<CSSSelector> arena;
-  CSSSelectorParser::ParseSelector(range, context, CSSNestingType::kNone,
+  CSSSelectorParser::ParseSelector(stream, context, CSSNestingType::kNone,
                                    /*parent_rule_for_nesting=*/nullptr,
                                    /*is_within_scope=*/false,
                                    /*semicolon_aborts_nested_selector=*/false,
@@ -988,10 +1021,9 @@ TEST(CSSSelectorParserTest, ImplicitShadowCrossingCombinators) {
   for (auto test_case : test_cases) {
     SCOPED_TRACE(test_case.input);
     CSSTokenizer tokenizer(StringView(test_case.input));
-    const auto tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
+    CSSParserTokenStream stream(tokenizer);
     base::span<CSSSelector> vector = CSSSelectorParser::ParseSelector(
-        range, context, CSSNestingType::kNone,
+        stream, context, CSSNestingType::kNone,
         /*parent_rule_for_nesting=*/nullptr, /*is_within_scope=*/false,
         /*semicolon_aborts_nested_selector=*/false, sheet, arena);
     CSSSelectorList* list = CSSSelectorList::AdoptSelectorVector(vector);
@@ -1075,7 +1107,7 @@ static const SelectorTestCase has_nesting_data[] = {
     {"::part(foo):has(:hover:focus)", ""},
     {"::part(foo):has(:focus, :hover)", ""},
     {"::part(foo):has(:focus)", ""},
-    {"::part(foo):has(:focus, :--bar)", ""},
+    {"::part(foo):has(:focus, :state(bar))", ""},
     {"::part(foo):has(.a)", ""},
     {"::part(foo):has(.a:hover)", ""},
     {"::part(foo):has(:hover.a)", ""},
@@ -1085,7 +1117,7 @@ static const SelectorTestCase has_nesting_data[] = {
     {"::part(foo):has(:enabled:hover)", ""},
     {"::part(foo):has(:hover, :where(.a))", ""},
     {"::part(foo):has(:hover, .a)", ""},
-    {"::part(foo):has(:--bar, .a)", ""},
+    {"::part(foo):has(:state(bar), .a)", ""},
     {"::part(foo):has(:enabled)", ""},
     {"::-webkit-scrollbar:has(:enabled)", ""},
     {"::selection:has(:window-inactive)", ""},

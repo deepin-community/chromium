@@ -15,6 +15,9 @@
 
 namespace ui {
 
+// A flag to ensure that accessibility fatal errors crash immediately.
+bool AXTreeManager::is_fail_fast_mode_ = false;
+
 // static
 AXTreeManagerMap& AXTreeManager::GetMap() {
   static base::NoDestructor<AXTreeManagerMap> map;
@@ -245,8 +248,6 @@ AXTreeManager::~AXTreeManager() {
   // example, events that fire every time "OnSubtreeWillBeDeleted" is called.
   if (ax_tree_)
     ax_tree_->Destroy();
-
-  CleanUp();
 
   // Stop observing so we don't get a callback for every node being deleted.
   event_generator_.ReleaseTree();

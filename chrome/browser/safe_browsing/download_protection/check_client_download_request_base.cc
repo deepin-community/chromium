@@ -56,25 +56,6 @@ std::string SanitizeUrl(const std::string& url) {
   return GURL(url).DeprecatedGetOriginAsURL().spec();
 }
 
-void MaybeLogDocumentMetrics(const std::string& request_data,
-                             DownloadCheckResultReason reason) {
-  if (request_data.empty()) {
-    return;
-  }
-
-  ClientDownloadRequest request;
-  if (!request.ParseFromString(request_data))
-    return;
-
-  if (request.has_document_summary()) {
-    base::UmaHistogramBoolean(
-        "SBClientDownload.DocumentContainsMacros",
-        request.document_summary().metadata().contains_macros());
-    base::UmaHistogramEnumeration("SBClientDownload.DocumentCheckDownloadStats",
-                                  reason, REASON_MAX);
-  }
-}
-
 }  // namespace
 
 CheckClientDownloadRequestBase::CheckClientDownloadRequestBase(
@@ -139,18 +120,8 @@ void CheckClientDownloadRequestBase::Start() {
   // analysis.
   auto callback = base::BindOnce(
       &CheckClientDownloadRequestBase::OnUrlAllowlistCheckDone, GetWeakPtr());
-  if (base::FeatureList::IsEnabled(kSafeBrowsingOnUIThread)) {
-    database_manager_->MatchDownloadAllowlistUrl(source_url_,
-                                                 std::move(callback));
-  } else {
-    content::GetIOThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(&safe_browsing::SafeBrowsingDatabaseManager::
-                           MatchDownloadAllowlistUrl,
-                       database_manager_, source_url_,
-                       base::BindPostTask(content::GetUIThreadTaskRunner({}),
-                                          std::move(callback))));
-  }
+  database_manager_->MatchDownloadAllowlistUrl(source_url_,
+                                               std::move(callback));
 }
 
 void CheckClientDownloadRequestBase::FinishRequest(
@@ -169,7 +140,6 @@ void CheckClientDownloadRequestBase::FinishRequest(
 
   base::UmaHistogramEnumeration("SBClientDownload.CheckDownloadStats", reason,
                                 REASON_MAX);
-  MaybeLogDocumentMetrics(client_download_request_data_, reason);
 
   NotifyRequestFinished(result, reason);
   service()->RequestFinished(this, GetBrowserContext(), result);
@@ -253,7 +223,7 @@ void CheckClientDownloadRequestBase::OnUrlAllowlistCheckDone(
 
       default:
         // We only expect the reasons explicitly handled above.
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
   }
   RecordFileExtensionType(kDownloadExtensionUmaName, target_file_path_);
@@ -289,6 +259,8 @@ void CheckClientDownloadRequestBase::GetAdditionalPromptResult(
   bool local_decryption_prompt = ShouldPromptForLocalDecryption(
       response.is_suspicious_encrypted_archive());
   if (local_decryption_prompt) {
+    LogLocalDecryptionEvent(safe_browsing::DeepScanEvent::kPromptShown);
+
     *result = DownloadCheckResult::PROMPT_FOR_LOCAL_PASSWORD_SCANNING;
     *reason = DownloadCheckResultReason::REASON_LOCAL_DECRYPTION_PROMPT;
     *token = response.token();
@@ -316,11 +288,32 @@ void CheckClientDownloadRequestBase::GetAdditionalPromptResult(
   if (ShouldPromptForDeepScanning(/*server_requests_prompt=*/true)) {
     LogDeepScanningPrompt(deep_scanning_prompt);
   }
+
+  bool immediate_deep_scan_prompt = ShouldImmediatelyDeepScan(
+      response.request_deep_scan(), /*log_metrics=*/true);
+  if (immediate_deep_scan_prompt) {
+    *result = DownloadCheckResult::IMMEDIATE_DEEP_SCAN;
+    *reason = DownloadCheckResultReason::REASON_IMMEDIATE_DEEP_SCAN;
+    // Always set the token if Chrome should prompt for deep scanning.
+    // Otherwise, client Safe Browsing reports may be missed when the
+    // verdict is SAFE. See https://crbug.com/1485218.
+    *token = response.token();
+  }
+
+  // Only record the UMA metric if we're in a population that potentially
+  // could prompt for deep scanning.
+  if (ShouldImmediatelyDeepScan(/*server_requests_prompt=*/true,
+                                /*log_metrics=*/false)) {
+    base::UmaHistogramBoolean(
+        "SBClientDownload.ServerRequestsImmediateDeepScan2",
+        immediate_deep_scan_prompt);
+  }
 }
 
 void CheckClientDownloadRequestBase::OnRequestBuilt(
     std::unique_ptr<ClientDownloadRequest> request) {
   if (ShouldPromptForIncorrectPassword()) {
+    LogLocalDecryptionEvent(safe_browsing::DeepScanEvent::kIncorrectPassword);
     FinishRequest(DownloadCheckResult::PROMPT_FOR_LOCAL_PASSWORD_SCANNING,
                   REASON_LOCAL_DECRYPTION_PROMPT);
     return;
@@ -633,9 +626,6 @@ void CheckClientDownloadRequestBase::OnURLLoaderComplete(
       break;
     case DownloadFileType::DMG:
       metrics_suffix = ".Dmg";
-      break;
-    case DownloadFileType::OFFICE_DOCUMENT:
-      metrics_suffix = ".Document";
       break;
     case DownloadFileType::SEVEN_ZIP:
       if (base::FeatureList::IsEnabled(kSevenZipEvaluationEnabled))

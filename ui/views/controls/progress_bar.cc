@@ -23,6 +23,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/skia_conversions.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/widget.h"
 
 namespace views {
@@ -60,21 +61,13 @@ int RoundToPercent(double fractional_value) {
 
 ProgressBar::ProgressBar() {
   SetFlipCanvasOnPaintForRTLUI(true);
-  SetAccessibilityProperties(ax::mojom::Role::kProgressIndicator);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kProgressIndicator);
 }
 
 ProgressBar::~ProgressBar() = default;
 
-void ProgressBar::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  View::GetAccessibleNodeData(node_data);
-  if (IsIndeterminate()) {
-    node_data->RemoveStringAttribute(ax::mojom::StringAttribute::kValue);
-  } else {
-    node_data->SetValue(base::FormatPercent(RoundToPercent(current_value_)));
-  }
-}
-
-gfx::Size ProgressBar::CalculatePreferredSize() const {
+gfx::Size ProgressBar::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
   // The width will typically be ignored.
   gfx::Size pref_size(1, preferred_height_);
   gfx::Insets insets = GetInsets();
@@ -341,12 +334,18 @@ void ProgressBar::OnPaintIndeterminate(gfx::Canvas* canvas) {
 }
 
 void ProgressBar::MaybeNotifyAccessibilityValueChanged() {
+  // Exit early if ProgressBar is Indeterminate or not visible.
+  if (IsIndeterminate()) {
+    GetViewAccessibility().RemoveValue();
+    return;
+  }
   if (!GetWidget() || !GetWidget()->IsVisible() ||
       RoundToPercent(current_value_) == last_announced_percentage_) {
     return;
   }
   last_announced_percentage_ = RoundToPercent(current_value_);
-  NotifyAccessibilityEvent(ax::mojom::Event::kValueChanged, true);
+  GetViewAccessibility().SetValue(
+      base::FormatPercent(last_announced_percentage_));
 }
 
 BEGIN_METADATA(ProgressBar)

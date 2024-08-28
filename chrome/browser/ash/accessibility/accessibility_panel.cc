@@ -48,8 +48,8 @@ class AccessibilityPanel::AccessibilityPanelWebContentsObserver
 };
 
 AccessibilityPanel::AccessibilityPanel(content::BrowserContext* browser_context,
-                                       std::string content_url,
-                                       std::string widget_name) {
+                                       const std::string& content_url,
+                                       const std::string& widget_name) {
   SetOwnedByWidget(true);
 
   views::WebView* web_view = new views::WebView(browser_context);
@@ -65,6 +65,7 @@ AccessibilityPanel::AccessibilityPanel(content::BrowserContext* browser_context,
 
   widget_ = new views::Widget();
   views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   // Placing the panel in the accessibility panel container allows ash to manage
   // both the window bounds and display work area.

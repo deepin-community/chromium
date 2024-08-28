@@ -16,7 +16,7 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
@@ -101,7 +101,7 @@ class SyncAwareCounterTest : public SyncTest {
 };
 
 // Test that the counting restarts when autofill sync state changes.
-// TODO(crbug.com/553421): Move this to the sync/test/integration directory?
+// TODO(crbug.com/40443942): Move this to the sync/test/integration directory?
 IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
   // Set up the Sync client.
   ASSERT_TRUE(SetupClients());
@@ -167,7 +167,7 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
 }
 
 // Test that the counting restarts when password sync state changes.
-// TODO(crbug.com/553421): Move this to the sync/test/integration directory?
+// TODO(crbug.com/40443942): Move this to the sync/test/integration directory?
 IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
   // Set up the Sync client.
   ASSERT_TRUE(SetupClients());
@@ -240,7 +240,7 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
 }
 
 // Test that the counting restarts when history sync state changes.
-// TODO(crbug.com/553421): Move this to the sync/test/integration directory?
+// TODO(crbug.com/40443942): Move this to the sync/test/integration directory?
 IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // Set up the Sync client.
   ASSERT_TRUE(SetupClients());

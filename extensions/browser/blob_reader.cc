@@ -7,6 +7,7 @@
 #include <limits>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "content/public/browser/browser_thread.h"
@@ -90,23 +91,18 @@ void BlobReader::OnCalculatedSize(uint64_t total_size,
     Succeeded();
 }
 
-void BlobReader::OnDataAvailable(const void* data, size_t num_bytes) {
-  if (!blob_data_)
-    blob_data_ = std::make_unique<std::string>();
-  blob_data_->append(static_cast<const char*>(data), num_bytes);
+void BlobReader::OnDataAvailable(base::span<const uint8_t> data) {
+  blob_data_.append(base::as_string_view(data));
 }
 
 void BlobReader::OnDataComplete() {
   data_complete_ = true;
-  if (!blob_data_)
-    blob_data_ = std::make_unique<std::string>();
   if (blob_length_)
     Succeeded();
 }
 
 void BlobReader::Failed() {
   blob_length_ = 0;
-  blob_data_ = std::make_unique<std::string>();
   std::move(callback_).Run();
 }
 

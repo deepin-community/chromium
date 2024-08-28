@@ -50,7 +50,6 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_observer.h"
 #include "third_party/blink/renderer/platform/network/http_parsers.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
@@ -161,7 +160,7 @@ class OutsideSettingsCSPDelegate final
   void ReportBlockedScriptExecutionToInspector(
       const String& directive_text) override {
     // This shouldn't be called during top-level worker script fetch.
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   void DidAddContentSecurityPolicies(
@@ -249,8 +248,9 @@ WorkerOrWorkletGlobalScope::~WorkerOrWorkletGlobalScope() = default;
 
 // EventTarget
 const AtomicString& WorkerOrWorkletGlobalScope::InterfaceName() const {
-  NOTREACHED() << "Each global scope that uses events should define its own "
-                  "interface name.";
+  NOTREACHED_IN_MIGRATION()
+      << "Each global scope that uses events should define its own "
+         "interface name.";
   return g_null_atom;
 }
 
@@ -279,18 +279,23 @@ void WorkerOrWorkletGlobalScope::CountUse(WebFeature feature) {
   if (IsContextDestroyed())
     return;
 
-  DCHECK_NE(WebFeature::kOBSOLETE_PageDestruction, feature);
+  DCHECK_NE(WebFeature::kPageVisits, feature);
   DCHECK_GT(WebFeature::kNumberOfFeatures, feature);
   if (used_features_[static_cast<size_t>(feature)])
     return;
   used_features_.set(static_cast<size_t>(feature));
 
   // Record CountUse users for investigating crbug.com/40918057.
+  base::UmaHistogramSparse("ServiceWorker.CountUse.WebFeature",
+                           static_cast<int>(feature));
   {
     WorkerOrWorkletInterfaceNameType type =
         WorkerOrWorkletInterfaceNameType::kOther;
     if (IsDedicatedWorkerGlobalScope()) {
       type = WorkerOrWorkletInterfaceNameType::kDedicatedWorkerGlobalScope;
+      base::UmaHistogramSparse(
+          "ServiceWorker.CountUse.DedicatedWorker.WebFeature",
+          static_cast<int>(feature));
     } else if (IsSharedWorkerGlobalScope()) {
       type = WorkerOrWorkletInterfaceNameType::kSharedWorkerGlobalScope;
     } else if (IsServiceWorkerGlobalScope()) {
@@ -318,6 +323,27 @@ void WorkerOrWorkletGlobalScope::CountUse(WebFeature feature) {
 
 void WorkerOrWorkletGlobalScope::CountDeprecation(WebFeature feature) {
   Deprecation::CountDeprecation(this, feature);
+}
+
+void WorkerOrWorkletGlobalScope::CountWebDXFeature(WebDXFeature feature) {
+  DCHECK(IsContextThread());
+
+  // `reporting_proxy_` should outlive `this` but there seems a situation where
+  // the assumption is broken. Don't count features while the context is
+  // destroyed.
+  // TODO(https://crbug.com/40058806): Fix the lifetime of WorkerReportingProxy.
+  if (IsContextDestroyed()) {
+    return;
+  }
+
+  DCHECK_NE(WebDXFeature::kPageVisits, feature);
+  DCHECK_GT(WebDXFeature::kNumberOfFeatures, feature);
+  if (used_webdx_features_[static_cast<size_t>(feature)]) {
+    return;
+  }
+  used_webdx_features_.set(static_cast<size_t>(feature));
+
+  ReportingProxy().CountWebDXFeature(feature);
 }
 
 ResourceLoadScheduler::ThrottleOptionOverride

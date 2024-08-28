@@ -46,8 +46,7 @@ namespace dawn::native::null {
 // Implementation of pre-Device objects: the null physical device, null backend connection and
 // Connect()
 
-PhysicalDevice::PhysicalDevice(InstanceBase* instance)
-    : PhysicalDeviceBase(instance, wgpu::BackendType::Null) {
+PhysicalDevice::PhysicalDevice() : PhysicalDeviceBase(wgpu::BackendType::Null) {
     mVendorId = 0;
     mDeviceId = 0;
     mName = "Null backend";
@@ -64,6 +63,17 @@ bool PhysicalDevice::SupportsExternalImages() const {
 
 bool PhysicalDevice::SupportsFeatureLevel(FeatureLevel) const {
     return true;
+}
+
+ResultOrError<PhysicalDeviceSurfaceCapabilities> PhysicalDevice::GetSurfaceCapabilities(
+    InstanceBase* instance,
+    const Surface* surface) const {
+    PhysicalDeviceSurfaceCapabilities capabilities;
+    capabilities.usages = wgpu::TextureUsage::RenderAttachment;
+    capabilities.formats = {wgpu::TextureFormat::BGRA8Unorm};
+    capabilities.presentModes = {wgpu::PresentMode::Fifo};
+    capabilities.alphaModes = {wgpu::CompositeAlphaMode::Opaque};
+    return capabilities;
 }
 
 MaybeError PhysicalDevice::InitializeImpl() {
@@ -85,15 +95,18 @@ MaybeError PhysicalDevice::InitializeSupportedLimitsImpl(CombinedLimits* limits)
     return {};
 }
 
-void PhysicalDevice::SetupBackendAdapterToggles(TogglesState* adpterToggles) const {}
+void PhysicalDevice::SetupBackendAdapterToggles(dawn::platform::Platform* platform,
+                                                TogglesState* adapterToggles) const {}
 
-void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) const {}
+void PhysicalDevice::SetupBackendDeviceToggles(dawn::platform::Platform* platform,
+                                               TogglesState* deviceToggles) const {}
 
 ResultOrError<Ref<DeviceBase>> PhysicalDevice::CreateDeviceImpl(
     AdapterBase* adapter,
     const UnpackedPtr<DeviceDescriptor>& descriptor,
-    const TogglesState& deviceToggles) {
-    return Device::Create(adapter, descriptor, deviceToggles);
+    const TogglesState& deviceToggles,
+    Ref<DeviceBase::DeviceLostEvent>&& lostEvent) {
+    return Device::Create(adapter, descriptor, deviceToggles, std::move(lostEvent));
 }
 
 void PhysicalDevice::PopulateBackendProperties(UnpackedPtr<AdapterProperties>& properties) const {
@@ -130,14 +143,9 @@ class Backend : public BackendConnection {
         // There is always a single Null physical device because it is purely CPU based
         // and doesn't depend on the system.
         if (mPhysicalDevice == nullptr) {
-            mPhysicalDevice = AcquireRef(new PhysicalDevice(GetInstance()));
+            mPhysicalDevice = AcquireRef(new PhysicalDevice());
         }
         return {mPhysicalDevice};
-    }
-
-    void ClearPhysicalDevices() override { mPhysicalDevice = nullptr; }
-    size_t GetPhysicalDeviceCountForTesting() const override {
-        return mPhysicalDevice != nullptr ? 1 : 0;
     }
 
   private:
@@ -165,8 +173,10 @@ struct CopyFromStagingToBufferOperation : PendingOperation {
 // static
 ResultOrError<Ref<Device>> Device::Create(AdapterBase* adapter,
                                           const UnpackedPtr<DeviceDescriptor>& descriptor,
-                                          const TogglesState& deviceToggles) {
-    Ref<Device> device = AcquireRef(new Device(adapter, descriptor, deviceToggles));
+                                          const TogglesState& deviceToggles,
+                                          Ref<DeviceBase::DeviceLostEvent>&& lostEvent) {
+    Ref<Device> device =
+        AcquireRef(new Device(adapter, descriptor, deviceToggles, std::move(lostEvent)));
     DAWN_TRY(device->Initialize(descriptor));
     return device;
 }
@@ -217,17 +227,17 @@ ResultOrError<Ref<SamplerBase>> Device::CreateSamplerImpl(const SamplerDescripto
 }
 ResultOrError<Ref<ShaderModuleBase>> Device::CreateShaderModuleImpl(
     const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+    const std::vector<tint::wgsl::Extension>& internalExtensions,
     ShaderModuleParseResult* parseResult,
     OwnedCompilationMessages* compilationMessages) {
-    Ref<ShaderModule> module = AcquireRef(new ShaderModule(this, descriptor));
+    Ref<ShaderModule> module = AcquireRef(new ShaderModule(this, descriptor, internalExtensions));
     DAWN_TRY(module->Initialize(parseResult, compilationMessages));
     return module;
 }
-ResultOrError<Ref<SwapChainBase>> Device::CreateSwapChainImpl(
-    Surface* surface,
-    SwapChainBase* previousSwapChain,
-    const SwapChainDescriptor* descriptor) {
-    return SwapChain::Create(this, surface, previousSwapChain, descriptor);
+ResultOrError<Ref<SwapChainBase>> Device::CreateSwapChainImpl(Surface* surface,
+                                                              SwapChainBase* previousSwapChain,
+                                                              const SurfaceConfiguration* config) {
+    return SwapChain::Create(this, surface, previousSwapChain, config);
 }
 ResultOrError<Ref<TextureBase>> Device::CreateTextureImpl(
     const UnpackedPtr<TextureDescriptor>& descriptor) {
@@ -235,13 +245,8 @@ ResultOrError<Ref<TextureBase>> Device::CreateTextureImpl(
 }
 ResultOrError<Ref<TextureViewBase>> Device::CreateTextureViewImpl(
     TextureBase* texture,
-    const TextureViewDescriptor* descriptor) {
+    const UnpackedPtr<TextureViewDescriptor>& descriptor) {
     return AcquireRef(new TextureView(texture, descriptor));
-}
-
-ResultOrError<wgpu::TextureUsage> Device::GetSupportedSurfaceUsageImpl(
-    const Surface* surface) const {
-    return wgpu::TextureUsage::RenderAttachment;
 }
 
 void Device::DestroyImpl() {
@@ -270,7 +275,7 @@ MaybeError Device::CopyFromStagingToBufferImpl(BufferBase* source,
                                                uint64_t destinationOffset,
                                                uint64_t size) {
     if (IsToggleEnabled(Toggle::LazyClearResourceOnFirstUse)) {
-        destination->SetIsDataInitialized();
+        destination->SetInitialized(true);
     }
 
     auto operation = std::make_unique<CopyFromStagingToBufferOperation>();
@@ -321,7 +326,6 @@ MaybeError Device::SubmitPendingOperations() {
     mPendingOperations.clear();
 
     DAWN_TRY(GetQueue()->CheckPassedSerials());
-    GetQueue()->IncrementLastSubmittedCommandSerial();
 
     return {};
 }
@@ -334,7 +338,7 @@ BindGroupDataHolder::BindGroupDataHolder(size_t size)
 {}
 
 BindGroupDataHolder::~BindGroupDataHolder() {
-    free(mBindingDataAllocation);
+    free(mBindingDataAllocation.ExtractAsDangling());
 }
 
 // BindGroup
@@ -381,6 +385,7 @@ void Buffer::DoWriteBuffer(uint64_t bufferOffset, const void* data, size_t size)
 }
 
 MaybeError Buffer::MapAsyncImpl(wgpu::MapMode mode, size_t offset, size_t size) {
+    GetDevice()->GetQueue()->IncrementLastSubmittedCommandSerial();
     return {};
 }
 
@@ -422,6 +427,7 @@ MaybeError Queue::SubmitImpl(uint32_t, CommandBufferBase* const*) {
     Device* device = ToBackend(GetDevice());
 
     DAWN_TRY(device->SubmitPendingOperations());
+    IncrementLastSubmittedCommandSerial();
 
     return {};
 }
@@ -507,8 +513,8 @@ MaybeError RenderPipeline::InitializeImpl() {
 ResultOrError<Ref<SwapChain>> SwapChain::Create(Device* device,
                                                 Surface* surface,
                                                 SwapChainBase* previousSwapChain,
-                                                const SwapChainDescriptor* descriptor) {
-    Ref<SwapChain> swapchain = AcquireRef(new SwapChain(device, surface, descriptor));
+                                                const SurfaceConfiguration* config) {
+    Ref<SwapChain> swapchain = AcquireRef(new SwapChain(device, surface, config));
     DAWN_TRY(swapchain->Initialize(previousSwapChain));
     return swapchain;
 }
@@ -533,10 +539,14 @@ MaybeError SwapChain::PresentImpl() {
     return {};
 }
 
-ResultOrError<Ref<TextureBase>> SwapChain::GetCurrentTextureImpl() {
+ResultOrError<SwapChainTextureInfo> SwapChain::GetCurrentTextureImpl() {
     TextureDescriptor textureDesc = GetSwapChainBaseTextureDescriptor(this);
     mTexture = AcquireRef(new Texture(GetDevice(), Unpack(&textureDesc)));
-    return mTexture;
+    SwapChainTextureInfo info;
+    info.texture = mTexture;
+    info.status = wgpu::SurfaceGetCurrentTextureStatus::Success;
+    info.suboptimal = false;
+    return info;
 }
 
 void SwapChain::DetachFromSurfaceImpl() {
@@ -565,7 +575,7 @@ float Device::GetTimestampPeriodInNS() const {
     return 1.0f;
 }
 
-bool Device::IsResolveTextureBlitWithDrawSupported() const {
+bool Device::CanTextureLoadResolveTargetInTheSameRenderpass() const {
     return true;
 }
 

@@ -8,14 +8,15 @@
 
 #include <utility>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxge/agg/cfx_agg_imagerenderer.h"
 #include "core/fxge/dib/cfx_dibbase.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
 #include "core/fxge/render_defines.h"
 #include "core/fxge/win32/cwin32_platform.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 CGdiDisplayDriver::CGdiDisplayDriver(HDC hDC)
     : CGdiDeviceDriver(hDC, DeviceType::kDisplay) {
@@ -34,42 +35,42 @@ int CGdiDisplayDriver::GetDeviceCaps(int caps_id) const {
   return CGdiDeviceDriver::GetDeviceCaps(caps_id);
 }
 
-bool CGdiDisplayDriver::GetDIBits(const RetainPtr<CFX_DIBitmap>& pBitmap,
+bool CGdiDisplayDriver::GetDIBits(RetainPtr<CFX_DIBitmap> bitmap,
                                   int left,
-                                  int top) {
+                                  int top) const {
   bool ret = false;
-  int width = pBitmap->GetWidth();
-  int height = pBitmap->GetHeight();
+  int width = bitmap->GetWidth();
+  int height = bitmap->GetHeight();
   HBITMAP hbmp = CreateCompatibleBitmap(m_hDC, width, height);
   HDC hDCMemory = CreateCompatibleDC(m_hDC);
   HBITMAP holdbmp = (HBITMAP)SelectObject(hDCMemory, hbmp);
   BitBlt(hDCMemory, 0, 0, width, height, m_hDC, left, top, SRCCOPY);
   SelectObject(hDCMemory, holdbmp);
-  BITMAPINFO bmi;
-  memset(&bmi, 0, sizeof bmi);
+  BITMAPINFO bmi = {};
   bmi.bmiHeader.biSize = sizeof bmi.bmiHeader;
-  bmi.bmiHeader.biBitCount = pBitmap->GetBPP();
+  bmi.bmiHeader.biBitCount = bitmap->GetBPP();
   bmi.bmiHeader.biHeight = -height;
   bmi.bmiHeader.biPlanes = 1;
   bmi.bmiHeader.biWidth = width;
-  if (pBitmap->GetBPP() > 8) {
+  if (bitmap->GetBPP() > 8) {
     ret = ::GetDIBits(hDCMemory, hbmp, 0, height,
-                      pBitmap->GetWritableBuffer().data(), &bmi,
+                      bitmap->GetWritableBuffer().data(), &bmi,
                       DIB_RGB_COLORS) == height;
+    if (ret && bitmap->IsAlphaFormat()) {
+      bitmap->SetUniformOpaqueAlpha();
+    }
   } else {
     auto rgb_bitmap = pdfium::MakeRetain<CFX_DIBitmap>();
     if (rgb_bitmap->Create(width, height, FXDIB_Format::kRgb)) {
       bmi.bmiHeader.biBitCount = 24;
       ::GetDIBits(hDCMemory, hbmp, 0, height,
                   rgb_bitmap->GetWritableBuffer().data(), &bmi, DIB_RGB_COLORS);
-      ret = pBitmap->TransferBitmap(0, 0, width, height, std::move(rgb_bitmap),
-                                    0, 0);
+      ret = bitmap->TransferBitmap(0, 0, width, height, std::move(rgb_bitmap),
+                                   0, 0);
     } else {
       ret = false;
     }
   }
-  if (ret && pBitmap->IsAlphaFormat())
-    pBitmap->SetUniformOpaqueAlpha();
 
   DeleteObject(hbmp);
   DeleteObject(hDCMemory);
@@ -214,12 +215,12 @@ bool CGdiDisplayDriver::StretchDIBits(RetainPtr<const CFX_DIBBase> bitmap,
                            dest_height, FXDIB_ResampleOptions());
 }
 
-bool CGdiDisplayDriver::StartDIBits(RetainPtr<const CFX_DIBBase> bitmap,
-                                    float alpha,
-                                    uint32_t color,
-                                    const CFX_Matrix& matrix,
-                                    const FXDIB_ResampleOptions& options,
-                                    std::unique_ptr<CFX_ImageRenderer>* handle,
-                                    BlendMode blend_type) {
-  return false;
+RenderDeviceDriverIface::StartResult CGdiDisplayDriver::StartDIBits(
+    RetainPtr<const CFX_DIBBase> bitmap,
+    float alpha,
+    uint32_t color,
+    const CFX_Matrix& matrix,
+    const FXDIB_ResampleOptions& options,
+    BlendMode blend_type) {
+  return {false, nullptr};
 }

@@ -62,6 +62,7 @@ class CORE_EXPORT RootFrameViewport final
                        ScrollCallback on_finish) override;
   PhysicalRect ScrollIntoView(
       const PhysicalRect&,
+      const PhysicalBoxStrut& scroll_margin,
       const mojom::blink::ScrollIntoViewParamsPtr&) override;
   gfx::Rect VisibleContentRect(
       IncludeScrollbarsInRect = kExcludeScrollbars) const override;
@@ -132,16 +133,17 @@ class CORE_EXPORT RootFrameViewport final
   void SetSnapContainerDataNeedsUpdate(bool) override;
   std::optional<gfx::PointF> GetSnapPositionAndSetTarget(
       const cc::SnapSelectionStrategy& strategy) override;
-  void UpdateSnappedTargetsAndEnqueueSnapChanged() override;
-  const cc::SnappedTargetData* GetSnapChangingTargetData() const override;
-  void SetSnapChangingTargetData(
-      std::optional<cc::SnappedTargetData> data) override;
+  void UpdateSnappedTargetsAndEnqueueScrollSnapChange() override;
+  std::optional<cc::TargetSnapAreaElementIds> GetScrollsnapchangingTargetIds()
+      const override;
+  void SetScrollsnapchangingTargetIds(
+      std::optional<cc::TargetSnapAreaElementIds>) override;
   const cc::SnapSelectionStrategy* GetImplSnapStrategy() const override;
   void SetImplSnapStrategy(
       std::unique_ptr<cc::SnapSelectionStrategy> strategy) override;
-  void EnqueueSnapChangingEventFromImplIfNeeded() override;
-  void UpdateSnapChangingTargetsAndEnqueueSnapChanging(
-      const gfx::PointF&) override;
+  void EnqueueScrollSnapChangingEventFromImplIfNeeded() override;
+  void UpdateScrollSnapChangingTargetsAndEnqueueScrollSnapChanging(
+      const cc::TargetSnapAreaElementIds& new_target_ids) override;
 
   void SetPendingHistoryRestoreScrollOffset(
       const HistoryItem::ViewState& view_state,
@@ -163,6 +165,11 @@ class CORE_EXPORT RootFrameViewport final
   bool ScrollAffectsLayoutViewport() {
     return user_scroll_sequence_affects_layout_viewport_;
   }
+
+  std::optional<cc::ElementId> GetTargetedSnapAreaId() override;
+  void SetTargetedSnapAreaId(const std::optional<cc::ElementId>&) override;
+
+  void DropCompositorScrollDeltaNextCommit() override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(RootFrameViewportTest, DistributeScrollOrder);

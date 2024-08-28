@@ -34,7 +34,6 @@
 #include <unordered_set>
 #include <utility>
 
-#include "src/tint/api/options/texture_builtins_from_uniform.h"
 #include "src/tint/lang/core/builtin_value.h"
 #include "src/tint/lang/glsl/writer/common/version.h"
 #include "src/tint/lang/wgsl/program/program_builder.h"
@@ -70,7 +69,7 @@ struct SanitizedResult {
 };
 
 /// Sanitize a program in preparation for generating GLSL.
-/// @program The program to sanitize
+/// @param program The program to sanitize
 /// @param options The HLSL generator options.
 /// @param entry_point the entry point to generate GLSL for
 /// @returns the sanitized program and any supplementary information
@@ -117,10 +116,10 @@ class ASTPrinter : public tint::TextGenerator {
     /// @param out the output of the expression stream
     /// @param expr the expression
     void EmitVectorRelational(StringStream& out, const ast::BinaryExpression* expr);
-    /// Handles generating a vector relational expression
+    /// Handles a bitcast call expression
     /// @param out the output of the expression stream
     /// @param expr the expression
-    void EmitBitcast(StringStream& out, const ast::BitcastExpression* expr);
+    void EmitBitcastCall(StringStream& out, const ast::CallExpression* expr);
     /// Emits a list of statements
     /// @param stmts the statement list
     void EmitStatements(VectorRef<const ast::Statement*> stmts);
@@ -279,17 +278,17 @@ class ASTPrinter : public tint::TextGenerator {
     /// Handles emitting a global variable with the uniform address space
     /// @param var the AST node for the 'var'
     /// @param sem the semantic node for the 'var'
-    void EmitUniformVariable(const ast::Var* var, const sem::Variable* sem);
+    void EmitUniformVariable(const ast::Var* var, const sem::GlobalVariable* sem);
 
     /// Handles emitting a global variable with the storage address space
     /// @param var the AST node for the 'var'
     /// @param sem the semantic node for the 'var'
-    void EmitStorageVariable(const ast::Var* var, const sem::Variable* sem);
+    void EmitStorageVariable(const ast::Var* var, const sem::GlobalVariable* sem);
 
     /// Handles emitting a global variable with the handle address space
     /// @param var the AST node for the 'var'
     /// @param sem the semantic node for the 'var'
-    void EmitHandleVariable(const ast::Var* var, const sem::Variable* sem);
+    void EmitHandleVariable(const ast::Var* var, const sem::GlobalVariable* sem);
 
     /// Handles emitting a global variable with the private address space
     /// @param var the global variable

@@ -20,6 +20,11 @@
  *
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_WTF_STRING_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_TEXT_WTF_STRING_H_
 
@@ -27,10 +32,12 @@
 // on systems without case-sensitive file systems.
 
 #include <iosfwd>
+#include <string_view>
 #include <type_traits>
 
 #include "base/containers/span.h"
 #include "build/build_config.h"
+#include "third_party/abseil-cpp/absl/base/attributes.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/integer_to_string_conversion.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
@@ -275,6 +282,10 @@ class WTF_EXPORT String {
   }
   bool StartsWithIgnoringCase(const StringView& prefix) const {
     return impl_ ? impl_->StartsWithIgnoringCase(prefix) : prefix.empty();
+  }
+  bool StartsWithIgnoringCaseAndAccents(const StringView& prefix) const {
+    return impl_ ? impl_->StartsWithIgnoringCaseAndAccents(prefix)
+                 : prefix.empty();
   }
   bool StartsWithIgnoringASCIICase(const StringView& prefix) const {
     return impl_ ? impl_->StartsWithIgnoringASCIICase(prefix) : prefix.empty();
@@ -522,7 +533,7 @@ class WTF_EXPORT String {
   [[nodiscard]] static String FromUTF8(const char* s) {
     return FromUTF8(reinterpret_cast<const LChar*>(s));
   }
-  [[nodiscard]] static String FromUTF8(base::StringPiece);
+  [[nodiscard]] static String FromUTF8(std::string_view);
 
   // Tries to convert the passed in string to UTF-8, but will fall back to
   // Latin-1 if the string is not valid UTF-8.
@@ -714,13 +725,17 @@ class WTF_EXPORT NewlineThenWhitespaceStringsTable {
 // double-quotes, and escapes characters other than ASCII printables.
 WTF_EXPORT std::ostream& operator<<(std::ostream&, const String&);
 
-inline StringView::StringView(const String& string,
+inline StringView::StringView(const String& string
+                                  ABSL_ATTRIBUTE_LIFETIME_BOUND,
                               unsigned offset,
                               unsigned length)
     : StringView(string.Impl(), offset, length) {}
-inline StringView::StringView(const String& string, unsigned offset)
+inline StringView::StringView(const String& string
+                                  ABSL_ATTRIBUTE_LIFETIME_BOUND,
+                              unsigned offset)
     : StringView(string.Impl(), offset) {}
-inline StringView::StringView(const String& string)
+inline StringView::StringView(
+    const String& string ABSL_ATTRIBUTE_LIFETIME_BOUND)
     : StringView(string.Impl()) {}
 
 }  // namespace WTF

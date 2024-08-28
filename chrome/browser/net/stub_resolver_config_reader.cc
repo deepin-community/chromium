@@ -17,7 +17,6 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -124,54 +123,20 @@ StubResolverConfigReader::StubResolverConfigReader(PrefService* local_state,
   if (set_up_pref_defaults) {
     local_state_->SetDefaultPrefValue(prefs::kBuiltInDnsClientEnabled,
                                       base::Value(ShouldEnableAsyncDns()));
-    net::SecureDnsMode default_secure_dns_mode = net::SecureDnsMode::kOff;
-    std::string default_doh_templates;
-    if (base::FeatureList::IsEnabled(features::kDnsOverHttps)) {
-      if (features::kDnsOverHttpsFallbackParam.Get()) {
-        default_secure_dns_mode = net::SecureDnsMode::kAutomatic;
-      } else {
-        default_secure_dns_mode = net::SecureDnsMode::kSecure;
-      }
-      default_doh_templates = features::kDnsOverHttpsTemplatesParam.Get();
-    }
-    local_state_->SetDefaultPrefValue(
-        prefs::kDnsOverHttpsMode,
-        base::Value(SecureDnsConfig::ModeToString(default_secure_dns_mode)));
-    local_state_->SetDefaultPrefValue(prefs::kDnsOverHttpsTemplates,
-                                      base::Value(default_doh_templates));
-
-    // If the user has explicitly enabled or disabled the DoH experiment in
-    // chrome://flags and the DoH UI setting is not visible, store that choice
-    // in the user prefs so that it can be persisted after the experiment ends.
-    // Also make sure to remove the stored prefs value if the user has changed
-    // their chrome://flags selection to the default.
-    if (!features::kDnsOverHttpsShowUiParam.Get()) {
-      flags_ui::PrefServiceFlagsStorage flags_storage(local_state_);
-      std::set<std::string> entries = flags_storage.GetFlags();
-      if (entries.count("dns-over-https@1")) {
-        // The user has "Enabled" selected.
-        local_state_->SetString(prefs::kDnsOverHttpsMode,
-                                SecureDnsConfig::kModeAutomatic);
-      } else if (entries.count("dns-over-https@2")) {
-        // The user has "Disabled" selected.
-        local_state_->SetString(prefs::kDnsOverHttpsMode,
-                                SecureDnsConfig::kModeOff);
-      } else {
-        // The user has "Default" selected.
-        local_state_->ClearPref(prefs::kDnsOverHttpsMode);
-      }
-    }
+    local_state_->SetDefaultPrefValue(prefs::kDnsOverHttpsMode,
+                                      base::Value(SecureDnsConfig::ModeToString(
+                                          net::SecureDnsMode::kAutomatic)));
   }
 
   pref_change_registrar_.Add(prefs::kBuiltInDnsClientEnabled, pref_callback);
   pref_change_registrar_.Add(prefs::kDnsOverHttpsMode, pref_callback);
-  pref_change_registrar_.Add(prefs::kDnsOverHttpsTemplates, pref_callback);
   pref_change_registrar_.Add(prefs::kAdditionalDnsQueryTypesEnabled,
                              pref_callback);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  pref_change_registrar_.Add(prefs::kDnsOverHttpsTemplatesWithIdentifiers,
+#if BUILDFLAG(IS_CHROMEOS)
+  pref_change_registrar_.Add(prefs::kDnsOverHttpsEffectiveTemplatesChromeOS,
                              pref_callback);
-  pref_change_registrar_.Add(prefs::kDnsOverHttpsSalt, pref_callback);
+#else
+  pref_change_registrar_.Add(prefs::kDnsOverHttpsTemplates, pref_callback);
 #endif
 
   parental_controls_delay_timer_.Start(
@@ -204,6 +169,8 @@ void StubResolverConfigReader::RegisterPrefs(PrefRegistrySimple* registry) {
 #if BUILDFLAG(IS_CHROMEOS)
   registry->RegisterStringPref(prefs::kDnsOverHttpsTemplatesWithIdentifiers,
                                std::string());
+  registry->RegisterStringPref(prefs::kDnsOverHttpsEffectiveTemplatesChromeOS,
+                               std::string());
   registry->RegisterStringPref(prefs::kDnsOverHttpsSalt, std::string());
 #endif
 }
@@ -234,9 +201,9 @@ bool StubResolverConfigReader::ShouldDisableDohForManaged() {
   if (android_has_owner_.value_or(false))
     return true;
 #elif BUILDFLAG(IS_WIN)
-  // TODO(crbug.com/1339062): What is the correct function to use here? (This
+  // TODO(crbug.com/40229843): What is the correct function to use here? (This
   // may or may not obsolete the following TODO)
-  // TODO(crbug.com/1320766): For legacy compatibility, this uses
+  // TODO(crbug.com/40223626): For legacy compatibility, this uses
   // IsEnterpriseDevice() which effectively equates to a domain join check.
   // Consider whether this should use IsManagedDevice() instead.
   if (base::win::IsEnrolledToDomain())
@@ -336,10 +303,10 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
             SecureDnsModeDetailsForHistogram::kOffByDetectedManagedEnvironment;
         break;
       case SecureDnsConfig::ManagementMode::kDisabledParentalControls:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
         break;
       default:
-        NOTREACHED();
+        NOTREACHED_IN_MIGRATION();
     }
 
     // No need to check for parental controls if DoH is already disabled.
@@ -378,11 +345,9 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
 
   net::DnsOverHttpsConfig doh_config;
   if (secure_dns_mode != net::SecureDnsMode::kOff) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    ash::dns_over_https::TemplatesUriResolverImpl doh_template_uri_resolver;
-    doh_template_uri_resolver.UpdateFromPrefs(local_state_);
-    doh_config = net::DnsOverHttpsConfig::FromStringLax(
-        doh_template_uri_resolver.GetEffectiveTemplates());
+#if BUILDFLAG(IS_CHROMEOS)
+    doh_config = net::DnsOverHttpsConfig::FromStringLax(local_state_->GetString(
+        prefs::kDnsOverHttpsEffectiveTemplatesChromeOS));
 #else
     doh_config = net::DnsOverHttpsConfig::FromStringLax(
         local_state_->GetString(prefs::kDnsOverHttpsTemplates));
@@ -414,7 +379,7 @@ void StubResolverConfigReader::OnAndroidOwnedStateCheckComplete(
 std::optional<std::string>
 StubResolverConfigReader::GetDohWithIdentifiersDisplayServers() {
   ash::dns_over_https::TemplatesUriResolverImpl doh_template_uri_resolver;
-  doh_template_uri_resolver.UpdateFromPrefs(local_state_);
+  doh_template_uri_resolver.Update(local_state_);
 
   if (doh_template_uri_resolver.GetDohWithIdentifiersActive())
     return doh_template_uri_resolver.GetDisplayTemplates();

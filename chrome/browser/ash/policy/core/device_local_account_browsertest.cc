@@ -51,6 +51,7 @@
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
+#include "chrome/browser/ash/login/session/chrome_session_manager.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/session/user_session_manager_test_api.h"
 #include "chrome/browser/ash/login/signin_specifics.h"
@@ -121,6 +122,7 @@
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
+#include "components/policy/core/common/device_local_account_type.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
@@ -761,14 +763,12 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     WaitForPolicy();
   }
 
-  const AccountId account_id_1_ =
-      AccountId::FromUserEmail(GenerateDeviceLocalAccountUserId(
-          kAccountId1,
-          DeviceLocalAccount::TYPE_PUBLIC_SESSION));
-  const AccountId account_id_2_ =
-      AccountId::FromUserEmail(GenerateDeviceLocalAccountUserId(
-          kAccountId2,
-          DeviceLocalAccount::TYPE_PUBLIC_SESSION));
+  const AccountId account_id_1_ = AccountId::FromUserEmail(
+      GenerateDeviceLocalAccountUserId(kAccountId1,
+                                       DeviceLocalAccountType::kPublicSession));
+  const AccountId account_id_2_ = AccountId::FromUserEmail(
+      GenerateDeviceLocalAccountUserId(kAccountId2,
+                                       DeviceLocalAccountType::kPublicSession));
   const std::string public_session_input_method_id_;
 
   std::string initial_locale_;
@@ -1517,8 +1517,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, UserAvatarImage) {
   const base::FilePath saved_image_path =
       user_data_dir.Append(account_id_1_.GetUserEmail()).AddExtension("jpg");
 
-  EXPECT_FALSE(user->HasDefaultImage());
-  EXPECT_EQ(user_manager::User::USER_IMAGE_EXTERNAL, user->image_index());
+  EXPECT_EQ(user_manager::UserImage::Type::kExternal, user->image_index());
   EXPECT_TRUE(ash::test::AreImagesEqual(policy_image, user->GetImage()));
   const base::Value::Dict& images_pref =
       g_browser_process->local_state()->GetDict("user_image_info");
@@ -1529,7 +1528,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, UserAvatarImage) {
   const std::string* image_path = image_properties->FindString("path");
   ASSERT_TRUE(image_index.has_value());
   ASSERT_TRUE(image_path);
-  EXPECT_EQ(user_manager::User::USER_IMAGE_EXTERNAL, image_index.value());
+  EXPECT_EQ(user_manager::UserImage::Type::kExternal, image_index.value());
   EXPECT_EQ(saved_image_path.value(), *image_path);
 
   gfx::ImageSkia saved_image = ash::test::ImageLoader(saved_image_path).Load();
@@ -2041,7 +2040,9 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
   VerifyKeyboardLayoutMatchesLocale();
 }
 
-IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, TermsOfServiceWithLocaleSwitch) {
+// TODO(crbug.com/40923043): Flaky.
+IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
+                       DISABLED_TermsOfServiceWithLocaleSwitch) {
   // Specify Terms of Service URL.
   ASSERT_TRUE(embedded_test_server()->Start());
   device_local_account_policy_.payload().mutable_termsofserviceurl()->set_value(
@@ -2255,7 +2256,8 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, SessionLengthLimit) {
   // Setup a fake delegate to advance clock.
   auto delegate_ptr = std::make_unique<FakeDelegateImpl>();
   auto* delegate = delegate_ptr.get();
-  static_cast<ash::ChromeUserManagerImpl*>(user_manager::UserManager::Get())
+  static_cast<ash::ChromeSessionManager*>(
+      session_manager::SessionManager::Get())
       ->GetSessionLengthLimiterForTesting()
       ->SetDelegateForTesting(std::move(delegate_ptr));
 
@@ -2836,14 +2838,14 @@ INSTANTIATE_TEST_SUITE_P(MgsDisplayPrefsTestInstance,
 
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, WebAppsInPublicSession) {
   UploadAndInstallDeviceLocalAccountPolicy();
-  // Add an account with DeviceLocalAccount::Type::TYPE_PUBLIC_SESSION.
+  // Add an account with DeviceLocalAccountType::kPublicSession.
   AddPublicSessionToDevicePolicy(kAccountId1);
   WaitForPolicy();
 
   StartLogin(std::string(), std::string());
   WaitForSessionStart();
 
-  // WebAppProvider should be enabled for TYPE_PUBLIC_SESSION user account.
+  // WebAppProvider should be enabled for kPublicSession user account.
   Profile* profile = GetProfileForTest();
   ASSERT_TRUE(profile);
   EXPECT_TRUE(web_app::WebAppProvider::GetForTest(profile));

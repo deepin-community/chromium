@@ -6,12 +6,14 @@
 
 #include <utility>
 
+#include "ash/public/cpp/app_list/app_list_types.h"
 #include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/ash/app_list/app_list_client_impl.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/ash/app_list/app_service/app_service_promise_app_item.h"
+#include "chrome/browser/ash/app_list/apps_collections_util.h"
 #include "chrome/browser/ash/app_list/chrome_app_list_model_updater.h"
 #include "chrome/browser/ash/app_list/reorder/app_list_reorder_util.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
@@ -99,6 +101,23 @@ ChromeAppListItem::CalculateDefaultPositionIfApplicable() {
   if (app_sorting->GetDefaultOrdinals(id(), &page_ordinal, &launch_ordinal) &&
       page_ordinal.IsValid() && launch_ordinal.IsValid()) {
     // Set the default position if it exists.
+    return syncer::StringOrdinal(page_ordinal.ToInternalValue() +
+                                 launch_ordinal.ToInternalValue());
+  }
+
+  return syncer::StringOrdinal();
+}
+
+syncer::StringOrdinal
+ChromeAppListItem::CalculateDefaultPositionForModifiedOrder() {
+  TRACE_EVENT0("ui",
+               "ChromeAppListItem::CalculateDefaultPositionForModifiedOrder");
+  syncer::StringOrdinal page_ordinal =
+      syncer::StringOrdinal::CreateInitialOrdinal();
+  syncer::StringOrdinal launch_ordinal;
+  if (apps_util::GetModifiedOrdinals(id(), &launch_ordinal) &&
+      page_ordinal.IsValid() && launch_ordinal.IsValid()) {
+    // Set the default modified position if it exists.
     return syncer::StringOrdinal(page_ordinal.ToInternalValue() +
                                  launch_ordinal.ToInternalValue());
   }
@@ -290,6 +309,10 @@ void ChromeAppListItem::SetChromePosition(
 
 void ChromeAppListItem::SetIsEphemeral(bool is_ephemeral) {
   metadata_->is_ephemeral = is_ephemeral;
+}
+
+void ChromeAppListItem::SetCollectionId(ash::AppCollection collection_id) {
+  metadata_->collection_id = collection_id;
 }
 
 bool ChromeAppListItem::IsPromiseApp() const {

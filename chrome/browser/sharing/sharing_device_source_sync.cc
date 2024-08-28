@@ -8,17 +8,15 @@
 #include <unordered_set>
 #include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/callback.h"
 #include "base/stl_util.h"
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/sharing/features.h"
-#include "chrome/browser/sharing/proto/sharing_message.pb.h"
 #include "chrome/browser/sharing/sharing_constants.h"
 #include "chrome/browser/sharing/sharing_target_device_info.h"
 #include "chrome/browser/sharing/sharing_utils.h"
 #include "components/send_tab_to_self/target_device_info.h"
+#include "components/sharing_message/features.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/local_device_info_provider.h"
@@ -169,7 +167,7 @@ SharingDeviceSourceSync::FilterDeviceCandidates(
   bool can_send_via_vapid = CanSendViaVapid(sync_service_);
   bool can_send_via_sender_id = CanSendViaSenderID(sync_service_);
 
-  base::EraseIf(devices, [accepted_features, can_send_via_vapid,
+  std::erase_if(devices, [accepted_features, can_send_via_vapid,
                           can_send_via_sender_id](
                              const syncer::DeviceInfo* device) {
     // Checks if |last_updated_timestamp| is not too old.

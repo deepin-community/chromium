@@ -82,8 +82,8 @@ bool ApmNeedsPlayoutReference(const webrtc::AudioProcessing* apm,
     // needed.
     return false;
   }
-  // TODO(crbug.com/1410129): Move the logic below into WebRTC APM since APM may
-  // use injected sub-modules the usage of which is not reflected in the APM
+  // TODO(crbug.com/40889535): Move the logic below into WebRTC APM since APM
+  // may use injected sub-modules the usage of which is not reflected in the APM
   // config (e.g., render side processing).
   const webrtc::AudioProcessing::Config config = apm->GetConfig();
   const bool aec = config.echo_canceller.enabled;
@@ -622,14 +622,15 @@ AudioParameters AudioProcessor::GetDefaultOutputFormat(
   // TODO(crbug.com/1336055): Investigate why chromecast devices need special
   // logic here.
   const int output_sample_rate =
-      need_webrtc_audio_processing ?
+      need_webrtc_audio_processing
+          ?
 #if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)
-                                   std::min(media::kAudioProcessingSampleRateHz,
-                                            input_format.sample_rate())
+          std::min(media::WebRtcAudioProcessingSampleRateHz(),
+                   input_format.sample_rate())
 #else
-                                   media::kAudioProcessingSampleRateHz
+          media::WebRtcAudioProcessingSampleRateHz()
 #endif
-                                   : input_format.sample_rate();
+          : input_format.sample_rate();
 
   media::ChannelLayoutConfig output_channel_layout_config;
   if (!need_webrtc_audio_processing) {

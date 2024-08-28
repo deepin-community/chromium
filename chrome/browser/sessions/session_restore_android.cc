@@ -35,7 +35,7 @@ content::WebContents* SessionRestore::RestoreForeignSessionTab(
           session_tab.navigations, profile);
 
   bool is_background_tab =
-      (disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) ? true : false;
+      disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
   content::WebContents::CreateParams create_params(context);
   if (is_background_tab && skip_renderer_creation) {
     create_params.initially_hidden = true;
@@ -70,6 +70,6 @@ std::vector<Browser*> SessionRestore::RestoreForeignSessionWindows(
     Profile* profile,
     std::vector<const sessions::SessionWindow*>::const_iterator begin,
     std::vector<const sessions::SessionWindow*>::const_iterator end) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return std::vector<Browser*>();
 }

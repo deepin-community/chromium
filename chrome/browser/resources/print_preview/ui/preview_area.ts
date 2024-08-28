@@ -24,7 +24,7 @@ import type {Destination} from '../data/destination.js';
 import type {Margins, MarginsSetting} from '../data/margins.js';
 import {CustomMarginsOrientation, MarginsType} from '../data/margins.js';
 import type {MeasurementSystem} from '../data/measurement_system.js';
-import type {MediaSizeValue, Ticket} from '../data/model.js';
+import type {MediaSizeValue, Settings, Ticket} from '../data/model.js';
 import {DuplexMode} from '../data/model.js';
 import {ScalingType} from '../data/scaling.js';
 import {Size} from '../data/size.js';
@@ -39,7 +39,7 @@ import type {PluginProxy} from './plugin_proxy.js';
 import {PluginProxyImpl} from './plugin_proxy.js';
 import {getTemplate} from './preview_area.html.js';
 // <if expr="is_chromeos">
-import {PrinterSetupInfoMessageType, PrinterSetupInfoMetricsSource} from './printer_setup_info_cros.js';
+import {PrinterSetupInfoInitiator, PrinterSetupInfoMessageType} from './printer_setup_info_cros.js';
 // </if>
 import {SettingsMixin} from './settings_mixin.js';
 
@@ -62,6 +62,13 @@ export enum PreviewAreaState {
 export interface PrintPreviewPreviewAreaElement {
   $: {marginControlContainer: PrintPreviewMarginControlContainerElement};
 }
+
+// <if expr="is_chromeos">
+export function shouldShowCrosPrinterSetupError(
+    state: State, error: Error): boolean {
+  return state === State.ERROR && error === Error.INVALID_PRINTER;
+}
+// </if>
 
 const PrintPreviewPreviewAreaElementBase =
     WebUiListenerMixin(I18nMixin(SettingsMixin(DarkModeMixin(PolymerElement))));
@@ -133,9 +140,9 @@ export class PrintPreviewPreviewAreaElement extends
         readOnly: true,
       },
 
-      previewAreaSource_: {
+      previewAreaInitiator_: {
         type: Number,
-        value: PrinterSetupInfoMetricsSource.PREVIEW_AREA,
+        value: PrinterSetupInfoInitiator.PREVIEW_AREA,
         readOnly: true,
       },
       // </if>
@@ -688,7 +695,7 @@ export class PrintPreviewPreviewAreaElement extends
   }
 
   /** @return Appropriate key for the scaling type setting. */
-  private getScalingSettingKey_(): string {
+  private getScalingSettingKey_(): keyof Settings {
     return this.getSetting('scalingTypePdf').available ? 'scalingTypePdf' :
                                                          'scalingType';
   }
@@ -813,11 +820,12 @@ export class PrintPreviewPreviewAreaElement extends
    */
   private computeShowCrosPrinterSetupInfo(): boolean {
     // <if expr="is_chromeos">
-    if (this.isPrintPreviewSetupAssistanceEnabled_) {
-      return this.state === State.ERROR && this.error === Error.INVALID_PRINTER;
-    }
+    return this.isPrintPreviewSetupAssistanceEnabled_ &&
+        shouldShowCrosPrinterSetupError(this.state, this.error);
     // </if>
+    // <if expr="not is_chromeos">
     return false;
+    // </if>
   }
 }
 

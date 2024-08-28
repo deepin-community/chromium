@@ -101,6 +101,9 @@ std::string InterpolationToAttribute(core::InterpolationType type,
                 attr = "center_";
             }
             break;
+        case core::InterpolationSampling::kFirst:
+        case core::InterpolationSampling::kEither:
+            break;
     }
     switch (type) {
         case core::InterpolationType::kPerspective:
@@ -156,7 +159,6 @@ SizeAndAlign MslPackedTypeSizeAndAlign(const core::type::Type* ty) {
                 }
             }
             TINT_UNREACHABLE() << "Unhandled vector element type " << el_ty->TypeInfo().name;
-            return SizeAndAlign{};
         },
 
         [&](const core::type::Matrix* mat) {
@@ -199,14 +201,12 @@ SizeAndAlign MslPackedTypeSizeAndAlign(const core::type::Type* ty) {
             }
 
             TINT_UNREACHABLE() << "Unhandled matrix element type " << el_ty->TypeInfo().name;
-            return SizeAndAlign{};
         },
 
         [&](const core::type::Array* arr) {
             if (TINT_UNLIKELY(!arr->IsStrideImplicit())) {
                 TINT_ICE()
                     << "arrays with explicit strides should not exist past the SPIR-V reader";
-                return SizeAndAlign{};
             }
             if (arr->Count()->Is<core::type::RuntimeArrayCount>()) {
                 return SizeAndAlign{arr->Stride(), arr->Align()};
@@ -215,7 +215,6 @@ SizeAndAlign MslPackedTypeSizeAndAlign(const core::type::Type* ty) {
                 return SizeAndAlign{arr->Stride() * count.value(), arr->Align()};
             }
             TINT_ICE() << core::type::Array::kErrExpectedConstantCount;
-            return SizeAndAlign{};
         },
 
         [&](const core::type::Struct* str) {

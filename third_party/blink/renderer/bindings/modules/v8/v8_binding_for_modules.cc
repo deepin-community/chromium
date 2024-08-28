@@ -23,6 +23,11 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
 
 #include "third_party/blink/public/common/indexeddb/indexeddb_key.h"
@@ -43,6 +48,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_idb_object_store.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/fileapi/file.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_any.h"
@@ -54,8 +60,8 @@
 #include "third_party/blink/renderer/modules/indexeddb/idb_key_range.h"
 #include "third_party/blink/renderer/modules/indexeddb/idb_value.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
-#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -96,7 +102,9 @@ static std::unique_ptr<IDBKey> CreateIDBKeyFromSimpleValue(
     }
     const char* start = static_cast<const char*>(buffer->Data());
     size_t length = buffer->ByteLength();
-    return IDBKey::CreateBinary(SharedBuffer::Create(start, length));
+    return IDBKey::CreateBinary(
+        base::MakeRefCounted<base::RefCountedData<Vector<char>>>(
+            Vector<char>(base::span(start, length))));
   }
 
   if (value->IsArrayBufferView()) {
@@ -112,7 +120,9 @@ static std::unique_ptr<IDBKey> CreateIDBKeyFromSimpleValue(
     }
     const char* start = static_cast<const char*>(view->BaseAddress());
     size_t length = view->byteLength();
-    return IDBKey::CreateBinary(SharedBuffer::Create(start, length));
+    return IDBKey::CreateBinary(
+        base::MakeRefCounted<base::RefCountedData<Vector<char>>>(
+            Vector<char>(base::span(start, length))));
   }
 
   return IDBKey::CreateInvalid();
@@ -128,10 +138,9 @@ static std::unique_ptr<IDBKey> CreateIDBKeyFromSimpleValue(
 // https://w3c.github.io/IndexedDB/#convert-a-value-to-a-multientry-key
 // A V8 exception may be thrown on bad data or by script's getters; if so,
 // callers should not make further V8 calls.
-static std::unique_ptr<IDBKey> CreateIDBKeyFromValue(
-    v8::Isolate* isolate,
-    v8::Local<v8::Value> value,
-    ExceptionState& exception_state) {
+std::unique_ptr<IDBKey> CreateIDBKeyFromValue(v8::Isolate* isolate,
+                                              v8::Local<v8::Value> value,
+                                              ExceptionState& exception_state) {
   // Simple case:
   if (!value->IsArray())
     return CreateIDBKeyFromSimpleValue(isolate, value, exception_state);
@@ -270,7 +279,7 @@ static Vector<String> ParseKeyPath(const String& key_path) {
 // https://w3c.github.io/IndexedDB/#evaluate-a-key-path-on-a-value
 // A V8 exception may be thrown on bad data or by script's getters; if so,
 // callers should not make further V8 calls.
-static std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPath(
+std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPath(
     v8::Isolate* isolate,
     v8::Local<v8::Value> v8_value,
     const String& key_path,
@@ -329,7 +338,11 @@ static std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPath(
         continue;
       }
       if (element == "lastModifiedDate") {
-        v8_value = file->lastModifiedDate(ScriptState::From(context)).V8Value();
+        ScriptState* script_state = ScriptState::From(isolate, context);
+        v8_value = file->lastModifiedDate(script_state).V8Value();
+        ExecutionContext* execution_context = ToExecutionContext(script_state);
+        UseCounter::Count(execution_context,
+                          WebFeature::kIndexedDBFileLastModifiedDate);
         continue;
       }
       // Fall through.
@@ -359,7 +372,7 @@ static std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPath(
 // https://w3c.github.io/IndexedDB/#evaluate-a-key-path-on-a-value
 // A V8 exception may be thrown on bad data or by script's getters; if so,
 // callers should not make further V8 calls.
-static std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPath(
+std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPath(
     v8::Isolate* isolate,
     v8::Local<v8::Value> value,
     const IDBKeyPath& key_path,
@@ -396,7 +409,7 @@ static std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPath(
 // https://w3c.github.io/IndexedDB/#evaluate-a-key-path-on-a-value
 // A V8 exception may be thrown on bad data or by script's getters; if so,
 // callers should not make further V8 calls.
-static std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPaths(
+std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPaths(
     v8::Isolate* isolate,
     v8::Local<v8::Value> value,
     const IDBKeyPath& store_key_path,
@@ -446,8 +459,9 @@ static std::unique_ptr<IDBKey> CreateIDBKeyFromValueAndKeyPaths(
 v8::Local<v8::Value> DeserializeIDBValueData(v8::Isolate* isolate,
                                              const IDBValue* value) {
   DCHECK(isolate->InContext());
-  if (!value || value->IsNull())
+  if (!value) {
     return v8::Null(isolate);
+  }
 
   scoped_refptr<SerializedScriptValue> serialized_value =
       value->CreateSerializedValue();
@@ -478,8 +492,9 @@ v8::Local<v8::Value> DeserializeIDBValue(ScriptState* script_state,
                                          const IDBValue* value) {
   v8::Isolate* isolate = script_state->GetIsolate();
   DCHECK(isolate->InContext());
-  if (!value || value->IsNull())
+  if (!value) {
     return v8::Null(isolate);
+  }
 
   v8::Local<v8::Value> v8_value = DeserializeIDBValueData(isolate, value);
   if (value->PrimaryKey()) {
@@ -552,7 +567,7 @@ bool InjectV8KeyIntoV8Value(v8::Isolate* isolate,
   // The conbination of a key generator and an empty key path is forbidden by
   // spec.
   if (!key_path_elements.size()) {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return false;
   }
 
@@ -699,40 +714,6 @@ SQLValue NativeValueTraits<SQLValue>::NativeValue(
   return SQLValue(string_value);
 }
 
-std::unique_ptr<IDBKey> NativeValueTraits<std::unique_ptr<IDBKey>>::NativeValue(
-    v8::Isolate* isolate,
-    v8::Local<v8::Value> value,
-    ExceptionState& exception_state) {
-  return CreateIDBKeyFromValue(isolate, value, exception_state);
-}
-
-std::unique_ptr<IDBKey> NativeValueTraits<std::unique_ptr<IDBKey>>::NativeValue(
-    v8::Isolate* isolate,
-    v8::Local<v8::Value> value,
-    ExceptionState& exception_state,
-    const IDBKeyPath& key_path) {
-  TRACE_EVENT0("IndexedDB", "createIDBKeyFromValueAndKeyPath");
-  return CreateIDBKeyFromValueAndKeyPath(isolate, value, key_path,
-                                         exception_state);
-}
-
-std::unique_ptr<IDBKey> NativeValueTraits<std::unique_ptr<IDBKey>>::NativeValue(
-    v8::Isolate* isolate,
-    v8::Local<v8::Value> value,
-    ExceptionState& exception_state,
-    const IDBKeyPath& store_key_path,
-    const IDBKeyPath& index_key_path) {
-  TRACE_EVENT0("IndexedDB", "createIDBKeyFromValueAndKeyPaths");
-  return CreateIDBKeyFromValueAndKeyPaths(isolate, value, store_key_path,
-                                          index_key_path, exception_state);
-}
-
-IDBKeyRange* NativeValueTraits<IDBKeyRange*>::NativeValue(
-    v8::Isolate* isolate,
-    v8::Local<v8::Value> value,
-    ExceptionState& exception_state) {
-  return V8IDBKeyRange::ToWrappable(isolate, value);
-}
 
 #if DCHECK_IS_ON()
 // This assertion is used when a value has been retrieved from an object store

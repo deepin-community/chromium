@@ -125,13 +125,14 @@ void ExtensionSystemImpl::Shared::InitPrefs() {
 
   const user_manager::User* user =
       user_manager::UserManager::Get()->GetActiveUser();
-  policy::DeviceLocalAccount::Type device_local_account_type;
-  if (user &&
-      policy::IsDeviceLocalAccountUser(user->GetAccountId().GetUserEmail(),
-                                       &device_local_account_type)) {
-    device_local_account_management_policy_provider_ =
-        std::make_unique<chromeos::DeviceLocalAccountManagementPolicyProvider>(
-            device_local_account_type);
+  if (user) {
+    auto device_local_account_type =
+        policy::GetDeviceLocalAccountType(user->GetAccountId().GetUserEmail());
+    if (device_local_account_type.has_value()) {
+      device_local_account_management_policy_provider_ = std::make_unique<
+          chromeos::DeviceLocalAccountManagementPolicyProvider>(
+          device_local_account_type.value());
+    }
   }
 #endif
 }
@@ -165,16 +166,16 @@ void ExtensionSystemImpl::Shared::RegisterManagementPolicyProviders() {
 void ExtensionSystemImpl::Shared::InitInstallGates() {
   update_install_gate_ = std::make_unique<UpdateInstallGate>(profile_);
   extension_service_->RegisterInstallGate(
-      ExtensionPrefs::DELAY_REASON_WAIT_FOR_IDLE, update_install_gate_.get());
+      ExtensionPrefs::DelayReason::kWaitForIdle, update_install_gate_.get());
   extension_service_->RegisterInstallGate(
-      ExtensionPrefs::DELAY_REASON_WAIT_FOR_IMPORTS,
+      ExtensionPrefs::DelayReason::kWaitForImports,
       extension_service_->shared_module_service());
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   if (chrome::IsRunningInForcedAppMode()) {
     kiosk_app_update_install_gate_ =
         std::make_unique<ash::KioskAppUpdateInstallGate>(profile_);
     extension_service_->RegisterInstallGate(
-        ExtensionPrefs::DELAY_REASON_WAIT_FOR_OS_UPDATE,
+        ExtensionPrefs::DelayReason::kWaitForOsUpdate,
         kiosk_app_update_install_gate_.get());
   }
 #endif

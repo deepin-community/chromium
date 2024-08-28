@@ -411,9 +411,7 @@ ServiceWorker* EventTarget::ToServiceWorker() {
   return nullptr;
 }
 
-PortalHost* EventTarget::ToPortalHost() {
-  return nullptr;
-}
+void EventTarget::ResetEventQueueStatus(const AtomicString& event_type) {}
 
 // An instance of EventTargetImpl is returned because EventTarget
 // is an abstract class, and making it non-abstract is unfavorable
@@ -560,7 +558,7 @@ bool EventTarget::addEventListener(
     }
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -710,24 +708,24 @@ void EventTarget::AddedEventListener(
           WebFeature::kContentVisibilityAutoStateChangeHandlerRegistered);
     } else if (event_type == event_type_names::kScrollend) {
       UseCounter::Count(*document, WebFeature::kScrollend);
+    } else if (event_util::IsSnapEventType(event_type)) {
+      UseCounter::Count(*document, WebFeature::kSnapEvent);
     }
   }
 
-  WebFeature mutation_event_feature;
-  Document::ListenerType listener_type;
-  if (event_util::IsDOMMutationEventType(event_type, mutation_event_feature,
-                                         listener_type)) {
+  auto info = event_util::IsDOMMutationEventType(event_type);
+  if (info.is_mutation_event) {
     if (ExecutionContext* context = GetExecutionContext()) {
       if (RuntimeEnabledFeatures::MutationEventsEnabled(context) &&
           (!document || document->SupportsLegacyDOMMutations())) {
         String message_text = String::Format(
-            "Listener added for a synchronous '%s' DOM Mutation Event. "
-            "This event type is deprecated "
-            "(https://w3c.github.io/uievents/#legacy-event-types) "
-            "and work is underway to remove it from this browser. Usage of "
-            "this event listener will cause performance issues today, and "
-            "represents a risk of future incompatibility. Consider using "
-            "MutationObserver instead.",
+            "Listener added for a '%s' mutation event. This event type is "
+            "deprecated, and will be removed from this browser VERY soon. "
+            "Usage of this event listener will cause performance issues today, "
+            "and represents a large risk of imminent site breakage. Consider "
+            "using MutationObserver instead. See "
+            "https://chromestatus.com/feature/5083947249172480 for more "
+            "information.",
             event_type.GetString().Utf8().c_str());
         PerformanceMonitor::ReportGenericViolation(
             context, PerformanceMonitor::kDiscouragedAPIUse, message_text,
@@ -735,17 +733,39 @@ void EventTarget::AddedEventListener(
         context->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
             mojom::blink::ConsoleMessageSource::kDeprecation,
             mojom::blink::ConsoleMessageLevel::kWarning, message_text));
-        Deprecation::CountDeprecation(context, mutation_event_feature);
+        Deprecation::CountDeprecation(context, info.listener_feature);
+        UseCounter::Count(context, WebFeature::kAnyMutationEventListenerAdded);
       } else {
-        String message_text = String::Format(
-            "Listener added for a '%s' DOM Mutation Event. This event type has "
-            "been deprecated and removed, and will no longer be fired. See "
-            "https://chromestatus.com/feature/5083947249172480 for more "
-            "detail.",
-            event_type.GetString().Utf8().c_str());
+        String message_text;
+        // Only show the special trial message if mutation events are disabled
+        // via the feature flag, and not via lack of embedder support.
+        if (!RuntimeEnabledFeatures::MutationEventsEnabled(context) &&
+            RuntimeEnabledFeatures::MutationEventsSpecialTrialMessageEnabled(
+                context)) {
+          message_text = String::Format(
+              "Usage of mutation events (%s) was detected. This event type has "
+              "been deprecated, and an early trial-run of complete removal is "
+              "underway. In this browser, mutation events are currently not "
+              "being fired. If you are a *user* experiencing a problem, please "
+              "report the issue to the operator of the website. If you are a "
+              "site owner, and you think this trial is causing an unexpected "
+              "issue, please report a bug at "
+              "https://issues.chromium.org/issues/"
+              "new?component=1456718&template=1948649. Note that these events "
+              "will stop being fired for ALL USERS starting in version 127, "
+              "which is the next release.",
+              event_type.GetString().Utf8().c_str());
+        } else {
+          message_text = String::Format(
+              "Listener added for a '%s' mutation event. Support for this "
+              "event type has been removed, and this event will no longer be "
+              "fired. See https://chromestatus.com/feature/5083947249172480 "
+              "for more information.",
+              event_type.GetString().Utf8().c_str());
+        }
         context->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
             mojom::blink::ConsoleMessageSource::kDeprecation,
-            mojom::blink::ConsoleMessageLevel::kWarning, message_text));
+            mojom::blink::ConsoleMessageLevel::kError, message_text));
       }
     }
   }
@@ -777,7 +797,7 @@ bool EventTarget::removeEventListener(
     }
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -1157,6 +1177,7 @@ void EventTarget::DispatchEnqueuedEvent(Event* event,
     event->async_task_context()->Cancel();
     return;
   }
+  this->ResetEventQueueStatus(event->type());
   probe::AsyncTask async_task(context, event->async_task_context());
   DispatchEvent(*event);
 }

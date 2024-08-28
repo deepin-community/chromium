@@ -6,7 +6,9 @@
 
 #include <utility>
 
+#include "base/notreached.h"
 #include "components/sync/model/conflict_resolution.h"
+#include "components/sync/model/data_batch.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/metadata_change_list.h"
 

@@ -74,7 +74,7 @@ class SpirvParserTestHelperBase : public BASE {
 
         // Validate the IR module against the capabilities supported by the SPIR-V dialect.
         auto validated =
-            core::ir::Validate(parsed.Get(), EnumSet<core::ir::Capability>{
+            core::ir::Validate(parsed.Get(), core::ir::Capabilities{
                                                  core::ir::Capability::kAllowVectorElementPointer,
                                              });
         if (validated != Success) {
@@ -82,11 +82,12 @@ class SpirvParserTestHelperBase : public BASE {
         }
 
         // Return the disassembled IR module.
-        return core::ir::Disassemble(parsed.Get());
+        return core::ir::Disassembler(parsed.Get()).Plain();
     }
 };
 
 using SpirvParserTest = SpirvParserTestHelperBase<testing::Test>;
+using SpirvParserDeathTest = SpirvParserTest;
 
 template <typename T>
 using SpirvParserTestWithParam = SpirvParserTestHelperBase<testing::TestWithParam<T>>;

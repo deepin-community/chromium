@@ -209,6 +209,11 @@ class VIEWS_EXPORT Textfield : public View,
   SkColor GetBackgroundColor() const;
   void SetBackgroundColor(SkColor color);
 
+  // Getter/Setter methods for `is_background_enabled_` which controls
+  // whether a background is drawn for this view.
+  bool GetBackgroundEnabled() const;
+  void SetBackgroundEnabled(bool enabled);
+
   // Gets/sets the selection text color to be used when painting the Textfield.
   SkColor GetSelectionTextColor() const;
   void SetSelectionTextColor(SkColor color);
@@ -321,7 +326,7 @@ class VIEWS_EXPORT Textfield : public View,
   // updating the cursor position and visibility.
   void FitToLocalBounds();
 
-  // Getter/Setter methods for |use_default_border_|.
+  // Getter/Setter methods for `use_default_border_`.
   bool GetUseDefaultBorder() const;
   void SetUseDefaultBorder(bool use_default_border);
 
@@ -330,7 +335,8 @@ class VIEWS_EXPORT Textfield : public View,
 
   // View overrides:
   int GetBaseline() const override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
   gfx::Size GetMinimumSize() const override;
   void SetBorder(std::unique_ptr<Border> b) override;
   ui::Cursor GetCursor(const ui::MouseEvent& event) override;
@@ -604,6 +610,8 @@ class VIEWS_EXPORT Textfield : public View,
       bool cursor_changed,
       std::optional<bool> notify_caret_bounds_changed = std::nullopt);
 
+  void UpdateAccessibilityTextDirection();
+
   // Updates cursor visibility and blinks the cursor if needed.
   void ShowCursor();
 
@@ -713,7 +721,7 @@ class VIEWS_EXPORT Textfield : public View,
   std::unique_ptr<TextfieldModel> model_;
 
   // This is the current listener for events from this Textfield.
-  raw_ptr<TextfieldController, DanglingUntriaged> controller_ = nullptr;
+  raw_ptr<TextfieldController> controller_ = nullptr;
 
   // An edit command to execute on the next key event. When set to a valid
   // value, the key event is still passed to |controller_|, but otherwise
@@ -901,6 +909,9 @@ class VIEWS_EXPORT Textfield : public View,
   // border.
   bool use_default_border_ = true;
 
+  // Flag to set whether a background is created for this view.
+  bool is_background_enabled_ = true;
+
   bool is_processing_focus_ = false;
 
   // Holds the subscription object for the enabled changed callback.
@@ -918,6 +929,7 @@ class VIEWS_EXPORT Textfield : public View,
 
 BEGIN_VIEW_BUILDER(VIEWS_EXPORT, Textfield, View)
 VIEW_BUILDER_PROPERTY(SkColor, BackgroundColor)
+VIEW_BUILDER_PROPERTY(bool, BackgroundEnabled)
 VIEW_BUILDER_PROPERTY(TextfieldController*, Controller)
 VIEW_BUILDER_PROPERTY(bool, CursorEnabled)
 VIEW_BUILDER_PROPERTY(int, DefaultWidthInChars)

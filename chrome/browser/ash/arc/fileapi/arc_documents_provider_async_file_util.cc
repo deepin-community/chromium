@@ -435,7 +435,7 @@ void ArcDocumentsProviderAsyncFileUtil::CopyInForeignFile(
     const storage::FileSystemURL& dest_url,
     StatusCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  NOTREACHED();  // Read-only file system.
+  NOTREACHED_IN_MIGRATION();  // Read-only file system.
   std::move(callback).Run(base::File::FILE_ERROR_ACCESS_DENIED);
 }
 
@@ -484,7 +484,7 @@ void ArcDocumentsProviderAsyncFileUtil::CreateSnapshotFile(
     const storage::FileSystemURL& url,
     CreateSnapshotFileCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  NOTIMPLEMENTED();  // TODO(crbug.com/671511): Implement this function.
+  NOTIMPLEMENTED();  // TODO(crbug.com/40496703): Implement this function.
   std::move(callback).Run(base::File::FILE_ERROR_FAILED, base::File::Info(),
                           base::FilePath(),
                           scoped_refptr<storage::ShareableFileReference>());

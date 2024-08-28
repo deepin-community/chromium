@@ -137,7 +137,7 @@ int FileSystemContext::GetPermissionPolicy(FileSystemType type) {
     case kFileSystemTypeUnknown:
       return FILE_PERMISSION_ALWAYS_DENY;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return FILE_PERMISSION_ALWAYS_DENY;
 }
 
@@ -329,7 +329,7 @@ FileSystemBackend* FileSystemContext::GetFileSystemBackend(
   auto found = backend_map_.find(type);
   if (found != backend_map_.end())
     return found->second;
-  NOTREACHED() << "Unknown filesystem type: " << type;
+  NOTREACHED_IN_MIGRATION() << "Unknown filesystem type: " << type;
   return nullptr;
 }
 
@@ -642,7 +642,7 @@ bool FileSystemContext::CanServeURLRequest(const FileSystemURL& url) const {
 }
 
 FileSystemContext::~FileSystemContext() {
-  // TODO(crbug.com/823854) This is a leak. Delete env after the backends have
+  // TODO(crbug.com/41377719) This is a leak. Delete env after the backends have
   // been deleted.
   env_override_.release();
 }

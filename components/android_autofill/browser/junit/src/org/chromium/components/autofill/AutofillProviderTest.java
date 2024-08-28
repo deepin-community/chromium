@@ -32,7 +32,6 @@ import androidx.annotation.RequiresApi;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -69,7 +68,7 @@ public class AutofillProviderTest {
     private ViewGroup mContainerView;
     private AutofillProvider mAutofillProvider;
     private DisplayAndroid mDisplayAndroid;
-    private long mMockedNativeAutofillProviderAndroid = 1;
+    private long mMockedNativeAndroidAutofillProvider = 1;
 
     // Virtual Id of the field with focus.
     private int mFocusVirtualId;
@@ -79,7 +78,6 @@ public class AutofillProviderTest {
     private SparseArray<VirtualViewFillInfo> mPrefillRequestInfos;
 
     @Rule public JniMocker mJniMocker = new JniMocker();
-    @Rule public TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
     @Mock private AutofillProvider.Natives mNativeMock;
     @Mock private RenderCoordinatesImpl mRenderCoordinates;
     @Mock private AutofillManager mAutofillManager;
@@ -132,7 +130,7 @@ public class AutofillProviderTest {
                         mContext, mContainerView, mWebContents, "AutofillProviderTest") {
                     @Override
                     protected void initializeNativeAutofillProvider(WebContents webContents) {
-                        setNativeAutofillProvider(mMockedNativeAutofillProviderAndroid);
+                        setNativeAutofillProvider(mMockedNativeAndroidAutofillProvider);
                     }
                 };
 
@@ -299,7 +297,7 @@ public class AutofillProviderTest {
 
         verify(mNativeMock)
                 .onShowBottomSheetResult(
-                        mMockedNativeAutofillProviderAndroid,
+                        mMockedNativeAndroidAutofillProvider,
                         /* isShown= */ true,
                         /* provided_structure= */ true);
     }
@@ -334,7 +332,7 @@ public class AutofillProviderTest {
 
         verify(mNativeMock)
                 .onShowBottomSheetResult(
-                        mMockedNativeAutofillProviderAndroid,
+                        mMockedNativeAndroidAutofillProvider,
                         /* isShown= */ false,
                         /* providedAutofillStructure= */ true);
     }
@@ -369,7 +367,7 @@ public class AutofillProviderTest {
 
         verify(mNativeMock)
                 .onShowBottomSheetResult(
-                        mMockedNativeAutofillProviderAndroid,
+                        mMockedNativeAndroidAutofillProvider,
                         /* isShown= */ false,
                         /* providedAutofillStructure= */ false);
     }

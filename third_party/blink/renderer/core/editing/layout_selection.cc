@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
+#include "third_party/blink/renderer/core/html/html_wbr_element.h"
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
@@ -155,7 +156,7 @@ static EphemeralRangeInFlatTree CalcSelectionInFlatTree(
                              : EphemeralRangeInFlatTree(focus, anchor);
     }
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return {};
 }
 
@@ -418,7 +419,7 @@ static OldSelectedNodes ResetOldSelectedNodes(
           break;
         }
         default: {
-          NOTREACHED();
+          NOTREACHED_IN_MIGRATION();
           break;
         }
       }
@@ -609,7 +610,7 @@ static LayoutTextSelectionStatus ComputeSelectionStatusForNode(
       return {start_offset.value(), end_offset.value(),
               SelectionIncludeEnd::kNotInclude};
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return {0, 0, SelectionIncludeEnd::kNotInclude};
   }
 }

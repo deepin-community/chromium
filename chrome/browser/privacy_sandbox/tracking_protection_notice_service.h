@@ -1,4 +1,3 @@
-
 // Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -7,6 +6,7 @@
 #define CHROME_BROWSER_PRIVACY_SANDBOX_TRACKING_PROTECTION_NOTICE_SERVICE_H_
 
 #include <memory>
+
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -17,7 +17,6 @@
 #include "components/privacy_sandbox/tracking_protection_onboarding.h"
 #include "components/user_education/common/feature_promo_controller.h"
 #include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -56,8 +55,14 @@ class TrackingProtectionNoticeService
       TrackingProtectionOnboarding* onboarding_service);
   ~TrackingProtectionNoticeService() override;
 
-  enum class TrackingProtectionMetricsNoticeEvent {
-    kNoticeObjectCreated = 0,
+  // KeyedService:
+  void Shutdown() override;
+
+  // Enum class used for recording histogram events.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class TrackingProtectionNoticeServiceEvent {
+    kPromoPreviouslyDismissed = 0,
     kActiveTabChanged = 1,
     kNavigationFinished = 2,
     kUpdateNoticeVisibility = 3,
@@ -69,8 +74,7 @@ class TrackingProtectionNoticeService
     kNoticeAlreadyShowing = 9,
     kNoticeRequestedAndShown = 10,
     kNoticeRequestedButNotShown = 11,
-    kPromoPreviouslyDismissed = 12,
-    kMaxValue = kPromoPreviouslyDismissed,
+    kMaxValue = kNoticeRequestedButNotShown,
   };
 
   class TabHelper : public content::WebContentsObserver,
@@ -93,13 +97,12 @@ class TrackingProtectionNoticeService
     void DidFinishNavigation(
         content::NavigationHandle* navigation_handle) override;
 
-    // contents::WebContentsObserver:
-    void PrimaryPageChanged(content::Page& page) override;
-
     WEB_CONTENTS_USER_DATA_KEY_DECL();
   };
 
  private:
+  class NoticeBehavior;
+
   // IPH Based Tracking Protection Notice, in charge of showing/hiding the IPH
   // Promo based on page eligibility and user navigation.
   class BaseIPHNotice {
@@ -107,7 +110,7 @@ class TrackingProtectionNoticeService
     BaseIPHNotice(Profile* profile,
                   TrackingProtectionOnboarding* onboarding_service,
                   TrackingProtectionNoticeService* notice_service);
-    virtual ~BaseIPHNotice();
+    ~BaseIPHNotice();
 
     void MaybeUpdateNoticeVisibility(content::WebContents* web_content);
 
@@ -116,66 +119,60 @@ class TrackingProtectionNoticeService
     }
 
     // Fires when the notice is closed (For any reason)
-    virtual void OnNoticeClosed(
+    void OnNoticeClosed(
         base::Time showed_when,
         user_education::FeaturePromoController* promo_controller);
 
-   private:
-    virtual bool WasPromoPreviouslyDismissed(Browser* browser);
-    virtual bool IsPromoShowing(Browser* browser);
-    virtual bool MaybeShowPromo(Browser* browser);
-    virtual void HidePromo(Browser* browser);
-    bool IsLocationBarEligible(Browser* browser);
+    const base::Feature& GetIPHFeature();
 
-    virtual TrackingProtectionOnboarding::NoticeType GetNoticeType() = 0;
-    virtual const base::Feature& GetIPHFeature() = 0;
+   private:
+    void MaybeInitNoticeBehavior();
+    bool IsLocationBarEligible(Browser* browser);
+    TrackingProtectionOnboarding::NoticeType GetNoticeType();
+
+    NoticeBehavior* notice_behavior() const { return notice_behavior_.get(); }
 
     raw_ptr<Profile> profile_;
+    // Behavior to be loaded lazily, when we're ready to execute it.
+    std::unique_ptr<NoticeBehavior> notice_behavior_;
+    std::optional<TrackingProtectionOnboarding::NoticeType> notice_type_;
     raw_ptr<TrackingProtectionOnboarding> onboarding_service_;
     raw_ptr<TrackingProtectionNoticeService> notice_service_;
   };
 
-  class OnboardingNotice : public BaseIPHNotice {
+  class NoticeBehavior {
    public:
-    OnboardingNotice(Profile* profile,
-                     TrackingProtectionOnboarding* onboarding_service,
-                     TrackingProtectionNoticeService* notice_service);
+    explicit NoticeBehavior(BaseIPHNotice* notice);
+    virtual ~NoticeBehavior();
+    virtual bool WasPromoPreviouslyDismissed(Browser* browser) = 0;
+    virtual bool MaybeShowPromo(Browser* browser) = 0;
+    virtual bool IsPromoShowing(Browser* browser) = 0;
+    virtual bool HidePromo(Browser* browser) = 0;
 
-   private:
-    TrackingProtectionOnboarding::NoticeType GetNoticeType() override;
-    const base::Feature& GetIPHFeature() override;
+   protected:
+    raw_ptr<BaseIPHNotice> notice_;
   };
 
-  class OffboardingNotice : public BaseIPHNotice {
+  // The Silent Notice is shown to the user without any visual indication.
+  // It is only used for control groups.
+  class SilentNotice : public NoticeBehavior {
    public:
-    OffboardingNotice(Profile* profile,
-                      TrackingProtectionOnboarding* onboarding_service,
-                      TrackingProtectionNoticeService* notice_service);
-
-   private:
-    TrackingProtectionOnboarding::NoticeType GetNoticeType() override;
-    const base::Feature& GetIPHFeature() override;
-    void OnNoticeClosed(
-        base::Time showed_when,
-        user_education::FeaturePromoController* promo_controller) override;
-  };
-
-  class SilentOnboardingNotice : public BaseIPHNotice {
-   public:
-    SilentOnboardingNotice(Profile* profile,
-                           TrackingProtectionOnboarding* onboarding_service,
-                           TrackingProtectionNoticeService* notice_service);
-
-   private:
-    TrackingProtectionOnboarding::NoticeType GetNoticeType() override;
-    const base::Feature& GetIPHFeature() override;
+    using NoticeBehavior::NoticeBehavior;
     bool WasPromoPreviouslyDismissed(Browser* browser) override;
-    bool IsPromoShowing(Browser* browser) override;
     bool MaybeShowPromo(Browser* browser) override;
-    void HidePromo(Browser* browser) override;
-    void OnNoticeClosed(
-        base::Time showed_when,
-        user_education::FeaturePromoController* promo_controller) override;
+    bool IsPromoShowing(Browser* browser) override;
+    bool HidePromo(Browser* browser) override;
+  };
+
+  // The Visible Notice is shown to the user as a IPH promo.
+  // It is only used for the main onboarding experience.
+  class VisibleNotice : public NoticeBehavior {
+   public:
+    using NoticeBehavior::NoticeBehavior;
+    bool WasPromoPreviouslyDismissed(Browser* browser) override;
+    bool MaybeShowPromo(Browser* browser) override;
+    bool IsPromoShowing(Browser* browser) override;
+    bool HidePromo(Browser* browser) override;
   };
 
   // Indicates if the notice is needed to be displayed.
@@ -202,24 +199,13 @@ class TrackingProtectionNoticeService
   // TrackingProtectionOnboarding::Observer
   void OnShouldShowNoticeUpdated() override;
 
-  // Runs the Hats Logic, which means could either Register the profile for a
-  // group if eligible, or trigger a survey.
-  void RunHatsLogic();
-
-  // Whether or not the Hats logic is required for the current client/profile.
-  bool IsHatsLogicRequired();
-
   raw_ptr<Profile> profile_;
   raw_ptr<TrackingProtectionOnboarding> onboarding_service_;
-  std::unique_ptr<BaseIPHNotice> onboarding_notice_;
-  std::unique_ptr<BaseIPHNotice> offboarding_notice_;
-  std::unique_ptr<BaseIPHNotice> silent_onboarding_notice_;
+  std::unique_ptr<BaseIPHNotice> tracking_protection_notice_;
   std::unique_ptr<BrowserTabStripTracker> tab_strip_tracker_;
   base::ScopedObservation<TrackingProtectionOnboarding,
                           TrackingProtectionOnboarding::Observer>
       onboarding_observation_{this};
-
-  bool has_opened_first_ntp_ = false;
 };
 
 }  // namespace privacy_sandbox

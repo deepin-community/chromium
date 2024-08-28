@@ -26,7 +26,6 @@ import androidx.test.filters.MediumTest;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
@@ -34,9 +33,9 @@ import org.mockito.junit.MockitoRule;
 import org.mockito.quality.Strictness;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.JniMocker;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -51,7 +50,6 @@ import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.components.user_prefs.UserPrefsJni;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.test.util.BlankUiTestActivityTestCase;
@@ -80,8 +78,6 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
 
     @Rule public final JniMocker mJniMocker = new JniMocker();
 
-    @Rule public TestRule mProcessor = new Features.JUnitProcessor();
-
     @Mock private SigninManager mSigninManagerMock;
 
     @Mock private IdentityServicesProvider mIdentityServicesProviderMock;
@@ -107,7 +103,7 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
         when(mUserPrefsNativeMock.get(mProfile)).thenReturn(mPrefService);
         when(IdentityServicesProvider.get().getSigninManager(any())).thenReturn(mSigninManagerMock);
         mDelegate =
-                TestThreadUtils.runOnUiThreadBlockingNoException(
+                ThreadUtils.runOnUiThreadBlocking(
                         () -> {
                             return new ConfirmSyncDataStateMachineDelegate(
                                     getActivity(),
@@ -125,7 +121,7 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
         startConfirmSyncFlow(OLD_ACCOUNT_NAME, NEW_ACCOUNT_NAME);
         onView(withId(R.id.sync_keep_separate_choice)).inRoot(isDialog()).perform(click());
         onView(withText(R.string.continue_button)).perform(click());
-        verify(mListenerMock).onConfirm(true);
+        verify(mListenerMock).onConfirm(true, false);
         verify(mListenerMock, never()).onCancel();
     }
 
@@ -136,7 +132,7 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
         startConfirmSyncFlow(OLD_ACCOUNT_NAME, NEW_ACCOUNT_NAME);
         onView(withId(R.id.sync_keep_separate_choice)).inRoot(isDialog()).perform(click());
         onView(isRoot()).perform(pressBack());
-        verify(mListenerMock, never()).onConfirm(anyBoolean());
+        verify(mListenerMock, never()).onConfirm(anyBoolean(), anyBoolean());
         verify(mListenerMock).onCancel();
     }
 
@@ -150,8 +146,8 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
         startConfirmSyncFlow(OLD_ACCOUNT_NAME, managedNewAccountName);
         onView(withId(R.id.sync_confirm_import_choice)).inRoot(isDialog()).perform(click());
         onView(withText(R.string.continue_button)).perform(click());
-        onView(withText(R.string.policy_dialog_proceed)).inRoot(isDialog()).perform(click());
-        verify(mListenerMock).onConfirm(false);
+        onView(withText(R.string.continue_button)).inRoot(isDialog()).perform(click());
+        verify(mListenerMock).onConfirm(false, true);
         verify(mListenerMock, never()).onCancel();
     }
 
@@ -166,7 +162,7 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
         onView(withId(R.id.sync_keep_separate_choice)).inRoot(isDialog()).perform(click());
         onView(withText(R.string.continue_button)).perform(click());
         onView(isRoot()).perform(pressBack());
-        verify(mListenerMock, never()).onConfirm(anyBoolean());
+        verify(mListenerMock, never()).onConfirm(anyBoolean(), anyBoolean());
         verify(mListenerMock).onCancel();
     }
 
@@ -177,7 +173,7 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
         startConfirmSyncFlow(OLD_ACCOUNT_NAME, OLD_ACCOUNT_NAME);
         onView(withId(R.id.sync_import_data_prompt)).check(doesNotExist());
         onView(withText(R.string.sign_in_managed_account)).check(doesNotExist());
-        verify(mListenerMock).onConfirm(false);
+        verify(mListenerMock).onConfirm(false, false);
         verify(mListenerMock, never()).onCancel();
     }
 
@@ -189,13 +185,13 @@ public class ConfirmSyncDataIntegrationTest extends BlankUiTestActivityTestCase 
         when(mSigninManagerMock.extractDomainName(managedNewAccountName))
                 .thenReturn(MANAGED_DOMAIN);
         startConfirmSyncFlow("", managedNewAccountName);
-        onView(withText(R.string.policy_dialog_proceed)).inRoot(isDialog()).perform(click());
-        verify(mListenerMock).onConfirm(false);
+        onView(withText(R.string.continue_button)).inRoot(isDialog()).perform(click());
+        verify(mListenerMock).onConfirm(false, true);
         verify(mListenerMock, never()).onCancel();
     }
 
     private void startConfirmSyncFlow(String oldAccountName, String newAccountName) {
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     ConfirmSyncDataStateMachine stateMachine =
                             new ConfirmSyncDataStateMachine(

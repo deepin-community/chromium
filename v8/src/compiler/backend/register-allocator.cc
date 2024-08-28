@@ -505,7 +505,7 @@ void LiveRange::ConvertUsesToOperand(const InstructionOperand& op,
         break;
       case UsePositionType::kRequiresRegister:
         DCHECK(op.IsRegister() || op.IsFPRegister());
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       case UsePositionType::kRegisterOrSlot:
       case UsePositionType::kRegisterOrSlotOrConstant:
         InstructionOperand::ReplaceWith(pos->operand(), &op);
@@ -1361,13 +1361,15 @@ SpillRange* RegisterAllocationData::AssignSpillRangeToLiveRange(
 void RegisterAllocationData::MarkFixedUse(MachineRepresentation rep,
                                           int index) {
   switch (rep) {
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kSimd128:
     case MachineRepresentation::kSimd256:
       if (kFPAliasing == AliasingKind::kOverlap) {
         fixed_fp_register_use_->Add(index);
       } else if (kFPAliasing == AliasingKind::kIndependent) {
-        if (rep == MachineRepresentation::kFloat32) {
+        if (rep == MachineRepresentation::kFloat16 ||
+            rep == MachineRepresentation::kFloat32) {
           fixed_fp_register_use_->Add(index);
         } else {
           fixed_simd128_register_use_->Add(index);
@@ -1395,13 +1397,15 @@ void RegisterAllocationData::MarkFixedUse(MachineRepresentation rep,
 
 bool RegisterAllocationData::HasFixedUse(MachineRepresentation rep, int index) {
   switch (rep) {
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kSimd128:
     case MachineRepresentation::kSimd256: {
       if (kFPAliasing == AliasingKind::kOverlap) {
         return fixed_fp_register_use_->Contains(index);
       } else if (kFPAliasing == AliasingKind::kIndependent) {
-        if (rep == MachineRepresentation::kFloat32) {
+        if (rep == MachineRepresentation::kFloat16 ||
+            rep == MachineRepresentation::kFloat32) {
           return fixed_fp_register_use_->Contains(index);
         } else {
           return fixed_simd128_register_use_->Contains(index);
@@ -1430,13 +1434,15 @@ bool RegisterAllocationData::HasFixedUse(MachineRepresentation rep, int index) {
 void RegisterAllocationData::MarkAllocated(MachineRepresentation rep,
                                            int index) {
   switch (rep) {
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat32:
     case MachineRepresentation::kSimd128:
     case MachineRepresentation::kSimd256:
       if (kFPAliasing == AliasingKind::kOverlap) {
         assigned_double_registers_->Add(index);
       } else if (kFPAliasing == AliasingKind::kIndependent) {
-        if (rep == MachineRepresentation::kFloat32) {
+        if (rep == MachineRepresentation::kFloat16 ||
+            rep == MachineRepresentation::kFloat32) {
           assigned_double_registers_->Add(index);
         } else {
           assigned_simd128_registers_->Add(index);
@@ -1810,15 +1816,15 @@ int LiveRangeBuilder::FixedFPLiveRangeID(int index, MachineRepresentation rep) {
     case MachineRepresentation::kSimd256:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_simd128_registers();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case MachineRepresentation::kSimd128:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_float_registers();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case MachineRepresentation::kFloat32:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_double_registers();
-      V8_FALLTHROUGH;
+      [[fallthrough]];
     case MachineRepresentation::kFloat64:
       result -=
           kNumberOfFixedRangesPerRegister * config()->num_general_registers();
@@ -1857,6 +1863,7 @@ TopLevelLiveRange* LiveRangeBuilder::FixedFPLiveRangeFor(
       &data()->fixed_double_live_ranges();
   if (kFPAliasing == AliasingKind::kCombine) {
     switch (rep) {
+      case MachineRepresentation::kFloat16:
       case MachineRepresentation::kFloat32:
         num_regs = config()->num_float_registers();
         live_ranges = &data()->fixed_float_live_ranges();

@@ -21,7 +21,7 @@ namespace features {
 // All features in alphabetical order. The features should be documented
 // alongside the definition of their values in the .cc file.
 
-// TODO(https://crbug.com/896640): Remove this when the tab dragging
+// TODO(crbug.com/40598679): Remove this when the tab dragging
 // interactive_ui_tests pass on Wayland.
 BASE_DECLARE_FEATURE(kAllowWindowDragUsingSystemDragDrop);
 
@@ -35,6 +35,42 @@ extern const base::FeatureParam<int> kChromeLabsActivationPercentage;
 
 BASE_DECLARE_FEATURE(kCloseOmniboxPopupOnInactiveAreaClick);
 
+BASE_DECLARE_FEATURE(kDefaultBrowserPromptRefresh);
+BASE_DECLARE_FEATURE(kDefaultBrowserPromptRefreshTrial);
+
+// String representation of the study group for running a synthetic trial.
+extern const base::FeatureParam<std::string>
+    kDefaultBrowserPromptRefreshStudyGroup;
+
+// Whether to show the default browser info bar prompt.
+extern const base::FeatureParam<bool> kShowDefaultBrowserInfoBar;
+
+// Whether to show the default browser app menu chip prompt.
+extern const base::FeatureParam<bool> kShowDefaultBrowserAppMenuChip;
+
+// Whether to show the default browser app menu item anytime the browser isn't
+// default, even if the app menu chip prompt isn't enabled.
+extern const base::FeatureParam<bool> kShowDefaultBrowserAppMenuItem;
+
+// Whether to show the updated info bar strings.
+extern const base::FeatureParam<bool> kUpdatedInfoBarCopy;
+
+// Base duration after which the user may be remprompted.
+extern const base::FeatureParam<base::TimeDelta> kRepromptDuration;
+
+// Maximum number of times a user will be prompted. When set to a negative
+// value, the user will be prompted indefinitely.
+extern const base::FeatureParam<int> kMaxPromptCount;
+
+// Exponential backoff multiplier for the reprompt duration.
+extern const base::FeatureParam<int> kRepromptDurationMultiplier;
+
+// The duration after which the app menu prompt should not longer be shown.
+extern const base::FeatureParam<base::TimeDelta> kDefaultBrowserAppMenuDuration;
+
+// Whether the app menu chip should use more prominent colors.
+extern const base::FeatureParam<bool> kAppMenuChipColorPrimary;
+
 BASE_DECLARE_FEATURE(kExtensionsMenuInAppMenu);
 bool IsExtensionMenuInRootAppMenu();
 
@@ -42,18 +78,38 @@ bool IsExtensionMenuInRootAppMenu();
 BASE_DECLARE_FEATURE(kAccessCodeCastUI);
 #endif
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_FUCHSIA)
-BASE_DECLARE_FEATURE(kCameraMicPreview);
-#endif
-
 BASE_DECLARE_FEATURE(kEvDetailsInPageInfo);
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+BASE_DECLARE_FEATURE(kFewerUpdateConfirmations);
+#endif
 
 #if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
 BASE_DECLARE_FEATURE(kGetTheMostOutOfChrome);
+
+BASE_DECLARE_FEATURE(kIOSPromoRefreshedPasswordBubble);
+
+BASE_DECLARE_FEATURE(kIOSPromoAddressBubble);
+
+BASE_DECLARE_FEATURE(kIOSPromoBookmarkBubble);
+// This enum lists the possible params for the kIOSPromoBookmarkBubble promo.
+// The first is the launch candidate, the other one is for debugging/testing.
+enum class IOSPromoBookmarkBubbleActivation {
+  kContextual,
+  kAlwaysShowWithBookmarkBubble,
+};
+extern const base::FeatureParam<IOSPromoBookmarkBubbleActivation>
+    kIOSPromoBookmarkBubbleActivationParam;
+
+BASE_DECLARE_FEATURE(kIOSPromoPaymentBubble);
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
 BASE_DECLARE_FEATURE(kHaTSWebUI);
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+BASE_DECLARE_FEATURE(kKeyboardAndPointerLockPrompt);
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -61,35 +117,40 @@ BASE_DECLARE_FEATURE(kLightweightExtensionOverrideConfirmations);
 #endif
 
 BASE_DECLARE_FEATURE(kPreloadTopChromeWebUI);
+// This enum entry values must be in sync with
+// WebUIContentsPreloadManager::PreloadMode.
+enum class PreloadTopChromeWebUIMode {
+  kPreloadOnWarmup = 0,
+  kPreloadOnMakeContents = 1
+};
+extern const char kPreloadTopChromeWebUIModeName[];
+extern const char kPreloadTopChromeWebUIModePreloadOnWarmupName[];
+extern const char kPreloadTopChromeWebUIModePreloadOnMakeContentsName[];
+extern const base::FeatureParam<PreloadTopChromeWebUIMode>
+    kPreloadTopChromeWebUIMode;
+extern const char kPreloadTopChromeWebUISmartPreloadName[];
+// If smart preload is enabled, the preload WebUI is determined by historical
+// engagement scores and whether a WebUI is currently being shown.
+// If disabled, always preload Tab Search.
+extern const base::FeatureParam<bool> kPreloadTopChromeWebUISmartPreload;
+
+#if !BUILDFLAG(IS_ANDROID)
+BASE_DECLARE_FEATURE(kPressAndHoldEscToExitBrowserFullscreen);
+#endif
 
 BASE_DECLARE_FEATURE(kResponsiveToolbar);
 
-BASE_DECLARE_FEATURE(kScrollableTabStrip);
-extern const char kMinimumTabWidthFeatureParameterName[];
-
-BASE_DECLARE_FEATURE(kScrollableTabStripWithDragging);
-extern const char kTabScrollingWithDraggingModeName[];
-
-BASE_DECLARE_FEATURE(kSplitTabStrip);
-BASE_DECLARE_FEATURE(kTabStripCollectionStorage);
-
 BASE_DECLARE_FEATURE(kTabScrollingButtonPosition);
 extern const char kTabScrollingButtonPositionParameterName[];
-
-BASE_DECLARE_FEATURE(kScrollableTabStripOverflow);
-extern const char kScrollableTabStripOverflowModeName[];
 
 BASE_DECLARE_FEATURE(kSidePanelWebView);
 
 #if !defined(ANDROID)
 BASE_DECLARE_FEATURE(kSidePanelCompanionDefaultPinned);
-
-BASE_DECLARE_FEATURE(kSidePanelPinning);
-
-bool IsSidePanelPinningEnabled();
 #endif
 
 BASE_DECLARE_FEATURE(kSidePanelJourneysQueryless);
+BASE_DECLARE_FEATURE(kSidePanelResizing);
 BASE_DECLARE_FEATURE(kSidePanelSearchCompanion);
 
 BASE_DECLARE_FEATURE(kSideSearch);
@@ -100,9 +161,6 @@ BASE_DECLARE_FEATURE(kSideSearchAutoTriggering);
 extern const base::FeatureParam<int> kSideSearchAutoTriggeringReturnCount;
 
 BASE_DECLARE_FEATURE(kTabGroupsCollapseFreezing);
-
-BASE_DECLARE_FEATURE(kTabGroupsSave);
-BASE_DECLARE_FEATURE(kTabGroupsSaveV2);
 
 BASE_DECLARE_FEATURE(kTabHoverCardImages);
 
@@ -133,6 +191,12 @@ bool IsTabOrganization();
 
 BASE_DECLARE_FEATURE(kMultiTabOrganization);
 
+BASE_DECLARE_FEATURE(kTabOrganizationAppMenuItem);
+
+BASE_DECLARE_FEATURE(kTabReorganization);
+
+BASE_DECLARE_FEATURE(kTabReorganizationDivider);
+
 // The target (and minimum) interval between proactive nudge triggers. Measured
 // against a clock that only runs while Chrome is in the foreground.
 extern const base::FeatureParam<base::TimeDelta> kTabOrganizationTriggerPeriod;
@@ -151,51 +215,9 @@ extern const base::FeatureParam<double>
 // predictably and frequently.
 extern const base::FeatureParam<bool> KTabOrganizationTriggerDemoMode;
 
-BASE_DECLARE_FEATURE(kTabOrganizationRefreshButton);
-
 BASE_DECLARE_FEATURE(kTabSearchChevronIcon);
 
 BASE_DECLARE_FEATURE(kTabSearchFeedback);
-
-BASE_DECLARE_FEATURE(kTabSearchFuzzySearch);
-
-extern const char kTabSearchSearchThresholdName[];
-
-// Setting this to true will ignore the distance parameter when finding matches.
-// This means that it will not matter where in the string the pattern occurs.
-extern const base::FeatureParam<bool> kTabSearchSearchIgnoreLocation;
-
-extern const char kTabSearchAlsoShowMediaTabsinOpenTabsSectionParameterName[];
-
-// Determines how close the match must be to the beginning of the string. Eg a
-// distance of 100 and threshold of 0.8 would require a perfect match to be
-// within 80 characters of the beginning of the string.
-extern const base::FeatureParam<int> kTabSearchSearchDistance;
-
-// This determines how strong the match should be for the item to be included in
-// the result set. Eg a threshold of 0.0 requires a perfect match, 1.0 would
-// match anything. Permissible values are [0.0, 1.0].
-extern const base::FeatureParam<double> kTabSearchSearchThreshold;
-
-// These are the hardcoded minimum and maximum search threshold values for
-// |kTabSearchSearchThreshold|.
-constexpr double kTabSearchSearchThresholdMin = 0.0;
-constexpr double kTabSearchSearchThresholdMax = 1.0;
-
-// Controls the weight associated with a tab's title for filtering and ordering
-// list items.
-extern const base::FeatureParam<double> kTabSearchTitleWeight;
-
-// Controls the weight associated with a tab's hostname when filering and
-// odering list items.
-extern const base::FeatureParam<double> kTabSearchHostnameWeight;
-
-// Controls the weight associated with a tab's group title filering and
-// odering list items
-extern const base::FeatureParam<double> kTabSearchGroupTitleWeight;
-
-// Whether to move the active tab to the bottom of the list.
-extern const base::FeatureParam<bool> kTabSearchMoveActiveTabToBottom;
 
 BASE_DECLARE_FEATURE(kTabSearchRecentlyClosed);
 
@@ -209,17 +231,11 @@ extern const base::FeatureParam<int>
 // count have been met.
 extern const base::FeatureParam<int> kTabSearchRecentlyClosedTabCountThreshold;
 
-BASE_DECLARE_FEATURE(kTabSearchUseMetricsReporter);
-
 BASE_DECLARE_FEATURE(kTearOffWebAppTabOpensWebAppWindow);
 
 BASE_DECLARE_FEATURE(kToolbarPinning);
 
 bool IsToolbarPinningEnabled();
-
-// Determines how screenshots of the toolbar uses Software or Hardware drawing.
-// Works on Android 10+.
-BASE_DECLARE_FEATURE(kToolbarUseHardwareBitmapDraw);
 
 BASE_DECLARE_FEATURE(kTopChromeWebUIUsesSpareRenderer);
 
@@ -229,6 +245,9 @@ extern const base::FeatureParam<int> kUpdateTextOptionNumber;
 #endif
 
 BASE_DECLARE_FEATURE(kEnterpriseProfileBadging);
+BASE_DECLARE_FEATURE(kEnterpriseUpdatedProfileCreationScreen);
+
+BASE_DECLARE_FEATURE(kManagementToolbarButton);
 
 BASE_DECLARE_FEATURE(kWebUIBubblePerProfilePersistence);
 
@@ -238,23 +257,18 @@ BASE_DECLARE_FEATURE(kWebUITabStrip);
 // tap gesture on the WebUI Tab Strip.
 BASE_DECLARE_FEATURE(kWebUITabStripContextMenuAfterTap);
 
-#if BUILDFLAG(IS_CHROMEOS)
-BASE_DECLARE_FEATURE(kChromeOSTabSearchCaptionButton);
-#endif
-
 // Cocoa to views migration.
 #if BUILDFLAG(IS_MAC)
-BASE_DECLARE_FEATURE(kLocationPermissionsExperiment);
-
 BASE_DECLARE_FEATURE(kViewsFirstRunDialog);
 BASE_DECLARE_FEATURE(kViewsTaskManager);
 BASE_DECLARE_FEATURE(kViewsJSAppModalDialog);
-
-int GetLocationPermissionsExperimentBubblePromptLimit();
-int GetLocationPermissionsExperimentLabelPromptLimit();
 #endif
 
 BASE_DECLARE_FEATURE(kStopLoadingAnimationForHiddenWindow);
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+BASE_DECLARE_FEATURE(kUsePortalAccentColor);
+#endif
 
 }  // namespace features
 

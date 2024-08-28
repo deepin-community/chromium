@@ -37,35 +37,39 @@ void FakeSyncApiComponentFactory::AllowFakeEngineInitCompletion(bool allow) {
 
 std::unique_ptr<DataTypeManager>
 FakeSyncApiComponentFactory::CreateDataTypeManager(
-    const DataTypeController::TypeMap* controllers,
+    const ModelTypeController::TypeMap* controllers,
     const DataTypeEncryptionHandler* encryption_handler,
-    ModelTypeConfigurer* configurer,
     DataTypeManagerObserver* observer) {
   auto data_type_manager = std::make_unique<TestDataTypeManagerImpl>(
-      controllers, encryption_handler, configurer, observer);
+      controllers, encryption_handler, observer);
   last_created_data_type_manager_ = data_type_manager->AsWeakPtr();
   return data_type_manager;
 }
 
 std::unique_ptr<SyncEngine> FakeSyncApiComponentFactory::CreateSyncEngine(
     const std::string& name,
+    const signin::GaiaIdHash& gaia_id_hash,
     syncer::SyncInvalidationsService* sync_invalidations_service) {
   auto engine = std::make_unique<FakeSyncEngine>(
       allow_fake_engine_init_completion_,
       /*is_first_time_sync_configure=*/!is_first_time_sync_configure_done_,
       /*sync_transport_data_cleared_cb=*/
-      base::BindRepeating(&FakeSyncApiComponentFactory::ClearAllTransportData,
+      base::BindRepeating(&FakeSyncApiComponentFactory::CleanupOnDisableSync,
                           weak_factory_.GetWeakPtr()));
   last_created_engine_ = engine->AsWeakPtr();
   return engine;
 }
 
-bool FakeSyncApiComponentFactory::HasTransportDataIncludingFirstSync() {
+bool FakeSyncApiComponentFactory::HasTransportDataIncludingFirstSync(
+    const signin::GaiaIdHash& gaia_id_hash) {
   return is_first_time_sync_configure_done_;
 }
 
-void FakeSyncApiComponentFactory::ClearAllTransportData() {
+void FakeSyncApiComponentFactory::CleanupOnDisableSync() {
   is_first_time_sync_configure_done_ = false;
 }
+
+void FakeSyncApiComponentFactory::ClearTransportDataForAccount(
+    const signin::GaiaIdHash& gaia_id_hash) {}
 
 }  // namespace syncer

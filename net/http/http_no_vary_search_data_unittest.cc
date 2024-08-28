@@ -2,14 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/http/http_no_vary_search_data.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/types/expected.h"
@@ -117,7 +122,7 @@ TEST_P(HttpNoVarySearchResponseHeadersTest, ParsingSuccess) {
   const TestData test = GetParam();
 
   const std::string raw_headers =
-      net::HttpUtil::AssembleRawHeaders(test.raw_headers);
+      HttpUtil::AssembleRawHeaders(test.raw_headers);
 
   const auto parsed = base::MakeRefCounted<HttpResponseHeaders>(raw_headers);
   ASSERT_OK_AND_ASSIGN(const auto no_vary_search_data,
@@ -144,7 +149,7 @@ class HttpNoVarySearchResponseHeadersParseFailureTest
 TEST_P(HttpNoVarySearchResponseHeadersParseFailureTest,
        ParsingFailureOrDefaultValue) {
   const std::string raw_headers =
-      net::HttpUtil::AssembleRawHeaders(GetParam().raw_headers);
+      HttpUtil::AssembleRawHeaders(GetParam().raw_headers);
 
   const auto parsed = base::MakeRefCounted<HttpResponseHeaders>(raw_headers);
   const auto no_vary_search_data =
@@ -776,7 +781,7 @@ INSTANTIATE_TEST_SUITE_P(HttpNoVarySearchResponseHeadersParseFailureTest,
 struct NoVarySearchCompareTestData {
   const GURL request_url;
   const GURL cached_url;
-  const base::StringPiece raw_headers;
+  const std::string_view raw_headers;
   const bool expected_match;
 };
 
@@ -791,11 +796,11 @@ TEST(HttpNoVarySearchCompare, CheckUrlEqualityWithSpecialCharacters) {
       {"@", "%40"},    {"[", "%5B"},    {"]", R"(%5D)"}, {"^", R"(%5E)"},
       {"_", R"(%5F)"}, {"`", "%60"},    {"{", "%7B"},    {"|", R"(%7C)"},
       {"}", R"(%7D)"}, {"~", R"(%7E)"}, {"", ""}};
-  const base::StringPiece raw_headers =
+  const std::string_view raw_headers =
       "HTTP/1.1 200 OK\r\n"
       R"(No-Vary-Search: params=("c"))"
       "\r\n\r\n";
-  const std::string headers = net::HttpUtil::AssembleRawHeaders(raw_headers);
+  const std::string headers = HttpUtil::AssembleRawHeaders(raw_headers);
   const auto parsed = base::MakeRefCounted<HttpResponseHeaders>(headers);
 
   const auto no_vary_search_data =
@@ -824,7 +829,7 @@ TEST(HttpNoVarySearchCompare, CheckUrlEqualityWithSpecialCharacters) {
     base::ReplaceSubstringsAfterOffset(&header_template, 0, "$key", key);
 
     const auto parsed_header = base::MakeRefCounted<HttpResponseHeaders>(
-        net::HttpUtil::AssembleRawHeaders(header_template));
+        HttpUtil::AssembleRawHeaders(header_template));
     const auto no_vary_search_data_special_char =
         HttpNoVarySearchData::ParseFromHeaders(*parsed_header).value();
 
@@ -833,7 +838,7 @@ TEST(HttpNoVarySearchCompare, CheckUrlEqualityWithSpecialCharacters) {
   }
 }
 
-constexpr std::pair<base::StringPiece, base::StringPiece>
+constexpr std::pair<std::string_view, std::string_view>
     kPercentEncodedNonAsciiKeys[] = {
         {"¢", R"(%C2%A2)"},
         {"¢ ¢", R"(%C2%A2+%C2%A2)"},
@@ -858,7 +863,7 @@ TEST(HttpNoVarySearchCompare,
     base::ReplaceSubstringsAfterOffset(&header_template, 0, "$key", value);
 
     const auto parsed_header = base::MakeRefCounted<HttpResponseHeaders>(
-        net::HttpUtil::AssembleRawHeaders(header_template));
+        HttpUtil::AssembleRawHeaders(header_template));
     const auto no_vary_search_data_special_char =
         HttpNoVarySearchData::ParseFromHeaders(*parsed_header).value();
 
@@ -885,7 +890,7 @@ TEST(HttpNoVarySearchCompare,
     base::ReplaceSubstringsAfterOffset(&header_template, 0, "$key", value);
 
     const auto parsed_header = base::MakeRefCounted<HttpResponseHeaders>(
-        net::HttpUtil::AssembleRawHeaders(header_template));
+        HttpUtil::AssembleRawHeaders(header_template));
     const auto no_vary_search_data_special_char =
         HttpNoVarySearchData::ParseFromHeaders(*parsed_header).value();
 
@@ -905,7 +910,7 @@ TEST_P(HttpNoVarySearchCompare, CheckUrlEqualityByNoVarySearch) {
   const auto& test_data = GetParam();
 
   const std::string headers =
-      net::HttpUtil::AssembleRawHeaders(test_data.raw_headers);
+      HttpUtil::AssembleRawHeaders(test_data.raw_headers);
   const auto parsed = base::MakeRefCounted<HttpResponseHeaders>(headers);
   const auto no_vary_search_data =
       HttpNoVarySearchData::ParseFromHeaders(*parsed).value();

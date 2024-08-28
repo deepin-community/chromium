@@ -49,10 +49,12 @@ class ChromeShellDelegate : public ash::ShellDelegate {
   std::unique_ptr<ash::SystemSoundsDelegate> CreateSystemSoundsDelegate()
       const override;
   std::unique_ptr<ash::api::TasksDelegate> CreateTasksDelegate() const override;
+  std::unique_ptr<ash::FocusModeDelegate> CreateFocusModeDelegate()
+      const override;
   std::unique_ptr<ash::UserEducationDelegate> CreateUserEducationDelegate()
       const override;
   scoped_refptr<network::SharedURLLoaderFactory>
-  GetGeolocationUrlLoaderFactory() const override;
+  GetBrowserProcessUrlLoaderFactory() const override;
   void OpenKeyboardShortcutHelpPage() const override;
   bool CanGoBack(gfx::NativeWindow window) const override;
   void SetTabScrubberChromeOSEnabled(bool enabled) override;
@@ -79,7 +81,8 @@ class ChromeShellDelegate : public ash::ShellDelegate {
   bool IsLoggingRedirectDisabled() const override;
   base::FilePath GetPrimaryUserDownloadsFolder() const override;
   void OpenFeedbackDialog(ShellDelegate::FeedbackSource source,
-                          const std::string& description_template) override;
+                          const std::string& description_template,
+                          const std::string& category_tag) override;
   void OpenProfileManager() override;
   static void SetDisableLoggingRedirectForTesting(bool value);
   static void ResetDisableLoggingRedirectForTesting();
@@ -93,6 +96,7 @@ class ChromeShellDelegate : public ash::ShellDelegate {
       ShouldExitFullscreenCallback callback) override;
   ash::DeskProfilesDelegate* GetDeskProfilesDelegate() override;
   void OpenMultitaskingSettings() override;
+  bool IsNoFirstRunSwitchOn() const override;
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_CHROME_SHELL_DELEGATE_H_

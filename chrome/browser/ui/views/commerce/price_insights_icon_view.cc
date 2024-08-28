@@ -11,17 +11,17 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/commerce/commerce_ui_tab_helper.h"
-#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "components/commerce/core/commerce_feature_list.h"
 #include "components/commerce/core/shopping_service.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/tracker.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_state.h"
 #include "ui/views/view_class_properties.h"
@@ -38,7 +38,7 @@ PriceInsightsIconView::PriceInsightsIconView(
       profile_(profile) {
   SetUpForInOutAnimation();
   SetProperty(views::kElementIdentifierKey, kPriceInsightsChipElementId);
-  SetAccessibilityProperties(
+  GetViewAccessibility().SetProperties(
       /*role*/ std::nullopt,
       l10n_util::GetStringUTF16(IDS_SHOPPING_INSIGHTS_ICON_TOOLTIP_TEXT));
 
@@ -54,9 +54,7 @@ views::BubbleDialogDelegate* PriceInsightsIconView::GetBubble() const {
 }
 
 const gfx::VectorIcon& PriceInsightsIconView::GetVectorIcon() const {
-  return OmniboxFieldTrial::IsChromeRefreshIconsEnabled()
-             ? vector_icons::kShoppingBagRefreshIcon
-             : vector_icons::kShoppingBagIcon;
+  return vector_icons::kShoppingBagRefreshIcon;
 }
 
 void PriceInsightsIconView::UpdateImpl() {
@@ -128,7 +126,7 @@ void PriceInsightsIconView::UpdatePriceInsightsIconLabel() {
     SetLabel(u"", l10n_util::GetStringUTF16(
                       IDS_SHOPPING_INSIGHTS_ICON_TOOLTIP_TEXT));
   }
-  SetPaintLabelOverSolidBackground(true);
+  SetBackgroundVisibility(BackgroundVisibility::kWithLabel);
 }
 
 void PriceInsightsIconView::AnimationProgressed(
@@ -138,9 +136,10 @@ void PriceInsightsIconView::AnimationProgressed(
   // kLabelPersistDuration before resuming the animation and allowing the label
   // to animate out. This is currently set to show for 12s including the in/out
   // animation.
-  // TODO(crbug.com/1314206): This approach of inspecting the animation progress
-  // to extend the animation duration is quite hacky. This should be removed and
-  // the IconLabelBubbleView API expanded to support a finer level of control.
+  // TODO(crbug.com/40832707): This approach of inspecting the animation
+  // progress to extend the animation duration is quite hacky. This should be
+  // removed and the IconLabelBubbleView API expanded to support a finer level
+  // of control.
   constexpr double kAnimationValueWhenLabelFullyShown = 0.5;
   constexpr base::TimeDelta kLabelPersistDuration = base::Seconds(10.8);
   if (should_extend_label_shown_duration_ &&

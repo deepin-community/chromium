@@ -8,13 +8,13 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
@@ -26,6 +26,7 @@
 #include "cc/input/scroll_snap_data.h"
 #include "cc/paint/element_id.h"
 #include "cc/paint/filter_operations.h"
+#include "cc/paint/scroll_offset_map.h"
 #include "cc/trees/clip_node.h"
 #include "cc/trees/effect_node.h"
 #include "cc/trees/mutator_host.h"
@@ -67,6 +68,8 @@ class CC_EXPORT PropertyTree {
   friend class PropertyTrees;
 
  public:
+  using NodeType = T;
+
   PropertyTree(const PropertyTree& other) = delete;
   ~PropertyTree();
   PropertyTree<T>& operator=(const PropertyTree<T>&);
@@ -76,6 +79,9 @@ class CC_EXPORT PropertyTree {
 #endif
 
   int Insert(const T& tree_node, int parent_id);
+
+  // Removes the last `n` nodes from the tree.
+  void RemoveNodes(size_t n);
 
   T* Node(int i) {
     CHECK_LT(i, static_cast<int>(nodes_.size()));
@@ -171,16 +177,37 @@ class CC_EXPORT TransformTree final : public PropertyTree<TransformNode> {
 #endif
 
   int Insert(const TransformNode& tree_node, int parent_id);
+  void RemoveNodes(size_t n);
 
   void clear();
 
   bool OnTransformAnimated(ElementId element_id,
                            const gfx::Transform& transform);
   void ResetChangeTracking();
-  // Updates the parent, target, and screen space transforms and snapping.
+
+  // Updates the parent, target, and screen space transforms and snapping for
+  // all nodes.
+  void UpdateAllTransforms(const ViewportPropertyIds& viewport_property_ids);
+  // UpdateAllTransforms() may update the transform tree in multiple passes.
+  // This struct stores data collected and used across the passes.
+  struct UpdateTransformsData {
+    UpdateTransformsData();
+    ~UpdateTransformsData();
+    // A transform node may depend on a later transform node (e.g. an anchor
+    // position offset node references later adjustment container nodes). When
+    // the former is updated, the latter id will be stored in this set assuming
+    // the depended data is stale. When the latter node is updated, its id will
+    // be removed from this set if it hasn't changed anything affecting the
+    // depending node. If this set is not empty after a pass,
+    // UpdateAllTransforms() will run another pass.
+    base::flat_set<int> stale_forward_dependencies;
+  };
+
+  // Updates transforms for a node.
   void UpdateTransforms(
       int id,
-      const ViewportPropertyIds* viewport_property_ids = nullptr);
+      const ViewportPropertyIds* viewport_property_ids = nullptr,
+      UpdateTransformsData* update_data = nullptr);
   void UpdateTransformChanged(TransformNode* node, TransformNode* parent_node);
   void UpdateNodeAndAncestorsAreAnimatedOrInvertible(
       TransformNode* node,
@@ -268,9 +295,12 @@ class CC_EXPORT TransformTree final : public PropertyTree<TransformNode> {
 
   StickyPositionNodeData* MutableStickyPositionData(int node_id);
   gfx::Vector2dF StickyPositionOffset(TransformNode* node);
-  gfx::Vector2dF AnchorPositionOffset(TransformNode* node);
+  gfx::Vector2dF AnchorPositionOffset(TransformNode* node,
+                                      int max_updated_node_id,
+                                      UpdateTransformsData* update_data);
   void UpdateLocalTransform(TransformNode* node,
-                            const ViewportPropertyIds* viewport_property_ids);
+                            const ViewportPropertyIds* viewport_property_ids,
+                            UpdateTransformsData* update_data);
   void UpdateScreenSpaceTransform(TransformNode* node,
                                   TransformNode* parent_node);
   void UpdateAnimationProperties(TransformNode* node,
@@ -355,6 +385,7 @@ class CC_EXPORT EffectTree final : public PropertyTree<EffectNode> {
 #endif
 
   int Insert(const EffectNode& tree_node, int parent_id);
+  void RemoveNodes(size_t n);
 
   void clear();
 
@@ -372,6 +403,7 @@ class CC_EXPORT EffectTree final : public PropertyTree<EffectNode> {
   void UpdateEffectChanged(EffectNode* node, EffectNode* parent_node);
 
   void UpdateHasFilters(EffectNode* node, EffectNode* parent_node);
+  void UpdateHasFastRoundedCorner(EffectNode* node, EffectNode* parent_node);
 
   typedef std::unordered_multimap<int, std::unique_ptr<viz::CopyOutputRequest>>
       CopyRequestMap;
@@ -402,10 +434,6 @@ class CC_EXPORT EffectTree final : public PropertyTree<EffectNode> {
   const RenderSurfaceImpl* GetRenderSurface(int id) const {
     return render_surfaces_[static_cast<size_t>(id)].get();
   }
-
-  void ClearTransitionPseudoElementEffectNodes();
-  void AddTransitionPseudoElementEffectId(int id);
-  std::vector<RenderSurfaceImpl*> GetTransitionPseudoElementRenderSurfaces();
 
   bool ContributesToDrawnSurface(int id) const;
 
@@ -449,8 +477,6 @@ class CC_EXPORT EffectTree final : public PropertyTree<EffectNode> {
 
   // Indexed by node id.
   std::vector<std::unique_ptr<RenderSurfaceImpl>> render_surfaces_;
-
-  std::unordered_set<int> transition_pseudo_element_effect_nodes_;
 };
 
 // These callbacks are called in the main thread to notify changes of scroll
@@ -514,7 +540,7 @@ class CC_EXPORT ScrollTree final : public PropertyTree<ScrollNode> {
   // Note: Using this method may causes the associated transform node for this
   // scroll node to update its transforms.
   //
-  // TODO(crbug.com/585458): Updating single transform node only works for
+  // TODO(crbug.com/41238797): Updating single transform node only works for
   // simple cases but we really should update the whole transform tree otherwise
   // we are ignoring any parent transform node that needs updating and thus our
   // snap amount can be incorrect.
@@ -555,6 +581,9 @@ class CC_EXPORT ScrollTree final : public PropertyTree<ScrollNode> {
       synced_offset->set_clobber_active_value();
   }
 
+  void SetScrollingContentsCullRect(ElementId id, const gfx::Rect& cull_rect);
+  const gfx::Rect* ScrollingContentsCullRect(ElementId id) const;
+
   SyncedScrollOffset* GetOrCreateSyncedScrollOffsetForTesting(ElementId id);
   bool UpdateScrollOffsetBaseForTesting(ElementId id,
                                         const gfx::PointF& offset);
@@ -586,13 +615,18 @@ class CC_EXPORT ScrollTree final : public PropertyTree<ScrollNode> {
   void NotifyDidChangeScrollbarsHidden(ElementId scroll_element_id,
                                        bool hidden) const;
 
-  // Returns true iff the node is composited and does not have any non-transient
-  // main-thread scrolling reasons (see main_thread_scrolling_reason.h).
-  bool CanRealizeScrollsOnCompositor(const ScrollNode& node) const;
+  // These functions determines how the rendered result of a compositor-
+  // initiated scroll should be realized by updating the scroll offset in
+  // the associated transform node.
+  // All of them return false if `node.transform_id` is invalid which means
+  // Blink didn't paint the transform node because the scrolling contents
+  // were far from the viewport and we don't need to realize the scrolls.
+  bool CanRealizeScrollsOnActiveTree(const ScrollNode& node) const;
+  bool CanRealizeScrollsOnPendingTree(const ScrollNode& node) const;
+  bool ShouldRealizeScrollsOnMain(const ScrollNode& node) const;
 
-  // Reports reasons for blocking scroll updates on main-thread repaint. For use
-  // only with scroll unification enabled. Returns bitfield of values from
-  // MainThreadScrollingReason.
+  // Reports reasons for blocking scroll updates on main-thread repaint.
+  // Returns bitfield of values from MainThreadScrollingReason.
   uint32_t GetMainThreadRepaintReasons(const ScrollNode& node) const;
 
  private:
@@ -600,7 +634,6 @@ class CC_EXPORT ScrollTree final : public PropertyTree<ScrollNode> {
   using PropertyTree::needs_update;
   using PropertyTree::set_needs_update;
 
-  using ScrollOffsetMap = base::flat_map<ElementId, gfx::PointF>;
   using SyncedScrollOffsetMap =
       base::flat_map<ElementId, scoped_refptr<SyncedScrollOffset>>;
 
@@ -613,6 +646,9 @@ class CC_EXPORT ScrollTree final : public PropertyTree<ScrollNode> {
   // and impl threads.
   ScrollOffsetMap scroll_offset_map_;
   SyncedScrollOffsetMap synced_scroll_offset_map_;
+
+  // Maps from scroll element id to scrolling contents cull rect.
+  base::flat_map<ElementId, gfx::Rect> scrolling_contents_cull_rects_;
 
   base::WeakPtr<ScrollCallbacks> callbacks_;
 

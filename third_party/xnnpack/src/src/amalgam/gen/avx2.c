@@ -2,32 +2,42 @@
 //
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
+//
+// Auto-generated file. Do not edit!
+//   Generator: tools/update-microkernels.py -a
 
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
+#ifndef M_LN2
+#define M_LN2 0.69314718055994531
+#endif  // M_LN2
 
 #include <immintrin.h>
 
-#include <xnnpack/common.h>
-#include <xnnpack/dwconv.h>
-#include <xnnpack/gemm.h>
-#include <xnnpack/igemm.h>
-#include <xnnpack/intrinsics-polyfill.h>
-#include <xnnpack/lut.h>
-#include <xnnpack/math.h>
-#include <xnnpack/microparams.h>
-#include <xnnpack/pavgpool.h>
-#include <xnnpack/raddstoreexpminusmax.h>
-#include <xnnpack/transpose.h>
-#include <xnnpack/unaligned.h>
-#include <xnnpack/vbinary.h>
-#include <xnnpack/vcvt.h>
-#include <xnnpack/vlrelu.h>
-#include <xnnpack/vunary.h>
+#include "xnnpack/common.h"
+#include "xnnpack/dwconv.h"
+#include "xnnpack/gemm.h"
+#include "xnnpack/igemm.h"
+#include "xnnpack/intrinsics-polyfill.h"
+#include "xnnpack/lut.h"
+#include "xnnpack/math.h"
+#include "xnnpack/microparams.h"
+#include "xnnpack/packw.h"
+#include "xnnpack/pavgpool.h"
+#include "xnnpack/prefetch.h"
+#include "xnnpack/raddstoreexpminusmax.h"
+#include "xnnpack/simd/f32-avx2.h"
+#include "xnnpack/transpose.h"
+#include "xnnpack/unaligned.h"
+#include "xnnpack/vbinary.h"
+#include "xnnpack/vcvt.h"
+#include "xnnpack/vlrelu.h"
+#include "xnnpack/vunary.h"
 
 
-void xnn_f16_gemm_minmax_ukernel_1x16__avx2_broadcast(
+void xnn_f16_f32acc_gemm_minmax_ukernel_1x16__avx2_broadcast(
     size_t mr,
     size_t nc,
     size_t kc,
@@ -52,8 +62,8 @@ void xnn_f16_gemm_minmax_ukernel_1x16__avx2_broadcast(
   uint16_t* c0 = c;
 
   do {
-    __m256 vacc0x01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-    __m256 vacc0x89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+    __m256 vacc0x0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+    __m256 vacc0x1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
     w = (const uint16_t*) w + 16;
 
     size_t k = kc;
@@ -61,57 +71,57 @@ void xnn_f16_gemm_minmax_ukernel_1x16__avx2_broadcast(
       const __m256 va0 = _mm256_cvtph_ps(_mm_set1_epi16((short) *a0));
       a0 += 1;
 
-      const __m256 vb01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-      const __m256 vb89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+      const __m256 vb0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+      const __m256 vb1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
       w = (const uint16_t*) w + 16;
 
-      vacc0x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb01234567, vacc0x01234567), _MM_FROUND_TO_NEAREST_INT));
-      vacc0x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb89ABCDEF, vacc0x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
+      vacc0x0 = _mm256_fmadd_ps(va0, vb0, vacc0x0);
+      vacc0x1 = _mm256_fmadd_ps(va0, vb1, vacc0x1);
 
       k -= sizeof(uint16_t);
     } while (k != 0);
 
     const __m256 vmin = _mm256_load_ps(params->avx.min);
-    vacc0x01234567 = _mm256_max_ps(vacc0x01234567, vmin);
-    vacc0x89ABCDEF = _mm256_max_ps(vacc0x89ABCDEF, vmin);
+    vacc0x0 = _mm256_max_ps(vacc0x0, vmin);
+    vacc0x1 = _mm256_max_ps(vacc0x1, vmin);
 
     const __m256 vmax = _mm256_load_ps(params->avx.max);
-    vacc0x01234567 = _mm256_min_ps(vacc0x01234567, vmax);
-    vacc0x89ABCDEF = _mm256_min_ps(vacc0x89ABCDEF, vmax);
+    vacc0x0 = _mm256_min_ps(vacc0x0, vmax);
+    vacc0x1 = _mm256_min_ps(vacc0x1, vmax);
 
     if XNN_LIKELY(nc >= 16) {
-      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT));
       c0 = (uint16_t*) ((uintptr_t) c0 + cn_stride);
 
       a0 = (const uint16_t*) ((uintptr_t) a0 - kc);
 
       nc -= 16;
     } else {
-      __m128i vh0x01234567 = _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh0x0 = _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT);
       if (nc & 8) {
-        _mm_storeu_si128((__m128i*) c0, vh0x01234567);
+        _mm_storeu_si128((__m128i*) c0, vh0x0);
 
-        vh0x01234567 = _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
+        vh0x0 = _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT);
 
         c0 += 8;
       }
       if (nc & 4) {
-        _mm_storel_epi64((__m128i*) c0, vh0x01234567);
+        _mm_storel_epi64((__m128i*) c0, vh0x0);
 
-        vh0x01234567 = _mm_unpackhi_epi64(vh0x01234567, vh0x01234567);
+        vh0x0 = _mm_unpackhi_epi64(vh0x0, vh0x0);
 
         c0 += 4;
       }
       if (nc & 2) {
-        _mm_storeu_si32(c0, vh0x01234567);
+        _mm_storeu_si32(c0, vh0x0);
 
-        vh0x01234567 = _mm_srli_epi64(vh0x01234567, 32);
+        vh0x0 = _mm_srli_epi64(vh0x0, 32);
 
         c0 += 2;
       }
       if (nc & 1) {
-        *c0 = (uint16_t) _mm_extract_epi16(vh0x01234567, 0);
+        *c0 = (uint16_t) _mm_extract_epi16(vh0x0, 0);
       }
 
       nc = 0;
@@ -119,7 +129,7 @@ void xnn_f16_gemm_minmax_ukernel_1x16__avx2_broadcast(
   } while (nc != 0);
 }
 
-void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
+void xnn_f16_f32acc_gemm_minmax_ukernel_4x16__avx2_broadcast(
     size_t mr,
     size_t nc,
     size_t kc,
@@ -162,14 +172,14 @@ void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
   }
 
   do {
-    __m256 vacc0x01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-    __m256 vacc0x89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
-    __m256 vacc1x01234567 = vacc0x01234567;
-    __m256 vacc1x89ABCDEF = vacc0x89ABCDEF;
-    __m256 vacc2x01234567 = vacc0x01234567;
-    __m256 vacc2x89ABCDEF = vacc0x89ABCDEF;
-    __m256 vacc3x01234567 = vacc0x01234567;
-    __m256 vacc3x89ABCDEF = vacc0x89ABCDEF;
+    __m256 vacc0x0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+    __m256 vacc0x1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+    __m256 vacc1x0 = vacc0x0;
+    __m256 vacc1x1 = vacc0x1;
+    __m256 vacc2x0 = vacc0x0;
+    __m256 vacc2x1 = vacc0x1;
+    __m256 vacc3x0 = vacc0x0;
+    __m256 vacc3x1 = vacc0x1;
     w = (const uint16_t*) w + 16;
 
     size_t k = kc;
@@ -183,54 +193,54 @@ void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
       const __m256 va3 = _mm256_cvtph_ps(_mm_set1_epi16((short) *a3));
       a3 += 1;
 
-      const __m256 vb01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-      const __m256 vb89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+      const __m256 vb0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+      const __m256 vb1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
       w = (const uint16_t*) w + 16;
 
-      vacc0x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb01234567, vacc0x01234567), _MM_FROUND_TO_NEAREST_INT));
-      vacc1x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va1, vb01234567, vacc1x01234567), _MM_FROUND_TO_NEAREST_INT));
-      vacc2x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va2, vb01234567, vacc2x01234567), _MM_FROUND_TO_NEAREST_INT));
-      vacc3x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va3, vb01234567, vacc3x01234567), _MM_FROUND_TO_NEAREST_INT));
-      vacc0x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb89ABCDEF, vacc0x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
-      vacc1x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va1, vb89ABCDEF, vacc1x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
-      vacc2x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va2, vb89ABCDEF, vacc2x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
-      vacc3x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va3, vb89ABCDEF, vacc3x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
+      vacc0x0 = _mm256_fmadd_ps(va0, vb0, vacc0x0);
+      vacc1x0 = _mm256_fmadd_ps(va1, vb0, vacc1x0);
+      vacc2x0 = _mm256_fmadd_ps(va2, vb0, vacc2x0);
+      vacc3x0 = _mm256_fmadd_ps(va3, vb0, vacc3x0);
+      vacc0x1 = _mm256_fmadd_ps(va0, vb1, vacc0x1);
+      vacc1x1 = _mm256_fmadd_ps(va1, vb1, vacc1x1);
+      vacc2x1 = _mm256_fmadd_ps(va2, vb1, vacc2x1);
+      vacc3x1 = _mm256_fmadd_ps(va3, vb1, vacc3x1);
 
       k -= sizeof(uint16_t);
     } while (k != 0);
 
     const __m256 vmin = _mm256_load_ps(params->avx.min);
-    vacc0x01234567 = _mm256_max_ps(vacc0x01234567, vmin);
-    vacc1x01234567 = _mm256_max_ps(vacc1x01234567, vmin);
-    vacc2x01234567 = _mm256_max_ps(vacc2x01234567, vmin);
-    vacc3x01234567 = _mm256_max_ps(vacc3x01234567, vmin);
-    vacc0x89ABCDEF = _mm256_max_ps(vacc0x89ABCDEF, vmin);
-    vacc1x89ABCDEF = _mm256_max_ps(vacc1x89ABCDEF, vmin);
-    vacc2x89ABCDEF = _mm256_max_ps(vacc2x89ABCDEF, vmin);
-    vacc3x89ABCDEF = _mm256_max_ps(vacc3x89ABCDEF, vmin);
+    vacc0x0 = _mm256_max_ps(vacc0x0, vmin);
+    vacc1x0 = _mm256_max_ps(vacc1x0, vmin);
+    vacc2x0 = _mm256_max_ps(vacc2x0, vmin);
+    vacc3x0 = _mm256_max_ps(vacc3x0, vmin);
+    vacc0x1 = _mm256_max_ps(vacc0x1, vmin);
+    vacc1x1 = _mm256_max_ps(vacc1x1, vmin);
+    vacc2x1 = _mm256_max_ps(vacc2x1, vmin);
+    vacc3x1 = _mm256_max_ps(vacc3x1, vmin);
 
     const __m256 vmax = _mm256_load_ps(params->avx.max);
-    vacc0x01234567 = _mm256_min_ps(vacc0x01234567, vmax);
-    vacc1x01234567 = _mm256_min_ps(vacc1x01234567, vmax);
-    vacc2x01234567 = _mm256_min_ps(vacc2x01234567, vmax);
-    vacc3x01234567 = _mm256_min_ps(vacc3x01234567, vmax);
-    vacc0x89ABCDEF = _mm256_min_ps(vacc0x89ABCDEF, vmax);
-    vacc1x89ABCDEF = _mm256_min_ps(vacc1x89ABCDEF, vmax);
-    vacc2x89ABCDEF = _mm256_min_ps(vacc2x89ABCDEF, vmax);
-    vacc3x89ABCDEF = _mm256_min_ps(vacc3x89ABCDEF, vmax);
+    vacc0x0 = _mm256_min_ps(vacc0x0, vmax);
+    vacc1x0 = _mm256_min_ps(vacc1x0, vmax);
+    vacc2x0 = _mm256_min_ps(vacc2x0, vmax);
+    vacc3x0 = _mm256_min_ps(vacc3x0, vmax);
+    vacc0x1 = _mm256_min_ps(vacc0x1, vmax);
+    vacc1x1 = _mm256_min_ps(vacc1x1, vmax);
+    vacc2x1 = _mm256_min_ps(vacc2x1, vmax);
+    vacc3x1 = _mm256_min_ps(vacc3x1, vmax);
 
     if XNN_LIKELY(nc >= 16) {
-      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT));
       c0 = (uint16_t*) ((uintptr_t) c0 + cn_stride);
-      _mm_storeu_si128((__m128i*) c1, _mm256_cvtps_ph(vacc1x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c1 + 8), _mm256_cvtps_ph(vacc1x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c1, _mm256_cvtps_ph(vacc1x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c1 + 8), _mm256_cvtps_ph(vacc1x1, _MM_FROUND_TO_NEAREST_INT));
       c1 = (uint16_t*) ((uintptr_t) c1 + cn_stride);
-      _mm_storeu_si128((__m128i*) c2, _mm256_cvtps_ph(vacc2x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c2 + 8), _mm256_cvtps_ph(vacc2x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c2, _mm256_cvtps_ph(vacc2x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c2 + 8), _mm256_cvtps_ph(vacc2x1, _MM_FROUND_TO_NEAREST_INT));
       c2 = (uint16_t*) ((uintptr_t) c2 + cn_stride);
-      _mm_storeu_si128((__m128i*) c3, _mm256_cvtps_ph(vacc3x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c3 + 8), _mm256_cvtps_ph(vacc3x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c3, _mm256_cvtps_ph(vacc3x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c3 + 8), _mm256_cvtps_ph(vacc3x1, _MM_FROUND_TO_NEAREST_INT));
       c3 = (uint16_t*) ((uintptr_t) c3 + cn_stride);
 
       a0 = (const uint16_t*) ((uintptr_t) a0 - kc);
@@ -240,20 +250,20 @@ void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
 
       nc -= 16;
     } else {
-      __m128i vh0x01234567 = _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT);
-      __m128i vh1x01234567 = _mm256_cvtps_ph(vacc1x01234567, _MM_FROUND_TO_NEAREST_INT);
-      __m128i vh2x01234567 = _mm256_cvtps_ph(vacc2x01234567, _MM_FROUND_TO_NEAREST_INT);
-      __m128i vh3x01234567 = _mm256_cvtps_ph(vacc3x01234567, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh0x0 = _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh1x0 = _mm256_cvtps_ph(vacc1x0, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh2x0 = _mm256_cvtps_ph(vacc2x0, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh3x0 = _mm256_cvtps_ph(vacc3x0, _MM_FROUND_TO_NEAREST_INT);
       if (nc & 8) {
-        _mm_storeu_si128((__m128i*) c0, vh0x01234567);
-        _mm_storeu_si128((__m128i*) c1, vh1x01234567);
-        _mm_storeu_si128((__m128i*) c2, vh2x01234567);
-        _mm_storeu_si128((__m128i*) c3, vh3x01234567);
+        _mm_storeu_si128((__m128i*) c0, vh0x0);
+        _mm_storeu_si128((__m128i*) c1, vh1x0);
+        _mm_storeu_si128((__m128i*) c2, vh2x0);
+        _mm_storeu_si128((__m128i*) c3, vh3x0);
 
-        vh0x01234567 = _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
-        vh1x01234567 = _mm256_cvtps_ph(vacc1x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
-        vh2x01234567 = _mm256_cvtps_ph(vacc2x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
-        vh3x01234567 = _mm256_cvtps_ph(vacc3x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
+        vh0x0 = _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT);
+        vh1x0 = _mm256_cvtps_ph(vacc1x1, _MM_FROUND_TO_NEAREST_INT);
+        vh2x0 = _mm256_cvtps_ph(vacc2x1, _MM_FROUND_TO_NEAREST_INT);
+        vh3x0 = _mm256_cvtps_ph(vacc3x1, _MM_FROUND_TO_NEAREST_INT);
 
         c0 += 8;
         c1 += 8;
@@ -261,15 +271,15 @@ void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
         c3 += 8;
       }
       if (nc & 4) {
-        _mm_storel_epi64((__m128i*) c0, vh0x01234567);
-        _mm_storel_epi64((__m128i*) c1, vh1x01234567);
-        _mm_storel_epi64((__m128i*) c2, vh2x01234567);
-        _mm_storel_epi64((__m128i*) c3, vh3x01234567);
+        _mm_storel_epi64((__m128i*) c0, vh0x0);
+        _mm_storel_epi64((__m128i*) c1, vh1x0);
+        _mm_storel_epi64((__m128i*) c2, vh2x0);
+        _mm_storel_epi64((__m128i*) c3, vh3x0);
 
-        vh0x01234567 = _mm_unpackhi_epi64(vh0x01234567, vh0x01234567);
-        vh1x01234567 = _mm_unpackhi_epi64(vh1x01234567, vh1x01234567);
-        vh2x01234567 = _mm_unpackhi_epi64(vh2x01234567, vh2x01234567);
-        vh3x01234567 = _mm_unpackhi_epi64(vh3x01234567, vh3x01234567);
+        vh0x0 = _mm_unpackhi_epi64(vh0x0, vh0x0);
+        vh1x0 = _mm_unpackhi_epi64(vh1x0, vh1x0);
+        vh2x0 = _mm_unpackhi_epi64(vh2x0, vh2x0);
+        vh3x0 = _mm_unpackhi_epi64(vh3x0, vh3x0);
 
         c0 += 4;
         c1 += 4;
@@ -277,15 +287,15 @@ void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
         c3 += 4;
       }
       if (nc & 2) {
-        _mm_storeu_si32(c0, vh0x01234567);
-        _mm_storeu_si32(c1, vh1x01234567);
-        _mm_storeu_si32(c2, vh2x01234567);
-        _mm_storeu_si32(c3, vh3x01234567);
+        _mm_storeu_si32(c0, vh0x0);
+        _mm_storeu_si32(c1, vh1x0);
+        _mm_storeu_si32(c2, vh2x0);
+        _mm_storeu_si32(c3, vh3x0);
 
-        vh0x01234567 = _mm_srli_epi64(vh0x01234567, 32);
-        vh1x01234567 = _mm_srli_epi64(vh1x01234567, 32);
-        vh2x01234567 = _mm_srli_epi64(vh2x01234567, 32);
-        vh3x01234567 = _mm_srli_epi64(vh3x01234567, 32);
+        vh0x0 = _mm_srli_epi64(vh0x0, 32);
+        vh1x0 = _mm_srli_epi64(vh1x0, 32);
+        vh2x0 = _mm_srli_epi64(vh2x0, 32);
+        vh3x0 = _mm_srli_epi64(vh3x0, 32);
 
         c0 += 2;
         c1 += 2;
@@ -293,10 +303,10 @@ void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
         c3 += 2;
       }
       if (nc & 1) {
-        *c0 = (uint16_t) _mm_extract_epi16(vh0x01234567, 0);
-        *c1 = (uint16_t) _mm_extract_epi16(vh1x01234567, 0);
-        *c2 = (uint16_t) _mm_extract_epi16(vh2x01234567, 0);
-        *c3 = (uint16_t) _mm_extract_epi16(vh3x01234567, 0);
+        *c0 = (uint16_t) _mm_extract_epi16(vh0x0, 0);
+        *c1 = (uint16_t) _mm_extract_epi16(vh1x0, 0);
+        *c2 = (uint16_t) _mm_extract_epi16(vh2x0, 0);
+        *c3 = (uint16_t) _mm_extract_epi16(vh3x0, 0);
       }
 
       nc = 0;
@@ -304,7 +314,7 @@ void xnn_f16_gemm_minmax_ukernel_4x16__avx2_broadcast(
   } while (nc != 0);
 }
 
-void xnn_f16_igemm_minmax_ukernel_1x16__avx2_broadcast(
+void xnn_f16_f32acc_igemm_minmax_ukernel_1x16__avx2_broadcast(
     size_t mr,
     size_t nc,
     size_t kc,
@@ -333,8 +343,8 @@ void xnn_f16_igemm_minmax_ukernel_1x16__avx2_broadcast(
   uint16_t* c0 = c;
 
   do {
-    __m256 vacc0x01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-    __m256 vacc0x89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+    __m256 vacc0x0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+    __m256 vacc0x1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
     w = (const uint16_t*) w + 16;
 
     size_t p = ks;
@@ -348,15 +358,15 @@ void xnn_f16_igemm_minmax_ukernel_1x16__avx2_broadcast(
 
       size_t k = kc;
       do {
-        const __m256 vb01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-        const __m256 vb89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+        const __m256 vb0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+        const __m256 vb1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
         w = (const uint16_t*) w + 16;
 
         const __m256 va0 = _mm256_cvtph_ps(_mm_set1_epi16((short) *a0));
         a0 += 1;
 
-        vacc0x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb01234567, vacc0x01234567), _MM_FROUND_TO_NEAREST_INT));
-        vacc0x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb89ABCDEF, vacc0x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
+        vacc0x0 = _mm256_fmadd_ps(va0, vb0, vacc0x0);
+        vacc0x1 = _mm256_fmadd_ps(va0, vb1, vacc0x1);
 
         k -= sizeof(uint16_t);
       } while (k != 0);
@@ -364,45 +374,45 @@ void xnn_f16_igemm_minmax_ukernel_1x16__avx2_broadcast(
     } while (p != 0);
 
     const __m256 vmin = _mm256_load_ps(params->avx.min);
-    vacc0x01234567 = _mm256_max_ps(vacc0x01234567, vmin);
-    vacc0x89ABCDEF = _mm256_max_ps(vacc0x89ABCDEF, vmin);
+    vacc0x0 = _mm256_max_ps(vacc0x0, vmin);
+    vacc0x1 = _mm256_max_ps(vacc0x1, vmin);
 
     const __m256 vmax = _mm256_load_ps(params->avx.max);
-    vacc0x01234567 = _mm256_min_ps(vacc0x01234567, vmax);
-    vacc0x89ABCDEF = _mm256_min_ps(vacc0x89ABCDEF, vmax);
+    vacc0x0 = _mm256_min_ps(vacc0x0, vmax);
+    vacc0x1 = _mm256_min_ps(vacc0x1, vmax);
 
     if XNN_LIKELY(nc >= 16) {
-      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT));
       c0 = (uint16_t*) ((uintptr_t) c0 + cn_stride);
 
       a = (const void**restrict) ((uintptr_t) a - ks);
       nc -= 16;
     } else {
-      __m128i vh0x01234567 = _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh0x0 = _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT);
       if (nc & 8) {
-        _mm_storeu_si128((__m128i*) c0, vh0x01234567);
+        _mm_storeu_si128((__m128i*) c0, vh0x0);
 
-        vh0x01234567 = _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
+        vh0x0 = _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT);
 
         c0 += 8;
       }
       if (nc & 4) {
-        _mm_storel_epi64((__m128i*) c0, vh0x01234567);
+        _mm_storel_epi64((__m128i*) c0, vh0x0);
 
-        vh0x01234567 = _mm_unpackhi_epi64(vh0x01234567, vh0x01234567);
+        vh0x0 = _mm_unpackhi_epi64(vh0x0, vh0x0);
 
         c0 += 4;
       }
       if (nc & 2) {
-        _mm_storeu_si32(c0, vh0x01234567);
+        _mm_storeu_si32(c0, vh0x0);
 
-        vh0x01234567 = _mm_srli_epi64(vh0x01234567, 32);
+        vh0x0 = _mm_srli_epi64(vh0x0, 32);
 
         c0 += 2;
       }
       if (nc & 1) {
-        *c0 = _mm_extract_epi16(vh0x01234567, 0);
+        *c0 = _mm_extract_epi16(vh0x0, 0);
       }
 
       nc = 0;
@@ -410,7 +420,7 @@ void xnn_f16_igemm_minmax_ukernel_1x16__avx2_broadcast(
   } while (nc != 0);
 }
 
-void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
+void xnn_f16_f32acc_igemm_minmax_ukernel_4x16__avx2_broadcast(
     size_t mr,
     size_t nc,
     size_t kc,
@@ -451,14 +461,14 @@ void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
   }
 
   do {
-    __m256 vacc0x01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-    __m256 vacc0x89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
-    __m256 vacc1x01234567 = vacc0x01234567;
-    __m256 vacc1x89ABCDEF = vacc0x89ABCDEF;
-    __m256 vacc2x01234567 = vacc0x01234567;
-    __m256 vacc2x89ABCDEF = vacc0x89ABCDEF;
-    __m256 vacc3x01234567 = vacc0x01234567;
-    __m256 vacc3x89ABCDEF = vacc0x89ABCDEF;
+    __m256 vacc0x0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+    __m256 vacc0x1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+    __m256 vacc1x0 = vacc0x0;
+    __m256 vacc1x1 = vacc0x1;
+    __m256 vacc2x0 = vacc0x0;
+    __m256 vacc2x1 = vacc0x1;
+    __m256 vacc3x0 = vacc0x0;
+    __m256 vacc3x1 = vacc0x1;
     w = (const uint16_t*) w + 16;
 
     size_t p = ks;
@@ -487,8 +497,8 @@ void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
 
       size_t k = kc;
       do {
-        const __m256 vb01234567 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
-        const __m256 vb89ABCDEF = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
+        const __m256 vb0 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) w));
+        const __m256 vb1 = _mm256_cvtph_ps(_mm_load_si128((const __m128i*) ((const uint16_t*) w + 8)));
         w = (const uint16_t*) w + 16;
 
         const __m256 va0 = _mm256_cvtph_ps(_mm_set1_epi16((short) *a0));
@@ -500,14 +510,14 @@ void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
         const __m256 va3 = _mm256_cvtph_ps(_mm_set1_epi16((short) *a3));
         a3 += 1;
 
-        vacc0x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb01234567, vacc0x01234567), _MM_FROUND_TO_NEAREST_INT));
-        vacc0x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va0, vb89ABCDEF, vacc0x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
-        vacc1x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va1, vb01234567, vacc1x01234567), _MM_FROUND_TO_NEAREST_INT));
-        vacc1x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va1, vb89ABCDEF, vacc1x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
-        vacc2x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va2, vb01234567, vacc2x01234567), _MM_FROUND_TO_NEAREST_INT));
-        vacc2x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va2, vb89ABCDEF, vacc2x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
-        vacc3x01234567 = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va3, vb01234567, vacc3x01234567), _MM_FROUND_TO_NEAREST_INT));
-        vacc3x89ABCDEF = _mm256_cvtph_ps(_mm256_cvtps_ph(_mm256_fmadd_ps(va3, vb89ABCDEF, vacc3x89ABCDEF), _MM_FROUND_TO_NEAREST_INT));
+        vacc0x0 = _mm256_fmadd_ps(va0, vb0, vacc0x0);
+        vacc0x1 = _mm256_fmadd_ps(va0, vb1, vacc0x1);
+        vacc1x0 = _mm256_fmadd_ps(va1, vb0, vacc1x0);
+        vacc1x1 = _mm256_fmadd_ps(va1, vb1, vacc1x1);
+        vacc2x0 = _mm256_fmadd_ps(va2, vb0, vacc2x0);
+        vacc2x1 = _mm256_fmadd_ps(va2, vb1, vacc2x1);
+        vacc3x0 = _mm256_fmadd_ps(va3, vb0, vacc3x0);
+        vacc3x1 = _mm256_fmadd_ps(va3, vb1, vacc3x1);
 
         k -= sizeof(uint16_t);
       } while (k != 0);
@@ -515,56 +525,56 @@ void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
     } while (p != 0);
 
     const __m256 vmin = _mm256_load_ps(params->avx.min);
-    vacc0x01234567 = _mm256_max_ps(vacc0x01234567, vmin);
-    vacc1x01234567 = _mm256_max_ps(vacc1x01234567, vmin);
-    vacc2x01234567 = _mm256_max_ps(vacc2x01234567, vmin);
-    vacc3x01234567 = _mm256_max_ps(vacc3x01234567, vmin);
-    vacc0x89ABCDEF = _mm256_max_ps(vacc0x89ABCDEF, vmin);
-    vacc1x89ABCDEF = _mm256_max_ps(vacc1x89ABCDEF, vmin);
-    vacc2x89ABCDEF = _mm256_max_ps(vacc2x89ABCDEF, vmin);
-    vacc3x89ABCDEF = _mm256_max_ps(vacc3x89ABCDEF, vmin);
+    vacc0x0 = _mm256_max_ps(vacc0x0, vmin);
+    vacc1x0 = _mm256_max_ps(vacc1x0, vmin);
+    vacc2x0 = _mm256_max_ps(vacc2x0, vmin);
+    vacc3x0 = _mm256_max_ps(vacc3x0, vmin);
+    vacc0x1 = _mm256_max_ps(vacc0x1, vmin);
+    vacc1x1 = _mm256_max_ps(vacc1x1, vmin);
+    vacc2x1 = _mm256_max_ps(vacc2x1, vmin);
+    vacc3x1 = _mm256_max_ps(vacc3x1, vmin);
 
     const __m256 vmax = _mm256_load_ps(params->avx.max);
-    vacc0x01234567 = _mm256_min_ps(vacc0x01234567, vmax);
-    vacc1x01234567 = _mm256_min_ps(vacc1x01234567, vmax);
-    vacc2x01234567 = _mm256_min_ps(vacc2x01234567, vmax);
-    vacc3x01234567 = _mm256_min_ps(vacc3x01234567, vmax);
-    vacc0x89ABCDEF = _mm256_min_ps(vacc0x89ABCDEF, vmax);
-    vacc1x89ABCDEF = _mm256_min_ps(vacc1x89ABCDEF, vmax);
-    vacc2x89ABCDEF = _mm256_min_ps(vacc2x89ABCDEF, vmax);
-    vacc3x89ABCDEF = _mm256_min_ps(vacc3x89ABCDEF, vmax);
+    vacc0x0 = _mm256_min_ps(vacc0x0, vmax);
+    vacc1x0 = _mm256_min_ps(vacc1x0, vmax);
+    vacc2x0 = _mm256_min_ps(vacc2x0, vmax);
+    vacc3x0 = _mm256_min_ps(vacc3x0, vmax);
+    vacc0x1 = _mm256_min_ps(vacc0x1, vmax);
+    vacc1x1 = _mm256_min_ps(vacc1x1, vmax);
+    vacc2x1 = _mm256_min_ps(vacc2x1, vmax);
+    vacc3x1 = _mm256_min_ps(vacc3x1, vmax);
 
     if XNN_LIKELY(nc >= 16) {
-      _mm_storeu_si128((__m128i*) c3, _mm256_cvtps_ph(vacc3x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c3 + 8), _mm256_cvtps_ph(vacc3x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c3, _mm256_cvtps_ph(vacc3x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c3 + 8), _mm256_cvtps_ph(vacc3x1, _MM_FROUND_TO_NEAREST_INT));
       c3 = (uint16_t*) ((uintptr_t) c3 + cn_stride);
-      _mm_storeu_si128((__m128i*) c2, _mm256_cvtps_ph(vacc2x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c2 + 8), _mm256_cvtps_ph(vacc2x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c2, _mm256_cvtps_ph(vacc2x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c2 + 8), _mm256_cvtps_ph(vacc2x1, _MM_FROUND_TO_NEAREST_INT));
       c2 = (uint16_t*) ((uintptr_t) c2 + cn_stride);
-      _mm_storeu_si128((__m128i*) c1, _mm256_cvtps_ph(vacc1x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c1 + 8), _mm256_cvtps_ph(vacc1x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c1, _mm256_cvtps_ph(vacc1x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c1 + 8), _mm256_cvtps_ph(vacc1x1, _MM_FROUND_TO_NEAREST_INT));
       c1 = (uint16_t*) ((uintptr_t) c1 + cn_stride);
-      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT));
-      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) c0, _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT));
+      _mm_storeu_si128((__m128i*) (c0 + 8), _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT));
       c0 = (uint16_t*) ((uintptr_t) c0 + cn_stride);
 
       a = (const void**restrict) ((uintptr_t) a - ks);
       nc -= 16;
     } else {
-      __m128i vh3x01234567 = _mm256_cvtps_ph(vacc3x01234567, _MM_FROUND_TO_NEAREST_INT);
-      __m128i vh2x01234567 = _mm256_cvtps_ph(vacc2x01234567, _MM_FROUND_TO_NEAREST_INT);
-      __m128i vh1x01234567 = _mm256_cvtps_ph(vacc1x01234567, _MM_FROUND_TO_NEAREST_INT);
-      __m128i vh0x01234567 = _mm256_cvtps_ph(vacc0x01234567, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh3x0 = _mm256_cvtps_ph(vacc3x0, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh2x0 = _mm256_cvtps_ph(vacc2x0, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh1x0 = _mm256_cvtps_ph(vacc1x0, _MM_FROUND_TO_NEAREST_INT);
+      __m128i vh0x0 = _mm256_cvtps_ph(vacc0x0, _MM_FROUND_TO_NEAREST_INT);
       if (nc & 8) {
-        _mm_storeu_si128((__m128i*) c3, vh3x01234567);
-        _mm_storeu_si128((__m128i*) c2, vh2x01234567);
-        _mm_storeu_si128((__m128i*) c1, vh1x01234567);
-        _mm_storeu_si128((__m128i*) c0, vh0x01234567);
+        _mm_storeu_si128((__m128i*) c3, vh3x0);
+        _mm_storeu_si128((__m128i*) c2, vh2x0);
+        _mm_storeu_si128((__m128i*) c1, vh1x0);
+        _mm_storeu_si128((__m128i*) c0, vh0x0);
 
-        vh3x01234567 = _mm256_cvtps_ph(vacc3x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
-        vh2x01234567 = _mm256_cvtps_ph(vacc2x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
-        vh1x01234567 = _mm256_cvtps_ph(vacc1x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
-        vh0x01234567 = _mm256_cvtps_ph(vacc0x89ABCDEF, _MM_FROUND_TO_NEAREST_INT);
+        vh3x0 = _mm256_cvtps_ph(vacc3x1, _MM_FROUND_TO_NEAREST_INT);
+        vh2x0 = _mm256_cvtps_ph(vacc2x1, _MM_FROUND_TO_NEAREST_INT);
+        vh1x0 = _mm256_cvtps_ph(vacc1x1, _MM_FROUND_TO_NEAREST_INT);
+        vh0x0 = _mm256_cvtps_ph(vacc0x1, _MM_FROUND_TO_NEAREST_INT);
 
         c3 += 8;
         c2 += 8;
@@ -572,15 +582,15 @@ void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
         c0 += 8;
       }
       if (nc & 4) {
-        _mm_storel_epi64((__m128i*) c3, vh3x01234567);
-        _mm_storel_epi64((__m128i*) c2, vh2x01234567);
-        _mm_storel_epi64((__m128i*) c1, vh1x01234567);
-        _mm_storel_epi64((__m128i*) c0, vh0x01234567);
+        _mm_storel_epi64((__m128i*) c3, vh3x0);
+        _mm_storel_epi64((__m128i*) c2, vh2x0);
+        _mm_storel_epi64((__m128i*) c1, vh1x0);
+        _mm_storel_epi64((__m128i*) c0, vh0x0);
 
-        vh3x01234567 = _mm_unpackhi_epi64(vh3x01234567, vh3x01234567);
-        vh2x01234567 = _mm_unpackhi_epi64(vh2x01234567, vh2x01234567);
-        vh1x01234567 = _mm_unpackhi_epi64(vh1x01234567, vh1x01234567);
-        vh0x01234567 = _mm_unpackhi_epi64(vh0x01234567, vh0x01234567);
+        vh3x0 = _mm_unpackhi_epi64(vh3x0, vh3x0);
+        vh2x0 = _mm_unpackhi_epi64(vh2x0, vh2x0);
+        vh1x0 = _mm_unpackhi_epi64(vh1x0, vh1x0);
+        vh0x0 = _mm_unpackhi_epi64(vh0x0, vh0x0);
 
         c3 += 4;
         c2 += 4;
@@ -588,15 +598,15 @@ void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
         c0 += 4;
       }
       if (nc & 2) {
-        _mm_storeu_si32(c3, vh3x01234567);
-        _mm_storeu_si32(c2, vh2x01234567);
-        _mm_storeu_si32(c1, vh1x01234567);
-        _mm_storeu_si32(c0, vh0x01234567);
+        _mm_storeu_si32(c3, vh3x0);
+        _mm_storeu_si32(c2, vh2x0);
+        _mm_storeu_si32(c1, vh1x0);
+        _mm_storeu_si32(c0, vh0x0);
 
-        vh3x01234567 = _mm_srli_epi64(vh3x01234567, 32);
-        vh2x01234567 = _mm_srli_epi64(vh2x01234567, 32);
-        vh1x01234567 = _mm_srli_epi64(vh1x01234567, 32);
-        vh0x01234567 = _mm_srli_epi64(vh0x01234567, 32);
+        vh3x0 = _mm_srli_epi64(vh3x0, 32);
+        vh2x0 = _mm_srli_epi64(vh2x0, 32);
+        vh1x0 = _mm_srli_epi64(vh1x0, 32);
+        vh0x0 = _mm_srli_epi64(vh0x0, 32);
 
         c3 += 2;
         c2 += 2;
@@ -604,10 +614,10 @@ void xnn_f16_igemm_minmax_ukernel_4x16__avx2_broadcast(
         c0 += 2;
       }
       if (nc & 1) {
-        *c3 = _mm_extract_epi16(vh3x01234567, 0);
-        *c2 = _mm_extract_epi16(vh2x01234567, 0);
-        *c1 = _mm_extract_epi16(vh1x01234567, 0);
-        *c0 = _mm_extract_epi16(vh0x01234567, 0);
+        *c3 = _mm_extract_epi16(vh3x0, 0);
+        *c2 = _mm_extract_epi16(vh2x0, 0);
+        *c1 = _mm_extract_epi16(vh1x0, 0);
+        *c0 = _mm_extract_epi16(vh0x0, 0);
       }
 
       nc = 0;
@@ -2965,223 +2975,6 @@ void xnn_f32_vsigmoid_ukernel__avx2_rr1_p5_div_u40(
     }
     if (batch & (1 * sizeof(float))) {
       _mm_store_ss(output, vf_lo);
-    }
-  }
-}
-
-void xnn_f32_vtanh_ukernel__avx2_expm1minus_rr1_lut4_p4h3ts_perm_div_u32(
-    size_t batch,
-    const float* input,
-    float* output,
-    const union xnn_f32_tanh_params params[restrict XNN_MIN_ELEMENTS(1)]) XNN_OOB_READS
-{
-  assert(batch != 0);
-  assert(batch % sizeof(float) == 0);
-  assert(input != NULL);
-  assert(output != NULL);
-
-  const __m256 vsign_mask = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.sign_mask);
-  const __m256 vsat_cutoff = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.sat_cutoff);
-  const __m256 vlog2e = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.log2e);
-  const __m256 vmagic_bias = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.magic_bias);
-  const __m256 vtable = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.table);
-  const __m256 vminus_ln2 = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.minus_ln2);
-  const __m256 vc4 = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.c4);
-  const __m256 vc3 = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.c3);
-  const __m256 vc2 = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.c2);
-  const __m256 vtwo = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.two);
-  const __m256 vminus_one = _mm256_load_ps(params->avx_expm1minus_rr1_lut4_p4h3_perm.minus_one);
-
-  for (; batch >= 32 * sizeof(float); batch -= 32 * sizeof(float)) {
-    const __m256 vx0 = _mm256_loadu_ps(input);
-    const __m256 vx1 = _mm256_loadu_ps(input + 8);
-    const __m256 vx2 = _mm256_loadu_ps(input + 16);
-    const __m256 vx3 = _mm256_loadu_ps(input + 24);
-    input += 32;
-
-    __m256 vz0 = _mm256_or_ps(vx0, vsign_mask);
-    __m256 vz1 = _mm256_or_ps(vx1, vsign_mask);
-    __m256 vz2 = _mm256_or_ps(vx2, vsign_mask);
-    __m256 vz3 = _mm256_or_ps(vx3, vsign_mask);
-
-    const __m256 vinvsignx0 = _mm256_xor_ps(vx0, vz0);
-    vz0 = _mm256_max_ps(vsat_cutoff, vz0);
-    const __m256 vinvsignx1 = _mm256_xor_ps(vx1, vz1);
-    vz1 = _mm256_max_ps(vsat_cutoff, vz1);
-    const __m256 vinvsignx2 = _mm256_xor_ps(vx2, vz2);
-    vz2 = _mm256_max_ps(vsat_cutoff, vz2);
-    const __m256 vinvsignx3 = _mm256_xor_ps(vx3, vz3);
-    vz3 = _mm256_max_ps(vsat_cutoff, vz3);
-
-    __m256 vn0 = _mm256_fmadd_ps(vz0, vlog2e, vmagic_bias);
-    __m256 vn1 = _mm256_fmadd_ps(vz1, vlog2e, vmagic_bias);
-    __m256 vn2 = _mm256_fmadd_ps(vz2, vlog2e, vmagic_bias);
-    __m256 vn3 = _mm256_fmadd_ps(vz3, vlog2e, vmagic_bias);
-
-    const __m256i ve0 = _mm256_slli_epi32(_mm256_castps_si256(vn0), 21);
-    const __m256i ve1 = _mm256_slli_epi32(_mm256_castps_si256(vn1), 21);
-    const __m256i ve2 = _mm256_slli_epi32(_mm256_castps_si256(vn2), 21);
-    const __m256i ve3 = _mm256_slli_epi32(_mm256_castps_si256(vn3), 21);
-
-    const __m256i vl0 = _mm256_castps_si256(_mm256_permutevar_ps(vtable, _mm256_castps_si256(vn0)));
-    const __m256i vl1 = _mm256_castps_si256(_mm256_permutevar_ps(vtable, _mm256_castps_si256(vn1)));
-    const __m256i vl2 = _mm256_castps_si256(_mm256_permutevar_ps(vtable, _mm256_castps_si256(vn2)));
-    const __m256i vl3 = _mm256_castps_si256(_mm256_permutevar_ps(vtable, _mm256_castps_si256(vn3)));
-
-    const __m256 vs0 = _mm256_castsi256_ps(_mm256_add_epi32(vl0, ve0));
-    const __m256 vs1 = _mm256_castsi256_ps(_mm256_add_epi32(vl1, ve1));
-    const __m256 vs2 = _mm256_castsi256_ps(_mm256_add_epi32(vl2, ve2));
-    const __m256 vs3 = _mm256_castsi256_ps(_mm256_add_epi32(vl3, ve3));
-
-    vn0 = _mm256_sub_ps(vn0, vmagic_bias);
-    vn1 = _mm256_sub_ps(vn1, vmagic_bias);
-    vn2 = _mm256_sub_ps(vn2, vmagic_bias);
-    vn3 = _mm256_sub_ps(vn3, vmagic_bias);
-
-    const __m256 vt0 = _mm256_fmadd_ps(vn0, vminus_ln2, vz0);
-    const __m256 vt1 = _mm256_fmadd_ps(vn1, vminus_ln2, vz1);
-    const __m256 vt2 = _mm256_fmadd_ps(vn2, vminus_ln2, vz2);
-    const __m256 vt3 = _mm256_fmadd_ps(vn3, vminus_ln2, vz3);
-
-    __m256 vp0 = vc4;
-    __m256 vp1 = vc4;
-    __m256 vp2 = vc4;
-    __m256 vp3 = vc4;
-    vp0 = _mm256_fmadd_ps(vp0, vt0, vc3);
-    vp1 = _mm256_fmadd_ps(vp1, vt1, vc3);
-    vp2 = _mm256_fmadd_ps(vp2, vt2, vc3);
-    vp3 = _mm256_fmadd_ps(vp3, vt3, vc3);
-    vp0 = _mm256_fmadd_ps(vp0, vt0, vc2);
-    vp1 = _mm256_fmadd_ps(vp1, vt1, vc2);
-    vp2 = _mm256_fmadd_ps(vp2, vt2, vc2);
-    vp3 = _mm256_fmadd_ps(vp3, vt3, vc2);
-    vp0 = _mm256_fmadd_ps(vp0, vt0, vtwo);
-    vp1 = _mm256_fmadd_ps(vp1, vt1, vtwo);
-    vp2 = _mm256_fmadd_ps(vp2, vt2, vtwo);
-    vp3 = _mm256_fmadd_ps(vp3, vt3, vtwo);
-
-    const __m256 vts0 = _mm256_mul_ps(vt0, vs0);
-    const __m256 vsmo0 = _mm256_add_ps(vs0, vminus_one);
-    const __m256 vts1 = _mm256_mul_ps(vt1, vs1);
-    const __m256 vsmo1 = _mm256_add_ps(vs1, vminus_one);
-    const __m256 vts2 = _mm256_mul_ps(vt2, vs2);
-    const __m256 vsmo2 = _mm256_add_ps(vs2, vminus_one);
-    const __m256 vts3 = _mm256_mul_ps(vt3, vs3);
-    const __m256 vsmo3 = _mm256_add_ps(vs3, vminus_one);
-    const __m256 vemo0 = _mm256_fmadd_ps(vp0, vts0, vsmo0);
-    const __m256 vemo1 = _mm256_fmadd_ps(vp1, vts1, vsmo1);
-    const __m256 vemo2 = _mm256_fmadd_ps(vp2, vts2, vsmo2);
-    const __m256 vemo3 = _mm256_fmadd_ps(vp3, vts3, vsmo3);
-    const __m256 vepo0 = _mm256_add_ps(vemo0, vtwo);
-    const __m256 vepo1 = _mm256_add_ps(vemo1, vtwo);
-    const __m256 vepo2 = _mm256_add_ps(vemo2, vtwo);
-    const __m256 vepo3 = _mm256_add_ps(vemo3, vtwo);
-
-    __m256 vy0 = _mm256_div_ps(vemo0, vepo0);
-    __m256 vy1 = _mm256_div_ps(vemo1, vepo1);
-    __m256 vy2 = _mm256_div_ps(vemo2, vepo2);
-    __m256 vy3 = _mm256_div_ps(vemo3, vepo3);
-
-    vy0 = _mm256_xor_ps(vy0, vinvsignx0);
-    vy1 = _mm256_xor_ps(vy1, vinvsignx1);
-    vy2 = _mm256_xor_ps(vy2, vinvsignx2);
-    vy3 = _mm256_xor_ps(vy3, vinvsignx3);
-
-    _mm256_storeu_ps(output, vy0);
-    _mm256_storeu_ps(output + 8, vy1);
-    _mm256_storeu_ps(output + 16, vy2);
-    _mm256_storeu_ps(output + 24, vy3);
-    output += 32;
-  }
-  for (; batch >= 8 * sizeof(float); batch -= 8 * sizeof(float)) {
-    const __m256 vx = _mm256_loadu_ps(input);
-    input += 8;
-
-    __m256 vz = _mm256_or_ps(vx, vsign_mask);
-
-    const __m256 vinvsignx = _mm256_xor_ps(vx, vz);
-    vz = _mm256_max_ps(vsat_cutoff, vz);
-
-    __m256 vn = _mm256_fmadd_ps(vz, vlog2e, vmagic_bias);
-
-    const __m256i ve = _mm256_slli_epi32(_mm256_castps_si256(vn), 21);
-
-    const __m256i vl = _mm256_castps_si256(_mm256_permutevar_ps(vtable, _mm256_castps_si256(vn)));
-
-    const __m256 vs = _mm256_castsi256_ps(_mm256_add_epi32(vl, ve));
-
-    vn = _mm256_sub_ps(vn, vmagic_bias);
-
-    const __m256 vt = _mm256_fmadd_ps(vn, vminus_ln2, vz);
-
-    __m256 vp = vc4;
-    vp = _mm256_fmadd_ps(vp, vt, vc3);
-    vp = _mm256_fmadd_ps(vp, vt, vc2);
-    vp = _mm256_fmadd_ps(vp, vt, vtwo);
-
-    const __m256 vts = _mm256_mul_ps(vt, vs);
-    const __m256 vsmo = _mm256_add_ps(vs, vminus_one);
-    const __m256 vemo = _mm256_fmadd_ps(vp, vts, vsmo);
-    const __m256 vepo = _mm256_add_ps(vemo, vtwo);
-
-    __m256 vy = _mm256_div_ps(vemo, vepo);
-
-    vy = _mm256_xor_ps(vy, vinvsignx);
-
-    _mm256_storeu_ps(output, vy);
-    output += 8;
-  }
-  if XNN_UNLIKELY(batch != 0) {
-    assert(batch >= 1 * sizeof(float));
-    assert(batch <= 7 * sizeof(float));
-    const __m256i vmask = _mm256_loadu_si256((const __m256i*) ((uintptr_t) &params->avx_expm1minus_rr1_lut4_p4h3_perm.mask_table[7] - batch));
-
-    const __m256 vx = _mm256_maskload_ps(input, vmask);
-
-    __m256 vz = _mm256_or_ps(vx, vsign_mask);
-
-    const __m256 vinvsignx = _mm256_xor_ps(vx, vz);
-    vz = _mm256_max_ps(vsat_cutoff, vz);
-
-    __m256 vn = _mm256_fmadd_ps(vz, vlog2e, vmagic_bias);
-
-    const __m256i ve = _mm256_slli_epi32(_mm256_castps_si256(vn), 21);
-
-    const __m256i vl = _mm256_castps_si256(_mm256_permutevar_ps(vtable, _mm256_castps_si256(vn)));
-
-    const __m256 vs = _mm256_castsi256_ps(_mm256_add_epi32(vl, ve));
-
-    vn = _mm256_sub_ps(vn, vmagic_bias);
-
-    const __m256 vt = _mm256_fmadd_ps(vn, vminus_ln2, vz);
-
-    __m256 vp = vc4;
-    vp = _mm256_fmadd_ps(vp, vt, vc3);
-    vp = _mm256_fmadd_ps(vp, vt, vc2);
-    vp = _mm256_fmadd_ps(vp, vt, vtwo);
-
-    const __m256 vts = _mm256_mul_ps(vt, vs);
-    const __m256 vsmo = _mm256_add_ps(vs, vminus_one);
-    const __m256 vemo = _mm256_fmadd_ps(vp, vts, vsmo);
-    const __m256 vepo = _mm256_add_ps(vemo, vtwo);
-
-    __m256 vy = _mm256_div_ps(vemo, vepo);
-
-    vy = _mm256_xor_ps(vy, vinvsignx);
-
-    __m128 vy_lo = _mm256_castps256_ps128(vy);
-    if (batch & (4 * sizeof(float))) {
-      _mm_storeu_ps(output, vy_lo);
-      vy_lo = _mm256_extractf128_ps(vy, 1);
-      output += 4;
-    }
-    if (batch & (2 * sizeof(float))) {
-      _mm_storel_pi((__m64*) output, vy_lo);
-      vy_lo = _mm_movehl_ps(vy_lo, vy_lo);
-      output += 2;
-    }
-    if (batch & (1 * sizeof(float))) {
-      _mm_store_ss(output, vy_lo);
     }
   }
 }
@@ -10669,6 +10462,1585 @@ void xnn_qu8_vlrelu_ukernel__avx2_u32(
   }
 }
 
+void xnn_x16_packw_gemm_goi_ukernel_x16__avx2_u16_prfm(
+  size_t g,
+  size_t nc,
+  size_t kc,
+  size_t nr,
+  size_t kr,
+  size_t sr,
+  const uint16_t* weights,
+  const uint16_t* bias,
+  const void* scale,
+  uint16_t* packed_weights,
+  size_t extra_bytes,
+  const void* params)
+{
+
+  assert(g != 0);
+  assert(nc != 0);
+  assert(kc != 0);
+  assert(nr == 16);   // This kernel is for NR=16
+  assert(kr == 1);
+  assert(sr == 1);
+  assert(weights != NULL);
+  assert(packed_weights != NULL);
+
+
+  do {
+    const uint16_t* w0 = weights;
+    size_t n = nc;
+    for (; n >= 16; n -= 16) {
+      {
+        __m256i vtmp;
+        if XNN_LIKELY(bias != NULL) {
+          vtmp = _mm256_loadu_si256((const __m256i*) bias);
+          bias += 16;
+        } else {
+          vtmp = _mm256_setzero_si256();
+        }
+        _mm256_store_si256((__m256i*) packed_weights, vtmp);
+        packed_weights += 16;
+      }
+      const uint16_t* w1 = w0 + kc;
+      const uint16_t* w2 = w1 + kc;
+      const uint16_t* w3 = w2 + kc;
+      const uint16_t* w4 = w3 + kc;
+      const uint16_t* w5 = w4 + kc;
+      const uint16_t* w6 = w5 + kc;
+      const uint16_t* w7 = w6 + kc;
+      const uint16_t* w8 = w7 + kc;
+      const uint16_t* w9 = w8 + kc;
+      const uint16_t* w10 = w9 + kc;
+      const uint16_t* w11 = w10 + kc;
+      const uint16_t* w12 = w11 + kc;
+      const uint16_t* w13 = w12 + kc;
+      const uint16_t* w14 = w13 + kc;
+      const uint16_t* w15 = w14 + kc;
+      xnn_prefetch_to_l1((const int8_t*) w0);
+      xnn_prefetch_to_l1((const int8_t*) w0 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w1);
+      xnn_prefetch_to_l1((const int8_t*) w1 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w2);
+      xnn_prefetch_to_l1((const int8_t*) w2 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w3);
+      xnn_prefetch_to_l1((const int8_t*) w3 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w4);
+      xnn_prefetch_to_l1((const int8_t*) w4 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w5);
+      xnn_prefetch_to_l1((const int8_t*) w5 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w6);
+      xnn_prefetch_to_l1((const int8_t*) w6 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w7);
+      xnn_prefetch_to_l1((const int8_t*) w7 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w8);
+      xnn_prefetch_to_l1((const int8_t*) w8 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w9);
+      xnn_prefetch_to_l1((const int8_t*) w9 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w10);
+      xnn_prefetch_to_l1((const int8_t*) w10 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w11);
+      xnn_prefetch_to_l1((const int8_t*) w11 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w12);
+      xnn_prefetch_to_l1((const int8_t*) w12 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w13);
+      xnn_prefetch_to_l1((const int8_t*) w13 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w14);
+      xnn_prefetch_to_l1((const int8_t*) w14 + 64);
+      xnn_prefetch_to_l1((const int8_t*) w15);
+      xnn_prefetch_to_l1((const int8_t*) w15 + 64);
+
+      size_t k = kc;
+      for (; k >= 16; k -= 16) {
+        __m256i v0 = _mm256_loadu_si256((const __m256i*) w0);
+        w0 += 16;
+        __m256i v1 = _mm256_loadu_si256((const __m256i*) w1);
+        w1 += 16;
+        __m256i v2 = _mm256_loadu_si256((const __m256i*) w2);
+        w2 += 16;
+        __m256i v3 = _mm256_loadu_si256((const __m256i*) w3);
+        w3 += 16;
+        __m256i v4 = _mm256_loadu_si256((const __m256i*) w4);
+        w4 += 16;
+        __m256i v5 = _mm256_loadu_si256((const __m256i*) w5);
+        w5 += 16;
+        __m256i v6 = _mm256_loadu_si256((const __m256i*) w6);
+        w6 += 16;
+        __m256i v7 = _mm256_loadu_si256((const __m256i*) w7);
+        w7 += 16;
+        __m256i v8 = _mm256_loadu_si256((const __m256i*) w8);
+        w8 += 16;
+        __m256i v9 = _mm256_loadu_si256((const __m256i*) w9);
+        w9 += 16;
+        __m256i v10 = _mm256_loadu_si256((const __m256i*) w10);
+        w10 += 16;
+        __m256i v11 = _mm256_loadu_si256((const __m256i*) w11);
+        w11 += 16;
+        __m256i v12 = _mm256_loadu_si256((const __m256i*) w12);
+        w12 += 16;
+        __m256i v13 = _mm256_loadu_si256((const __m256i*) w13);
+        w13 += 16;
+        __m256i v14 = _mm256_loadu_si256((const __m256i*) w14);
+        w14 += 16;
+        __m256i v15 = _mm256_loadu_si256((const __m256i*) w15);
+        w15 += 16;
+        // Interleave 16-bit lanes
+        __m256i vt0 = _mm256_unpacklo_epi16(v0, v1);
+        __m256i vt1 = _mm256_unpackhi_epi16(v0, v1);
+        __m256i vt2 = _mm256_unpacklo_epi16(v2, v3);
+        __m256i vt3 = _mm256_unpackhi_epi16(v2, v3);
+        __m256i vt4 = _mm256_unpacklo_epi16(v4, v5);
+        __m256i vt5 = _mm256_unpackhi_epi16(v4, v5);
+        __m256i vt6 = _mm256_unpacklo_epi16(v6, v7);
+        __m256i vt7 = _mm256_unpackhi_epi16(v6, v7);
+        __m256i vt8 = _mm256_unpacklo_epi16(v8, v9);
+        __m256i vt9 = _mm256_unpackhi_epi16(v8, v9);
+        __m256i vt10 = _mm256_unpacklo_epi16(v10, v11);
+        __m256i vt11 = _mm256_unpackhi_epi16(v10, v11);
+        __m256i vt12 = _mm256_unpacklo_epi16(v12, v13);
+        __m256i vt13 = _mm256_unpackhi_epi16(v12, v13);
+        __m256i vt14 = _mm256_unpacklo_epi16(v14, v15);
+        __m256i vt15 = _mm256_unpackhi_epi16(v14, v15);
+
+        xnn_prefetch_to_l1((const int8_t*) w0 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w1 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w2 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w3 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w4 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w5 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w6 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w7 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w8 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w9 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w10 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w11 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w12 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w13 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w14 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w15 + 128);
+
+        // Interleave 32-bit lanes
+        v0 = _mm256_unpacklo_epi32(vt0, vt2);
+        v1 = _mm256_unpackhi_epi32(vt0, vt2);
+        v2 = _mm256_unpacklo_epi32(vt1, vt3);
+        v3 = _mm256_unpackhi_epi32(vt1, vt3);
+        v4 = _mm256_unpacklo_epi32(vt4, vt6);
+        v5 = _mm256_unpackhi_epi32(vt4, vt6);
+        v6 = _mm256_unpacklo_epi32(vt5, vt7);
+        v7 = _mm256_unpackhi_epi32(vt5, vt7);
+        v8 = _mm256_unpacklo_epi32(vt8, vt10);
+        v9 = _mm256_unpackhi_epi32(vt8, vt10);
+        v10 = _mm256_unpacklo_epi32(vt9, vt11);
+        v11 = _mm256_unpackhi_epi32(vt9, vt11);
+        v12 = _mm256_unpacklo_epi32(vt12, vt14);
+        v13 = _mm256_unpackhi_epi32(vt12, vt14);
+        v14 = _mm256_unpacklo_epi32(vt13, vt15);
+        v15 = _mm256_unpackhi_epi32(vt13, vt15);
+
+        // Interleave 64-bit lanes
+        vt0 = _mm256_unpacklo_epi64(v0, v4);
+        vt1 = _mm256_unpackhi_epi64(v0, v4);
+        vt2 = _mm256_unpacklo_epi64(v1, v5);
+        vt3 = _mm256_unpackhi_epi64(v1, v5);
+        vt4 = _mm256_unpacklo_epi64(v2, v6);
+        vt5 = _mm256_unpackhi_epi64(v2, v6);
+        vt6 = _mm256_unpacklo_epi64(v3, v7);
+        vt7 = _mm256_unpackhi_epi64(v3, v7);
+        vt8 = _mm256_unpacklo_epi64(v8, v12);
+        vt9 = _mm256_unpackhi_epi64(v8, v12);
+        vt10 = _mm256_unpacklo_epi64(v9, v13);
+        vt11 = _mm256_unpackhi_epi64(v9, v13);
+        vt12 = _mm256_unpacklo_epi64(v10, v14);
+        vt13 = _mm256_unpackhi_epi64(v10, v14);
+        vt14 = _mm256_unpacklo_epi64(v11, v15);
+        vt15 = _mm256_unpackhi_epi64(v11, v15);
+
+        v0 = _mm256_inserti128_si256(vt0, _mm256_castsi256_si128(vt8), 1);
+        v8 = _mm256_permute2x128_si256(vt0, vt8, 0x31);
+        v1 = _mm256_inserti128_si256(vt1, _mm256_castsi256_si128(vt9), 1);
+        v9 = _mm256_permute2x128_si256(vt1, vt9, 0x31);
+        v2 = _mm256_inserti128_si256(vt2, _mm256_castsi256_si128(vt10), 1);
+        v10 = _mm256_permute2x128_si256(vt2, vt10, 0x31);
+        v3 = _mm256_inserti128_si256(vt3, _mm256_castsi256_si128(vt11), 1);
+        v11 = _mm256_permute2x128_si256(vt3, vt11, 0x31);
+        v4 = _mm256_inserti128_si256(vt4, _mm256_castsi256_si128(vt12), 1);
+        v12 = _mm256_permute2x128_si256(vt4, vt12, 0x31);
+        v5 = _mm256_inserti128_si256(vt5, _mm256_castsi256_si128(vt13), 1);
+        v13 = _mm256_permute2x128_si256(vt5, vt13, 0x31);
+        v6 = _mm256_inserti128_si256(vt6, _mm256_castsi256_si128(vt14), 1);
+        v14 = _mm256_permute2x128_si256(vt6, vt14, 0x31);
+        v7 = _mm256_inserti128_si256(vt7, _mm256_castsi256_si128(vt15), 1);
+        v15 = _mm256_permute2x128_si256(vt7, vt15, 0x31);
+        _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+        _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+        _mm256_store_si256((__m256i*) packed_weights + 2, v2);
+        _mm256_store_si256((__m256i*) packed_weights + 3, v3);
+        _mm256_store_si256((__m256i*) packed_weights + 4, v4);
+        _mm256_store_si256((__m256i*) packed_weights + 5, v5);
+        _mm256_store_si256((__m256i*) packed_weights + 6, v6);
+        _mm256_store_si256((__m256i*) packed_weights + 7, v7);
+        _mm256_store_si256((__m256i*) packed_weights + 8, v8);
+        _mm256_store_si256((__m256i*) packed_weights + 9, v9);
+        _mm256_store_si256((__m256i*) packed_weights + 10, v10);
+        _mm256_store_si256((__m256i*) packed_weights + 11, v11);
+        _mm256_store_si256((__m256i*) packed_weights + 12, v12);
+        _mm256_store_si256((__m256i*) packed_weights + 13, v13);
+        _mm256_store_si256((__m256i*) packed_weights + 14, v14);
+        _mm256_store_si256((__m256i*) packed_weights + 15, v15);
+        packed_weights += 256;
+      }
+      // KC remainder
+      if XNN_UNLIKELY(k != 0) {
+        assert(k >= 1);
+        assert(k < 16);
+        __m256i v0;
+        __m256i v1;
+        __m256i v2;
+        __m256i v3;
+        __m256i v4;
+        __m256i v5;
+        __m256i v6;
+        __m256i v7;
+        __m256i v8;
+        __m256i v9;
+        __m256i v10;
+        __m256i v11;
+        __m256i v12;
+        __m256i v13;
+        __m256i v14;
+        __m256i v15;
+        __m256i vmask;
+        switch(k) {
+          case 1:
+            v0 = _mm256_setzero_si256();
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[0], 0);
+            v1 = _mm256_setzero_si256();
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[0], 0);
+            v2 = _mm256_setzero_si256();
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[0], 0);
+            v3 = _mm256_setzero_si256();
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[0], 0);
+            v4 = _mm256_setzero_si256();
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[0], 0);
+            v5 = _mm256_setzero_si256();
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[0], 0);
+            v6 = _mm256_setzero_si256();
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[0], 0);
+            v7 = _mm256_setzero_si256();
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[0], 0);
+            v8 = _mm256_setzero_si256();
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[0], 0);
+            v9 = _mm256_setzero_si256();
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[0], 0);
+            v10 = _mm256_setzero_si256();
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[0], 0);
+            v11 = _mm256_setzero_si256();
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[0], 0);
+            v12 = _mm256_setzero_si256();
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[0], 0);
+            v13 = _mm256_setzero_si256();
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[0], 0);
+            v14 = _mm256_setzero_si256();
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[0], 0);
+            v15 = _mm256_setzero_si256();
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[0], 0);
+            break;
+          case 2:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, 0, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            break;
+          case 3:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, 0, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[2], 2);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[2], 2);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[2], 2);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[2], 2);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[2], 2);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[2], 2);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[2], 2);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[2], 2);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[2], 2);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[2], 2);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[2], 2);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[2], 2);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[2], 2);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[2], 2);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[2], 2);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[2], 2);
+            break;
+          case 4:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            break;
+          case 5:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[4], 4);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[4], 4);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[4], 4);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[4], 4);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[4], 4);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[4], 4);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[4], 4);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[4], 4);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[4], 4);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[4], 4);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[4], 4);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[4], 4);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[4], 4);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[4], 4);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[4], 4);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[4], 4);
+            break;
+          case 6:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            break;
+          case 7:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[6], 6);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[6], 6);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[6], 6);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[6], 6);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[6], 6);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[6], 6);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[6], 6);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[6], 6);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[6], 6);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[6], 6);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[6], 6);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[6], 6);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[6], 6);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[6], 6);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[6], 6);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[6], 6);
+            break;
+          case 8:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            break;
+          case 9:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[8], 8);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[8], 8);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[8], 8);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[8], 8);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[8], 8);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[8], 8);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[8], 8);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[8], 8);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[8], 8);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[8], 8);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[8], 8);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[8], 8);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[8], 8);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[8], 8);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[8], 8);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[8], 8);
+            break;
+          case 10:
+            vmask = _mm256_set_epi32(0, 0, 0, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            break;
+          case 11:
+            vmask = _mm256_set_epi32(0, 0, 0, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[10], 10);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[10], 10);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[10], 10);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[10], 10);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[10], 10);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[10], 10);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[10], 10);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[10], 10);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[10], 10);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[10], 10);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[10], 10);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[10], 10);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[10], 10);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[10], 10);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[10], 10);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[10], 10);
+            break;
+          case 12:
+            vmask = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            break;
+          case 13:
+            vmask = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[12], 12);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[12], 12);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[12], 12);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[12], 12);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[12], 12);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[12], 12);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[12], 12);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[12], 12);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[12], 12);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[12], 12);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[12], 12);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[12], 12);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[12], 12);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[12], 12);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[12], 12);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[12], 12);
+            break;
+          case 14:
+            vmask = _mm256_set_epi32(0, -1, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            break;
+          case 15:
+            vmask = _mm256_set_epi32(0, -1, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[14], 14);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[14], 14);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[14], 14);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[14], 14);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[14], 14);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[14], 14);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[14], 14);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[14], 14);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[14], 14);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[14], 14);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[14], 14);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[14], 14);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[14], 14);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[14], 14);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[14], 14);
+            v15 = _mm256_maskload_epi32((const int*) w15, vmask);
+            v15 = _mm256_insert_epi16(v15, (int16_t) w15[14], 14);
+            break;
+        }
+        w0 += k;
+        w1 += k;
+        w2 += k;
+        w3 += k;
+        w4 += k;
+        w5 += k;
+        w6 += k;
+        w7 += k;
+        w8 += k;
+        w9 += k;
+        w10 += k;
+        w11 += k;
+        w12 += k;
+        w13 += k;
+        w14 += k;
+        w15 += k;
+        // Interleave 16-bit lanes
+        __m256i vt0 = _mm256_unpacklo_epi16(v0, v1);
+        __m256i vt1 = _mm256_unpackhi_epi16(v0, v1);
+        __m256i vt2 = _mm256_unpacklo_epi16(v2, v3);
+        __m256i vt3 = _mm256_unpackhi_epi16(v2, v3);
+        __m256i vt4 = _mm256_unpacklo_epi16(v4, v5);
+        __m256i vt5 = _mm256_unpackhi_epi16(v4, v5);
+        __m256i vt6 = _mm256_unpacklo_epi16(v6, v7);
+        __m256i vt7 = _mm256_unpackhi_epi16(v6, v7);
+        __m256i vt8 = _mm256_unpacklo_epi16(v8, v9);
+        __m256i vt9 = _mm256_unpackhi_epi16(v8, v9);
+        __m256i vt10 = _mm256_unpacklo_epi16(v10, v11);
+        __m256i vt11 = _mm256_unpackhi_epi16(v10, v11);
+        __m256i vt12 = _mm256_unpacklo_epi16(v12, v13);
+        __m256i vt13 = _mm256_unpackhi_epi16(v12, v13);
+        __m256i vt14 = _mm256_unpacklo_epi16(v14, v15);
+        __m256i vt15 = _mm256_unpackhi_epi16(v14, v15);
+
+        xnn_prefetch_to_l1((const int8_t*) w0 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w1 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w2 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w3 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w4 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w5 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w6 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w7 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w8 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w9 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w10 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w11 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w12 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w13 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w14 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w15 + 128);
+
+        // Interleave 32-bit lanes
+        v0 = _mm256_unpacklo_epi32(vt0, vt2);
+        v1 = _mm256_unpackhi_epi32(vt0, vt2);
+        v2 = _mm256_unpacklo_epi32(vt1, vt3);
+        v3 = _mm256_unpackhi_epi32(vt1, vt3);
+        v4 = _mm256_unpacklo_epi32(vt4, vt6);
+        v5 = _mm256_unpackhi_epi32(vt4, vt6);
+        v6 = _mm256_unpacklo_epi32(vt5, vt7);
+        v7 = _mm256_unpackhi_epi32(vt5, vt7);
+        v8 = _mm256_unpacklo_epi32(vt8, vt10);
+        v9 = _mm256_unpackhi_epi32(vt8, vt10);
+        v10 = _mm256_unpacklo_epi32(vt9, vt11);
+        v11 = _mm256_unpackhi_epi32(vt9, vt11);
+        v12 = _mm256_unpacklo_epi32(vt12, vt14);
+        v13 = _mm256_unpackhi_epi32(vt12, vt14);
+        v14 = _mm256_unpacklo_epi32(vt13, vt15);
+        v15 = _mm256_unpackhi_epi32(vt13, vt15);
+
+        // Interleave 64-bit lanes
+        vt0 = _mm256_unpacklo_epi64(v0, v4);
+        vt1 = _mm256_unpackhi_epi64(v0, v4);
+        vt2 = _mm256_unpacklo_epi64(v1, v5);
+        vt3 = _mm256_unpackhi_epi64(v1, v5);
+        vt4 = _mm256_unpacklo_epi64(v2, v6);
+        vt5 = _mm256_unpackhi_epi64(v2, v6);
+        vt6 = _mm256_unpacklo_epi64(v3, v7);
+        vt7 = _mm256_unpackhi_epi64(v3, v7);
+        vt8 = _mm256_unpacklo_epi64(v8, v12);
+        vt9 = _mm256_unpackhi_epi64(v8, v12);
+        vt10 = _mm256_unpacklo_epi64(v9, v13);
+        vt11 = _mm256_unpackhi_epi64(v9, v13);
+        vt12 = _mm256_unpacklo_epi64(v10, v14);
+        vt13 = _mm256_unpackhi_epi64(v10, v14);
+        vt14 = _mm256_unpacklo_epi64(v11, v15);
+        vt15 = _mm256_unpackhi_epi64(v11, v15);
+
+        v0 = _mm256_inserti128_si256(vt0, _mm256_castsi256_si128(vt8), 1);
+        v8 = _mm256_permute2x128_si256(vt0, vt8, 0x31);
+        v1 = _mm256_inserti128_si256(vt1, _mm256_castsi256_si128(vt9), 1);
+        v9 = _mm256_permute2x128_si256(vt1, vt9, 0x31);
+        v2 = _mm256_inserti128_si256(vt2, _mm256_castsi256_si128(vt10), 1);
+        v10 = _mm256_permute2x128_si256(vt2, vt10, 0x31);
+        v3 = _mm256_inserti128_si256(vt3, _mm256_castsi256_si128(vt11), 1);
+        v11 = _mm256_permute2x128_si256(vt3, vt11, 0x31);
+        v4 = _mm256_inserti128_si256(vt4, _mm256_castsi256_si128(vt12), 1);
+        v12 = _mm256_permute2x128_si256(vt4, vt12, 0x31);
+        v5 = _mm256_inserti128_si256(vt5, _mm256_castsi256_si128(vt13), 1);
+        v13 = _mm256_permute2x128_si256(vt5, vt13, 0x31);
+        v6 = _mm256_inserti128_si256(vt6, _mm256_castsi256_si128(vt14), 1);
+        v14 = _mm256_permute2x128_si256(vt6, vt14, 0x31);
+        v7 = _mm256_inserti128_si256(vt7, _mm256_castsi256_si128(vt15), 1);
+        v15 = _mm256_permute2x128_si256(vt7, vt15, 0x31);
+        if (k & 8) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+          _mm256_store_si256((__m256i*) packed_weights + 2, v2);
+          _mm256_store_si256((__m256i*) packed_weights + 3, v3);
+          _mm256_store_si256((__m256i*) packed_weights + 4, v4);
+          _mm256_store_si256((__m256i*) packed_weights + 5, v5);
+          _mm256_store_si256((__m256i*) packed_weights + 6, v6);
+          _mm256_store_si256((__m256i*) packed_weights + 7, v7);
+          packed_weights += 128;
+          v0 = v8;
+          v1 = v9;
+          v2 = v10;
+          v3 = v11;
+          v4 = v12;
+          v5 = v13;
+          v6 = v14;
+          v7 = v15;
+        }
+        if (k & 4) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+          _mm256_store_si256((__m256i*) packed_weights + 2, v2);
+          _mm256_store_si256((__m256i*) packed_weights + 3, v3);
+          packed_weights += 64;
+          v0 = v4;
+          v1 = v5;
+          v2 = v6;
+          v3 = v7;
+        }
+        if (k & 2) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+          packed_weights += 32;
+          v0 = v2;
+          v1 = v3;
+        }
+        if (k & 1) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          packed_weights += 16;
+        }
+      }
+      packed_weights = (uint16_t*) ((uintptr_t) packed_weights + extra_bytes);
+      w0 = w15;
+    }
+
+    // NC remainder (1..15)
+    if XNN_UNLIKELY(n != 0) {
+      assert(n >= 1);
+      assert(n <= 15);
+      if XNN_LIKELY(bias != NULL) {
+        memcpy(packed_weights, bias, n * 2);
+        bias += n;
+      } else {
+        memset(packed_weights, 0, 32);
+      }
+      packed_weights += 16;
+      // NR remainder has less than 16 rows so last row is not loaded
+      const uint16_t* w1 = w0 + kc;
+      if XNN_UNPREDICTABLE(n < 2) {
+        w1 = w0;
+      }
+      const uint16_t* w2 = w1 + kc;
+      if XNN_UNPREDICTABLE(n <= 2) {
+        w2 = w1;
+      }
+      const uint16_t* w3 = w2 + kc;
+      if XNN_UNPREDICTABLE(n < 4) {
+        w3 = w2;
+      }
+      const uint16_t* w4 = w3 + kc;
+      if XNN_UNPREDICTABLE(n <= 4) {
+        w4 = w3;
+      }
+      const uint16_t* w5 = w4 + kc;
+      if XNN_UNPREDICTABLE(n < 6) {
+        w5 = w4;
+      }
+      const uint16_t* w6 = w5 + kc;
+      if XNN_UNPREDICTABLE(n <= 6) {
+        w6 = w5;
+      }
+      const uint16_t* w7 = w6 + kc;
+      if XNN_UNPREDICTABLE(n < 8) {
+        w7 = w6;
+      }
+      const uint16_t* w8 = w7 + kc;
+      if XNN_UNPREDICTABLE(n <= 8) {
+        w8 = w7;
+      }
+      const uint16_t* w9 = w8 + kc;
+      if XNN_UNPREDICTABLE(n < 10) {
+        w9 = w8;
+      }
+      const uint16_t* w10 = w9 + kc;
+      if XNN_UNPREDICTABLE(n <= 10) {
+        w10 = w9;
+      }
+      const uint16_t* w11 = w10 + kc;
+      if XNN_UNPREDICTABLE(n < 12) {
+        w11 = w10;
+      }
+      const uint16_t* w12 = w11 + kc;
+      if XNN_UNPREDICTABLE(n <= 12) {
+        w12 = w11;
+      }
+      const uint16_t* w13 = w12 + kc;
+      if XNN_UNPREDICTABLE(n < 14) {
+        w13 = w12;
+      }
+      const uint16_t* w14 = w13 + kc;
+      if XNN_UNPREDICTABLE(n <= 14) {
+        w14 = w13;
+      }
+
+      size_t k = kc;
+      for (; k >= 16; k -= 16) {
+        __m256i v0 = _mm256_loadu_si256((const __m256i*) w0);
+        w0 += 16;
+        __m256i v1 = _mm256_loadu_si256((const __m256i*) w1);
+        w1 += 16;
+        __m256i v2 = _mm256_loadu_si256((const __m256i*) w2);
+        w2 += 16;
+        __m256i v3 = _mm256_loadu_si256((const __m256i*) w3);
+        w3 += 16;
+        __m256i v4 = _mm256_loadu_si256((const __m256i*) w4);
+        w4 += 16;
+        __m256i v5 = _mm256_loadu_si256((const __m256i*) w5);
+        w5 += 16;
+        __m256i v6 = _mm256_loadu_si256((const __m256i*) w6);
+        w6 += 16;
+        __m256i v7 = _mm256_loadu_si256((const __m256i*) w7);
+        w7 += 16;
+        __m256i v8 = _mm256_loadu_si256((const __m256i*) w8);
+        w8 += 16;
+        __m256i v9 = _mm256_loadu_si256((const __m256i*) w9);
+        w9 += 16;
+        __m256i v10 = _mm256_loadu_si256((const __m256i*) w10);
+        w10 += 16;
+        __m256i v11 = _mm256_loadu_si256((const __m256i*) w11);
+        w11 += 16;
+        __m256i v12 = _mm256_loadu_si256((const __m256i*) w12);
+        w12 += 16;
+        __m256i v13 = _mm256_loadu_si256((const __m256i*) w13);
+        w13 += 16;
+        __m256i v14 = _mm256_loadu_si256((const __m256i*) w14);
+        w14 += 16;
+        __m256i v15;
+        // Interleave 16-bit lanes
+        __m256i vt0 = _mm256_unpacklo_epi16(v0, v1);
+        __m256i vt1 = _mm256_unpackhi_epi16(v0, v1);
+        __m256i vt2 = _mm256_unpacklo_epi16(v2, v3);
+        __m256i vt3 = _mm256_unpackhi_epi16(v2, v3);
+        __m256i vt4 = _mm256_unpacklo_epi16(v4, v5);
+        __m256i vt5 = _mm256_unpackhi_epi16(v4, v5);
+        __m256i vt6 = _mm256_unpacklo_epi16(v6, v7);
+        __m256i vt7 = _mm256_unpackhi_epi16(v6, v7);
+        __m256i vt8 = _mm256_unpacklo_epi16(v8, v9);
+        __m256i vt9 = _mm256_unpackhi_epi16(v8, v9);
+        __m256i vt10 = _mm256_unpacklo_epi16(v10, v11);
+        __m256i vt11 = _mm256_unpackhi_epi16(v10, v11);
+        __m256i vt12 = _mm256_unpacklo_epi16(v12, v13);
+        __m256i vt13 = _mm256_unpackhi_epi16(v12, v13);
+        __m256i vt14 = _mm256_unpacklo_epi16(v14, v14);
+        __m256i vt15 = _mm256_unpackhi_epi16(v14, v14);
+
+        xnn_prefetch_to_l1((const int8_t*) w0 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w1 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w2 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w3 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w4 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w5 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w6 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w7 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w8 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w9 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w10 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w11 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w12 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w13 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w14 + 128);
+
+        // Interleave 32-bit lanes
+        v0 = _mm256_unpacklo_epi32(vt0, vt2);
+        v1 = _mm256_unpackhi_epi32(vt0, vt2);
+        v2 = _mm256_unpacklo_epi32(vt1, vt3);
+        v3 = _mm256_unpackhi_epi32(vt1, vt3);
+        v4 = _mm256_unpacklo_epi32(vt4, vt6);
+        v5 = _mm256_unpackhi_epi32(vt4, vt6);
+        v6 = _mm256_unpacklo_epi32(vt5, vt7);
+        v7 = _mm256_unpackhi_epi32(vt5, vt7);
+        v8 = _mm256_unpacklo_epi32(vt8, vt10);
+        v9 = _mm256_unpackhi_epi32(vt8, vt10);
+        v10 = _mm256_unpacklo_epi32(vt9, vt11);
+        v11 = _mm256_unpackhi_epi32(vt9, vt11);
+        v12 = _mm256_unpacklo_epi32(vt12, vt14);
+        v13 = _mm256_unpackhi_epi32(vt12, vt14);
+        v14 = _mm256_unpacklo_epi32(vt13, vt15);
+        v15 = _mm256_unpackhi_epi32(vt13, vt15);
+
+        // Interleave 64-bit lanes
+        vt0 = _mm256_unpacklo_epi64(v0, v4);
+        vt1 = _mm256_unpackhi_epi64(v0, v4);
+        vt2 = _mm256_unpacklo_epi64(v1, v5);
+        vt3 = _mm256_unpackhi_epi64(v1, v5);
+        vt4 = _mm256_unpacklo_epi64(v2, v6);
+        vt5 = _mm256_unpackhi_epi64(v2, v6);
+        vt6 = _mm256_unpacklo_epi64(v3, v7);
+        vt7 = _mm256_unpackhi_epi64(v3, v7);
+        vt8 = _mm256_unpacklo_epi64(v8, v12);
+        vt9 = _mm256_unpackhi_epi64(v8, v12);
+        vt10 = _mm256_unpacklo_epi64(v9, v13);
+        vt11 = _mm256_unpackhi_epi64(v9, v13);
+        vt12 = _mm256_unpacklo_epi64(v10, v14);
+        vt13 = _mm256_unpackhi_epi64(v10, v14);
+        vt14 = _mm256_unpacklo_epi64(v11, v15);
+        vt15 = _mm256_unpackhi_epi64(v11, v15);
+
+        v0 = _mm256_inserti128_si256(vt0, _mm256_castsi256_si128(vt8), 1);
+        v8 = _mm256_permute2x128_si256(vt0, vt8, 0x31);
+        v1 = _mm256_inserti128_si256(vt1, _mm256_castsi256_si128(vt9), 1);
+        v9 = _mm256_permute2x128_si256(vt1, vt9, 0x31);
+        v2 = _mm256_inserti128_si256(vt2, _mm256_castsi256_si128(vt10), 1);
+        v10 = _mm256_permute2x128_si256(vt2, vt10, 0x31);
+        v3 = _mm256_inserti128_si256(vt3, _mm256_castsi256_si128(vt11), 1);
+        v11 = _mm256_permute2x128_si256(vt3, vt11, 0x31);
+        v4 = _mm256_inserti128_si256(vt4, _mm256_castsi256_si128(vt12), 1);
+        v12 = _mm256_permute2x128_si256(vt4, vt12, 0x31);
+        v5 = _mm256_inserti128_si256(vt5, _mm256_castsi256_si128(vt13), 1);
+        v13 = _mm256_permute2x128_si256(vt5, vt13, 0x31);
+        v6 = _mm256_inserti128_si256(vt6, _mm256_castsi256_si128(vt14), 1);
+        v14 = _mm256_permute2x128_si256(vt6, vt14, 0x31);
+        v7 = _mm256_inserti128_si256(vt7, _mm256_castsi256_si128(vt15), 1);
+        v15 = _mm256_permute2x128_si256(vt7, vt15, 0x31);
+        _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+        _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+        _mm256_store_si256((__m256i*) packed_weights + 2, v2);
+        _mm256_store_si256((__m256i*) packed_weights + 3, v3);
+        _mm256_store_si256((__m256i*) packed_weights + 4, v4);
+        _mm256_store_si256((__m256i*) packed_weights + 5, v5);
+        _mm256_store_si256((__m256i*) packed_weights + 6, v6);
+        _mm256_store_si256((__m256i*) packed_weights + 7, v7);
+        _mm256_store_si256((__m256i*) packed_weights + 8, v8);
+        _mm256_store_si256((__m256i*) packed_weights + 9, v9);
+        _mm256_store_si256((__m256i*) packed_weights + 10, v10);
+        _mm256_store_si256((__m256i*) packed_weights + 11, v11);
+        _mm256_store_si256((__m256i*) packed_weights + 12, v12);
+        _mm256_store_si256((__m256i*) packed_weights + 13, v13);
+        _mm256_store_si256((__m256i*) packed_weights + 14, v14);
+        _mm256_store_si256((__m256i*) packed_weights + 15, v15);
+        packed_weights += 256;
+      }
+
+      // KC and NC remainder
+      if XNN_UNLIKELY(k != 0) {
+        assert(k >= 1);
+        assert(k < 16);
+        __m256i v0;
+        __m256i v1;
+        __m256i v2;
+        __m256i v3;
+        __m256i v4;
+        __m256i v5;
+        __m256i v6;
+        __m256i v7;
+        __m256i v8;
+        __m256i v9;
+        __m256i v10;
+        __m256i v11;
+        __m256i v12;
+        __m256i v13;
+        __m256i v14;
+        __m256i v15;
+        __m256i vmask;
+        switch(k) {
+          case 1:
+            v0 = _mm256_setzero_si256();
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[0], 0);
+            v1 = _mm256_setzero_si256();
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[0], 0);
+            v2 = _mm256_setzero_si256();
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[0], 0);
+            v3 = _mm256_setzero_si256();
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[0], 0);
+            v4 = _mm256_setzero_si256();
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[0], 0);
+            v5 = _mm256_setzero_si256();
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[0], 0);
+            v6 = _mm256_setzero_si256();
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[0], 0);
+            v7 = _mm256_setzero_si256();
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[0], 0);
+            v8 = _mm256_setzero_si256();
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[0], 0);
+            v9 = _mm256_setzero_si256();
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[0], 0);
+            v10 = _mm256_setzero_si256();
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[0], 0);
+            v11 = _mm256_setzero_si256();
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[0], 0);
+            v12 = _mm256_setzero_si256();
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[0], 0);
+            v13 = _mm256_setzero_si256();
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[0], 0);
+            v14 = _mm256_setzero_si256();
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[0], 0);
+            break;
+          case 2:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, 0, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            break;
+          case 3:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, 0, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[2], 2);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[2], 2);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[2], 2);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[2], 2);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[2], 2);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[2], 2);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[2], 2);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[2], 2);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[2], 2);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[2], 2);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[2], 2);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[2], 2);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[2], 2);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[2], 2);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[2], 2);
+            break;
+          case 4:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            break;
+          case 5:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, 0, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[4], 4);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[4], 4);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[4], 4);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[4], 4);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[4], 4);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[4], 4);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[4], 4);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[4], 4);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[4], 4);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[4], 4);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[4], 4);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[4], 4);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[4], 4);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[4], 4);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[4], 4);
+            break;
+          case 6:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            break;
+          case 7:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, 0, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[6], 6);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[6], 6);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[6], 6);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[6], 6);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[6], 6);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[6], 6);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[6], 6);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[6], 6);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[6], 6);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[6], 6);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[6], 6);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[6], 6);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[6], 6);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[6], 6);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[6], 6);
+            break;
+          case 8:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            break;
+          case 9:
+            vmask = _mm256_set_epi32(0, 0, 0, 0, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[8], 8);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[8], 8);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[8], 8);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[8], 8);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[8], 8);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[8], 8);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[8], 8);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[8], 8);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[8], 8);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[8], 8);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[8], 8);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[8], 8);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[8], 8);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[8], 8);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[8], 8);
+            break;
+          case 10:
+            vmask = _mm256_set_epi32(0, 0, 0, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            break;
+          case 11:
+            vmask = _mm256_set_epi32(0, 0, 0, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[10], 10);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[10], 10);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[10], 10);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[10], 10);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[10], 10);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[10], 10);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[10], 10);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[10], 10);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[10], 10);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[10], 10);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[10], 10);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[10], 10);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[10], 10);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[10], 10);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[10], 10);
+            break;
+          case 12:
+            vmask = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            break;
+          case 13:
+            vmask = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[12], 12);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[12], 12);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[12], 12);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[12], 12);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[12], 12);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[12], 12);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[12], 12);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[12], 12);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[12], 12);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[12], 12);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[12], 12);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[12], 12);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[12], 12);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[12], 12);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[12], 12);
+            break;
+          case 14:
+            vmask = _mm256_set_epi32(0, -1, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            break;
+          case 15:
+            vmask = _mm256_set_epi32(0, -1, -1, -1, -1, -1, -1, -1);
+            v0 = _mm256_maskload_epi32((const int*) w0, vmask);
+            v0 = _mm256_insert_epi16(v0, (int16_t) w0[14], 14);
+            v1 = _mm256_maskload_epi32((const int*) w1, vmask);
+            v1 = _mm256_insert_epi16(v1, (int16_t) w1[14], 14);
+            v2 = _mm256_maskload_epi32((const int*) w2, vmask);
+            v2 = _mm256_insert_epi16(v2, (int16_t) w2[14], 14);
+            v3 = _mm256_maskload_epi32((const int*) w3, vmask);
+            v3 = _mm256_insert_epi16(v3, (int16_t) w3[14], 14);
+            v4 = _mm256_maskload_epi32((const int*) w4, vmask);
+            v4 = _mm256_insert_epi16(v4, (int16_t) w4[14], 14);
+            v5 = _mm256_maskload_epi32((const int*) w5, vmask);
+            v5 = _mm256_insert_epi16(v5, (int16_t) w5[14], 14);
+            v6 = _mm256_maskload_epi32((const int*) w6, vmask);
+            v6 = _mm256_insert_epi16(v6, (int16_t) w6[14], 14);
+            v7 = _mm256_maskload_epi32((const int*) w7, vmask);
+            v7 = _mm256_insert_epi16(v7, (int16_t) w7[14], 14);
+            v8 = _mm256_maskload_epi32((const int*) w8, vmask);
+            v8 = _mm256_insert_epi16(v8, (int16_t) w8[14], 14);
+            v9 = _mm256_maskload_epi32((const int*) w9, vmask);
+            v9 = _mm256_insert_epi16(v9, (int16_t) w9[14], 14);
+            v10 = _mm256_maskload_epi32((const int*) w10, vmask);
+            v10 = _mm256_insert_epi16(v10, (int16_t) w10[14], 14);
+            v11 = _mm256_maskload_epi32((const int*) w11, vmask);
+            v11 = _mm256_insert_epi16(v11, (int16_t) w11[14], 14);
+            v12 = _mm256_maskload_epi32((const int*) w12, vmask);
+            v12 = _mm256_insert_epi16(v12, (int16_t) w12[14], 14);
+            v13 = _mm256_maskload_epi32((const int*) w13, vmask);
+            v13 = _mm256_insert_epi16(v13, (int16_t) w13[14], 14);
+            v14 = _mm256_maskload_epi32((const int*) w14, vmask);
+            v14 = _mm256_insert_epi16(v14, (int16_t) w14[14], 14);
+            break;
+        }
+        w0 += k;
+        w1 += k;
+        w2 += k;
+        w3 += k;
+        w4 += k;
+        w5 += k;
+        w6 += k;
+        w7 += k;
+        w8 += k;
+        w9 += k;
+        w10 += k;
+        w11 += k;
+        w12 += k;
+        w13 += k;
+        w14 += k;
+        // Interleave 16-bit lanes
+        __m256i vt0 = _mm256_unpacklo_epi16(v0, v1);
+        __m256i vt1 = _mm256_unpackhi_epi16(v0, v1);
+        __m256i vt2 = _mm256_unpacklo_epi16(v2, v3);
+        __m256i vt3 = _mm256_unpackhi_epi16(v2, v3);
+        __m256i vt4 = _mm256_unpacklo_epi16(v4, v5);
+        __m256i vt5 = _mm256_unpackhi_epi16(v4, v5);
+        __m256i vt6 = _mm256_unpacklo_epi16(v6, v7);
+        __m256i vt7 = _mm256_unpackhi_epi16(v6, v7);
+        __m256i vt8 = _mm256_unpacklo_epi16(v8, v9);
+        __m256i vt9 = _mm256_unpackhi_epi16(v8, v9);
+        __m256i vt10 = _mm256_unpacklo_epi16(v10, v11);
+        __m256i vt11 = _mm256_unpackhi_epi16(v10, v11);
+        __m256i vt12 = _mm256_unpacklo_epi16(v12, v13);
+        __m256i vt13 = _mm256_unpackhi_epi16(v12, v13);
+        __m256i vt14 = _mm256_unpacklo_epi16(v14, v14);
+        __m256i vt15 = _mm256_unpackhi_epi16(v14, v14);
+
+        xnn_prefetch_to_l1((const int8_t*) w0 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w1 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w2 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w3 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w4 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w5 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w6 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w7 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w8 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w9 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w10 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w11 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w12 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w13 + 128);
+        xnn_prefetch_to_l1((const int8_t*) w14 + 128);
+
+        // Interleave 32-bit lanes
+        v0 = _mm256_unpacklo_epi32(vt0, vt2);
+        v1 = _mm256_unpackhi_epi32(vt0, vt2);
+        v2 = _mm256_unpacklo_epi32(vt1, vt3);
+        v3 = _mm256_unpackhi_epi32(vt1, vt3);
+        v4 = _mm256_unpacklo_epi32(vt4, vt6);
+        v5 = _mm256_unpackhi_epi32(vt4, vt6);
+        v6 = _mm256_unpacklo_epi32(vt5, vt7);
+        v7 = _mm256_unpackhi_epi32(vt5, vt7);
+        v8 = _mm256_unpacklo_epi32(vt8, vt10);
+        v9 = _mm256_unpackhi_epi32(vt8, vt10);
+        v10 = _mm256_unpacklo_epi32(vt9, vt11);
+        v11 = _mm256_unpackhi_epi32(vt9, vt11);
+        v12 = _mm256_unpacklo_epi32(vt12, vt14);
+        v13 = _mm256_unpackhi_epi32(vt12, vt14);
+        v14 = _mm256_unpacklo_epi32(vt13, vt15);
+        v15 = _mm256_unpackhi_epi32(vt13, vt15);
+
+        // Interleave 64-bit lanes
+        vt0 = _mm256_unpacklo_epi64(v0, v4);
+        vt1 = _mm256_unpackhi_epi64(v0, v4);
+        vt2 = _mm256_unpacklo_epi64(v1, v5);
+        vt3 = _mm256_unpackhi_epi64(v1, v5);
+        vt4 = _mm256_unpacklo_epi64(v2, v6);
+        vt5 = _mm256_unpackhi_epi64(v2, v6);
+        vt6 = _mm256_unpacklo_epi64(v3, v7);
+        vt7 = _mm256_unpackhi_epi64(v3, v7);
+        vt8 = _mm256_unpacklo_epi64(v8, v12);
+        vt9 = _mm256_unpackhi_epi64(v8, v12);
+        vt10 = _mm256_unpacklo_epi64(v9, v13);
+        vt11 = _mm256_unpackhi_epi64(v9, v13);
+        vt12 = _mm256_unpacklo_epi64(v10, v14);
+        vt13 = _mm256_unpackhi_epi64(v10, v14);
+        vt14 = _mm256_unpacklo_epi64(v11, v15);
+        vt15 = _mm256_unpackhi_epi64(v11, v15);
+
+        v0 = _mm256_inserti128_si256(vt0, _mm256_castsi256_si128(vt8), 1);
+        v8 = _mm256_permute2x128_si256(vt0, vt8, 0x31);
+        v1 = _mm256_inserti128_si256(vt1, _mm256_castsi256_si128(vt9), 1);
+        v9 = _mm256_permute2x128_si256(vt1, vt9, 0x31);
+        v2 = _mm256_inserti128_si256(vt2, _mm256_castsi256_si128(vt10), 1);
+        v10 = _mm256_permute2x128_si256(vt2, vt10, 0x31);
+        v3 = _mm256_inserti128_si256(vt3, _mm256_castsi256_si128(vt11), 1);
+        v11 = _mm256_permute2x128_si256(vt3, vt11, 0x31);
+        v4 = _mm256_inserti128_si256(vt4, _mm256_castsi256_si128(vt12), 1);
+        v12 = _mm256_permute2x128_si256(vt4, vt12, 0x31);
+        v5 = _mm256_inserti128_si256(vt5, _mm256_castsi256_si128(vt13), 1);
+        v13 = _mm256_permute2x128_si256(vt5, vt13, 0x31);
+        v6 = _mm256_inserti128_si256(vt6, _mm256_castsi256_si128(vt14), 1);
+        v14 = _mm256_permute2x128_si256(vt6, vt14, 0x31);
+        v7 = _mm256_inserti128_si256(vt7, _mm256_castsi256_si128(vt15), 1);
+        v15 = _mm256_permute2x128_si256(vt7, vt15, 0x31);
+        if (k & 8) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+          _mm256_store_si256((__m256i*) packed_weights + 2, v2);
+          _mm256_store_si256((__m256i*) packed_weights + 3, v3);
+          _mm256_store_si256((__m256i*) packed_weights + 4, v4);
+          _mm256_store_si256((__m256i*) packed_weights + 5, v5);
+          _mm256_store_si256((__m256i*) packed_weights + 6, v6);
+          _mm256_store_si256((__m256i*) packed_weights + 7, v7);
+          packed_weights += 128;
+          v0 = v8;
+          v1 = v9;
+          v2 = v10;
+          v3 = v11;
+          v4 = v12;
+          v5 = v13;
+          v6 = v14;
+          v7 = v15;
+        }
+        if (k & 4) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+          _mm256_store_si256((__m256i*) packed_weights + 2, v2);
+          _mm256_store_si256((__m256i*) packed_weights + 3, v3);
+          packed_weights += 64;
+          v0 = v4;
+          v1 = v5;
+          v2 = v6;
+          v3 = v7;
+        }
+        if (k & 2) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          _mm256_store_si256((__m256i*) packed_weights + 1, v1);
+          packed_weights += 32;
+          v0 = v2;
+          v1 = v3;
+        }
+        if (k & 1) {
+          _mm256_store_si256((__m256i*) packed_weights + 0, v0);
+          packed_weights += 16;
+        }
+      }
+      packed_weights = (uint16_t*) ((uintptr_t) packed_weights + extra_bytes);
+    }
+    weights += nc * kc;
+  } while (--g != 0);
+}
+
 void xnn_x16_transposec_ukernel__16x16_reuse_switch_avx2(
     const uint16_t* input,
     uint16_t* output,
@@ -10678,8 +12050,8 @@ void xnn_x16_transposec_ukernel__16x16_reuse_switch_avx2(
     size_t block_height,
     const union xnn_x16_transpose_params params[restrict XNN_MIN_ELEMENTS(1)]) XNN_OOB_READS
 {
-  assert(output_stride >= block_height * sizeof(uint16_t));
-  assert(input_stride >= block_width * sizeof(uint16_t));
+  assert(block_width == 1 || output_stride >= block_height * sizeof(uint16_t));
+  assert(block_height == 1 || input_stride >= block_width * sizeof(uint16_t));
 
   const size_t tile_height = 16;
   const size_t tile_width = 16;
@@ -10792,75 +12164,90 @@ void xnn_x16_transposec_ukernel__16x16_reuse_switch_avx2(
           _mm256_storeu_si256((__m256i*) oN, v0_15);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 14: {
           const __m256i v0_14 = _mm256_permute2f128_si256(v1_6, v1_14, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_14);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 13: {
           const __m256i v0_13 = _mm256_permute2f128_si256(v1_5, v1_13, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_13);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 12: {
           const __m256i v0_12 = _mm256_permute2f128_si256(v1_4, v1_12, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_12);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 11: {
           const __m256i v0_11 = _mm256_permute2f128_si256(v1_3, v1_11, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_11);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 10: {
           const __m256i v0_10 = _mm256_permute2f128_si256(v1_2, v1_10, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_10);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 9: {
           const __m256i v0_9 = _mm256_permute2f128_si256(v1_1, v1_9, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_9);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 8: {
           const __m256i v0_8 = _mm256_permute2f128_si256(v1_0, v1_8, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_8);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 7: {
           const __m256i v0_7 = _mm256_insertf128_si256(v1_7, _mm256_castsi256_si128(v1_15), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_7);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 6: {
           const __m256i v0_6 = _mm256_insertf128_si256(v1_6, _mm256_castsi256_si128(v1_14), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_6);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 5: {
           const __m256i v0_5 = _mm256_insertf128_si256(v1_5, _mm256_castsi256_si128(v1_13), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_5);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 4: {
           const __m256i v0_4 = _mm256_insertf128_si256(v1_4, _mm256_castsi256_si128(v1_12), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_4);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 3: {
           const __m256i v0_3 = _mm256_insertf128_si256(v1_3, _mm256_castsi256_si128(v1_11), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_3);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 2: {
           const __m256i v0_2 = _mm256_insertf128_si256(v1_2, _mm256_castsi256_si128(v1_10), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_2);
           oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 1: {
           const __m256i v0_1 = _mm256_insertf128_si256(v1_1, _mm256_castsi256_si128(v1_9), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_1);
         }
+        XNN_FALLTHROUGH
         case 0: {
           const __m256i v0_0 = _mm256_insertf128_si256(v1_0, _mm256_castsi256_si128(v1_8), 1);
           _mm256_storeu_si256((__m256i*) o, v0_0);
@@ -11015,61 +12402,76 @@ void xnn_x16_transposec_ukernel__16x16_reuse_switch_avx2(
             _mm_storeu_si128((__m128i*) oN, v0_15_lo);
              v0_15_lo = _mm256_extractf128_si256(v1_15, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             _mm_storeu_si128((__m128i*) oN, v0_14_lo);
              v0_14_lo = _mm256_extractf128_si256(v1_14, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             _mm_storeu_si128((__m128i*) oN, v0_13_lo);
              v0_13_lo = _mm256_extractf128_si256(v1_13, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             _mm_storeu_si128((__m128i*) oN, v0_12_lo);
              v0_12_lo = _mm256_extractf128_si256(v1_12, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             _mm_storeu_si128((__m128i*) oN, v0_11_lo);
              v0_11_lo = _mm256_extractf128_si256(v1_11, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             _mm_storeu_si128((__m128i*) oN, v0_10_lo);
              v0_10_lo = _mm256_extractf128_si256(v1_10, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             _mm_storeu_si128((__m128i*) oN, v0_9_lo);
              v0_9_lo = _mm256_extractf128_si256(v1_9, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             _mm_storeu_si128((__m128i*) oN, v0_8_lo);
              v0_8_lo = _mm256_extractf128_si256(v1_8, 0x1);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             _mm_storeu_si128((__m128i*) oN, v0_7_lo);
              v0_7_lo = _mm256_castsi256_si128(v1_15);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             _mm_storeu_si128((__m128i*) oN, v0_6_lo);
              v0_6_lo = _mm256_castsi256_si128(v1_14);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             _mm_storeu_si128((__m128i*) oN, v0_5_lo);
              v0_5_lo = _mm256_castsi256_si128(v1_13);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             _mm_storeu_si128((__m128i*) oN, v0_4_lo);
              v0_4_lo = _mm256_castsi256_si128(v1_12);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             _mm_storeu_si128((__m128i*) oN, v0_3_lo);
              v0_3_lo = _mm256_castsi256_si128(v1_11);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             _mm_storeu_si128((__m128i*) oN, v0_2_lo);
              v0_2_lo = _mm256_castsi256_si128(v1_10);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
             _mm_storeu_si128((__m128i*) oN, v0_1_lo);
             v0_1_lo = _mm256_castsi256_si128(v1_9);
+            XNN_FALLTHROUGH
           case 0:
             _mm_storeu_si128((__m128i*) o, v0_0_lo);
             v0_0_lo = _mm256_castsi256_si128(v1_8);
@@ -11087,61 +12489,76 @@ void xnn_x16_transposec_ukernel__16x16_reuse_switch_avx2(
             _mm_storel_epi64((__m128i*) oN, v0_15_lo);
             v0_15_lo = _mm_unpackhi_epi64(v0_15_lo, v0_15_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             _mm_storel_epi64((__m128i*) oN, v0_14_lo);
             v0_14_lo = _mm_unpackhi_epi64(v0_14_lo, v0_14_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             _mm_storel_epi64((__m128i*) oN, v0_13_lo);
             v0_13_lo = _mm_unpackhi_epi64(v0_13_lo, v0_13_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             _mm_storel_epi64((__m128i*) oN, v0_12_lo);
             v0_12_lo = _mm_unpackhi_epi64(v0_12_lo, v0_12_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             _mm_storel_epi64((__m128i*) oN, v0_11_lo);
             v0_11_lo = _mm_unpackhi_epi64(v0_11_lo, v0_11_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             _mm_storel_epi64((__m128i*) oN, v0_10_lo);
             v0_10_lo = _mm_unpackhi_epi64(v0_10_lo, v0_10_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             _mm_storel_epi64((__m128i*) oN, v0_9_lo);
             v0_9_lo = _mm_unpackhi_epi64(v0_9_lo, v0_9_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             _mm_storel_epi64((__m128i*) oN, v0_8_lo);
             v0_8_lo = _mm_unpackhi_epi64(v0_8_lo, v0_8_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             _mm_storel_epi64((__m128i*) oN, v0_7_lo);
             v0_7_lo = _mm_unpackhi_epi64(v0_7_lo, v0_7_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             _mm_storel_epi64((__m128i*) oN, v0_6_lo);
             v0_6_lo = _mm_unpackhi_epi64(v0_6_lo, v0_6_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             _mm_storel_epi64((__m128i*) oN, v0_5_lo);
             v0_5_lo = _mm_unpackhi_epi64(v0_5_lo, v0_5_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             _mm_storel_epi64((__m128i*) oN, v0_4_lo);
             v0_4_lo = _mm_unpackhi_epi64(v0_4_lo, v0_4_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             _mm_storel_epi64((__m128i*) oN, v0_3_lo);
             v0_3_lo = _mm_unpackhi_epi64(v0_3_lo, v0_3_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             _mm_storel_epi64((__m128i*) oN, v0_2_lo);
             v0_2_lo = _mm_unpackhi_epi64(v0_2_lo, v0_2_lo);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
             _mm_storel_epi64((__m128i*) oN, v0_1_lo);
             v0_1_lo = _mm_unpackhi_epi64(v0_1_lo, v0_1_lo);
+            XNN_FALLTHROUGH
           case 0:
             _mm_storel_epi64((__m128i*) o, v0_0_lo);
             v0_0_lo = _mm_unpackhi_epi64(v0_0_lo, v0_0_lo);
@@ -11158,61 +12575,76 @@ void xnn_x16_transposec_ukernel__16x16_reuse_switch_avx2(
             _mm_storeu_si32(oN, v0_15_lo);
             v0_15_lo = _mm_srli_epi64(v0_15_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             _mm_storeu_si32(oN, v0_14_lo);
             v0_14_lo = _mm_srli_epi64(v0_14_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             _mm_storeu_si32(oN, v0_13_lo);
             v0_13_lo = _mm_srli_epi64(v0_13_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             _mm_storeu_si32(oN, v0_12_lo);
             v0_12_lo = _mm_srli_epi64(v0_12_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             _mm_storeu_si32(oN, v0_11_lo);
             v0_11_lo = _mm_srli_epi64(v0_11_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             _mm_storeu_si32(oN, v0_10_lo);
             v0_10_lo = _mm_srli_epi64(v0_10_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             _mm_storeu_si32(oN, v0_9_lo);
             v0_9_lo = _mm_srli_epi64(v0_9_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             _mm_storeu_si32(oN, v0_8_lo);
             v0_8_lo = _mm_srli_epi64(v0_8_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             _mm_storeu_si32(oN, v0_7_lo);
             v0_7_lo = _mm_srli_epi64(v0_7_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             _mm_storeu_si32(oN, v0_6_lo);
             v0_6_lo = _mm_srli_epi64(v0_6_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             _mm_storeu_si32(oN, v0_5_lo);
             v0_5_lo = _mm_srli_epi64(v0_5_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             _mm_storeu_si32(oN, v0_4_lo);
             v0_4_lo = _mm_srli_epi64(v0_4_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             _mm_storeu_si32(oN, v0_3_lo);
             v0_3_lo = _mm_srli_epi64(v0_3_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             _mm_storeu_si32(oN, v0_2_lo);
             v0_2_lo = _mm_srli_epi64(v0_2_lo, 32);
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
             _mm_storeu_si32(oN, v0_1_lo);
             v0_1_lo = _mm_srli_epi64(v0_1_lo, 32);
+            XNN_FALLTHROUGH
           case 0:
             _mm_storeu_si32(o, v0_0_lo);
             v0_0_lo = _mm_srli_epi64(v0_0_lo, 32);
@@ -11228,47 +12660,62 @@ void xnn_x16_transposec_ukernel__16x16_reuse_switch_avx2(
           case 15:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_15_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_14_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_13_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_12_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_11_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_10_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_9_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_8_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_7_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_6_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_5_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_4_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_3_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_2_lo));
             oN = (uint16_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
              unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_1_lo));
+             XNN_FALLTHROUGH
           case 0:
              unaligned_store_u16(o, (uint16_t) _mm_cvtsi128_si32(v0_0_lo));
             break;
@@ -11578,8 +13025,8 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
     size_t block_height,
     const union xnn_x8_transpose_params params[restrict XNN_MIN_ELEMENTS(1)]) XNN_OOB_READS
 {
-  assert(output_stride >= block_height * sizeof(uint8_t));
-  assert(input_stride >= block_width * sizeof(uint8_t));
+  assert(block_width == 1 || output_stride >= block_height * sizeof(uint8_t));
+  assert(block_height == 1 || input_stride >= block_width * sizeof(uint8_t));
 
   const size_t tile_height = 32;
   const size_t tile_width = 32;
@@ -11804,155 +13251,186 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
           _mm256_storeu_si256((__m256i*) oN, v0_31);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 30: {
           const __m256i v0_30 = _mm256_permute2f128_si256(v1_14, v1_30, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_30);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 29: {
           const __m256i v0_29 = _mm256_permute2f128_si256(v1_13, v1_29, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_29);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 28: {
           const __m256i v0_28 = _mm256_permute2f128_si256(v1_12, v1_28, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_28);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 27: {
           const __m256i v0_27 = _mm256_permute2f128_si256(v1_11, v1_27, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_27);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 26: {
           const __m256i v0_26 = _mm256_permute2f128_si256(v1_10, v1_26, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_26);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 25: {
           const __m256i v0_25 = _mm256_permute2f128_si256(v1_9, v1_25, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_25);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 24: {
           const __m256i v0_24 = _mm256_permute2f128_si256(v1_8, v1_24, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_24);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 23: {
           const __m256i v0_23 = _mm256_permute2f128_si256(v1_7, v1_23, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_23);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 22: {
           const __m256i v0_22 = _mm256_permute2f128_si256(v1_6, v1_22, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_22);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 21: {
           const __m256i v0_21 = _mm256_permute2f128_si256(v1_5, v1_21, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_21);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 20: {
           const __m256i v0_20 = _mm256_permute2f128_si256(v1_4, v1_20, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_20);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 19: {
           const __m256i v0_19 = _mm256_permute2f128_si256(v1_3, v1_19, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_19);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 18: {
           const __m256i v0_18 = _mm256_permute2f128_si256(v1_2, v1_18, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_18);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 17: {
           const __m256i v0_17 = _mm256_permute2f128_si256(v1_1, v1_17, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_17);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 16: {
           const __m256i v0_16 = _mm256_permute2f128_si256(v1_0, v1_16, 0x31);
           _mm256_storeu_si256((__m256i*) oN, v0_16);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 15: {
           const __m256i v0_15 = _mm256_insertf128_si256(v1_15, _mm256_castsi256_si128(v1_31), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_15);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 14: {
           const __m256i v0_14 = _mm256_insertf128_si256(v1_14, _mm256_castsi256_si128(v1_30), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_14);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 13: {
           const __m256i v0_13 = _mm256_insertf128_si256(v1_13, _mm256_castsi256_si128(v1_29), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_13);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 12: {
           const __m256i v0_12 = _mm256_insertf128_si256(v1_12, _mm256_castsi256_si128(v1_28), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_12);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 11: {
           const __m256i v0_11 = _mm256_insertf128_si256(v1_11, _mm256_castsi256_si128(v1_27), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_11);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 10: {
           const __m256i v0_10 = _mm256_insertf128_si256(v1_10, _mm256_castsi256_si128(v1_26), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_10);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 9: {
           const __m256i v0_9 = _mm256_insertf128_si256(v1_9, _mm256_castsi256_si128(v1_25), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_9);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 8: {
           const __m256i v0_8 = _mm256_insertf128_si256(v1_8, _mm256_castsi256_si128(v1_24), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_8);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 7: {
           const __m256i v0_7 = _mm256_insertf128_si256(v1_7, _mm256_castsi256_si128(v1_23), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_7);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 6: {
           const __m256i v0_6 = _mm256_insertf128_si256(v1_6, _mm256_castsi256_si128(v1_22), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_6);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 5: {
           const __m256i v0_5 = _mm256_insertf128_si256(v1_5, _mm256_castsi256_si128(v1_21), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_5);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 4: {
           const __m256i v0_4 = _mm256_insertf128_si256(v1_4, _mm256_castsi256_si128(v1_20), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_4);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 3: {
           const __m256i v0_3 = _mm256_insertf128_si256(v1_3, _mm256_castsi256_si128(v1_19), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_3);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 2: {
           const __m256i v0_2 = _mm256_insertf128_si256(v1_2, _mm256_castsi256_si128(v1_18), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_2);
           oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
         }
+        XNN_FALLTHROUGH
         case 1: {
           const __m256i v0_1 = _mm256_insertf128_si256(v1_1, _mm256_castsi256_si128(v1_17), 1);
           _mm256_storeu_si256((__m256i*) oN, v0_1);
         }
+        XNN_FALLTHROUGH
         case 0: {
           const __m256i v0_0 = _mm256_insertf128_si256(v1_0, _mm256_castsi256_si128(v1_16), 1);
           _mm256_storeu_si256((__m256i*) o, v0_0);
@@ -12283,125 +13761,156 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
             _mm_storeu_si128((__m128i*) oN, v0_31_lo);
              v0_31_lo = _mm256_extractf128_si256(v1_31, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 30:
             _mm_storeu_si128((__m128i*) oN, v0_30_lo);
              v0_30_lo = _mm256_extractf128_si256(v1_30, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 29:
             _mm_storeu_si128((__m128i*) oN, v0_29_lo);
              v0_29_lo = _mm256_extractf128_si256(v1_29, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 28:
             _mm_storeu_si128((__m128i*) oN, v0_28_lo);
              v0_28_lo = _mm256_extractf128_si256(v1_28, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 27:
             _mm_storeu_si128((__m128i*) oN, v0_27_lo);
              v0_27_lo = _mm256_extractf128_si256(v1_27, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 26:
             _mm_storeu_si128((__m128i*) oN, v0_26_lo);
              v0_26_lo = _mm256_extractf128_si256(v1_26, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 25:
             _mm_storeu_si128((__m128i*) oN, v0_25_lo);
              v0_25_lo = _mm256_extractf128_si256(v1_25, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 24:
             _mm_storeu_si128((__m128i*) oN, v0_24_lo);
              v0_24_lo = _mm256_extractf128_si256(v1_24, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 23:
             _mm_storeu_si128((__m128i*) oN, v0_23_lo);
              v0_23_lo = _mm256_extractf128_si256(v1_23, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 22:
             _mm_storeu_si128((__m128i*) oN, v0_22_lo);
              v0_22_lo = _mm256_extractf128_si256(v1_22, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 21:
             _mm_storeu_si128((__m128i*) oN, v0_21_lo);
              v0_21_lo = _mm256_extractf128_si256(v1_21, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 20:
             _mm_storeu_si128((__m128i*) oN, v0_20_lo);
              v0_20_lo = _mm256_extractf128_si256(v1_20, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 19:
             _mm_storeu_si128((__m128i*) oN, v0_19_lo);
              v0_19_lo = _mm256_extractf128_si256(v1_19, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 18:
             _mm_storeu_si128((__m128i*) oN, v0_18_lo);
              v0_18_lo = _mm256_extractf128_si256(v1_18, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 17:
             _mm_storeu_si128((__m128i*) oN, v0_17_lo);
              v0_17_lo = _mm256_extractf128_si256(v1_17, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 16:
             _mm_storeu_si128((__m128i*) oN, v0_16_lo);
              v0_16_lo = _mm256_extractf128_si256(v1_16, 0x1);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 15:
             _mm_storeu_si128((__m128i*) oN, v0_15_lo);
              v0_15_lo = _mm256_castsi256_si128(v1_31);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             _mm_storeu_si128((__m128i*) oN, v0_14_lo);
              v0_14_lo = _mm256_castsi256_si128(v1_30);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             _mm_storeu_si128((__m128i*) oN, v0_13_lo);
              v0_13_lo = _mm256_castsi256_si128(v1_29);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             _mm_storeu_si128((__m128i*) oN, v0_12_lo);
              v0_12_lo = _mm256_castsi256_si128(v1_28);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             _mm_storeu_si128((__m128i*) oN, v0_11_lo);
              v0_11_lo = _mm256_castsi256_si128(v1_27);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             _mm_storeu_si128((__m128i*) oN, v0_10_lo);
              v0_10_lo = _mm256_castsi256_si128(v1_26);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             _mm_storeu_si128((__m128i*) oN, v0_9_lo);
              v0_9_lo = _mm256_castsi256_si128(v1_25);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             _mm_storeu_si128((__m128i*) oN, v0_8_lo);
              v0_8_lo = _mm256_castsi256_si128(v1_24);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             _mm_storeu_si128((__m128i*) oN, v0_7_lo);
              v0_7_lo = _mm256_castsi256_si128(v1_23);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             _mm_storeu_si128((__m128i*) oN, v0_6_lo);
              v0_6_lo = _mm256_castsi256_si128(v1_22);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             _mm_storeu_si128((__m128i*) oN, v0_5_lo);
              v0_5_lo = _mm256_castsi256_si128(v1_21);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             _mm_storeu_si128((__m128i*) oN, v0_4_lo);
              v0_4_lo = _mm256_castsi256_si128(v1_20);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             _mm_storeu_si128((__m128i*) oN, v0_3_lo);
              v0_3_lo = _mm256_castsi256_si128(v1_19);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             _mm_storeu_si128((__m128i*) oN, v0_2_lo);
              v0_2_lo = _mm256_castsi256_si128(v1_18);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
             _mm_storeu_si128((__m128i*) oN, v0_1_lo);
             v0_1_lo = _mm256_castsi256_si128(v1_17);
+            XNN_FALLTHROUGH
           case 0:
             _mm_storeu_si128((__m128i*) o, v0_0_lo);
             v0_0_lo = _mm256_castsi256_si128(v1_16);
@@ -12419,125 +13928,156 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
             _mm_storel_epi64((__m128i*) oN, v0_31_lo);
             v0_31_lo = _mm_unpackhi_epi64(v0_31_lo, v0_31_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 30:
             _mm_storel_epi64((__m128i*) oN, v0_30_lo);
             v0_30_lo = _mm_unpackhi_epi64(v0_30_lo, v0_30_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 29:
             _mm_storel_epi64((__m128i*) oN, v0_29_lo);
             v0_29_lo = _mm_unpackhi_epi64(v0_29_lo, v0_29_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 28:
             _mm_storel_epi64((__m128i*) oN, v0_28_lo);
             v0_28_lo = _mm_unpackhi_epi64(v0_28_lo, v0_28_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 27:
             _mm_storel_epi64((__m128i*) oN, v0_27_lo);
             v0_27_lo = _mm_unpackhi_epi64(v0_27_lo, v0_27_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 26:
             _mm_storel_epi64((__m128i*) oN, v0_26_lo);
             v0_26_lo = _mm_unpackhi_epi64(v0_26_lo, v0_26_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 25:
             _mm_storel_epi64((__m128i*) oN, v0_25_lo);
             v0_25_lo = _mm_unpackhi_epi64(v0_25_lo, v0_25_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 24:
             _mm_storel_epi64((__m128i*) oN, v0_24_lo);
             v0_24_lo = _mm_unpackhi_epi64(v0_24_lo, v0_24_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 23:
             _mm_storel_epi64((__m128i*) oN, v0_23_lo);
             v0_23_lo = _mm_unpackhi_epi64(v0_23_lo, v0_23_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 22:
             _mm_storel_epi64((__m128i*) oN, v0_22_lo);
             v0_22_lo = _mm_unpackhi_epi64(v0_22_lo, v0_22_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 21:
             _mm_storel_epi64((__m128i*) oN, v0_21_lo);
             v0_21_lo = _mm_unpackhi_epi64(v0_21_lo, v0_21_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 20:
             _mm_storel_epi64((__m128i*) oN, v0_20_lo);
             v0_20_lo = _mm_unpackhi_epi64(v0_20_lo, v0_20_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 19:
             _mm_storel_epi64((__m128i*) oN, v0_19_lo);
             v0_19_lo = _mm_unpackhi_epi64(v0_19_lo, v0_19_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 18:
             _mm_storel_epi64((__m128i*) oN, v0_18_lo);
             v0_18_lo = _mm_unpackhi_epi64(v0_18_lo, v0_18_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 17:
             _mm_storel_epi64((__m128i*) oN, v0_17_lo);
             v0_17_lo = _mm_unpackhi_epi64(v0_17_lo, v0_17_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 16:
             _mm_storel_epi64((__m128i*) oN, v0_16_lo);
             v0_16_lo = _mm_unpackhi_epi64(v0_16_lo, v0_16_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 15:
             _mm_storel_epi64((__m128i*) oN, v0_15_lo);
             v0_15_lo = _mm_unpackhi_epi64(v0_15_lo, v0_15_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             _mm_storel_epi64((__m128i*) oN, v0_14_lo);
             v0_14_lo = _mm_unpackhi_epi64(v0_14_lo, v0_14_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             _mm_storel_epi64((__m128i*) oN, v0_13_lo);
             v0_13_lo = _mm_unpackhi_epi64(v0_13_lo, v0_13_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             _mm_storel_epi64((__m128i*) oN, v0_12_lo);
             v0_12_lo = _mm_unpackhi_epi64(v0_12_lo, v0_12_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             _mm_storel_epi64((__m128i*) oN, v0_11_lo);
             v0_11_lo = _mm_unpackhi_epi64(v0_11_lo, v0_11_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             _mm_storel_epi64((__m128i*) oN, v0_10_lo);
             v0_10_lo = _mm_unpackhi_epi64(v0_10_lo, v0_10_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             _mm_storel_epi64((__m128i*) oN, v0_9_lo);
             v0_9_lo = _mm_unpackhi_epi64(v0_9_lo, v0_9_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             _mm_storel_epi64((__m128i*) oN, v0_8_lo);
             v0_8_lo = _mm_unpackhi_epi64(v0_8_lo, v0_8_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             _mm_storel_epi64((__m128i*) oN, v0_7_lo);
             v0_7_lo = _mm_unpackhi_epi64(v0_7_lo, v0_7_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             _mm_storel_epi64((__m128i*) oN, v0_6_lo);
             v0_6_lo = _mm_unpackhi_epi64(v0_6_lo, v0_6_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             _mm_storel_epi64((__m128i*) oN, v0_5_lo);
             v0_5_lo = _mm_unpackhi_epi64(v0_5_lo, v0_5_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             _mm_storel_epi64((__m128i*) oN, v0_4_lo);
             v0_4_lo = _mm_unpackhi_epi64(v0_4_lo, v0_4_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             _mm_storel_epi64((__m128i*) oN, v0_3_lo);
             v0_3_lo = _mm_unpackhi_epi64(v0_3_lo, v0_3_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             _mm_storel_epi64((__m128i*) oN, v0_2_lo);
             v0_2_lo = _mm_unpackhi_epi64(v0_2_lo, v0_2_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
             _mm_storel_epi64((__m128i*) oN, v0_1_lo);
             v0_1_lo = _mm_unpackhi_epi64(v0_1_lo, v0_1_lo);
+            XNN_FALLTHROUGH
           case 0:
             _mm_storel_epi64((__m128i*) o, v0_0_lo);
             v0_0_lo = _mm_unpackhi_epi64(v0_0_lo, v0_0_lo);
@@ -12554,125 +14094,156 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
             _mm_storeu_si32(oN, v0_31_lo);
             v0_31_lo = _mm_srli_epi64(v0_31_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 30:
             _mm_storeu_si32(oN, v0_30_lo);
             v0_30_lo = _mm_srli_epi64(v0_30_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 29:
             _mm_storeu_si32(oN, v0_29_lo);
             v0_29_lo = _mm_srli_epi64(v0_29_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 28:
             _mm_storeu_si32(oN, v0_28_lo);
             v0_28_lo = _mm_srli_epi64(v0_28_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 27:
             _mm_storeu_si32(oN, v0_27_lo);
             v0_27_lo = _mm_srli_epi64(v0_27_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 26:
             _mm_storeu_si32(oN, v0_26_lo);
             v0_26_lo = _mm_srli_epi64(v0_26_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 25:
             _mm_storeu_si32(oN, v0_25_lo);
             v0_25_lo = _mm_srli_epi64(v0_25_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 24:
             _mm_storeu_si32(oN, v0_24_lo);
             v0_24_lo = _mm_srli_epi64(v0_24_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 23:
             _mm_storeu_si32(oN, v0_23_lo);
             v0_23_lo = _mm_srli_epi64(v0_23_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 22:
             _mm_storeu_si32(oN, v0_22_lo);
             v0_22_lo = _mm_srli_epi64(v0_22_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 21:
             _mm_storeu_si32(oN, v0_21_lo);
             v0_21_lo = _mm_srli_epi64(v0_21_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 20:
             _mm_storeu_si32(oN, v0_20_lo);
             v0_20_lo = _mm_srli_epi64(v0_20_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 19:
             _mm_storeu_si32(oN, v0_19_lo);
             v0_19_lo = _mm_srli_epi64(v0_19_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 18:
             _mm_storeu_si32(oN, v0_18_lo);
             v0_18_lo = _mm_srli_epi64(v0_18_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 17:
             _mm_storeu_si32(oN, v0_17_lo);
             v0_17_lo = _mm_srli_epi64(v0_17_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 16:
             _mm_storeu_si32(oN, v0_16_lo);
             v0_16_lo = _mm_srli_epi64(v0_16_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 15:
             _mm_storeu_si32(oN, v0_15_lo);
             v0_15_lo = _mm_srli_epi64(v0_15_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             _mm_storeu_si32(oN, v0_14_lo);
             v0_14_lo = _mm_srli_epi64(v0_14_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             _mm_storeu_si32(oN, v0_13_lo);
             v0_13_lo = _mm_srli_epi64(v0_13_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             _mm_storeu_si32(oN, v0_12_lo);
             v0_12_lo = _mm_srli_epi64(v0_12_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             _mm_storeu_si32(oN, v0_11_lo);
             v0_11_lo = _mm_srli_epi64(v0_11_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             _mm_storeu_si32(oN, v0_10_lo);
             v0_10_lo = _mm_srli_epi64(v0_10_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             _mm_storeu_si32(oN, v0_9_lo);
             v0_9_lo = _mm_srli_epi64(v0_9_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             _mm_storeu_si32(oN, v0_8_lo);
             v0_8_lo = _mm_srli_epi64(v0_8_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             _mm_storeu_si32(oN, v0_7_lo);
             v0_7_lo = _mm_srli_epi64(v0_7_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             _mm_storeu_si32(oN, v0_6_lo);
             v0_6_lo = _mm_srli_epi64(v0_6_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             _mm_storeu_si32(oN, v0_5_lo);
             v0_5_lo = _mm_srli_epi64(v0_5_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             _mm_storeu_si32(oN, v0_4_lo);
             v0_4_lo = _mm_srli_epi64(v0_4_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             _mm_storeu_si32(oN, v0_3_lo);
             v0_3_lo = _mm_srli_epi64(v0_3_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             _mm_storeu_si32(oN, v0_2_lo);
             v0_2_lo = _mm_srli_epi64(v0_2_lo, 32);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
             _mm_storeu_si32(oN, v0_1_lo);
             v0_1_lo = _mm_srli_epi64(v0_1_lo, 32);
+            XNN_FALLTHROUGH
           case 0:
             _mm_storeu_si32(o, v0_0_lo);
             v0_0_lo = _mm_srli_epi64(v0_0_lo, 32);
@@ -12689,125 +14260,156 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_31_lo));
              v0_31_lo = _mm_srli_epi32(v0_31_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 30:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_30_lo));
              v0_30_lo = _mm_srli_epi32(v0_30_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 29:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_29_lo));
              v0_29_lo = _mm_srli_epi32(v0_29_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 28:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_28_lo));
              v0_28_lo = _mm_srli_epi32(v0_28_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 27:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_27_lo));
              v0_27_lo = _mm_srli_epi32(v0_27_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 26:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_26_lo));
              v0_26_lo = _mm_srli_epi32(v0_26_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 25:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_25_lo));
              v0_25_lo = _mm_srli_epi32(v0_25_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 24:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_24_lo));
              v0_24_lo = _mm_srli_epi32(v0_24_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 23:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_23_lo));
              v0_23_lo = _mm_srli_epi32(v0_23_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 22:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_22_lo));
              v0_22_lo = _mm_srli_epi32(v0_22_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 21:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_21_lo));
              v0_21_lo = _mm_srli_epi32(v0_21_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 20:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_20_lo));
              v0_20_lo = _mm_srli_epi32(v0_20_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 19:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_19_lo));
              v0_19_lo = _mm_srli_epi32(v0_19_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 18:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_18_lo));
              v0_18_lo = _mm_srli_epi32(v0_18_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 17:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_17_lo));
              v0_17_lo = _mm_srli_epi32(v0_17_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 16:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_16_lo));
              v0_16_lo = _mm_srli_epi32(v0_16_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 15:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_15_lo));
              v0_15_lo = _mm_srli_epi32(v0_15_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_14_lo));
              v0_14_lo = _mm_srli_epi32(v0_14_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_13_lo));
              v0_13_lo = _mm_srli_epi32(v0_13_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_12_lo));
              v0_12_lo = _mm_srli_epi32(v0_12_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_11_lo));
              v0_11_lo = _mm_srli_epi32(v0_11_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_10_lo));
              v0_10_lo = _mm_srli_epi32(v0_10_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_9_lo));
              v0_9_lo = _mm_srli_epi32(v0_9_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_8_lo));
              v0_8_lo = _mm_srli_epi32(v0_8_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_7_lo));
              v0_7_lo = _mm_srli_epi32(v0_7_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_6_lo));
              v0_6_lo = _mm_srli_epi32(v0_6_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_5_lo));
              v0_5_lo = _mm_srli_epi32(v0_5_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_4_lo));
              v0_4_lo = _mm_srli_epi32(v0_4_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_3_lo));
              v0_3_lo = _mm_srli_epi32(v0_3_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_2_lo));
              v0_2_lo = _mm_srli_epi32(v0_2_lo, 16);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
              unaligned_store_u16(oN, (uint16_t) _mm_cvtsi128_si32(v0_1_lo));
              v0_1_lo = _mm_srli_epi32(v0_1_lo, 16);
+             XNN_FALLTHROUGH
           case 0:
              unaligned_store_u16(o, (uint16_t) _mm_cvtsi128_si32(v0_0_lo));
              v0_0_lo = _mm_srli_epi32(v0_0_lo, 16);
@@ -12823,95 +14425,126 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
           case 31:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_31_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 30:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_30_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 29:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_29_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 28:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_28_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 27:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_27_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 26:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_26_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 25:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_25_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 24:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_24_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 23:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_23_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 22:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_22_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 21:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_21_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 20:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_20_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 19:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_19_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 18:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_18_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 17:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_17_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 16:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_16_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 15:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_15_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 14:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_14_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 13:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_13_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 12:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_12_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 11:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_11_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 10:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_10_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 9:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_9_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 8:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_8_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 7:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_7_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 6:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_6_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 5:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_5_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 4:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_4_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 3:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_3_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 2:
             *oN = (uint8_t) _mm_cvtsi128_si32(v0_2_lo);
             oN = (uint8_t*) ((uintptr_t) oN + minus_output_stride);
+            XNN_FALLTHROUGH
           case 1:
               *oN = (uint8_t) _mm_cvtsi128_si32(v0_1_lo);
+              XNN_FALLTHROUGH
           case 0:
             *o = (uint8_t) _mm_cvtsi128_si32(v0_0_lo);
             break;
@@ -12925,4 +14558,205 @@ void xnn_x8_transposec_ukernel__32x32_reuse_switch_avx2(
     o = (uint8_t*) ((uintptr_t) o + output_reset);
     block_width = doz(block_width, tile_width);
   } while (block_width != 0);
+}
+
+static XNN_INLINE xnn_simd_f32_t xnn_signed_getexp_f32(xnn_simd_f32_t a) {
+  // The bits of IEE754 single-precision floating-point format are:
+  //
+  //   s | e e e e e e e e | m m m m m m m m m m m m m m m m m m m m m m m
+  //
+  // We start by masking out the sign and exponent and shifting it 8 bits to the
+  // right arithmetically, i.e. extending by the leftmost sign bit:
+  //
+  //   s | s s s s s s s s | e e e e e e e e 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  //
+  // These bits are then `or`-ed with `256.0f`, which has a biased exponent of
+  // `135` and all mantissa bit set to zero. This is equivalent to adding the
+  // biased integer exponent to `256.0`:
+  //
+  //   0 | 1 0 0 0 0 1 1 1 | e e e e e e e e 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  //
+  // We can re-extract the exponent as a `float` value by subtracting `256.0`
+  // plus the exponent bias `127.0`, i.e. `383.0`.
+  //
+  // Note that if the sign bit is `1`, we end up with the floating point bits:
+  //
+  //   1 | 1 1 1 1 1 1 1 1 | e e e e e e e e 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  //
+  // Which is `-NaN` if the exponent is non-zero, and `-Inf` if the exponent is
+  // zero (e.g. the input was `0.0f` or denormal).
+
+  // Some useful constants.
+  XNN_SIMD_CONST_F32(sign_mask, -0.0f);
+  XNN_SIMD_CONST_U32(sign_and_exp_mask, 0xff800000);
+  XNN_SIMD_CONST_F32(bias_256, 256.0f);
+  XNN_SIMD_CONST_F32(bias_383, 383.0f);
+
+  // If `a` is `0.0f`, flip its sign bit so that we return `-Inf`.
+  a = xnn_or_f32(xnn_and_f32(xnn_cmpeq_f32(a, xnn_zero_f32()), sign_mask), a);
+
+  // Extract the exponent and shift the exponent to the most significant bits of
+  // the mantissa.
+  const xnn_simd_f32_t exp =
+      xnn_sra_f32(xnn_and_f32(a, sign_and_exp_mask), 8);
+
+  // Add the shifted exponent to `256.0f` by copying its bits to the mantissa,
+  // then subtract out `383.0f`, i.e. the original `256.0f` plus the `127`
+  // exponent bias, resulting in the unbiased exponent.
+  return xnn_sub_f32(xnn_or_f32(bias_256, exp), bias_383);
+}
+
+void xnn_f32_vlog_ukernel__avx2_rational_3_3_div_u16(
+    size_t batch,
+    const float* input,
+    float* output,
+    const union xnn_f32_default_params unused_params[restrict XNN_MIN_ELEMENTS(1)])
+{
+  assert(batch != 0);
+  assert(batch % sizeof(float) == 0);
+  assert(input != NULL);
+  assert(output != NULL);
+  assert(xnn_simd_size_f32 == 8);
+
+  // Some useful constants.
+  XNN_SIMD_CONST_F32(vone, 1.0f);
+  XNN_SIMD_CONST_F32(vln2, M_LN2);
+  XNN_SIMD_CONST_U32(vmantissa_bits_mask, 0x007FFFFFUL);
+
+  // Note that these two values are not _exactly_ `(float)M_SQRT2` and
+  // `(float)M_SQRT1_2`, but are instead chosen such that their product is
+  // exactly `1.0f` when evaluated in `float` precision.
+  XNN_SIMD_CONST_F32(vsqrt2, 1.4142134190e+00);
+  XNN_SIMD_CONST_F32(vsqrt1_2, 7.0710688829e-01);
+
+  // The monomial coefficients of the numerator polynomial.
+  // XNN_SIMD_CONST_F32(valpha_0, 0.0f);
+  // XNN_SIMD_CONST_F32(valpha_1, 1.0f);
+  // XNN_SIMD_CONST_F32(valpha_2, 1.0f);
+  XNN_SIMD_CONST_F32(valpha_3, 1.824996918440e-01);
+
+  // The monomial coefficients of the denominator polynomial.
+  // XNN_SIMD_CONST_F32(vbeta_0, 1.0f);
+  XNN_SIMD_CONST_F32(vbeta_1, 1.5f);
+  XNN_SIMD_CONST_F32(vbeta_2, 0.599170029163);
+  XNN_SIMD_CONST_F32(vbeta_3, 0.049584995955);
+
+
+  for (; batch >= 16 * sizeof(float); batch -= 16 * sizeof(float)) {
+    xnn_simd_f32_t vx_0 = xnn_loadu_f32(input);
+    xnn_simd_f32_t vx_1 = xnn_loadu_f32(input + 1 * xnn_simd_size_f32);
+    input += 16;
+
+    // Scale `x` with `sqrt(2)` so that the exponent is rounded up.
+    vx_0 = xnn_mul_f32(vx_0, vsqrt2);
+    vx_1 = xnn_mul_f32(vx_1, vsqrt2);
+
+    // Extract the exponent.
+    const xnn_simd_f32_t vexp_0 = xnn_signed_getexp_f32(vx_0);
+    const xnn_simd_f32_t vexp_1 = xnn_signed_getexp_f32(vx_1);
+
+    // Normalize `x` to an exponent of zero.
+    vx_0 = xnn_or_f32(xnn_and_f32(vx_0, vmantissa_bits_mask), vone);
+    vx_1 = xnn_or_f32(xnn_and_f32(vx_1, vmantissa_bits_mask), vone);
+
+    // Scale `x` back with `1/sqrt(2)` to move its range from `[1.0, 2.0)` to
+    // `[sqrt(1/2), sqrt(2))`, and further subtract `1.0` so that it is around
+    // zero, i.e. `[sqrt(1/2) - 1, sqrt(2) - 1)`, or `[−0.29289, 0.4142136)`.
+    vx_0 = xnn_sub_f32(xnn_mul_f32(vx_0, vsqrt1_2), vone);
+    vx_1 = xnn_sub_f32(xnn_mul_f32(vx_1, vsqrt1_2), vone);
+
+    // In the following, we use a 3/2-degree rational polynomial to
+    // approximate the (shifted) `log(x + 1)` on the (shifted) interval
+    // `[sqrt(1/2) - 1, sqrt(2) - 1)`. The shifted interval is chosen so that
+    // `f(0) = 0`.
+
+    // Evaluate the numerator polynomial p.
+    xnn_simd_f32_t vp_0 = xnn_fmadd_f32(vx_0, valpha_3, vone);
+    xnn_simd_f32_t vp_1 = xnn_fmadd_f32(vx_1, valpha_3, vone);
+    vp_0 = xnn_fmadd_f32(vx_0, vp_0, vone);
+    vp_1 = xnn_fmadd_f32(vx_1, vp_1, vone);
+    vp_0 = xnn_mul_f32(vx_0, vp_0);
+    vp_1 = xnn_mul_f32(vx_1, vp_1);
+
+    // Evaluate the denominator polynomial q.
+    xnn_simd_f32_t vq_0 = xnn_fmadd_f32(vx_0, vbeta_3, vbeta_2);
+    xnn_simd_f32_t vq_1 = xnn_fmadd_f32(vx_1, vbeta_3, vbeta_2);
+    vq_0 = xnn_fmadd_f32(vx_0, vq_0, vbeta_1);
+    vq_1 = xnn_fmadd_f32(vx_1, vq_1, vbeta_1);
+    vq_0 = xnn_fmadd_f32(vx_0, vq_0, vone);
+    vq_1 = xnn_fmadd_f32(vx_1, vq_1, vone);
+
+    // Divide the numerator by the denominator.
+    xnn_simd_f32_t vy_0 = xnn_div_f32(vp_0, vq_0);
+    xnn_simd_f32_t vy_1 = xnn_div_f32(vp_1, vq_1);
+
+    // Put it all together, i.e. `log(x) = `log(2)*exp + y`.
+    vy_0 = xnn_fmadd_f32(vexp_0, vln2, vy_0);
+    vy_1 = xnn_fmadd_f32(vexp_1, vln2, vy_1);
+
+    xnn_storeu_f32(output, vy_0);
+    xnn_storeu_f32(output + 1 * xnn_simd_size_f32, vy_1);
+    output += 16;
+  }
+  for (; batch >= xnn_simd_bytes_f32; batch -= xnn_simd_bytes_f32) {
+    xnn_simd_f32_t vx = xnn_loadu_f32(input);
+    input += xnn_simd_size_f32;
+
+    // Scale `x` with `sqrt(2)` so that the exponent is rounded up.
+    vx = xnn_mul_f32(vx, vsqrt2);
+
+    // Extract the exponent.
+    const xnn_simd_f32_t vexp = xnn_signed_getexp_f32(vx);
+
+    // Normalize `x` to an exponent of zero.
+    vx = xnn_or_f32(xnn_and_f32(vx, vmantissa_bits_mask), vone);
+
+    // Scale `x` back with `1/sqrt(2)` to move its range from `[1.0, 2.0)` to
+    // `[sqrt(1/2), sqrt(2))`, and further subtract `1.0` so that it is around
+    // zero, i.e. `[sqrt(1/2) - 1, sqrt(2) - 1)`, or `[−0.29289, 0.4142136)`.
+    vx = xnn_sub_f32(xnn_mul_f32(vx, vsqrt1_2), vone);
+
+    // In the following, we use a 3/2-degree rational polynomial to
+    // approximate the (shifted) `log(x + 1)` on the (shifted) interval
+    // `[sqrt(1/2) - 1, sqrt(2) - 1)`. The shifted interval is chosen so that
+    // `f(0) = 0`.
+
+    // Evaluate the numerator polynomial p.
+    xnn_simd_f32_t vp = xnn_fmadd_f32(vx, valpha_3, vone);
+    vp = xnn_fmadd_f32(vx, vp, vone);
+    vp = xnn_mul_f32(vx, vp);
+
+    // Evaluate the denominator polynomial q.
+    xnn_simd_f32_t vq = xnn_fmadd_f32(vx, vbeta_3, vbeta_2);
+    vq = xnn_fmadd_f32(vx, vq, vbeta_1);
+    vq = xnn_fmadd_f32(vx, vq, vone);
+
+    // Divide the numerator by the denominator.
+    xnn_simd_f32_t vy =  xnn_div_f32(vp, vq);
+
+    // Put it all together, i.e. `log(x) = `log(2)*exp + y`.
+    vy = xnn_fmadd_f32(vexp, vln2, vy);
+
+    xnn_storeu_f32(output, vy);
+    output += xnn_simd_size_f32;
+  }
+  if XNN_UNLIKELY(batch != 0) {
+    xnn_simd_f32_t vx = xnn_load_tail_f32(input, batch >> XNN_LOG2_SIZEOF_FLOAT);
+
+    // See the loop above for comments.
+    vx = xnn_mul_f32(vx, vsqrt2);
+    const xnn_simd_f32_t vexp = xnn_signed_getexp_f32(vx);
+    vx = xnn_or_f32(xnn_and_f32(vx, vmantissa_bits_mask), vone);
+    vx = xnn_sub_f32(xnn_mul_f32(vx, vsqrt1_2), vone);
+    xnn_simd_f32_t vp = xnn_fmadd_f32(vx, valpha_3, vone);
+    vp = xnn_fmadd_f32(vx, vp, vone);
+    vp = xnn_mul_f32(vx, vp);
+    xnn_simd_f32_t vq = xnn_fmadd_f32(vx, vbeta_3, vbeta_2);
+    vq = xnn_fmadd_f32(vx, vq, vbeta_1);
+    vq = xnn_fmadd_f32(vx, vq, vone);
+    xnn_simd_f32_t vy =  xnn_div_f32(vp, vq);
+    vy = xnn_fmadd_f32(vexp, vln2, vy);
+
+    xnn_store_tail_f32(output, vy, batch >> XNN_LOG2_SIZEOF_FLOAT);
+  }
 }

@@ -17,11 +17,13 @@
 #define API_MEDIA_STREAM_INTERFACE_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <string>
 #include <vector>
 
 #include "absl/types/optional.h"
+#include "api/audio/audio_processing_statistics.h"
 #include "api/audio_options.h"
 #include "api/ref_count.h"
 #include "api/scoped_refptr.h"
@@ -30,7 +32,7 @@
 #include "api/video/video_sink_interface.h"
 #include "api/video/video_source_interface.h"
 #include "api/video_track_source_constraints.h"
-#include "modules/audio_processing/include/audio_processing_statistics.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/system/rtc_export.h"
 
 namespace webrtc {

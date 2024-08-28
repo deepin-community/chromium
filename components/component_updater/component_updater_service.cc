@@ -81,7 +81,8 @@ ComponentRegistration::ComponentRegistration(
     bool requires_network_encryption,
     bool supports_group_policy_enable_component_updates,
     bool allow_cached_copies,
-    bool allow_updates_on_metered_connection)
+    bool allow_updates_on_metered_connection,
+    bool allow_updates)
     : app_id(app_id),
       name(name),
       public_key_hash(public_key_hash),
@@ -94,8 +95,8 @@ ComponentRegistration::ComponentRegistration(
       supports_group_policy_enable_component_updates(
           supports_group_policy_enable_component_updates),
       allow_cached_copies(allow_cached_copies),
-      allow_updates_on_metered_connection(allow_updates_on_metered_connection) {
-}
+      allow_updates_on_metered_connection(allow_updates_on_metered_connection),
+      allow_updates(allow_updates) {}
 ComponentRegistration::ComponentRegistration(
     const ComponentRegistration& other) = default;
 ComponentRegistration& ComponentRegistration::operator=(
@@ -298,9 +299,16 @@ update_client::CrxComponent CrxUpdateService::ToCrxComponent(
   crx.brand = brand_;
   crx.crx_format_requirement =
       crx_file::VerifierFormat::CRX3_WITH_PUBLISHER_PROOF;
-  crx.updates_enabled =
-      !component.supports_group_policy_enable_component_updates ||
+
+  bool component_updates_enabled =
       config_->GetPrefService()->GetBoolean(prefs::kComponentUpdatesEnabled);
+  // Some components should update even when enterprise policy disables
+  // updates.
+  bool override_component_updates_enabled =
+    !component.supports_group_policy_enable_component_updates;
+  bool should_update =
+      override_component_updates_enabled || component_updates_enabled;
+  crx.updates_enabled = component.allow_updates && should_update;
 
   return crx;
 }
@@ -323,7 +331,6 @@ void CrxUpdateService::MaybeThrottle(const std::string& id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const auto it = components_.find(id);
   if (it != components_.end()) {
-    DCHECK_EQ(it->first, id);
     if (OnDemandUpdateWithCooldown(id)) {
       ready_callbacks_.insert(std::make_pair(id, std::move(callback)));
       return;
@@ -389,7 +396,7 @@ void CrxUpdateService::OnDemandUpdateInternal(const std::string& id,
     update_client_->Update({id}, std::move(crx_data_callback), {}, false,
                            std::move(update_complete_callback));
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 }
 

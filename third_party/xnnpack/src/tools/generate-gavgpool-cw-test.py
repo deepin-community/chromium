@@ -166,11 +166,10 @@ def main(args):
 
 
 #include <gtest/gtest.h>
-
-#include <xnnpack/common.h>
-#include <xnnpack/isa-checks.h>
-
-#include <xnnpack/gavgpool.h>
+#include "xnnpack/common.h"
+#include "xnnpack/gavgpool.h"
+#include "xnnpack/isa-checks.h"
+#include "xnnpack/microparams-init.h"
 #include "gavgpool-cw-microkernel-tester.h"
 """.format(specification=options.spec, generator=sys.argv[0])
 

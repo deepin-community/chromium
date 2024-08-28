@@ -44,6 +44,7 @@ component("platform") {
     "ax_platform_node.h",
     "ax_platform_node_delegate.cc",
     "ax_platform_node_delegate.h",
+    "ax_platform_node_id.h",
     "child_iterator.h",
     "child_iterator_base.cc",
     "child_iterator_base.h",
@@ -253,6 +254,21 @@ component("platform") {
       ]
       weak_frameworks = [
         "Accessibility.framework",  # macOS 11
+      ]
+    }
+
+    if (is_ios) {
+      sources += [
+        "ax_platform_node_ios.h",
+        "ax_platform_node_ios.mm",
+        "ax_platform_node_ui_kit_element.h",
+        "ax_platform_node_ui_kit_element.mm",
+      ]
+
+      frameworks = [
+        "Accessibility.framework",
+        "UIKit.framework",
+        "Foundation.framework",
       ]
     }
 

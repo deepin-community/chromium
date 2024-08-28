@@ -9,6 +9,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ash/public/cpp/window_tree_host_lookup.h"
@@ -24,7 +25,6 @@
 #include "chrome/browser/extensions/api/braille_display_private/braille_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
-#include "chrome/common/extensions/api/accessibility_private.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/session_manager/core/session_manager.h"
@@ -36,12 +36,20 @@
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/extension_system.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/accessibility/public/mojom/assistive_technology_type.mojom.h"
 #include "services/media_session/public/mojom/audio_focus.mojom.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/events/devices/input_device_event_observer.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/wm/core/coordinate_conversion.h"
+
+// Matches 'supports_os_accessibility_service` in
+// //services/accessibility/buildflags.gni.
+#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/common/extensions/api/accessibility_private.h"
+#include "services/accessibility/public/mojom/assistive_technology_type.mojom.h"
+#endif  // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_CHROMEOS_ASH)
 
 namespace content {
 struct FocusedNodeDetails;
@@ -120,7 +128,6 @@ enum class PlaySoundOption {
 
 // AccessibilityManager changes the statuses of accessibility features
 // watching profile notifications and pref-changes.
-// TODO(yoshiki): merge MagnificationManager with AccessibilityManager.
 class AccessibilityManager
     : public session_manager::SessionManagerObserver,
       public extensions::api::braille_display_private::BrailleObserver,
@@ -129,7 +136,8 @@ class AccessibilityManager
       public input_method::InputMethodManager::Observer,
       public CrasAudioHandler::AudioObserver,
       public ProfileObserver,
-      public speech::SodaInstaller::Observer {
+      public speech::SodaInstaller::Observer,
+      public ui::InputDeviceEventObserver {
  public:
   AccessibilityManager(const AccessibilityManager&) = delete;
   AccessibilityManager& operator=(const AccessibilityManager&) = delete;
@@ -190,6 +198,12 @@ class AccessibilityManager
 
   // Returns true if autoclick is enabled.
   bool IsAutoclickEnabled() const;
+
+  // Enables or disables ReducedAnimations.
+  void EnableReducedAnimations(bool enabled);
+
+  // Returns true if ReducedAnimations is enabled.
+  bool IsReducedAnimationsEnabled() const;
 
   // Enables or disables FaceGaze.
   void EnableFaceGaze(bool enabled);
@@ -281,6 +295,17 @@ class AccessibilityManager
   // false.
   bool IsBrailleDisplayConnected() const;
 
+  // Returns if Fullscreen Magnifier is enabled.
+  bool IsFullscreenMagnifierEnabled() const;
+
+  // Returns if Docked Magnifier is enabled.
+  bool IsDockedMagnifierEnabled() const;
+
+  // Returns false if any accessibility settings are enabled that would indicate
+  // that a user might have trouble pointing their phone camera at their
+  // Chomebook screen in order to scan a QR code.
+  bool AllowQRCodeUX() const;
+
   // user_manager::UserManager::UserSessionStateObserver overrides:
   void ActiveUserChanged(user_manager::User* active_user) override;
 
@@ -298,14 +323,6 @@ class AccessibilityManager
 
   // Notify accessibility when locale changes occur.
   void OnLocaleChanged();
-
-  // Called when we first detect two fingers are held down, which can be
-  // used to toggle spoken feedback on some touch-only devices.
-  void OnTwoFingerTouchStart();
-
-  // Called when the user is no longer holding down two fingers (including
-  // releasing one, holding down three, or moving them).
-  void OnTwoFingerTouchStop();
 
   // Whether or not to enable toggling spoken feedback via holding down
   // two fingers on the screen.
@@ -418,12 +435,19 @@ class AccessibilityManager
                                int changed_button_flags,
                                gfx::Point location_in_screen);
 
+  // Looks up the action key that translates to F7 for caret browsing dialog.
+  std::optional<ui::KeyboardCode> GetCaretBrowsingActionKey();
+
   // SodaInstaller::Observer:
   void OnSodaInstalled(speech::LanguageCode language_code) override;
   void OnSodaInstallError(speech::LanguageCode language_code,
                           speech::SodaInstaller::ErrorCode error_code) override;
   void OnSodaProgress(speech::LanguageCode language_code,
                       int progress) override;
+
+  // ui::InputDeviceEventObserver
+  void OnInputDeviceConfigurationChanged(uint8_t input_device_type) override;
+  void OnDeviceListsComplete() override;
 
   // Test helpers:
   void SetProfileForTest(Profile* profile);
@@ -542,6 +566,7 @@ class AccessibilityManager
 
   // session_manager::SessionManagerObserver:
   void OnLoginOrLockScreenVisible() override;
+  void OnSessionStateChanged() override;
 
   // Sets the current profile using the active profile.
   void SetActiveProfile();
@@ -602,12 +627,14 @@ class AccessibilityManager
 
   // Pumpkin-related methods.
   void OnPumpkinInstalled(bool success, const std::string& root_path);
-  void OnPumpkinError(const std::string& error);
+  void OnPumpkinError(std::string_view error);
   void OnPumpkinDataCreated(
       std::optional<::extensions::api::accessibility_private::PumpkinData>
           data);
 
   void OnAppTerminating();
+
+  void MaybeLogBrailleDisplayConnectedTime();
 
   // Profile which has the current a11y context.
   raw_ptr<Profile> profile_ = nullptr;
@@ -635,6 +662,7 @@ class AccessibilityManager
   std::unique_ptr<AccessibilityServiceClient> accessibility_service_client_;
 
   bool braille_display_connected_ = false;
+  base::Time braille_display_connect_time_;
   base::ScopedObservation<
       extensions::api::braille_display_private::BrailleController,
       extensions::api::braille_display_private::BrailleObserver>
@@ -700,6 +728,9 @@ class AccessibilityManager
 
   // Whether the virtual keyboard was enabled before Switch Access loaded.
   bool was_vk_enabled_before_switch_access_ = false;
+
+  // Tracks whether or not on the locked screen currently.
+  bool locked_ = false;
 
   InstallFaceGazeAssetsCallback install_facegaze_assets_callback_;
 

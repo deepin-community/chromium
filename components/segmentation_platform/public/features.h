@@ -47,9 +47,6 @@ BASE_DECLARE_FEATURE(kSegmentationPlatformSearchUser);
 // Feature flag for device switcher segment.
 BASE_DECLARE_FEATURE(kSegmentationPlatformDeviceSwitcher);
 
-// Feature flag for enabling price tracking action feature.
-BASE_DECLARE_FEATURE(kContextualPageActionPriceTracking);
-
 // Feature flag for enabling reader mode action feature.
 BASE_DECLARE_FEATURE(kContextualPageActionReaderMode);
 
@@ -89,6 +86,10 @@ BASE_DECLARE_FEATURE(kSegmentationPlatformIosModuleRanker);
 // Feature flag for enabling android home module ranker.
 BASE_DECLARE_FEATURE(kSegmentationPlatformAndroidHomeModuleRanker);
 
+// Feature flag for enabling on-demand service for ranking android
+// home modules.
+BASE_DECLARE_FEATURE(kSegmentationPlatformAndroidHomeModuleRankerV2);
+
 // Feature flag for controlling sampling of training data collection.
 BASE_DECLARE_FEATURE(kSegmentationPlatformTimeDelaySampling);
 
@@ -100,6 +101,18 @@ BASE_DECLARE_FEATURE(kSegmentationPlatformModelInitializationDelay);
 
 // Feature flag for turning of signal database cache.
 BASE_DECLARE_FEATURE(kSegmentationPlatformSignalDbCache);
+
+// Feature flag for Compose promotion targeting.
+BASE_DECLARE_FEATURE(kSegmentationPlatformComposePromotion);
+
+// Feature flag for using SQL database for UMA signals.
+BASE_DECLARE_FEATURE(kSegmentationPlatformUmaFromSqlDb);
+
+// Feature flag for having separate models for the Start and NTP surface.
+BASE_DECLARE_FEATURE(kSegmentationPlatformIosModuleRankerSplitBySurface);
+
+// Feature flag for enabling the URL visit resumption ranker.
+BASE_DECLARE_FEATURE(kSegmentationPlatformURLVisitResumptionRanker);
 
 }  // namespace segmentation_platform::features
 

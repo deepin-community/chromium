@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/webcodecs/audio_decoder.h"
 
 #include "base/metrics/histogram_functions.h"
@@ -108,25 +113,23 @@ AudioDecoder* AudioDecoder::Create(ScriptState* script_state,
 }
 
 // static
-ScriptPromise AudioDecoder::isConfigSupported(ScriptState* script_state,
-                                              const AudioDecoderConfig* config,
-                                              ExceptionState& exception_state) {
+ScriptPromise<AudioDecoderSupport> AudioDecoder::isConfigSupported(
+    ScriptState* script_state,
+    const AudioDecoderConfig* config,
+    ExceptionState& exception_state) {
   String js_error_message;
   std::optional<media::AudioType> audio_type =
       IsValidAudioDecoderConfig(*config, &js_error_message);
 
   if (!audio_type) {
     exception_state.ThrowTypeError(js_error_message);
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   AudioDecoderSupport* support = AudioDecoderSupport::Create();
   support->setSupported(media::IsSupportedAudioType(*audio_type));
   support->setConfig(CopyConfig(*config));
-
-  return ScriptPromise::Cast(
-      script_state,
-      ToV8Traits<AudioDecoderSupport>::ToV8(script_state, support));
+  return ToResolvedPromise<AudioDecoderSupport>(script_state, support);
 }
 
 // static
@@ -170,8 +173,17 @@ std::optional<media::AudioType> AudioDecoder::IsValidAudioDecoderConfig(
     description_required = true;
 
   if (description_required && !config.hasDescription()) {
-    *js_error_message = "Description is required.";
+    *js_error_message = "Invalid config; description is required.";
     return std::nullopt;
+  }
+
+  if (config.hasDescription()) {
+    auto desc_wrapper = AsSpan<const uint8_t>(config.description());
+
+    if (!desc_wrapper.data()) {
+      *js_error_message = "Invalid config; description is detached.";
+      return std::nullopt;
+    }
   }
 
   media::AudioCodec codec = media::AudioCodec::kUnknown;
@@ -197,7 +209,7 @@ AudioDecoder::MakeMediaAudioDecoderConfig(const ConfigType& config,
       IsValidAudioDecoderConfig(config, js_error_message);
   if (!audio_type) {
     // Checked by IsValidConfig().
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return std::nullopt;
   }
   if (audio_type->codec == media::AudioCodec::kUnknown) {
@@ -206,8 +218,15 @@ AudioDecoder::MakeMediaAudioDecoderConfig(const ConfigType& config,
 
   std::vector<uint8_t> extra_data;
   if (config.hasDescription()) {
-    // TODO(crbug.com/1179970): This should throw if description is detached.
     auto desc_wrapper = AsSpan<const uint8_t>(config.description());
+
+    if (!desc_wrapper.data()) {
+      // We should never get here, since this should be caught in
+      // IsValidAudioDecoderConfig().
+      *js_error_message = "Invalid config; description is detached.";
+      return std::nullopt;
+    }
+
     if (!desc_wrapper.empty()) {
       const uint8_t* start = desc_wrapper.data();
       const size_t size = desc_wrapper.size();

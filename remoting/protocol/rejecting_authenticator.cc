@@ -17,6 +17,15 @@ RejectingAuthenticator::RejectingAuthenticator(RejectionReason rejection_reason)
 
 RejectingAuthenticator::~RejectingAuthenticator() = default;
 
+CredentialsType RejectingAuthenticator::credentials_type() const {
+  return CredentialsType::UNKNOWN;
+}
+
+const Authenticator& RejectingAuthenticator::implementing_authenticator()
+    const {
+  return *this;
+}
+
 Authenticator::State RejectingAuthenticator::state() const {
   return state_;
 }
@@ -40,18 +49,18 @@ void RejectingAuthenticator::ProcessMessage(
 
 std::unique_ptr<jingle_xmpp::XmlElement>
 RejectingAuthenticator::GetNextMessage() {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 }
 
 const std::string& RejectingAuthenticator::GetAuthKey() const {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return auth_key_;
 }
 
 std::unique_ptr<ChannelAuthenticator>
 RejectingAuthenticator::CreateChannelAuthenticator() const {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return nullptr;
 }
 

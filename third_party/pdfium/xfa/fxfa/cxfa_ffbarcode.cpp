@@ -8,8 +8,8 @@
 
 #include <utility>
 
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_extension.h"
-#include "third_party/base/check.h"
 #include "xfa/fwl/cfwl_app.h"
 #include "xfa/fwl/cfwl_barcode.h"
 #include "xfa/fwl/cfwl_notedriver.h"
@@ -95,10 +95,12 @@ const BarCodeInfo kBarCodeData[] = {
 
 std::optional<BC_CHAR_ENCODING> CharEncodingFromString(
     const WideString& value) {
-  if (value.CompareNoCase(L"UTF-16"))
+  if (value.EqualsASCIINoCase("UTF-16")) {
     return BC_CHAR_ENCODING::kUnicode;
-  if (value.CompareNoCase(L"UTF-8"))
+  }
+  if (value.EqualsASCIINoCase("UTF-8")) {
     return BC_CHAR_ENCODING::kUTF8;
+  }
   return std::nullopt;
 }
 

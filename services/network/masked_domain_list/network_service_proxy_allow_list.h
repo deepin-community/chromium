@@ -32,7 +32,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkServiceProxyAllowList {
   size_t EstimateMemoryUsage() const;
 
   // Returns true if the allow list is eligible to be used but does not indicate
-  // that allow list is currently populated.
+  // that the allow list is currently populated.
   bool IsEnabled();
 
   // Returns true if there are entries in the allow list and it is possible to
@@ -66,7 +66,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkServiceProxyAllowList {
       const std::set<std::string>& mdl_domains,
       const std::set<std::string>& excluded_domains);
 
-  FRIEND_TEST_ALL_PREFIXES(NetworkServiceProxyAllowListTest,
+  FRIEND_TEST_ALL_PREFIXES(NetworkServiceProxyAllowListBaseTest,
                            ExclusionSetDomainsRemovedFromMDL);
 };
 

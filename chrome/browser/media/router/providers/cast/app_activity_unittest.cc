@@ -75,20 +75,22 @@ class AppActivityTest : public CastActivityTestBase {
 };
 
 TEST_F(AppActivityTest, SendAppMessageToReceiver) {
-  // TODO(crbug.com/954797): Test case where there is no session.
-  // TODO(crbug.com/954797): Test case where message has invalid namespace.
+  // TODO(crbug.com/40623998): Test case where there is no session.
+  // TODO(crbug.com/40623998): Test case where message has invalid namespace.
 
   EXPECT_CALL(message_handler_, SendAppMessage(kChannelId, _))
       .WillOnce(Return(cast_channel::Result::kFailed))
-      .WillOnce(WithArg<1>([](const cast::channel::CastMessage& cast_message) {
-        EXPECT_EQ("theClientId", cast_message.source_id());
-        EXPECT_EQ("theTransportId", cast_message.destination_id());
-        EXPECT_EQ("urn:x-cast:com.google.foo", cast_message.namespace_());
-        EXPECT_TRUE(cast_message.has_payload_utf8());
-        EXPECT_THAT(cast_message.payload_utf8(), IsJson(R"({"foo": "bar"})"));
-        EXPECT_FALSE(cast_message.has_payload_binary());
-        return cast_channel::Result::kOk;
-      }));
+      .WillOnce(WithArg<1>(
+          [](const openscreen::cast::proto::CastMessage& cast_message) {
+            EXPECT_EQ("theClientId", cast_message.source_id());
+            EXPECT_EQ("theTransportId", cast_message.destination_id());
+            EXPECT_EQ("urn:x-cast:com.google.foo", cast_message.namespace_());
+            EXPECT_TRUE(cast_message.has_payload_utf8());
+            EXPECT_THAT(cast_message.payload_utf8(),
+                        IsJson(R"({"foo": "bar"})"));
+            EXPECT_FALSE(cast_message.has_payload_binary());
+            return cast_channel::Result::kOk;
+          }));
 
   std::unique_ptr<CastInternalMessage> message =
       CastInternalMessage::From(ParseJsonDict(R"({
@@ -110,7 +112,7 @@ TEST_F(AppActivityTest, SendAppMessageToReceiver) {
 }
 
 TEST_F(AppActivityTest, SendMediaRequestToReceiver) {
-  // TODO(crbug.com/954797): Test case where there is no session.
+  // TODO(crbug.com/40623998): Test case where there is no session.
 
   const std::optional<int> request_id = 1234;
 
@@ -141,7 +143,7 @@ TEST_F(AppActivityTest, SendMediaRequestToReceiver) {
 }
 
 TEST_F(AppActivityTest, SendSetVolumeRequestToReceiver) {
-  // TODO(crbug.com/954797): Test case where no socket is found kChannelId.
+  // TODO(crbug.com/40623998): Test case where no socket is found kChannelId.
   EXPECT_CALL(
       message_handler_,
       SendSetVolumeRequest(
@@ -235,7 +237,7 @@ TEST_F(AppActivityTest, SendMessageToClient) {
 }
 
 TEST_F(AppActivityTest, AddRemoveClient) {
-  // TODO(crbug.com/954797): Check value returned by AddClient().
+  // TODO(crbug.com/40623998): Check value returned by AddClient().
 
   // Adding clients works as expected.
   ASSERT_TRUE(connected_clients().empty());

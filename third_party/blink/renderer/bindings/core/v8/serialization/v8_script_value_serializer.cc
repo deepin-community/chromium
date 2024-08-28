@@ -6,8 +6,7 @@
 
 #include "base/auto_reset.h"
 #include "base/feature_list.h"
-#include "base/sys_byteorder.h"
-#include "third_party/blink/public/common/features.h"
+#include "base/numerics/byte_conversions.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/web_blob_info.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
@@ -238,21 +237,15 @@ scoped_refptr<SerializedScriptValue> V8ScriptValueSerializer::Serialize(
       SerializedScriptValue::kWireFormatVersion < 0x80,
       "the following calculation depends on the encoded length of the version");
   static_assert(SerializedScriptValue::kWireFormatVersion == 21,
-                "The kSSVTrailerWriteNewVersion flag assumes writing version "
-                "20 is otherwise safe.");
+                "Only version 21 is supported.");
   static constexpr size_t kTrailerOffsetPosition =
       1 /* version tag */ + 1 /* version */ + 1 /* trailer offset tag */;
   static constexpr uint8_t kZeroOffset[sizeof(uint64_t) + sizeof(uint32_t)] =
       {};
-  if (base::FeatureList::IsEnabled(features::kSSVTrailerWriteNewVersion)) {
-    WriteTag(kVersionTag);
-    WriteUint32(SerializedScriptValue::kWireFormatVersion);
-    WriteTag(kTrailerOffsetTag);
-    WriteRawBytes(kZeroOffset, sizeof(kZeroOffset));
-  } else {
-    WriteTag(kVersionTag);
-    WriteUint32(20 /* wire format version before trailers */);
-  }
+  WriteTag(kVersionTag);
+  WriteUint32(SerializedScriptValue::kWireFormatVersion);
+  WriteTag(kTrailerOffsetTag);
+  WriteRawBytes(kZeroOffset, sizeof(kZeroOffset));
   serializer_.WriteHeader();
 
   // Serialize the value and handle errors.
@@ -289,28 +282,30 @@ scoped_refptr<SerializedScriptValue> V8ScriptValueSerializer::Serialize(
 
   // Append the trailer, if applicable.
   Vector<uint8_t> trailer;
-  if (base::FeatureList::IsEnabled(features::kSSVTrailerWriteNewVersion)) {
-    trailer = trailer_writer_.MakeTrailerData();
-    if (!trailer.empty())
-      WriteRawBytes(trailer.data(), trailer.size());
+  trailer = trailer_writer_.MakeTrailerData();
+  if (!trailer.empty()) {
+    WriteRawBytes(trailer.data(), trailer.size());
   }
 
   // Finalize the results.
-  std::pair<uint8_t*, size_t> buffer = serializer_.Release();
+  auto [buffer_ptr, buffer_size] = serializer_.Release();
+  auto buffer =
+      // SAFETY: The size from Release() is promised to be the size of the
+      // allocation for the returned pointer. The pointer is allocated by the
+      // serializer_ delegate which is `this` and `ReallocateBufferMemory`
+      // allocates memory such that it can be deleted by the DataBufferPtr's
+      // Deleter.
+      UNSAFE_BUFFERS(SerializedScriptValue::DataBufferPtr::FromOwningPointer(
+          buffer_ptr, buffer_size));
   if (!trailer.empty()) {
-    CHECK(base::FeatureList::IsEnabled(features::kSSVTrailerWriteNewVersion));
-    CHECK_GT(buffer.second, kTrailerOffsetPosition + sizeof(uint64_t) +
-                                sizeof(uint32_t) + trailer.size());
-    const uint64_t trailer_offset =
-        base::HostToNet64(buffer.second - trailer.size());
-    const uint32_t trailer_size = base::HostToNet32(trailer.size());
-    memcpy(buffer.first + kTrailerOffsetPosition, &trailer_offset,
-           sizeof(uint64_t));
-    memcpy(buffer.first + kTrailerOffsetPosition + sizeof(uint64_t),
-           &trailer_size, sizeof(uint32_t));
+    buffer.as_span()
+        .subspan<kTrailerOffsetPosition, sizeof(uint64_t)>()
+        .copy_from(base::U64ToBigEndian(buffer.size() - trailer.size()));
+    buffer.as_span()
+        .subspan<kTrailerOffsetPosition + sizeof(uint64_t), sizeof(uint32_t)>()
+        .copy_from(base::U32ToBigEndian(trailer.size()));
   }
-  serialized_script_value_->SetData(
-      SerializedScriptValue::DataBufferPtr(buffer.first), buffer.second);
+  serialized_script_value_->SetData(std::move(buffer));
   return std::move(serialized_script_value_);
 }
 
@@ -405,9 +400,7 @@ void V8ScriptValueSerializer::WriteUnguessableToken(
   WriteUint64(token.GetLowForSerialization());
 }
 
-void V8ScriptValueSerializer::WriteUTF8String(const String& string) {
-  // TODO(jbroman): Ideally this method would take a WTF::StringView, but the
-  // StringUTF8Adaptor trick doesn't yet work with StringView.
+void V8ScriptValueSerializer::WriteUTF8String(const StringView& string) {
   StringUTF8Adaptor utf8(string);
   WriteUint32(utf8.size());
   WriteRawBytes(utf8.data(), utf8.size());
@@ -824,8 +817,8 @@ bool V8ScriptValueSerializer::WriteDOMObject(ScriptWrappable* wrappable,
     WriteAndRequireInterfaceTag(kFencedFrameConfigTag);
 
     WriteUTF8String(
-        config
-            ->GetValueIgnoringVisibility<FencedFrameConfig::Attribute::kURL>());
+        config->GetValueIgnoringVisibility<FencedFrameConfig::Attribute::kURL>()
+            .GetString());
     WriteUint32(config->GetValueIgnoringVisibility<
                 FencedFrameConfig::Attribute::kWidth>());
     WriteUint32(config->GetValueIgnoringVisibility<
@@ -910,6 +903,14 @@ void V8ScriptValueSerializer::ThrowDataCloneError(
                             kDoNotExternalize));
 }
 
+v8::Maybe<bool> V8ScriptValueSerializer::IsHostObject(
+    v8::Isolate* isolate,
+    v8::Local<v8::Object> object) {
+  // TODO(328117814): upstream this check to v8 so we don't need to call
+  // delegate for this.
+  return v8::Just(object->IsApiWrapper());
+}
+
 v8::Maybe<bool> V8ScriptValueSerializer::WriteHostObject(
     v8::Isolate* isolate,
     v8::Local<v8::Object> object) {
@@ -922,7 +923,7 @@ v8::Maybe<bool> V8ScriptValueSerializer::WriteHostObject(
                                       "An object could not be cloned.");
     return v8::Nothing<bool>();
   }
-  ScriptWrappable* wrappable = ToScriptWrappable(object);
+  ScriptWrappable* wrappable = ToAnyScriptWrappable(isolate, object);
   // TODO(crbug.com/1353299): Remove this CHECK after an investigation.
   CHECK(wrappable);
   bool wrote_dom_object = WriteDOMObject(wrappable, exception_state);
@@ -952,9 +953,9 @@ DOMSharedArrayBuffer* ToSharedArrayBuffer(v8::Isolate* isolate,
 
   v8::Local<v8::SharedArrayBuffer> v8_shared_array_buffer =
       value.As<v8::SharedArrayBuffer>();
-  if (ScriptWrappable* shared_array_buffer =
-          ToScriptWrappable(v8_shared_array_buffer)) {
-    return shared_array_buffer->ToImpl<DOMSharedArrayBuffer>();
+  if (auto* shared_array_buffer = ToScriptWrappable<DOMSharedArrayBuffer>(
+          isolate, v8_shared_array_buffer)) {
+    return shared_array_buffer;
   }
 
   // Transfer the ownership of the allocated memory to a DOMArrayBuffer without
@@ -1050,7 +1051,7 @@ v8::Maybe<uint32_t> V8ScriptValueSerializer::GetWasmModuleTransferId(
     }
 
     case Options::kUnspecified:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return v8::Nothing<uint32_t>();
 }

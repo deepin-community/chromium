@@ -10,9 +10,8 @@
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/time/time.h"
-#include "components/safe_browsing/core/browser/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/browser/safe_browsing_url_checker_impl.h"
-#include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -30,9 +29,7 @@ class UrlCheckerDelegate;
 class RealTimeUrlLookupServiceBase;
 class HashRealTimeService;
 
-// UrlCheckerOnSB handles calling methods on SafeBrowsingUrlCheckerImpl, which
-// must be called on the IO thread. The results are synced back to the
-// throttle.
+// UrlCheckerOnSB handles calling methods on SafeBrowsingUrlCheckerImpl.
 // TODO(http://crbug.com/824843): Remove this if safe browsing is moved to the
 // UI thread.
 class UrlCheckerOnSB final {
@@ -40,7 +37,6 @@ class UrlCheckerOnSB final {
   struct StartParams {
     StartParams(net::HttpRequestHeaders headers,
                 int load_flags,
-                network::mojom::RequestDestination request_destination,
                 bool has_user_gesture,
                 GURL url,
                 std::string method);
@@ -48,7 +44,6 @@ class UrlCheckerOnSB final {
     ~StartParams();
     net::HttpRequestHeaders headers;
     int load_flags;
-    network::mojom::RequestDestination request_destination;
     bool has_user_gesture;
     const GURL url;
     const std::string method;
@@ -74,12 +69,6 @@ class UrlCheckerOnSB final {
   using GetDelegateCallback =
       base::RepeatingCallback<scoped_refptr<UrlCheckerDelegate>()>;
 
-  using NativeUrlCheckNotifier = base::OnceCallback<void(
-      bool /* proceed */,
-      bool /* showed_interstitial */,
-      bool /* has_post_commit_interstitial_skipped */,
-      SafeBrowsingUrlCheckerImpl::PerformedCheck /* performed_check */)>;
-
   UrlCheckerOnSB(
       GetDelegateCallback delegate_getter,
       int frame_tree_node_id,
@@ -93,7 +82,8 @@ class UrlCheckerOnSB final {
       base::WeakPtr<RealTimeUrlLookupServiceBase> url_lookup_service,
       base::WeakPtr<HashRealTimeService> hash_realtime_service,
       hash_realtime_utils::HashRealTimeSelection hash_realtime_selection,
-      bool is_async_check);
+      bool is_async_check,
+      SessionID tab_id);
 
   ~UrlCheckerOnSB();
 
@@ -125,19 +115,9 @@ class UrlCheckerOnSB final {
   }
 
  private:
-  // If |slow_check_notifier| is non-null, it indicates that a "slow check" is
-  // ongoing, i.e., the URL may be unsafe and a more time-consuming process is
-  // required to get the final result. In that case, the rest of the callback
-  // arguments should be ignored. This method sets the |slow_check_notifier|
-  // output parameter to a callback to receive the final result.
+  // This is the callback invoked by |url_checker_|. See the UrlCheckResult
+  // struct in |UnsafeResource| for the meaning of each parameter.
   void OnCheckUrlResult(
-      NativeUrlCheckNotifier* slow_check_notifier,
-      bool proceed,
-      bool showed_interstitial,
-      bool has_post_commit_interstitial_skipped,
-      SafeBrowsingUrlCheckerImpl::PerformedCheck performed_check);
-
-  void OnCompleteCheck(
       bool proceed,
       bool showed_interstitial,
       bool has_post_commit_interstitial_skipped,
@@ -165,6 +145,7 @@ class UrlCheckerOnSB final {
       hash_realtime_utils::HashRealTimeSelection::kNone;
   base::TimeTicks creation_time_;
   bool is_async_check_ = false;
+  SessionID tab_id_;
   base::WeakPtrFactory<UrlCheckerOnSB> weak_factory_{this};
 };
 

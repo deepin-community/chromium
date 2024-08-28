@@ -18,6 +18,7 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/media/autoplay_uma_helper.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
+#include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer_entry.h"
@@ -55,7 +56,7 @@ bool ComputeLockPendingUserGestureRequired(const Document& document) {
       return false;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return true;
 }
 
@@ -387,7 +388,7 @@ void AutoplayPolicy::OnIntersectionChangedForAutoplay(
     if (self->ShouldAutoplay()) {
       self->element_->paused_ = false;
       self->element_->SetShowPosterFlag(false);
-      self->element_->ScheduleEvent(event_type_names::kPlay);
+      self->element_->ScheduleNamedEvent(event_type_names::kPlay);
       self->element_->ScheduleNotifyPlaying();
 
       self->element_->UpdatePlayState();

@@ -28,15 +28,15 @@ import com.google.common.collect.ImmutableSet;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
-import org.chromium.base.test.util.Features;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -53,7 +53,6 @@ import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.url_formatter.SchemeDisplay;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.url.GURL;
 
@@ -67,8 +66,6 @@ public final class ShareSheetBottomSheetContentTest {
     @Rule
     public BaseActivityTestRule<BlankUiTestActivity> mActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
-
-    @Rule public TestRule mFeaturesProcessor = new Features.JUnitProcessor();
 
     @Rule
     public AutomotiveContextWrapperTestRule mAutoTestRule = new AutomotiveContextWrapperTestRule();
@@ -114,10 +111,12 @@ public final class ShareSheetBottomSheetContentTest {
                 .addOnInitializedCallback(any());
         TrackerFactory.setTrackerForTests(mFeatureEngagementTracker);
         ProfileManager.setLastUsedProfileForTesting(mProfile);
+        Mockito.when(mProfile.getOriginalProfile()).thenReturn(mProfile);
 
         mShareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         mShareParams,
@@ -131,6 +130,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", /* url= */ "")
@@ -162,6 +162,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", /* url= */ "")
@@ -193,6 +194,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", /* url= */ "")
@@ -332,6 +334,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", sUrl).build(),
@@ -363,6 +366,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", /* url= */ "")
@@ -373,7 +377,7 @@ public final class ShareSheetBottomSheetContentTest {
         when(mShareSheetLinkToggleCoordinator.shouldShowToggle()).thenReturn(true);
         when(mShareSheetLinkToggleCoordinator.shouldEnableToggleByDefault()).thenReturn(false);
 
-        TestThreadUtils.runOnUiThreadBlocking(
+        ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         shareSheetBottomSheetContent.createRecyclerViews(
                                 ImmutableList.of(),
@@ -397,6 +401,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", /* url= */ "")
@@ -431,6 +436,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", /* url= */ "")
@@ -476,6 +482,7 @@ public final class ShareSheetBottomSheetContentTest {
         ShareSheetBottomSheetContent shareSheetBottomSheetContent =
                 new ShareSheetBottomSheetContent(
                         mActivity,
+                        mProfile,
                         new MockLargeIconBridge(),
                         null,
                         new ShareParams.Builder(/* window= */ null, /* title= */ "", /* url= */ "")

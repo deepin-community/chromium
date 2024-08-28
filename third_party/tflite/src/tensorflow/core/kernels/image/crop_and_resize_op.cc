@@ -149,6 +149,11 @@ class CropAndResizeOp : public AsyncOpKernel {
         context, image_height > 0 && image_width > 0,
         errors::InvalidArgument("image dimensions must be positive"), done);
     OP_REQUIRES_ASYNC(
+        context, boxes.dims() == 2,
+        absl::InvalidArgumentError(absl::StrCat("boxes must be 2-D, got: ",
+                                                boxes.shape().DebugString())),
+        done);
+    OP_REQUIRES_ASYNC(
         context, TensorShapeUtils::IsVector(box_index.shape()),
         errors::InvalidArgument("box_indices must be rank 1 but is shape ",
                                 box_index.shape().DebugString()),
@@ -868,9 +873,8 @@ inline void RunIfBoxIndexIsValid<GPUDevice>(
   se::DeviceMemoryBase wrapped(isvalid_dev.data(), sizeof(bool));
   const bool status =
       stream
-          ->ThenMemcpy(
-              isvalid_host_tensor.scalar<bool>().data() /* destination */,
-              wrapped /* source */, sizeof(bool))
+          ->Memcpy(isvalid_host_tensor.scalar<bool>().data() /* destination */,
+                   wrapped /* source */, sizeof(bool))
           .ok();
   OP_REQUIRES_ASYNC(
       context, status,

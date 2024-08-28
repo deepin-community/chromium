@@ -117,6 +117,7 @@ class DebugConnector : public auction_worklet::mojom::BidderWorklet {
       uint8_t browser_signal_recency,
       const url::Origin& browser_signal_seller_origin,
       const std::optional<url::Origin>& browser_signal_top_level_seller_origin,
+      const std::optional<base::TimeDelta> browser_signal_reporting_timeout,
       std::optional<uint32_t> bidding_data_version,
       uint64_t trace_id,
       ReportWinCallback report_win_callback) override {
@@ -128,9 +129,9 @@ class DebugConnector : public auction_worklet::mojom::BidderWorklet {
         << "SendPendingSignalsRequests shouldn't be called on DebugConnector";
   }
 
-  void ConnectDevToolsAgent(
-      mojo::PendingAssociatedReceiver<blink::mojom::DevToolsAgent>
-          agent_receiver) override {
+  void ConnectDevToolsAgent(mojo::PendingAssociatedReceiver<
+                                blink::mojom::DevToolsAgent> agent_receiver,
+                            uint32_t thread_index) override {
     auction_v8_helper_->ConnectDevToolsAgent(std::move(agent_receiver),
                                              mojo_thread_, *debug_id_);
   }
@@ -276,7 +277,8 @@ class AuctionV8HelperTest : public testing::Test {
                        base::SequencedTaskRunner::GetCurrentDefault(),
                        std::move(debug_id),
                        connector_pipe.BindNewPipeAndPassReceiver()));
-    connector_pipe->ConnectDevToolsAgent(std::move(agent_receiver));
+    connector_pipe->ConnectDevToolsAgent(std::move(agent_receiver),
+                                         /*thread_index=*/0);
     return connector_pipe;
   }
 
@@ -1561,9 +1563,10 @@ TEST_F(AuctionV8HelperTest, SerializeDeserialize) {
 }
 
 TEST_F(AuctionV8HelperTest, ExtractJsonTimeout) {
-  // Use a shorter timeout so test runs faster.
-  const base::TimeDelta kTimeout = base::Milliseconds(20);
-  auto time_limit = helper_->CreateTimeLimit(kTimeout);
+  // While it's tempting to use a shorter timeout since this is a
+  // non-termination test, that flakes occasionally, and even more so under
+  // *SAN, for which the default is auto-adjusted.
+  auto time_limit = helper_->CreateTimeLimit(/*script_timeout=*/std::nullopt);
   auto time_limit_scope =
       std::make_unique<AuctionV8Helper::TimeLimitScope>(time_limit.get());
 

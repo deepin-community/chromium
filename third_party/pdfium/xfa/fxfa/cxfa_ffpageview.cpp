@@ -9,11 +9,11 @@
 #include <algorithm>
 #include <vector>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/stl_util.h"
 #include "fxjs/gc/container_trace.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/contains.h"
 #include "xfa/fxfa/cxfa_ffcheckbutton.h"
 #include "xfa/fxfa/cxfa_ffdoc.h"
 #include "xfa/fxfa/cxfa_ffdocview.h"
@@ -404,7 +404,7 @@ bool CXFA_FFTabOrderPageWidgetIterator::SetCurrentWidget(
     return false;
 
   m_iCurWidget =
-      pdfium::base::checked_cast<int32_t>(it - m_TabOrderWidgetArray.begin());
+      pdfium::checked_cast<int32_t>(it - m_TabOrderWidgetArray.begin());
   return true;
 }
 

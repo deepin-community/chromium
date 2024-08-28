@@ -44,7 +44,7 @@ class FakeTabSlotController : public TabSlotController {
   void ToggleTabGroupCollapsedState(
       const tab_groups::TabGroupId group,
       ToggleTabGroupCollapsedStateOrigin origin =
-          ToggleTabGroupCollapsedStateOrigin::kImplicitAction) override;
+          ToggleTabGroupCollapsedStateOrigin::kMenuAction) override;
   void NotifyTabGroupEditorBubbleOpened() override {}
   void NotifyTabGroupEditorBubbleClosed() override {}
 
@@ -56,6 +56,7 @@ class FakeTabSlotController : public TabSlotController {
   bool IsTabPinned(const Tab* tab) const override;
   bool IsTabFirst(const Tab* tab) const override;
   bool IsFocusInTabs() const override;
+  bool ShouldCompactLeadingEdge() const override;
   void MaybeStartDrag(
       TabSlotView* source,
       const ui::LocatedEvent& event,
@@ -68,7 +69,6 @@ class FakeTabSlotController : public TabSlotController {
   void OnMouseEventInTab(views::View* source,
                          const ui::MouseEvent& event) override {}
   void UpdateHoverCard(Tab* tab, HoverCardUpdateType update_type) override {}
-  bool ShowDomainInHoverCards() const override;
   bool HoverCardIsShowingForTab(Tab* tab) override;
   int GetBackgroundOffset() const override;
   int GetStrokeThickness() const override;
@@ -94,11 +94,15 @@ class FakeTabSlotController : public TabSlotController {
   void ShiftGroupLeft(const tab_groups::TabGroupId& group) override {}
   void ShiftGroupRight(const tab_groups::TabGroupId& group) override {}
   const Browser* GetBrowser() const override;
+  int GetInactiveTabWidth() const override;
+  bool IsFrameCondensed() const override;
 
   void SetTabColors(SkColor fg_color_active, SkColor fg_color_inactive) {
     tab_fg_color_active_ = fg_color_active;
     tab_fg_color_inactive_ = fg_color_inactive;
   }
+
+  void SetInactiveTabWidth(int width) { inactive_tab_width_ = width; }
 
  private:
   raw_ptr<TabStripController> tab_strip_controller_;
@@ -109,6 +113,8 @@ class FakeTabSlotController : public TabSlotController {
 
   SkColor tab_fg_color_active_ = gfx::kPlaceholderColor;
   SkColor tab_fg_color_inactive_ = gfx::kPlaceholderColor;
+
+  int inactive_tab_width_ = 0;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_FAKE_TAB_SLOT_CONTROLLER_H_

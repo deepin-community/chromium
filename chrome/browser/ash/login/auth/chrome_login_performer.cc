@@ -17,13 +17,13 @@
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_service.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/common/chrome_paths.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/early_prefs/early_prefs_reader.h"
 #include "chromeos/ash/components/osauth/impl/early_login_auth_policy_connector.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/account_id/account_id.h"
 #include "components/signin/public/identity_manager/account_managed_status_finder.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -51,7 +51,7 @@ bool ChromeLoginPerformer::RunTrustedCheck(base::OnceClosure callback) {
     if (delegate_) {
       delegate_->PolicyLoadFailed();
     } else {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
     }
     return true;  // Some callback was called.
   } else if (status == CrosSettingsProvider::TEMPORARILY_UNTRUSTED) {
@@ -78,7 +78,7 @@ void ChromeLoginPerformer::DidRunTrustedCheck(base::OnceClosure* callback) {
     if (delegate_) {
       delegate_->PolicyLoadFailed();
     } else {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
     }
   } else if (status == CrosSettingsProvider::TEMPORARILY_UNTRUSTED) {
     // Value of AllowNewUser setting is still not verified.
@@ -113,7 +113,7 @@ void ChromeLoginPerformer::RunOnlineAllowlistCheck(
        signin::AccountManagedStatusFinder::EmailEnterpriseStatus::kUnknown)) {
     wildcard_login_checker_ = std::make_unique<policy::WildcardLoginChecker>();
     if (refresh_token.empty()) {
-      NOTREACHED() << "Refresh token must be present.";
+      NOTREACHED_IN_MIGRATION() << "Refresh token must be present.";
       OnlineWildcardLoginCheckCompleted(
           std::move(success_callback), std::move(failure_callback),
           policy::WildcardLoginChecker::RESULT_FAILED);

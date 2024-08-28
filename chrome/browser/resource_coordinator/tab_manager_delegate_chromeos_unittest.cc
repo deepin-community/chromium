@@ -11,6 +11,7 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/process/process_handle.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "chrome/browser/resource_coordinator/tab_manager_features.h"
 #include "chrome/browser/resource_coordinator/test_lifecycle_unit.h"
@@ -27,8 +28,18 @@ class TabManagerDelegateTest : public testing::Test {
   TabManagerDelegateTest() {}
   ~TabManagerDelegateTest() override {}
 
+  void SetUp() override {
+    histogram_tester_ = std::make_unique<base::HistogramTester>();
+  }
+
+  void TearDown() override { histogram_tester_.reset(); }
+
+ protected:
+  base::HistogramTester* histogram_tester() { return histogram_tester_.get(); }
+
  private:
   content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<base::HistogramTester> histogram_tester_;
 };
 
 constexpr bool kIsFocused = true;
@@ -144,8 +155,12 @@ class MockTabManagerDelegate : public TabManagerDelegate {
     return TabManagerDelegate::IsRecentlyKilledArcProcess(process_name, now);
   }
 
-  std::vector<ash::ResourcedClient::Process> GetReportedProcesses() {
-    return processes_;
+  void ClearLifecycleUnits() { lifecycle_units_.clear(); }
+
+  int GetReportCount() { return report_count_; }
+
+  base::flat_map<base::ProcessHandle, PageState> GetReportedProcesses() {
+    return reported_processes_;
   }
 
  protected:
@@ -166,9 +181,10 @@ class MockTabManagerDelegate : public TabManagerDelegate {
     return &debugd_client_;
   }
 
-  void ReportProcesses(
-      const std::vector<ash::ResourcedClient::Process>& processes) override {
-    processes_ = processes;
+  void ReportProcesses(const base::flat_map<base::ProcessHandle, PageState>&
+                           processes) override {
+    reported_processes_ = processes;
+    report_count_++;
   }
 
  private:
@@ -177,7 +193,8 @@ class MockTabManagerDelegate : public TabManagerDelegate {
   std::vector<int> killed_arc_processes_;
   LifecycleUnitVector killed_tabs_;
   bool always_return_true_from_is_recently_killed_;
-  std::vector<ash::ResourcedClient::Process> processes_;
+  base::flat_map<base::ProcessHandle, PageState> reported_processes_;
+  int report_count_ = 0;
 };
 
 class MockMemoryStat : public TabManagerDelegate::MemoryStat {
@@ -497,25 +514,125 @@ TEST_F(TabManagerDelegateTest, ReportProcesses) {
   tab_manager_delegate.ListProcesses();
 
   auto processes = tab_manager_delegate.GetReportedProcesses();
-  EXPECT_EQ(processes[0].pid, 11);
-  EXPECT_EQ(processes[0].is_protected, false);
-  EXPECT_EQ(processes[0].is_visible, false);
-  EXPECT_EQ(processes[1].pid, 12);
-  EXPECT_EQ(processes[1].is_protected, false);
-  EXPECT_EQ(processes[1].is_visible, false);
-  EXPECT_EQ(processes[2].pid, 13);
-  EXPECT_EQ(processes[2].is_protected, false);
-  EXPECT_EQ(processes[2].is_visible, false);
-  EXPECT_EQ(processes[3].pid, 14);
-  EXPECT_EQ(processes[3].is_protected, false);
-  EXPECT_EQ(processes[3].is_visible, false);
-  EXPECT_EQ(processes[4].pid, 15);
-  EXPECT_EQ(processes[4].is_protected, true);
-  EXPECT_EQ(processes[4].is_visible, false);
-  EXPECT_EQ(processes[5].pid, 16);
-  EXPECT_EQ(processes[5].is_protected, true);
-  EXPECT_EQ(processes[5].is_visible, true);
-  EXPECT_EQ(processes[5].is_focused, true);
+  ASSERT_TRUE(processes.contains(11));
+  EXPECT_EQ(processes[11].is_protected, false);
+  EXPECT_EQ(processes[11].is_visible, false);
+  ASSERT_TRUE(processes.contains(12));
+  EXPECT_EQ(processes[12].is_protected, false);
+  EXPECT_EQ(processes[12].is_visible, false);
+  ASSERT_TRUE(processes.contains(13));
+  EXPECT_EQ(processes[13].is_protected, false);
+  EXPECT_EQ(processes[13].is_visible, false);
+  ASSERT_TRUE(processes.contains(14));
+  EXPECT_EQ(processes[14].is_protected, false);
+  EXPECT_EQ(processes[14].is_visible, false);
+  ASSERT_TRUE(processes.contains(15));
+  EXPECT_EQ(processes[15].is_protected, true);
+  EXPECT_EQ(processes[15].is_visible, false);
+  ASSERT_TRUE(processes.contains(16));
+  EXPECT_EQ(processes[16].is_protected, true);
+  EXPECT_EQ(processes[16].is_visible, true);
+  EXPECT_EQ(processes[16].is_focused, true);
+}
+
+TEST_F(TabManagerDelegateTest, TestNoTabsAreReported) {
+  MockTabManagerDelegate tab_manager_delegate;
+
+  TestLifecycleUnit tab1(base::TimeTicks(), 11);
+  tab_manager_delegate.AddLifecycleUnit(&tab1);
+
+  tab_manager_delegate.ListProcesses();
+
+  auto processes = tab_manager_delegate.GetReportedProcesses();
+  ASSERT_EQ(processes.size(), 1U);
+
+  tab_manager_delegate.ClearLifecycleUnits();
+
+  tab_manager_delegate.ListProcesses();
+
+  processes = tab_manager_delegate.GetReportedProcesses();
+  ASSERT_EQ(processes.size(), 0U);
+}
+
+TEST_F(TabManagerDelegateTest, TestDuplicateReportsAreNotSent) {
+  MockTabManagerDelegate tab_manager_delegate;
+
+  TestLifecycleUnit tab1(base::TimeTicks(), 11);
+  tab_manager_delegate.AddLifecycleUnit(&tab1);
+
+  tab_manager_delegate.ListProcesses();
+
+  auto processes = tab_manager_delegate.GetReportedProcesses();
+  ASSERT_EQ(processes.size(), 1U);
+  ASSERT_EQ(tab_manager_delegate.GetReportCount(), 1);
+
+  tab_manager_delegate.ListProcesses();
+  ASSERT_EQ(tab_manager_delegate.GetReportCount(), 1);
+}
+
+TEST_F(TabManagerDelegateTest, TestTabStateChangeCausesNewReport) {
+  MockTabManagerDelegate tab_manager_delegate;
+
+  TestLifecycleUnit tab1(base::TimeTicks(), 11);
+  tab_manager_delegate.AddLifecycleUnit(&tab1);
+
+  tab_manager_delegate.ListProcesses();
+
+  ASSERT_EQ(tab_manager_delegate.GetReportedProcesses().size(), 1U);
+  ASSERT_EQ(tab_manager_delegate.GetReportCount(), 1);
+
+  tab1.SetDiscardFailureReason(DecisionFailureReason::LIVE_STATE_VISIBLE);
+  tab1.SetLastFocusedTime(base::TimeTicks::Max());
+  tab1.SetCanDiscard(false);
+
+  tab_manager_delegate.ListProcesses();
+  ASSERT_EQ(tab_manager_delegate.GetReportCount(), 2);
+  ASSERT_EQ(tab_manager_delegate.GetReportedProcesses().size(), 1U);
+  ASSERT_TRUE(tab_manager_delegate.GetReportedProcesses().contains(11));
+  ASSERT_TRUE(tab_manager_delegate.GetReportedProcesses()[11].is_protected);
+  ASSERT_TRUE(tab_manager_delegate.GetReportedProcesses()[11].is_visible);
+  ASSERT_TRUE(tab_manager_delegate.GetReportedProcesses()[11].is_focused);
+}
+
+TEST_F(TabManagerDelegateTest, TestAdditionalTabCausesNewReport) {
+  MockTabManagerDelegate tab_manager_delegate;
+
+  TestLifecycleUnit tab1(base::TimeTicks(), 11);
+  tab_manager_delegate.AddLifecycleUnit(&tab1);
+
+  tab_manager_delegate.ListProcesses();
+
+  ASSERT_EQ(tab_manager_delegate.GetReportedProcesses().size(), 1U);
+  ASSERT_EQ(tab_manager_delegate.GetReportCount(), 1);
+
+  TestLifecycleUnit tab2(base::TimeTicks(), 12);
+  tab_manager_delegate.AddLifecycleUnit(&tab2);
+
+  tab_manager_delegate.ListProcesses();
+
+  ASSERT_EQ(tab_manager_delegate.GetReportedProcesses().size(), 2U);
+  ASSERT_EQ(tab_manager_delegate.GetReportCount(), 2);
+}
+
+TEST_F(TabManagerDelegateTest, TestDiscardedTabsAreNotReported) {
+  MockTabManagerDelegate tab_manager_delegate;
+
+  // Tab list:
+  // tab1    pid: 11
+  // tab2    pid: 12, discarded
+
+  TestLifecycleUnit tab1(base::TimeTicks(), 11);
+  tab_manager_delegate.AddLifecycleUnit(&tab1);
+  TestLifecycleUnit tab2(base::TimeTicks(), 12);
+  tab2.SetState(LifecycleUnitState::DISCARDED,
+                LifecycleUnitStateChangeReason::BROWSER_INITIATED);
+  tab_manager_delegate.AddLifecycleUnit(&tab2);
+
+  tab_manager_delegate.ListProcesses();
+
+  auto processes = tab_manager_delegate.GetReportedProcesses();
+  ASSERT_EQ(processes.size(), 1u);
+  ASSERT_TRUE(processes.contains(11));
 }
 
 TEST_F(TabManagerDelegateTest, TestTargetMemoryToFreeIsRespected) {
@@ -540,11 +657,105 @@ TEST_F(TabManagerDelegateTest, TestTargetMemoryToFreeIsRespected) {
 
   tab_manager_delegate.LowMemoryKillImpl(
       base::TimeTicks::Now(), ::mojom::LifecycleUnitDiscardReason::EXTERNAL,
-      TabManager::TabDiscardDoneCB(base::DoNothing()), absl::nullopt);
+      TabManager::TabDiscardDoneCB(base::DoNothing()), std::nullopt);
 
   auto killed_tabs = tab_manager_delegate.GetKilledTabs();
 
   ASSERT_EQ(2U, killed_tabs.size());
+}
+
+TEST_F(TabManagerDelegateTest, TestUnprotectedTabDiscardIsReported) {
+  // Not owned.
+  MockMemoryStat* memory_stat = new MockMemoryStat();
+
+  // Instantiate the mock instance.
+  MockTabManagerDelegate tab_manager_delegate(memory_stat);
+
+  TestLifecycleUnit tab1(base::TimeTicks() + base::Seconds(3), 11);
+  tab_manager_delegate.AddLifecycleUnit(&tab1);
+
+  memory_stat->SetTargetMemoryToFreeKB(250000);
+
+  tab_manager_delegate.LowMemoryKillImpl(
+      base::TimeTicks::Now(), ::mojom::LifecycleUnitDiscardReason::EXTERNAL,
+      TabManager::TabDiscardDoneCB(base::DoNothing()), {});
+
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingProtectedTab",
+                                        true, 0);
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingProtectedTab",
+                                        false, 1);
+}
+
+TEST_F(TabManagerDelegateTest, TestProtectedTabDiscardIsReported) {
+  // Not owned.
+  MockMemoryStat* memory_stat = new MockMemoryStat();
+
+  // Instantiate the mock instance.
+  MockTabManagerDelegate tab_manager_delegate(memory_stat);
+
+  TestLifecycleUnit protected_tab(base::TimeTicks() + base::Seconds(3), 11);
+  // Setting can discard to false forces this tab to be protected.
+  protected_tab.SetCanDiscard(false);
+  tab_manager_delegate.AddLifecycleUnit(&protected_tab);
+
+  memory_stat->SetTargetMemoryToFreeKB(250000);
+
+  tab_manager_delegate.LowMemoryKillImpl(
+      base::TimeTicks::Now(), ::mojom::LifecycleUnitDiscardReason::EXTERNAL,
+      TabManager::TabDiscardDoneCB(base::DoNothing()), {});
+
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingProtectedTab",
+                                        true, 1);
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingProtectedTab",
+                                        false, 0);
+}
+
+TEST_F(TabManagerDelegateTest, TestFocusedTabIsNotDiscarded) {
+  // Not owned.
+  MockMemoryStat* memory_stat = new MockMemoryStat();
+
+  // Instantiate the mock instance.
+  MockTabManagerDelegate tab_manager_delegate(memory_stat);
+
+  // Add a single focused tab. This tab should never be discarded.
+  TestLifecycleUnit focused_tab(base::TimeTicks::Max(), 11);
+  // Setting can discard to false forces this tab to be protected.
+  focused_tab.SetCanDiscard(false);
+  tab_manager_delegate.AddLifecycleUnit(&focused_tab);
+
+  memory_stat->SetTargetMemoryToFreeKB(250000);
+
+  tab_manager_delegate.LowMemoryKillImpl(
+      base::TimeTicks::Now(), ::mojom::LifecycleUnitDiscardReason::EXTERNAL,
+      TabManager::TabDiscardDoneCB(base::DoNothing()), {});
+
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingFocusedTab",
+                                        false, 0);
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingFocusedTab", true,
+                                        0);
+}
+
+TEST_F(TabManagerDelegateTest, TestUnfocusedTabDiscardIsReported) {
+  // Not owned.
+  MockMemoryStat* memory_stat = new MockMemoryStat();
+
+  // Instantiate the mock instance.
+  MockTabManagerDelegate tab_manager_delegate(memory_stat);
+
+  TestLifecycleUnit background_tab(base::TimeTicks() + base::Seconds(4), 11);
+  background_tab.SetCanDiscard(true);
+  tab_manager_delegate.AddLifecycleUnit(&background_tab);
+
+  memory_stat->SetTargetMemoryToFreeKB(250000);
+
+  tab_manager_delegate.LowMemoryKillImpl(
+      base::TimeTicks::Now(), ::mojom::LifecycleUnitDiscardReason::EXTERNAL,
+      TabManager::TabDiscardDoneCB(base::DoNothing()), {});
+
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingFocusedTab", true,
+                                        0);
+  histogram_tester()->ExpectBucketCount("Discarding.DiscardingFocusedTab",
+                                        false, 1);
 }
 
 }  // namespace resource_coordinator

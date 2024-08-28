@@ -2,14 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <atomic>
+
 #include "base/containers/contains.h"
-#include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
+#include "base/not_fatal_until.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/vr/test/mock_xr_device_hook_base.h"
 #include "chrome/browser/vr/test/multi_class_browser_test.h"
 #include "chrome/browser/vr/test/webxr_vr_browser_test.h"
+#include "device/vr/public/cpp/features.h"
 #include "device/vr/public/mojom/browser_test_interfaces.mojom.h"
 #include "device/vr/public/mojom/openxr_interaction_profile_type.mojom.h"
 
@@ -80,13 +83,17 @@ class WebXrControllerInputMock : public MockXRDeviceHookBase {
   void WaitNumFrames(unsigned int num_frames) {
     DCHECK(!wait_loop_);
     target_submitted_frames_ = num_submitted_frames_ + num_frames;
-    wait_loop_ = new base::RunLoop(base::RunLoop::Type::kNestableTasksAllowed);
+    wait_loop_ = std::make_unique<base::RunLoop>(
+        base::RunLoop::Type::kNestableTasksAllowed);
+    can_signal_wait_loop_ = true;
+
     wait_loop_->Run();
-    delete wait_loop_;
+
+    can_signal_wait_loop_ = false;
     wait_loop_ = nullptr;
   }
 
-  // TODO(https://crbug.com/887726): Figure out why waiting for OpenVR to grab
+  // TODO(crbug.com/41416308): Figure out why waiting for OpenVR to grab
   // the updated state instead of waiting for a number of frames causes frames
   // to be submitted at an extremely slow rate. Once fixed, switch away from
   // waiting on number of frames.
@@ -245,11 +252,16 @@ class WebXrControllerInputMock : public MockXRDeviceHookBase {
 
   device::ControllerFrameData GetCurrentControllerData(unsigned int index) {
     auto iter = controller_data_map_.find(index);
-    DCHECK(iter != controller_data_map_.end());
+    CHECK(iter != controller_data_map_.end(), base::NotFatalUntil::M130);
     return iter->second;
   }
 
-  raw_ptr<base::RunLoop, DanglingUntriaged> wait_loop_ = nullptr;
+  // Used to track both if `wait_loop_` is valid in a thread-safe manner or if
+  // it has already had quit signaled on it, since `AnyQuitCalled` won't update
+  // until the `Quit` task has posted to the main thread.
+  std::atomic_bool can_signal_wait_loop_ = false;
+
+  std::unique_ptr<base::RunLoop> wait_loop_ = nullptr;
   unsigned int num_submitted_frames_ = 0;
   unsigned int target_submitted_frames_ = 0;
 };
@@ -258,8 +270,10 @@ void WebXrControllerInputMock::OnFrameSubmitted(
     std::vector<device_test::mojom::ViewDataPtr> views,
     device_test::mojom::XRTestHook::OnFrameSubmittedCallback callback) {
   num_submitted_frames_++;
-  if (wait_loop_ && target_submitted_frames_ == num_submitted_frames_) {
+  if (can_signal_wait_loop_ &&
+      target_submitted_frames_ == num_submitted_frames_) {
     wait_loop_->Quit();
+    can_signal_wait_loop_ = false;
   }
   std::move(callback).Run();
 }
@@ -310,7 +324,7 @@ WEBXR_VR_ALL_RUNTIMES_BROWSER_TEST_F(TestInputHandednessChange) {
 WEBXR_VR_ALL_RUNTIMES_BROWSER_TEST_F(TestInputSourcesChange) {
   WebXrControllerInputMock my_mock;
 
-  // TODO(crbug.com/963676): Figure out if the race is a product or test bug.
+  // TODO(crbug.com/41459138): Figure out if the race is a product or test bug.
   // There's a potential for a race causing the input sources change event to
   // fire multiple times if we disconnect a controller that has a gamepad.
   // Even just a select trigger is sufficient to have an xr-standard mapping, so
@@ -636,14 +650,57 @@ constexpr device::mojom::OpenXrInteractionProfileType
     kSkippedInteractionProfiles[] = {
         // The "Invalid" entry is not a real profile.
         device::mojom::OpenXrInteractionProfileType::kInvalid,
-        // kAndroidHandGestures is a "synthetic" interaction profile type which
-        // is synthesized via it's own set of extension methods and needs to
-        // use a different mechanism to send button clicks rather than the rest
-        // of the methods.
-        device::mojom::OpenXrInteractionProfileType::kAndroidHandGestures,
-        // kMetaHandAim is also a "synthetic" interaction profile type
+        // kMetaHandAim is a "synthetic" interaction profile type which is
+        // synthesized via it's own set of extension methods and needs to use a
+        // different mechanism to send button clicks rather than the rest of the
+        // methods.
         device::mojom::OpenXrInteractionProfileType::kMetaHandAim,
 };
+
+void TestHandProfiles(WebXrVrBrowserTestBase* t, bool joint_support) {
+  WebXrControllerInputMock my_mock;
+  my_mock.UpdateInteractionProfile(
+      device::mojom::OpenXrInteractionProfileType::kExtHand);
+  auto controller_data = my_mock.CreateValidController(
+      device::ControllerRole::kControllerRoleRight);
+  my_mock.ConnectController(controller_data);
+
+  t->LoadFileAndAwaitInitialization("test_webxr_profiles");
+  if (joint_support) {
+    t->RunJavaScriptOrFail("setupImmersiveSessionToRequestHands()");
+  }
+
+  t->EnterSessionWithUserGestureOrFail();
+
+  // We should only have seen the first change indicating we have input sources.
+  t->PollJavaScriptBooleanOrFail("inputChangeEvents === 1",
+                                 WebXrVrBrowserTestBase::kPollTimeoutShort);
+
+  std::string expected_string =
+      joint_support ? "generic-hand" : "generic-fixed-hand";
+  std::string unexpected_string =
+      joint_support ? "generic-fixed-hand" : "generic-hand";
+
+  t->RunJavaScriptOrFail("validateAllInputSourcesContainProfile('" +
+                         expected_string + "')");
+  t->RunJavaScriptOrFail("validateNoInputSourcesContainProfile('" +
+                         unexpected_string + "')");
+}
+
+class WebXrVrOpenXrHandBrowserTest : public WebXrVrOpenXrBrowserTest {
+ public:
+  WebXrVrOpenXrHandBrowserTest() {
+    enable_features_.push_back(device::features::kWebXrHandInput);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(WebXrVrOpenXrHandBrowserTest, TestProfilesHandJoint) {
+  TestHandProfiles(this, true);
+}
+
+IN_PROC_BROWSER_TEST_F(WebXrVrOpenXrBrowserTest, TestProfilesFixedHand) {
+  TestHandProfiles(this, false);
+}
 
 // Ensure that OpenXR can change between all known Interaction Profile types.
 // If you're adding a new interaction profile, you may need to validate that

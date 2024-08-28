@@ -26,6 +26,8 @@
 #include "chrome/browser/ash/file_system_provider/observer.h"
 #include "chrome/browser/ash/file_system_provider/service.h"
 #include "chrome/browser/ash/guest_os/public/types.h"
+#include "chrome/browser/ash/policy/skyvault/local_files_migration_manager.h"
+#include "chrome/browser/ash/policy/skyvault/local_user_files_policy_observer.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/storage_monitor/removable_storage_observer.h"
 #include "services/device/public/mojom/mtp_manager.mojom.h"
@@ -56,14 +58,17 @@ class VolumeManagerObserver;
 // - Linux/Crostini file system.
 // - Android/Arc++ file system.
 // - File System Providers.
-class VolumeManager : public KeyedService,
-                      arc::ArcSessionManagerObserver,
-                      drive::DriveIntegrationService::Observer,
-                      ash::disks::DiskMountManager::Observer,
-                      ash::file_system_provider::Observer,
-                      storage_monitor::RemovableStorageObserver,
-                      ui::ClipboardObserver,
-                      DocumentsProviderRootManager::Observer {
+class VolumeManager
+    : public KeyedService,
+      arc::ArcSessionManagerObserver,
+      drive::DriveIntegrationService::Observer,
+      ash::disks::DiskMountManager::Observer,
+      ash::file_system_provider::Observer,
+      storage_monitor::RemovableStorageObserver,
+      ui::ClipboardObserver,
+      DocumentsProviderRootManager::Observer,
+      policy::local_user_files::LocalUserFilesPolicyObserver,
+      policy::local_user_files::LocalFilesMigrationManager::Observer {
  public:
   // An alternate to device::mojom::MtpManager::GetStorageInfo.
   // Used for injecting fake MTP manager for testing in VolumeManagerTest.
@@ -189,6 +194,7 @@ class VolumeManager : public KeyedService,
       const base::FilePath& device_path = base::FilePath(),
       const std::string& drive_label = "",
       const std::string& file_system_type = "");
+  void RemoveVolumeForTesting(const std::string& volume_id);
 
   // DriveIntegrationService::Observer implementation.
   void OnFileSystemMounted() override;
@@ -263,6 +269,9 @@ class VolumeManager : public KeyedService,
 
   void ConvertFuseBoxFSPVolumeIdToFSPIfNeeded(std::string* volume_id) const;
 
+  // policy::local_user_files::Observer:
+  void OnLocalUserFilesPolicyChanged() override;
+
   SnapshotManager* snapshot_manager() { return snapshot_manager_.get(); }
 
   io_task::IOTaskController* io_task_controller() {
@@ -272,6 +281,9 @@ class VolumeManager : public KeyedService,
   friend std::ostream& operator<<(std::ostream& out, const VolumeManager& vm) {
     return out << "VolumeManager[" << vm.id_ << "]";
   }
+
+  // Skips the migration and immediately unmounts My Files.
+  void OnMigrationSucceededForTesting();
 
  private:
   // Comparator sorting Volume objects by volume ID .
@@ -337,6 +349,36 @@ class VolumeManager : public KeyedService,
                                     RemoveSftpGuestOsVolumeCallback callback,
                                     ash::MountError error);
 
+  // Registers and mounts the downloads volume.
+  void MountDownloadsVolume(bool read_only = false);
+
+  // Unmounts and revokes the downloads volume.
+  void UnmountDownloadsVolume();
+
+  // Mounts all ARC roots declared in arc_media_view_util.cc.
+  void MountArcRoots();
+
+  // Unmounts all ARC roots declared in arc_media_view_util.cc.
+  void UnmountArcRoots();
+
+  void UnsubscribeFromArcEvents();
+
+  // Subscribes to ARC file system events and if needed, registers and mounts
+  // the arc volumes.
+  void SubscribeAndMountArc();
+
+  // Unsubscribes from ARC file system events and if needed, unmounts and
+  // revokes the arc volumes.
+  void UnsubscribeAndUnmountArc();
+
+  // Mounts local folders (MyFiles, Play and Linux files).
+  void OnLocalUserFilesEnabled();
+  // Unmounts local folders (MyFiles, Play and Linux files).
+  void OnLocalUserFilesDisabled();
+
+  // Removes My Files after SkyVault migration completes successufully.
+  void OnMigrationSucceeded() override;
+
   static int counter_;
   const int id_ = ++counter_;  // Only used in log traces
 
@@ -355,8 +397,13 @@ class VolumeManager : public KeyedService,
   std::unique_ptr<DocumentsProviderRootManager>
       documents_provider_root_manager_;
   io_task::IOTaskController io_task_controller_;
+  // TODO(b/328006921): Replace with a check if the volumes are mounted.
   bool arc_volumes_mounted_ = false;
   bool ignore_clipboard_changed_ = false;
+  // TODO(b/328006921): Replace with a check if the volumes are mounted.
+  bool local_user_files_allowed_ = true;
+  // Whether a read only version of local folders (My Files) is needed.
+  bool read_only_local_folders_ = true;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

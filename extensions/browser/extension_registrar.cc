@@ -8,6 +8,7 @@
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "build/chromeos_buildflags.h"
 #include "content/public/browser/browser_context.h"
@@ -23,7 +24,7 @@
 #include "extensions/browser/lazy_context_task_queue.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/renderer_startup_helper.h"
-#include "extensions/browser/service_worker_task_queue.h"
+#include "extensions/browser/service_worker/service_worker_task_queue.h"
 #include "extensions/browser/task_queue_util.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -72,15 +73,15 @@ void ExtensionRegistrar::AddExtension(
     // Other than for unpacked extensions, we should not be downgrading.
     if (!Manifest::IsUnpackedLocation(extension->location()) &&
         version_compare_result < 0) {
-      // TODO(https://crbug.com/810799): It would be awfully nice to CHECK this,
+      // TODO(crbug.com/41369768): It would be awfully nice to CHECK this,
       // but that's caused problems. There are apparently times when this
       // happens that we aren't accounting for. We should track those down and
       // fix them, but it can be tricky.
-      NOTREACHED() << "Attempted to downgrade extension."
-                   << "\nID: " << extension->id()
-                   << "\nOld Version: " << old->version()
-                   << "\nNew Version: " << extension->version()
-                   << "\nLocation: " << extension->location();
+      NOTREACHED_IN_MIGRATION()
+          << "Attempted to downgrade extension." << "\nID: " << extension->id()
+          << "\nOld Version: " << old->version()
+          << "\nNew Version: " << extension->version()
+          << "\nLocation: " << extension->location();
       return;
     }
   }
@@ -229,7 +230,8 @@ void ExtensionRegistrar::DisableExtension(const ExtensionId& extension_id,
             DISABLE_PUBLISHED_IN_STORE_REQUIRED_BY_POLICY |
         extensions::disable_reason::DISABLE_BLOCKED_BY_POLICY |
         extensions::disable_reason::DISABLE_CUSTODIAN_APPROVAL_REQUIRED |
-        extensions::disable_reason::DISABLE_REINSTALL;
+        extensions::disable_reason::DISABLE_REINSTALL |
+        extensions::disable_reason::DISABLE_UNSUPPORTED_MANIFEST_VERSION;
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
     // For controlled extensions, only allow disabling not ash-keeplisted
@@ -365,7 +367,7 @@ void ExtensionRegistrar::ReloadExtension(
       // Retain DevToolsAgentHosts for the extension being reloaded to prevent
       // client disconnecting. We will re-attach later, when the extension is
       // loaded.
-      // TODO(crbug.com/1246530): clean up upon failure to reload.
+      // TODO(crbug.com/40196582): clean up upon failure to reload.
       orphaned_dev_tools_[extension_id] = std::move(agent_hosts);
     }
     path = enabled_extension->path();
@@ -535,7 +537,15 @@ void ExtensionRegistrar::UnregisterServiceWorkerWithRootScope(
 void ExtensionRegistrar::NotifyServiceWorkerUnregistered(
     const ExtensionId& extension_id,
     bool success) {
+  base::UmaHistogramBoolean(
+      "Extensions.ServiceWorkerBackground.WorkerUnregistrationState", success);
+  base::UmaHistogramBoolean(
+      "Extensions.ServiceWorkerBackground.WorkerUnregistrationState_"
+      "AddExtension",
+      success);
+
   if (!success) {
+    // TODO(crbug.com/346732739): Handle this case.
     LOG(ERROR) << "Failed to unregister service worker for extension "
                << extension_id;
   }
@@ -580,27 +590,28 @@ void ExtensionRegistrar::MaybeSpinUpLazyContext(const Extension* extension,
   bool is_component_extension =
       Manifest::IsComponentLocation(extension->location());
 
-  // TODO(crbug.com/1024211): This is either a workaround or something
+  // TODO(crbug.com/40107353): This is either a workaround or something
   // that will be part of the permanent solution for service worker-
   // based extensions.
   // We spin up extensions with the webRequest permission so their
   // listeners are reconstructed on load.
-  bool has_web_request_permission =
+  // Event page-based extension cannot have the webRequest permission, but
+  // a bug allowed them to specify it in optional permissions, so filter
+  // out those extensions. See crbug.com/40912377.
+  bool needs_spinup_for_web_request =
       extension->permissions_data()->HasAPIPermission(
-          mojom::APIPermissionID::kWebRequest);
-  // Event page-based extension cannot have the webRequest permission.
-  DCHECK(!has_web_request_permission ||
-         BackgroundInfo::IsServiceWorkerBased(extension));
+          mojom::APIPermissionID::kWebRequest) &&
+      BackgroundInfo::IsServiceWorkerBased(extension);
 
   // If there aren't any special cases, we're done.
   if (!has_orphaned_dev_tools && !is_component_extension &&
-      !has_web_request_permission) {
+      !needs_spinup_for_web_request) {
     return;
   }
 
   // If the extension's not being reloaded (|is_newly_added| = true),
   // only wake it up if it has the webRequest permission.
-  if (is_newly_added && !has_web_request_permission)
+  if (is_newly_added && !needs_spinup_for_web_request)
     return;
 
   // Wake up the extension by posting a dummy task. In the case of a service

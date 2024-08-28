@@ -72,11 +72,10 @@ class UnifiedSystemTrayTest : public AshTestBase,
   void SetUp() override {
     std::vector<base::test::FeatureRef> enabled_features;
 
-    enabled_features.push_back(features::kCameraEffectsSupportedByHardware);
     if (IsVcControlsUiEnabled()) {
       fake_video_conference_tray_controller_ =
           std::make_unique<FakeVideoConferenceTrayController>();
-      enabled_features.push_back(features::kVideoConference);
+      enabled_features.push_back(features::kFeatureManagementVideoConference);
     }
     feature_list_.InitWithFeatures(enabled_features, {});
     AshTestBase::SetUp();
@@ -256,7 +255,9 @@ TEST_P(UnifiedSystemTrayTest, SliderBubbleMovesOnShelfAutohide) {
   // Create a test widget to make auto-hiding work. Auto-hidden shelf will
   // remain visible if no windows are shown, making it impossible to properly
   // test.
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(0, 0, 200, 200);
   params.context = GetContext();
   views::Widget* widget = new views::Widget;

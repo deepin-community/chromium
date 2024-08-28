@@ -12,7 +12,7 @@
 #include "content/common/content_export.h"
 #include "content/services/auction_worklet/public/mojom/private_aggregation_request.mojom-forward.h"
 #include "content/services/auction_worklet/public/mojom/seller_worklet.mojom.h"
-#include "third_party/blink/public/mojom/private_aggregation/aggregatable_report.mojom-forward.h"
+#include "third_party/blink/public/mojom/aggregation_service/aggregatable_report.mojom-forward.h"
 
 namespace url {
 class Origin;
@@ -21,11 +21,6 @@ class Origin;
 namespace content {
 
 class PrivateAggregationManager;
-
-// Reserved event types for aggregatable report's for-event contribution.
-CONTENT_EXPORT extern const char kReservedAlways[];
-CONTENT_EXPORT extern const char kReservedWin[];
-CONTENT_EXPORT extern const char kReservedLoss[];
 
 struct CONTENT_EXPORT PrivateAggregationRequestWithEventType {
   PrivateAggregationRequestWithEventType(
@@ -77,6 +72,10 @@ CONTENT_EXPORT void SplitContributionsIntoBatchesThenSendToHost(
     const url::Origin& reporting_origin,
     std::optional<url::Origin> aggregation_coordinator_origin,
     const url::Origin& main_frame_origin);
+
+// Returns false if request has an invalid filtering ID.
+CONTENT_EXPORT bool HasValidFilteringId(
+    const auction_worklet::mojom::PrivateAggregationRequestPtr& request);
 
 }  // namespace content
 

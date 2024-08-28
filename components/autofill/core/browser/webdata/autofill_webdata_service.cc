@@ -22,8 +22,6 @@
 #include "components/webdata/common/web_database_backend.h"
 #include "components/webdata/common/web_database_service.h"
 
-using base::Time;
-
 namespace autofill {
 
 AutofillWebDataService::AutofillWebDataService(
@@ -82,7 +80,8 @@ WebDataServiceBase::Handle AutofillWebDataService::GetFormValuesForElementName(
 }
 
 void AutofillWebDataService::RemoveFormElementsAddedBetween(
-    const Time& delete_begin, const Time& delete_end) {
+    base::Time delete_begin,
+    base::Time delete_end) {
   wdbs_->ScheduleDBTask(
       FROM_HERE,
       base::BindOnce(
@@ -139,8 +138,10 @@ WebDataServiceBase::Handle AutofillWebDataService::GetAutofillProfiles(
 }
 
 WebDataServiceBase::Handle
-    AutofillWebDataService::GetCountOfValuesContainedBetween(
-        const Time& begin, const Time& end, WebDataServiceConsumer* consumer) {
+AutofillWebDataService::GetCountOfValuesContainedBetween(
+    base::Time begin,
+    base::Time end,
+    WebDataServiceConsumer* consumer) {
   return wdbs_->ScheduleDBTaskWithResult(
       FROM_HERE,
       base::BindOnce(
@@ -181,14 +182,6 @@ void AutofillWebDataService::RemoveCreditCard(const std::string& guid) {
   wdbs_->ScheduleDBTask(
       FROM_HERE, base::BindOnce(&AutofillWebDataBackendImpl::RemoveCreditCard,
                                 autofill_backend_, guid));
-}
-
-void AutofillWebDataService::AddFullServerCreditCard(
-    const CreditCard& credit_card) {
-  wdbs_->ScheduleDBTask(
-      FROM_HERE,
-      base::BindOnce(&AutofillWebDataBackendImpl::AddFullServerCreditCard,
-                     autofill_backend_, credit_card));
 }
 
 void AutofillWebDataService::AddLocalIban(const Iban& iban) {
@@ -284,22 +277,6 @@ WebDataServiceBase::Handle AutofillWebDataService::GetServerCreditCards(
       consumer);
 }
 
-void AutofillWebDataService::UnmaskServerCreditCard(
-    const CreditCard& credit_card,
-    const std::u16string& full_number) {
-  wdbs_->ScheduleDBTask(
-      FROM_HERE,
-      base::BindOnce(&AutofillWebDataBackendImpl::UnmaskServerCreditCard,
-                     autofill_backend_, credit_card, full_number));
-}
-
-void AutofillWebDataService::MaskServerCreditCard(const std::string& id) {
-  wdbs_->ScheduleDBTask(
-      FROM_HERE,
-      base::BindOnce(&AutofillWebDataBackendImpl::MaskServerCreditCard,
-                     autofill_backend_, id));
-}
-
 WebDataServiceBase::Handle AutofillWebDataService::GetPaymentsCustomerData(
     WebDataServiceConsumer* consumer) {
   return wdbs_->ScheduleDBTaskWithResult(
@@ -346,15 +323,25 @@ WebDataServiceBase::Handle AutofillWebDataService::GetCreditCardBenefits(
       consumer);
 }
 
+WebDataServiceBase::Handle AutofillWebDataService::GetMaskedBankAccounts(
+    WebDataServiceConsumer* consumer) {
+  return wdbs_->ScheduleDBTaskWithResult(
+      FROM_HERE,
+      base::BindOnce(&AutofillWebDataBackendImpl::GetMaskedBankAccounts,
+                     autofill_backend_),
+      consumer);
+}
+
+void AutofillWebDataService::ClearAllCreditCardBenefits() {
+  wdbs_->ScheduleDBTask(
+      FROM_HERE,
+      base::BindOnce(&AutofillWebDataBackendImpl::ClearAllCreditCardBenefits,
+                     autofill_backend_));
+}
+
 void AutofillWebDataService::ClearAllServerData() {
   wdbs_->ScheduleDBTask(
       FROM_HERE, base::BindOnce(&AutofillWebDataBackendImpl::ClearAllServerData,
-                                autofill_backend_));
-}
-
-void AutofillWebDataService::ClearAllLocalData() {
-  wdbs_->ScheduleDBTask(
-      FROM_HERE, base::BindOnce(&AutofillWebDataBackendImpl::ClearAllLocalData,
                                 autofill_backend_));
 }
 
@@ -367,8 +354,8 @@ void AutofillWebDataService::UpdateServerCardMetadata(
 }
 
 void AutofillWebDataService::RemoveAutofillDataModifiedBetween(
-    const Time& delete_begin,
-    const Time& delete_end) {
+    base::Time delete_begin,
+    base::Time delete_end) {
   wdbs_->ScheduleDBTask(
       FROM_HERE,
       base::BindOnce(
@@ -377,7 +364,8 @@ void AutofillWebDataService::RemoveAutofillDataModifiedBetween(
 }
 
 void AutofillWebDataService::RemoveOriginURLsModifiedBetween(
-    const Time& delete_begin, const Time& delete_end) {
+    base::Time delete_begin,
+    base::Time delete_end) {
   wdbs_->ScheduleDBTask(
       FROM_HERE,
       base::BindOnce(
@@ -436,6 +424,14 @@ AutofillWebDataService::RemoveExpiredAutocompleteEntries(
           &AutofillWebDataBackendImpl::RemoveExpiredAutocompleteEntries,
           autofill_backend_),
       consumer);
+}
+
+void AutofillWebDataService::AddServerCreditCardForTesting(
+    const CreditCard& credit_card) {
+  wdbs_->ScheduleDBTask(
+      FROM_HERE,
+      base::BindOnce(&AutofillWebDataBackendImpl::AddServerCreditCardForTesting,
+                     autofill_backend_, credit_card));
 }
 
 AutofillWebDataService::~AutofillWebDataService() = default;

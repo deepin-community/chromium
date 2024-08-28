@@ -87,6 +87,7 @@ enum class CommandID : uint16_t
     EndTransformFeedback,
     FillBuffer,
     ImageBarrier,
+    ImageWaitEvent,
     InsertDebugUtilsLabel,
     MemoryBarrier,
     NextSubpass,
@@ -477,6 +478,17 @@ struct ImageBarrierParams
 };
 VERIFY_8_BYTE_ALIGNMENT(ImageBarrierParams)
 
+struct ImageWaitEventParams
+{
+    CommandHeader header;
+
+    uint32_t padding;
+    VkEvent event;
+    VkPipelineStageFlags srcStageMask;
+    VkPipelineStageFlags dstStageMask;
+};
+VERIFY_8_BYTE_ALIGNMENT(ImageWaitEventParams)
+
 struct MemoryBarrierParams
 {
     CommandHeader header;
@@ -611,8 +623,9 @@ struct SetFragmentShadingRateParams
 {
     CommandHeader header;
 
-    uint16_t fragmentWidth;
-    uint16_t fragmentHeight;
+    uint32_t fragmentWidth : 8;
+    uint32_t fragmentHeight : 8;
+    uint32_t vkFragmentShadingRateCombinerOp1 : 16;
 };
 VERIFY_8_BYTE_ALIGNMENT(SetFragmentShadingRateParams)
 
@@ -791,8 +804,11 @@ class SecondaryCommandBuffer final : angle::NonCopyable
         ContextVk *contextVk,
         const Framebuffer &framebuffer,
         const RenderPassDesc &renderPassDesc,
-        VkCommandBufferInheritanceInfo *inheritanceInfoOut)
+        VkCommandBufferInheritanceInfo *inheritanceInfoOut,
+        VkCommandBufferInheritanceRenderingInfo *renderingInfoOut,
+        gl::DrawBuffersArray<VkFormat> *colorFormatStorageOut)
     {
+        *inheritanceInfoOut = {};
         return angle::Result::Continue;
     }
 
@@ -941,6 +957,11 @@ class SecondaryCommandBuffer final : angle::NonCopyable
     void imageBarrier(VkPipelineStageFlags srcStageMask,
                       VkPipelineStageFlags dstStageMask,
                       const VkImageMemoryBarrier &imageMemoryBarrier);
+
+    void imageWaitEvent(const VkEvent &event,
+                        VkPipelineStageFlags srcStageMask,
+                        VkPipelineStageFlags dstStageMask,
+                        const VkImageMemoryBarrier &imageMemoryBarrier);
 
     void insertDebugUtilsLabelEXT(const VkDebugUtilsLabelEXT &label);
 
@@ -1723,6 +1744,25 @@ ANGLE_INLINE void SecondaryCommandBuffer::imageBarrier(
     storeArrayParameter(writePtr, &imageMemoryBarrier, imgBarrierSize);
 }
 
+ANGLE_INLINE void SecondaryCommandBuffer::imageWaitEvent(
+    const VkEvent &event,
+    VkPipelineStageFlags srcStageMask,
+    VkPipelineStageFlags dstStageMask,
+    const VkImageMemoryBarrier &imageMemoryBarrier)
+{
+    ASSERT(imageMemoryBarrier.pNext == nullptr);
+
+    uint8_t *writePtr;
+    const ArrayParamSize imgBarrierSize = calculateArrayParameterSize<VkImageMemoryBarrier>(1);
+
+    ImageWaitEventParams *paramStruct = initCommand<ImageWaitEventParams>(
+        CommandID::ImageWaitEvent, imgBarrierSize.allocateBytes, &writePtr);
+    paramStruct->event        = event;
+    paramStruct->srcStageMask = srcStageMask;
+    paramStruct->dstStageMask = dstStageMask;
+    storeArrayParameter(writePtr, &imageMemoryBarrier, imgBarrierSize);
+}
+
 ANGLE_INLINE void SecondaryCommandBuffer::insertDebugUtilsLabelEXT(
     const VkDebugUtilsLabelEXT &label)
 {
@@ -1912,17 +1952,18 @@ ANGLE_INLINE void SecondaryCommandBuffer::setFragmentShadingRate(
     ASSERT(fragmentSize != nullptr);
 
     // Supported parameter values -
-    // 1. CombinerOp needs to be VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR
+    // 1. CombinerOp for ops[0] needs to be VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR
+    //    as there are no current usecases in ANGLE to use primitive fragment shading rates
     // 2. The largest fragment size supported is 4x4
     ASSERT(ops[0] == VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR);
-    ASSERT(ops[1] == VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR);
     ASSERT(fragmentSize->width <= 4);
     ASSERT(fragmentSize->height <= 4);
 
     SetFragmentShadingRateParams *paramStruct =
         initCommand<SetFragmentShadingRateParams>(CommandID::SetFragmentShadingRate);
-    paramStruct->fragmentWidth  = static_cast<uint16_t>(fragmentSize->width);
-    paramStruct->fragmentHeight = static_cast<uint16_t>(fragmentSize->height);
+    paramStruct->fragmentWidth                    = static_cast<uint16_t>(fragmentSize->width);
+    paramStruct->fragmentHeight                   = static_cast<uint16_t>(fragmentSize->height);
+    paramStruct->vkFragmentShadingRateCombinerOp1 = static_cast<uint16_t>(ops[1]);
 }
 
 ANGLE_INLINE void SecondaryCommandBuffer::setFrontFace(VkFrontFace frontFace)

@@ -54,11 +54,17 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/html_base_element.h"
+#include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_li_element.h"
+#include "third_party/blink/renderer/core/html/html_link_element.h"
+#include "third_party/blink/renderer/core/html/html_meta_element.h"
 #include "third_party/blink/renderer/core/html/html_quote_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
+#include "third_party/blink/renderer/core/html/html_style_element.h"
+#include "third_party/blink/renderer/core/html/html_title_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
@@ -68,6 +74,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -883,14 +890,28 @@ static bool FollowBlockElementStyle(const Node* node) {
     return false;
   }
 
-  return IsListItem(node) || IsTableCell(node) ||
-         element->HasTagName(html_names::kPreTag) ||
-         element->HasTagName(html_names::kH1Tag) ||
-         element->HasTagName(html_names::kH2Tag) ||
-         element->HasTagName(html_names::kH3Tag) ||
-         element->HasTagName(html_names::kH4Tag) ||
-         element->HasTagName(html_names::kH5Tag) ||
-         element->HasTagName(html_names::kH6Tag);
+  bool should_follow_block_element_style =
+  // TODO(https://crbug.com/352610616): Investigate preserving styles within
+  // list elements in block merge scenarios.
+      IsListItem(node) ||
+
+      IsTableCell(node) ||
+
+  // TODO(https://crbug.com/352038138): Investigate preserving styles within
+  // pre elements in block merge scenarios.
+      element->HasTagName(html_names::kPreTag);
+  if (RuntimeEnabledFeatures::
+          PreserveFollowingBlockStylesDuringBlockMergeEnabled()) {
+    return should_follow_block_element_style;
+  } else {
+    return should_follow_block_element_style ||
+           element->HasTagName(html_names::kH1Tag) ||
+           element->HasTagName(html_names::kH2Tag) ||
+           element->HasTagName(html_names::kH3Tag) ||
+           element->HasTagName(html_names::kH4Tag) ||
+           element->HasTagName(html_names::kH5Tag) ||
+           element->HasTagName(html_names::kH6Tag);
+  }
 }
 
 // Remove style spans before insertion if they are unnecessary.  It's faster
@@ -918,7 +939,7 @@ void ReplaceSelectionCommand::HandleStyleSpansBeforeInsertion(
   // |node| can be an inline element like <br> under <li>
   // e.g.) editing/execCommand/switch-list-type.html
   //       editing/deleting/backspace-merge-into-block.html
-  if (IsInline(node)) {
+  if (IsInlineElement(node)) {
     node = EnclosingBlock(insertion_pos.AnchorNode());
     if (!node)
       return;
@@ -1386,7 +1407,7 @@ void ReplaceSelectionCommand::DoApply(EditingState* editing_state) {
   Element* block_start = EnclosingBlock(insertion_pos.AnchorNode());
   if ((IsHTMLListElement(inserted_nodes.RefNode()) ||
        (IsHTMLListElement(inserted_nodes.RefNode()->firstChild()))) &&
-      block_start && block_start->GetLayoutObject()->IsListItemIncludingNG() &&
+      block_start && block_start->GetLayoutObject()->IsListItem() &&
       IsEditable(*block_start->parentNode())) {
     inserted_nodes.SetRefNode(InsertAsListItems(
         To<HTMLElement>(inserted_nodes.RefNode()), block_start, insertion_pos,
@@ -2023,7 +2044,7 @@ Node* ReplaceSelectionCommand::InsertAsListItems(HTMLElement* list_element,
       inserted_nodes.RespondToNodeInsertion(*list_item);
       last_node = list_item;
     } else {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
     }
   }
   if (is_start || is_middle) {

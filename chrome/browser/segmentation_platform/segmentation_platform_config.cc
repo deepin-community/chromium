@@ -5,12 +5,14 @@
 #include "chrome/browser/segmentation_platform/segmentation_platform_config.h"
 
 #include <memory>
+#include <string_view>
+#include <vector>
 
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
+#include "components/compose/buildflags.h"
 #include "components/search/ntp_features.h"
 #include "components/segmentation_platform/embedder/default_model/cross_device_user_segment.h"
 #include "components/segmentation_platform/embedder/default_model/database_api_clients.h"
@@ -24,6 +26,7 @@
 #include "components/segmentation_platform/embedder/default_model/search_user_model.h"
 #include "components/segmentation_platform/embedder/default_model/shopping_user_model.h"
 #include "components/segmentation_platform/embedder/default_model/tab_resumption_ranker.h"
+#include "components/segmentation_platform/embedder/default_model/url_visit_resumption_ranker.h"
 #include "components/segmentation_platform/internal/config_parser.h"
 #include "components/segmentation_platform/public/config.h"
 #include "components/segmentation_platform/public/constants.h"
@@ -35,9 +38,7 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
-#include "chrome/browser/feature_guide/notifications/feature_notification_guide_service.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
-#include "chrome/browser/segmentation_platform/default_model/chrome_start_model_android_v2.h"
 #include "components/commerce/core/commerce_feature_list.h"
 #include "components/commerce/core/shopping_service.h"
 #include "components/segmentation_platform/embedder/default_model/android_home_module_ranker.h"
@@ -47,6 +48,10 @@
 #include "components/segmentation_platform/embedder/default_model/most_visited_tiles_user.h"
 #include "components/segmentation_platform/embedder/default_model/power_user_segment.h"
 #include "components/segmentation_platform/embedder/default_model/tablet_productivity_user_model.h"
+#endif
+
+#if BUILDFLAG(ENABLE_COMPOSE)
+#include "components/segmentation_platform/embedder/default_model/compose_promotion.h"
 #endif
 
 namespace segmentation_platform {
@@ -97,16 +102,7 @@ std::unique_ptr<Config> GetConfigForAdaptiveToolbar() {
 
 #if BUILDFLAG(IS_ANDROID)
 bool IsEnabledContextualPageActions() {
-  if (!base::FeatureList::IsEnabled(features::kContextualPageActions))
-    return false;
-
-  bool is_price_tracking_enabled = base::FeatureList::IsEnabled(
-      features::kContextualPageActionPriceTracking);
-
-  bool is_reader_mode_enabled =
-      base::FeatureList::IsEnabled(features::kContextualPageActionReaderMode);
-
-  return is_price_tracking_enabled || is_reader_mode_enabled;
+  return base::FeatureList::IsEnabled(features::kContextualPageActions);
 }
 
 std::unique_ptr<Config> GetConfigForContextualPageActions(
@@ -145,6 +141,7 @@ std::unique_ptr<Config> GetConfigForDesktopNtpModule() {
 
 }  // namespace
 
+// Note: Do not remove feature flag for models that are served on the server.
 std::vector<std::unique_ptr<Config>> GetSegmentationPlatformConfig(
     content::BrowserContext* context) {
   std::vector<std::unique_ptr<Config>> configs;
@@ -157,7 +154,6 @@ std::vector<std::unique_ptr<Config>> GetSegmentationPlatformConfig(
     configs.emplace_back(GetConfigForContextualPageActions(context));
   }
 
-  configs.emplace_back(ChromeStartModelV2::GetConfig());
   configs.emplace_back(IntentionalUserModel::GetConfig());
   configs.emplace_back(PowerUserSegment::GetConfig());
   configs.emplace_back(FrequentFeatureUserModel::GetConfig());
@@ -174,23 +170,27 @@ std::vector<std::unique_ptr<Config>> GetSegmentationPlatformConfig(
   configs.emplace_back(ResumeHeavyUserModel::GetConfig());
   configs.emplace_back(DeviceSwitcherModel::GetConfig());
   configs.emplace_back(TabResumptionRanker::GetConfig());
+  configs.emplace_back(URLVisitResumptionRanker::GetConfig());
   configs.emplace_back(PasswordManagerUserModel::GetConfig());
   configs.emplace_back(DatabaseApiClients::GetConfig());
+
+#if BUILDFLAG(ENABLE_COMPOSE)
+  configs.emplace_back(ComposePromotion::GetConfig());
+#endif  // BUILDFLAG(ENABLE_COMPOSE)
 
   // Model used for testing.
   configs.emplace_back(OptimizationTargetSegmentationDummy::GetConfig());
 
   if (base::FeatureList::IsEnabled(
-          webapps::features::kWebAppsEnableMLModelForPromotion) ||
-      base::FeatureList::IsEnabled(
-          webapps::features::kInstallPromptSegmentation)) {
+          webapps::features::kWebAppsEnableMLModelForPromotion)) {
     configs.emplace_back(GetConfigForWebAppInstallationPromo());
   }
+
   if (base::FeatureList::IsEnabled(ntp_features::kNtpDriveModuleSegmentation)) {
     configs.emplace_back(GetConfigForDesktopNtpModule());
   }
 
-  base::EraseIf(configs, [](const auto& config) { return !config.get(); });
+  std::erase_if(configs, [](const auto& config) { return !config.get(); });
 
   AppendConfigsFromExperiments(configs);
   return configs;
@@ -225,8 +225,8 @@ void AppendConfigsFromExperiments(
 FieldTrialRegisterImpl::FieldTrialRegisterImpl() = default;
 FieldTrialRegisterImpl::~FieldTrialRegisterImpl() = default;
 
-void FieldTrialRegisterImpl::RegisterFieldTrial(base::StringPiece trial_name,
-                                                base::StringPiece group_name) {
+void FieldTrialRegisterImpl::RegisterFieldTrial(std::string_view trial_name,
+                                                std::string_view group_name) {
   // The register method is called early in startup once the platform is
   // initialized. So, in most cases the client will register the field trial
   // before uploading the first UMA log of the current session. We do not want
@@ -245,7 +245,7 @@ void FieldTrialRegisterImpl::RegisterFieldTrial(base::StringPiece trial_name,
 }
 
 void FieldTrialRegisterImpl::RegisterSubsegmentFieldTrialIfNeeded(
-    base::StringPiece trial_name,
+    std::string_view trial_name,
     SegmentId segment_id,
     int subsegment_rank) {
   std::optional<std::string> group_name;

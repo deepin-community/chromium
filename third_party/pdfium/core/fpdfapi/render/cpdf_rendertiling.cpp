@@ -89,8 +89,8 @@ RetainPtr<CFX_DIBitmap> CPDF_RenderTiling::Draw(
   float ceil_width = std::ceil(cell_bbox.Width());
 
   // Validate the float will fit into the int when the conversion is done.
-  if (!pdfium::base::IsValueInRangeForNumericType<int>(ceil_height) ||
-      !pdfium::base::IsValueInRangeForNumericType<int>(ceil_width)) {
+  if (!pdfium::IsValueInRangeForNumericType<int>(ceil_height) ||
+      !pdfium::IsValueInRangeForNumericType<int>(ceil_width)) {
     return nullptr;
   }
 
@@ -122,9 +122,14 @@ RetainPtr<CFX_DIBitmap> CPDF_RenderTiling::Draw(
   if (width > clip_box.Width() || height > clip_box.Height() ||
       width * height > clip_box.Width() * clip_box.Height()) {
     std::unique_ptr<CPDF_GraphicStates> pStates;
-    if (!pPattern->colored())
+    if (!pPattern->colored()) {
       pStates = CPDF_RenderStatus::CloneObjStates(&pPageObj->graphic_states(),
                                                   bStroke);
+    } else if (pPageObj->AsPath()) {
+      pStates = std::make_unique<CPDF_GraphicStates>();
+      pStates->SetDefaultStates();
+      pStates->mutable_general_state().SetFillAlpha(pPageObj->general_state().GetFillAlpha());
+    }
 
     RetainPtr<const CPDF_Dictionary> pFormResource =
         pPatternForm->GetDict()->GetDictFor("Resources");

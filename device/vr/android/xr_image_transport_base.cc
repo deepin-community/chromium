@@ -200,7 +200,7 @@ bool XrImageTransportBase::ResizeSharedBuffer(WebXrPresentationState* webxr,
 
   // The SharedImages created here will eventually be transferred to other
   // processes to have their contents read/written via WebGL for WebXR.
-  uint32_t shared_image_usage =
+  gpu::SharedImageUsageSet shared_image_usage =
       gpu::SHARED_IMAGE_USAGE_SCANOUT | gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
       gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_GLES2_WRITE;
 
@@ -253,7 +253,7 @@ std::unique_ptr<WebXrSharedBuffer> XrImageTransportBase::CreateBuffer() {
   return buffer;
 }
 
-gpu::MailboxHolder XrImageTransportBase::TransferFrame(
+WebXrSharedBuffer* XrImageTransportBase::TransferFrame(
     WebXrPresentationState* webxr,
     const gfx::Size& frame_size,
     const gfx::Transform& uv_transform) {
@@ -283,7 +283,7 @@ gpu::MailboxHolder XrImageTransportBase::TransferFrame(
   DCHECK(shared_buffer->sync_token.HasData());
   DVLOG(2) << ": SyncToken=" << shared_buffer->sync_token.ToDebugString();
 
-  return shared_buffer->mailbox_holder();
+  return shared_buffer;
 }
 
 void XrImageTransportBase::CreateGpuFenceForSyncToken(

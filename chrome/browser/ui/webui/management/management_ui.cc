@@ -12,6 +12,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/webui/management/management_ui_constants.h"
 #include "chrome/browser/ui/webui/management/management_ui_handler.h"
 #include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/url_constants.h"
@@ -56,6 +57,7 @@ content::WebUIDataSource* CreateAndAddManagementUIHtmlSource(Profile* profile) {
 #if BUILDFLAG(IS_CHROMEOS)
       {"learnMore", IDS_LEARN_MORE},
       {"localTrustRoots", IDS_MANAGEMENT_LOCAL_TRUST_ROOTS},
+      {"filesCloudUpload", IDS_MANAGEMENT_FILES_CLOUD_UPLOAD},
       {"managementTrustRootsConfigured", IDS_MANAGEMENT_TRUST_ROOTS_CONFIGURED},
       {"deviceConfiguration", IDS_MANAGEMENT_DEVICE_CONFIGURATION},
       {"deviceReporting", IDS_MANAGEMENT_DEVICE_REPORTING},
@@ -138,6 +140,8 @@ content::WebUIDataSource* CreateAndAddManagementUIHtmlSource(Profile* profile) {
        IDS_MANAGEMENT_EXTENSION_REPORT_PERF_CRASH},
       {kManagementExtensionReportUserBrowsingData,
        IDS_MANAGEMENT_EXTENSION_REPORT_USER_BROWSING_DATA},
+      {kManagementExtensionReportVisitedUrl,
+       IDS_MANAGEMENT_EXTENSION_REPORT_VISITED_URL},
       {kThreatProtectionTitle, IDS_MANAGEMENT_THREAT_PROTECTION},
       {"connectorEvent", IDS_MANAGEMENT_CONNECTORS_EVENT},
       {"connectorVisibleData", IDS_MANAGEMENT_CONNECTORS_VISIBLE_DATA},
@@ -160,6 +164,14 @@ content::WebUIDataSource* CreateAndAddManagementUIHtmlSource(Profile* profile) {
       {kManagementOnPageVisitedVisibleData,
        IDS_MANAGEMENT_PAGE_VISITED_VISIBLE_DATA},
       {kManagementLegacyTechReport, IDS_MANAGEMENT_LEGACY_TECH_REPORT},
+      // Profile reporting messages
+      {kProfileReportingExplanation,
+       IDS_MANAGEMENT_PROFILE_REPORTING_EXPLANATION},
+      {kProfileReportingOverview, IDS_MANAGEMENT_PROFILE_REPORTING_OVERVIEW},
+      {kProfileReportingUsername, IDS_MANAGEMENT_PROFILE_REPORTING_USERNAME},
+      {kProfileReportingBrowser, IDS_MANAGEMENT_PROFILE_REPORTING_BROWSER},
+      {kProfileReportingExtension, IDS_MANAGEMENT_PROFILE_REPORTING_EXTENSION},
+      {kProfileReportingPolicy, IDS_MANAGEMENT_PROFILE_REPORTING_POLICY},
   };
 
   source->AddLocalizedStrings(kLocalizedStrings);
@@ -234,9 +246,10 @@ std::u16string ManagementUI::GetManagementPageSubtitle(Profile* profile) {
 }
 
 ManagementUI::ManagementUI(content::WebUI* web_ui) : WebUIController(web_ui) {
-  content::WebUIDataSource* source =
-      CreateAndAddManagementUIHtmlSource(Profile::FromWebUI(web_ui));
-  ManagementUIHandler::Initialize(web_ui, source);
+  Profile* profile = Profile::FromWebUI(web_ui);
+  CreateAndAddManagementUIHtmlSource(Profile::FromWebUI(web_ui));
+
+  web_ui->AddMessageHandler(ManagementUIHandler::Create(profile));
 }
 
 ManagementUI::~ManagementUI() {}

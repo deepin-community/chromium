@@ -19,9 +19,8 @@ FakeIdentityRequestDialogController::FakeIdentityRequestDialogController(
 FakeIdentityRequestDialogController::~FakeIdentityRequestDialogController() =
     default;
 
-void FakeIdentityRequestDialogController::ShowAccountsDialog(
-    const std::string& top_frame_for_display,
-    const std::optional<std::string>& iframe_for_display,
+bool FakeIdentityRequestDialogController::ShowAccountsDialog(
+    const std::string& rp_for_display,
     const std::vector<content::IdentityProviderData>& identity_provider_data,
     IdentityRequestAccount::SignInMode sign_in_mode,
     blink::mojom::RpMode rp_mode,
@@ -30,7 +29,7 @@ void FakeIdentityRequestDialogController::ShowAccountsDialog(
     LoginToIdPCallback on_add_account,
     DismissCallback dismiss_callback,
     AccountsDisplayedCallback accounts_displayed_callback) {
-  // TODO(crbug.com/1348262): Temporarily support only the first IDP, extend to
+  // TODO(crbug.com/40233285): Temporarily support only the first IDP, extend to
   // support multiple IDPs.
   std::vector<IdentityRequestAccount> accounts =
       identity_provider_data[0].accounts;
@@ -54,13 +53,9 @@ void FakeIdentityRequestDialogController::ShowAccountsDialog(
       break;
   };
 
-  if (is_interception_enabled_) {
-    // Browser automation will handle selecting an account/canceling.
-    return;
-  }
   // Use the provided account, if any. Otherwise do not run the callback right
   // away.
-  if (selected_account_) {
+  if (selected_account_ && !is_interception_enabled_) {
     std::move(on_selected)
         .Run(identity_provider_data[0].idp_metadata.config_url,
              *selected_account_,
@@ -70,11 +65,11 @@ void FakeIdentityRequestDialogController::ShowAccountsDialog(
         .Run(identity_provider_data[0].idp_metadata.config_url,
              identity_provider_data[0].accounts[0].id, /* is_sign_in= */ true);
   }
+  return true;
 }
 
-void FakeIdentityRequestDialogController::ShowFailureDialog(
-    const std::string& top_frame_for_display,
-    const std::optional<std::string>& iframe_for_display,
+bool FakeIdentityRequestDialogController::ShowFailureDialog(
+    const std::string& rp_for_display,
     const std::string& idp_for_display,
     blink::mojom::RpContext rp_context,
     blink::mojom::RpMode rp_mode,
@@ -82,11 +77,11 @@ void FakeIdentityRequestDialogController::ShowFailureDialog(
     DismissCallback dismiss_callback,
     LoginToIdPCallback login_callback) {
   title_ = "Confirm IDP Login";
+  return true;
 }
 
-void FakeIdentityRequestDialogController::ShowErrorDialog(
-    const std::string& top_frame_for_display,
-    const std::optional<std::string>& iframe_for_display,
+bool FakeIdentityRequestDialogController::ShowErrorDialog(
+    const std::string& rp_for_display,
     const std::string& idp_for_display,
     blink::mojom::RpContext rp_context,
     blink::mojom::RpMode rp_mode,
@@ -94,8 +89,22 @@ void FakeIdentityRequestDialogController::ShowErrorDialog(
     const std::optional<TokenError>& error,
     DismissCallback dismiss_callback,
     MoreDetailsCallback more_details_callback) {
-  DCHECK(dismiss_callback);
-  std::move(dismiss_callback).Run(DismissReason::kOther);
+  if (!is_interception_enabled_) {
+    DCHECK(dismiss_callback);
+    std::move(dismiss_callback).Run(DismissReason::kOther);
+    return false;
+  }
+  return true;
+}
+
+bool FakeIdentityRequestDialogController::ShowLoadingDialog(
+    const std::string& rp_for_display,
+    const std::string& idp_for_display,
+    blink::mojom::RpContext rp_context,
+    blink::mojom::RpMode rp_mode,
+    DismissCallback dismiss_callback) {
+  title_ = "Loading";
+  return true;
 }
 
 std::string FakeIdentityRequestDialogController::GetTitle() const {
@@ -111,11 +120,13 @@ void FakeIdentityRequestDialogController::ShowUrl(LinkType link_type,
   content::OpenURLParams params(
       url, content::Referrer(), WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui::PAGE_TRANSITION_AUTO_TOPLEVEL, /*is_renderer_initiated=*/false);
-  web_contents_->GetDelegate()->OpenURLFromTab(web_contents_, params);
+  web_contents_->GetDelegate()->OpenURLFromTab(
+      web_contents_, params, /*navigation_handle_callback=*/{});
 }
 
 content::WebContents* FakeIdentityRequestDialogController::ShowModalDialog(
     const GURL& url,
+    blink::mojom::RpMode rp_mode,
     DismissCallback dismiss_callback) {
   if (!web_contents_) {
     return nullptr;
@@ -126,8 +137,8 @@ content::WebContents* FakeIdentityRequestDialogController::ShowModalDialog(
   content::OpenURLParams params(
       url, content::Referrer(), WindowOpenDisposition::NEW_POPUP,
       ui::PAGE_TRANSITION_AUTO_TOPLEVEL, /*is_renderer_initiated=*/false);
-  popup_window_ =
-      web_contents_->GetDelegate()->OpenURLFromTab(web_contents_, params);
+  popup_window_ = web_contents_->GetDelegate()->OpenURLFromTab(
+      web_contents_, params, /*navigation_handle_callback=*/{});
   Observe(popup_window_);
   return popup_window_;
 }
@@ -152,4 +163,11 @@ void FakeIdentityRequestDialogController::WebContentsDestroyed() {
   popup_window_ = nullptr;
 }
 
+void FakeIdentityRequestDialogController::RequestIdPRegistrationPermision(
+    const url::Origin& origin,
+    base::OnceCallback<void(bool accepted)> callback) {
+  if (!is_interception_enabled_) {
+    std::move(callback).Run(false);
+  }
+}
 }  // namespace content

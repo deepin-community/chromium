@@ -16,6 +16,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_impl.h"
 #include "chrome/browser/download/download_request_limiter.h"
+#include "chrome/browser/global_desktop_features.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/media/webrtc/webrtc_log_uploader.h"
 #include "chrome/browser/notifications/notification_platform_bridge.h"
@@ -37,20 +38,22 @@
 #include "components/permissions/permissions_client.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/prefs/pref_service.h"
-#include "components/subresource_filter/content/browser/ruleset_service.h"
+#include "components/subresource_filter/content/shared/browser/ruleset_service.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/notification_service.h"
 #include "extensions/buildflags/buildflags.h"
 #include "media/media_buildflags.h"
 #include "printing/buildflags/buildflags.h"
-#include "services/device/public/cpp/geolocation/geolocation_manager.h"
+#include "services/device/public/cpp/geolocation/buildflags.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "services/network/test/test_network_quality_tracker.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-#include "services/device/public/cpp/test/fake_geolocation_manager.h"
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+#include "services/device/public/cpp/device_features.h"
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
+#include "services/device/public/cpp/test/fake_geolocation_system_permission_manager.h"
 #endif
 
 #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
@@ -109,13 +112,16 @@ void TestingBrowserProcess::CreateInstance() {
   g_browser_process = process;
   process->Init();
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
-  auto fake_geolocation_manager =
-      std::make_unique<device::FakeGeolocationManager>();
-  fake_geolocation_manager->SetSystemPermission(
-      device::LocationSystemPermissionStatus::kAllowed);
-  device::GeolocationManager::SetInstance(std::move(fake_geolocation_manager));
-#endif
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  if (features::IsOsLevelGeolocationPermissionSupportEnabled()) {
+    auto fake_geolocation_system_permission_manager =
+        std::make_unique<device::FakeGeolocationSystemPermissionManager>();
+    fake_geolocation_system_permission_manager->SetSystemPermission(
+        device::LocationSystemPermissionStatus::kAllowed);
+    device::GeolocationSystemPermissionManager::SetInstance(
+        std::move(fake_geolocation_system_permission_manager));
+  }
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 }
 
 // static
@@ -147,8 +153,8 @@ TestingBrowserProcess::TestingBrowserProcess()
   // TestingBrowserProcess is used in unit_tests which sets this up through
   // content::UnitTestTestSuite but also through other test binaries which don't
   // use that test suite in which case we have to set it up.
-  if (!content::NotificationService::current())
-    notification_service_.reset(content::NotificationService::Create());
+  notification_service_ =
+      content::NotificationService::CreateIfNecessaryForTesting();
 }
 
 TestingBrowserProcess::~TestingBrowserProcess() {
@@ -196,6 +202,8 @@ void TestingBrowserProcess::Init() {
   hid_system_tray_icon_ = std::make_unique<HidStatusIcon>();
   usb_system_tray_icon_ = std::make_unique<UsbStatusIcon>();
 #endif  // BUILDFLAG(IS_CHROMEOS)
+  desktop_features_ = GlobalDesktopFeatures::CreateGlobalDesktopFeatures();
+  desktop_features_->Init();
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
 
@@ -267,12 +275,17 @@ void TestingBrowserProcess::SetProfileManager(
   profile_manager_ = std::move(profile_manager);
 }
 
+void TestingBrowserProcess::SetVariationsService(
+    variations::VariationsService* variations_service) {
+  variations_service_ = variations_service;
+}
+
 PrefService* TestingBrowserProcess::local_state() {
   return local_state_;
 }
 
 variations::VariationsService* TestingBrowserProcess::variations_service() {
-  return nullptr;
+  return variations_service_;
 }
 
 StartupData* TestingBrowserProcess::startup_data() {
@@ -334,7 +347,7 @@ BackgroundModeManager* TestingBrowserProcess::background_mode_manager() {
 #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
 void TestingBrowserProcess::set_background_mode_manager_for_test(
     std::unique_ptr<BackgroundModeManager> manager) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 #endif
 
@@ -354,6 +367,11 @@ WebRtcLogUploader* TestingBrowserProcess::webrtc_log_uploader() {
 subresource_filter::RulesetService*
 TestingBrowserProcess::subresource_filter_ruleset_service() {
   return subresource_filter_ruleset_service_.get();
+}
+
+subresource_filter::RulesetService*
+TestingBrowserProcess::fingerprinting_protection_ruleset_service() {
+  return fingerprinting_protection_ruleset_service_.get();
 }
 
 BrowserProcessPlatformPart* TestingBrowserProcess::platform_part() {
@@ -518,10 +536,21 @@ HidSystemTrayIcon* TestingBrowserProcess::hid_system_tray_icon() {
 UsbSystemTrayIcon* TestingBrowserProcess::usb_system_tray_icon() {
   return usb_system_tray_icon_.get();
 }
+
+GlobalDesktopFeatures* TestingBrowserProcess::GetDesktopFeatures() {
+  return desktop_features_.get();
+}
 #endif
 
 os_crypt_async::OSCryptAsync* TestingBrowserProcess::os_crypt_async() {
   return os_crypt_async_.get();
+}
+
+void TestingBrowserProcess::set_additional_os_crypt_async_provider_for_test(
+    size_t precedence,
+    std::unique_ptr<os_crypt_async::KeyProvider> provider) {
+  // Not implemented.
+  CHECK(false);
 }
 
 BuildState* TestingBrowserProcess::GetBuildState() {
@@ -613,6 +642,11 @@ void TestingBrowserProcess::SetWebRtcLogUploader(
 void TestingBrowserProcess::SetRulesetService(
     std::unique_ptr<subresource_filter::RulesetService> ruleset_service) {
   subresource_filter_ruleset_service_.swap(ruleset_service);
+}
+
+void TestingBrowserProcess::SetFingerprintingProtectionRulesetService(
+    std::unique_ptr<subresource_filter::RulesetService> ruleset_service) {
+  fingerprinting_protection_ruleset_service_.swap(ruleset_service);
 }
 
 void TestingBrowserProcess::SetShuttingDown(bool is_shutting_down) {

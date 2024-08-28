@@ -6,6 +6,9 @@
 # ARM NEON
 - name: xnn_f32_vmin_ukernel__neon_u4
 - name: xnn_f32_vmin_ukernel__neon_u8
+# RISC-V Vector
+- name: xnn_f32_vmin_ukernel__rvv_u4v
+- name: xnn_f32_vmin_ukernel__rvv_u8v
 # x86 SSE
 - name: xnn_f32_vmin_ukernel__sse_u4
 - name: xnn_f32_vmin_ukernel__sse_u8
@@ -29,6 +32,10 @@
 - name: xnn_f32_vmin_ukernel__wasm_u2
 - name: xnn_f32_vmin_ukernel__wasm_u4
 - name: xnn_f32_vmin_ukernel__wasm_u8
+# Hexagon HVX
+- name: xnn_f32_vmin_ukernel__hvx_u32
+- name: xnn_f32_vmin_ukernel__hvx_u64
+- name: xnn_f32_vmin_ukernel__hvx_u128
 # Scalar
 - name: xnn_f32_vmin_ukernel__scalar_u1
 - name: xnn_f32_vmin_ukernel__scalar_u2

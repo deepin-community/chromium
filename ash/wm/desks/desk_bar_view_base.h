@@ -14,18 +14,24 @@
 #include "ash/wm/desks/desk_mini_view.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/scroll_arrow_button.h"
-#include "ash/wm/overview/overview_grid.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
+#include "ui/aura/window_occlusion_tracker.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/events/event.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
+namespace gfx {
+class Rect;
+}  // namespace gfx
+
 namespace ash {
 
 class DeskBarHoverObserver;
+class OverviewGrid;
+class WindowOcclusionCalculator;
 
 // Base class for desk bar views, including desk bar view within overview and
 // desk bar view for the desk button.
@@ -64,7 +70,7 @@ class ASH_EXPORT DeskBarViewBase : public views::View,
   static int GetPreferredBarHeight(aura::Window* root, Type type, State state);
 
   // Return the preferred state for the desk bar given `type`.
-  static State GetPerferredState(Type type);
+  static State GetPreferredState(Type type);
 
   // Create and returns the widget that contains the desk bar view of `type`.
   // The returned widget has no contents view yet, and hasn't been shown yet.
@@ -177,7 +183,7 @@ class ASH_EXPORT DeskBarViewBase : public views::View,
   // and the `zero_state_default_desk_button_`.
   void UpdateButtonsForSavedDeskGrid();
 
-  // Udate the visibility of the `default_desk_button_` on the desk bar's
+  // Update the visibility of the `default_desk_button_` on the desk bar's
   // state.
   void UpdateDeskButtonsVisibility();
 
@@ -295,7 +301,10 @@ class ASH_EXPORT DeskBarViewBase : public views::View,
   friend class DeskBarScrollViewLayout;
   friend class DesksTestApi;
 
-  DeskBarViewBase(aura::Window* root, Type type);
+  DeskBarViewBase(
+      aura::Window* root,
+      Type type,
+      base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator);
   ~DeskBarViewBase() override;
 
   // Return the X offset of the first mini_view on the left (if there's one),
@@ -336,8 +345,8 @@ class ASH_EXPORT DeskBarViewBase : public views::View,
   void OnLibraryButtonPressed();
 
   // This function cycles through `mini_views_` and updates the tooltip for each
-  // mini view's combine desks button.
-  void MaybeUpdateCombineDesksTooltips();
+  // mini view's desk action buttons.
+  void MaybeUpdateDeskActionButtonTooltips();
 
   // Scrollview callbacks.
   void OnContentsScrolled();
@@ -348,6 +357,9 @@ class ASH_EXPORT DeskBarViewBase : public views::View,
   // scroll. Return true if the scroll is triggered. Return false if the scroll
   // is ended.
   bool MaybeScrollByDraggedDesk();
+
+  // Maybe refreshes `overview_grid_` bounds on desk bar `state_` changed.
+  void MaybeRefreshOverviewGridBounds();
 
   // Records UMA histograms on desk profile adoption.
   void RecordDeskProfileAdoption();
@@ -432,6 +444,8 @@ class ASH_EXPORT DeskBarViewBase : public views::View,
 
   // Test closure that runs after the UI has been updated asynchronously.
   base::OnceClosure on_update_ui_closure_for_testing_;
+
+  const base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator_;
 };
 
 }  // namespace ash

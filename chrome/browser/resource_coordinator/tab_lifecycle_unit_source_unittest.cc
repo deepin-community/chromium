@@ -26,6 +26,7 @@
 #include "chrome/browser/resource_coordinator/time.h"
 #include "chrome/browser/resource_coordinator/utils.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/test_tab_strip_model_delegate.h"
 #include "chrome/common/pref_names.h"
@@ -267,8 +268,8 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
 
     // Detach the non-active tab. Verify that it can no longer be discarded.
     ExpectCanDiscardTrueAllReasons(first_lifecycle_unit);
-    std::unique_ptr<content::WebContents> owned_contents =
-        tab_strip_model_->DetachWebContentsAtForInsertion(0);
+    std::unique_ptr<tabs::TabModel> detached_tab =
+        tab_strip_model_->DetachTabAtForInsertion(0);
     ExpectCanDiscardFalseTrivialAllReasons(first_lifecycle_unit);
 
     // Create a second tab strip.
@@ -284,7 +285,7 @@ class TabLifecycleUnitSourceTest : public ChromeRenderViewHostTestHarness {
 
     // Insert the tab into the second tab strip without focusing it. Verify that
     // it can be discarded.
-    other_tab_strip_model.AppendWebContents(std::move(owned_contents), false);
+    other_tab_strip_model.AppendTab(std::move(detached_tab), false);
     ExpectCanDiscardTrueAllReasons(first_lifecycle_unit);
 
     EXPECT_EQ(LifecycleUnitState::ACTIVE, first_lifecycle_unit->GetState());
@@ -480,7 +481,7 @@ TEST_F(TabLifecycleUnitSourceTest, CloseTabInFocusedTabStrip) {
                                   {first_lifecycle_unit});
 }
 
-TEST_F(TabLifecycleUnitSourceTest, ReplaceWebContents) {
+TEST_F(TabLifecycleUnitSourceTest, DiscardWebContents) {
   LifecycleUnit* first_lifecycle_unit = nullptr;
   LifecycleUnit* second_lifecycle_unit = nullptr;
   CreateTwoTabs(true /* focus_tab_strip */, &first_lifecycle_unit,
@@ -497,7 +498,7 @@ TEST_F(TabLifecycleUnitSourceTest, ReplaceWebContents) {
       CreateTestWebContents();
   content::WebContents* raw_new_web_contents = new_web_contents.get();
   std::unique_ptr<content::WebContents> original_web_contents_deleter =
-      tab_strip_model_->ReplaceWebContentsAt(1, std::move(new_web_contents));
+      tab_strip_model_->DiscardWebContentsAt(1, std::move(new_web_contents));
   EXPECT_EQ(original_web_contents, original_web_contents_deleter.get());
   EXPECT_FALSE(source_->GetTabLifecycleUnitExternal(original_web_contents));
   EXPECT_EQ(tab_lifecycle_unit_external,
@@ -534,10 +535,10 @@ TEST_F(TabLifecycleUnitSourceTest, DetachAndDeleteWebContents) {
 
   // Detach and destroy the non-active tab. Verify that the LifecycleUnit is
   // destroyed.
-  std::unique_ptr<content::WebContents> web_contents =
-      tab_strip_model_->DetachWebContentsAtForInsertion(0);
+  std::unique_ptr<tabs::TabModel> detached_tab =
+      tab_strip_model_->DetachTabAtForInsertion(0);
   EXPECT_CALL(observer, OnLifecycleUnitDestroyed(first_lifecycle_unit));
-  web_contents.reset();
+  detached_tab.reset();
   ::testing::Mock::VerifyAndClear(&observer);
 }
 

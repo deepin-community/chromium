@@ -7,6 +7,7 @@
 
 #include <unordered_set>
 
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "content/common/content_export.h"
 #include "device/bluetooth/bluetooth_adapter.h"
@@ -36,7 +37,7 @@ class CONTENT_EXPORT BluetoothAdapterFactoryWrapper {
   static BluetoothAdapterFactoryWrapper& Get();
 
   // Returns true if the platform supports Bluetooth Low Energy or if
-  // SetBluetoothAdapterForTesting has been called.
+  // SetBluetoothAdapterOverride has been called.
   bool IsLowEnergySupported();
 
   // Adds |service| to the set of adapter observers if this is the first time
@@ -58,7 +59,7 @@ class CONTENT_EXPORT BluetoothAdapterFactoryWrapper {
   // Sets a new BluetoothAdapter to be returned by GetAdapter. When setting
   // a new adapter all observers from the old adapter are removed and added
   // to |test_adapter|.
-  void SetBluetoothAdapterForTesting(
+  void SetBluetoothAdapterOverride(
       scoped_refptr<device::BluetoothAdapter> test_adapter);
 
  private:
@@ -83,7 +84,8 @@ class CONTENT_EXPORT BluetoothAdapterFactoryWrapper {
   // We keep a list of all observers so that when the adapter gets swapped,
   // we can remove all observers from the old adapter and add them to the
   // new adapter.
-  std::unordered_set<WebBluetoothServiceImpl*> adapter_observers_;
+  std::unordered_set<raw_ptr<WebBluetoothServiceImpl, CtnExperimental>>
+      adapter_observers_;
 
   // Should only be called on the UI thread.
   THREAD_CHECKER(thread_checker_);

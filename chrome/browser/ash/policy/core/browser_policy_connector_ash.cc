@@ -56,8 +56,7 @@
 #include "chrome/browser/ash/policy/scheduled_task_handler/reboot_notifications_scheduler.h"
 #include "chrome/browser/ash/policy/scheduled_task_handler/scheduled_task_executor_impl.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
-#include "chrome/browser/ash/printing/bulk_printers_calculator_factory.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chrome/browser/ash/printing/enterprise/bulk_printers_calculator_factory.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/policy/device_management_service_configuration.h"
@@ -72,6 +71,7 @@
 #include "chromeos/ash/components/network/network_cert_loader.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/onc/onc_certificate_importer_impl.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
@@ -104,7 +104,7 @@ MarketSegment TranslateMarketSegment(
     case em::PolicyData::ENROLLED_ENTERPRISE:
       return MarketSegment::ENTERPRISE;
   }
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return MarketSegment::UNKNOWN;
 }
 
@@ -368,7 +368,7 @@ bool BrowserPolicyConnectorAsh::IsDeviceEnterpriseManaged() const {
 }
 
 bool BrowserPolicyConnectorAsh::HasMachineLevelPolicies() {
-  NOTREACHED() << "This method is only defined for desktop Chrome";
+  NOTREACHED_IN_MIGRATION() << "This method is only defined for desktop Chrome";
   return false;
 }
 

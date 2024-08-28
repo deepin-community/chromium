@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/login/ui/login_display_host_mojo.h"
 
+#include <optional>
 #include <utility>
 
 #include "ash/constants/ash_features.h"
@@ -11,22 +12,28 @@
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/input_device_settings_controller.h"
 #include "ash/public/cpp/login/local_authentication_request_controller.h"
-#include "ash/public/cpp/login/login_utils.h"
+#include "ash/public/cpp/login_accelerators.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/login_screen_model.h"
+#include "ash/public/cpp/login_types.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/style/color_palette_controller.h"
 #include "ash/system/model/enterprise_domain_model.h"
 #include "ash/system/model/system_tray_model.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/task/single_thread_task_runner.h"
+#include "base/notreached.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/accessibility/accessibility_manager.h"
+#include "base/values.h"
+#include "chrome/browser/ash/login/challenge_response_auth_keys_loader.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/mojo_system_info_dispatcher.h"
@@ -35,54 +42,64 @@
 #include "chrome/browser/ash/login/reauth_stats.h"
 #include "chrome/browser/ash/login/screens/chrome_user_selection_screen.h"
 #include "chrome/browser/ash/login/screens/gaia_screen.h"
+#include "chrome/browser/ash/login/screens/user_selection_screen.h"
 #include "chrome/browser/ash/login/security_token_session_controller.h"
-#include "chrome/browser/ash/login/user_board_view_mojo.h"
+#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/ui/login_display_host_common.h"
+#include "chrome/browser/ash/login/ui/signin_ui.h"
+#include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/certificate_provider/certificate_provider_service_factory.h"
-#include "chrome/browser/certificate_provider/pin_dialog_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login_screen_client_impl.h"
 #include "chrome/browser/ui/ash/system_tray_client_impl.h"
 #include "chrome/browser/ui/ash/wallpaper_controller_client_impl.h"
 #include "chrome/browser/ui/webui/ash/login/enable_adb_sideloading_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/enable_debugging_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/gaia_password_changed_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/guest_tos_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/kiosk_autolaunch_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/lacros_data_migration_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/os_install_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/remote_activity_notification_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/reset_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/signin_fatal_error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
-#include "chrome/common/channel_info.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "chromeos/ash/components/login/auth/public/auth_types.h"
+#include "chromeos/ash/components/login/auth/public/key.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
+#include "chromeos/ash/components/osauth/public/auth_hub.h"
+#include "chromeos/ash/components/osauth/public/common_types.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/account_id/account_id.h"
 #include "components/startup_metric_utils/common/startup_metric_utils.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_names.h"
-#include "components/version_info/version_info.h"
-#include "content/public/browser/browser_thread.h"
+#include "components/user_manager/user_type.h"
+#include "content/public/browser/web_contents.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/layer.h"
+#include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes_posix.h"
+#include "ui/gfx/native_widget_types.h"
 #include "ui/views/view.h"
 
 namespace ash {
 namespace {
 
 chromeos::CertificateProviderService* GetLoginScreenCertProviderService() {
-  DCHECK(ProfileHelper::IsSigninProfileInitialized());
+  auto* browser_context =
+      BrowserContextHelper::Get()->GetSigninBrowserContext();
   return chromeos::CertificateProviderServiceFactory::GetForBrowserContext(
-      ProfileHelper::GetSigninProfile());
+      browser_context);
 }
 
 // Returns true iff
@@ -173,13 +190,11 @@ LoginDisplayHostMojo::AuthState::AuthState(
 LoginDisplayHostMojo::AuthState::~AuthState() = default;
 
 LoginDisplayHostMojo::LoginDisplayHostMojo(DisplayedScreen displayed_screen)
-    : user_board_view_mojo_(std::make_unique<UserBoardViewMojo>()),
-      user_selection_screen_(
+    : user_selection_screen_(
           std::make_unique<ChromeUserSelectionScreen>(displayed_screen)),
       system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>()) {
   CHECK(!g_login_display_host_mojo);
   g_login_display_host_mojo = this;
-  user_selection_screen_->SetView(user_board_view_mojo_.get());
 
   allow_new_user_subscription_ = CrosSettings::Get()->AddSettingsObserver(
       kAccountsPrefAllowNewUser,
@@ -274,9 +289,6 @@ void LoginDisplayHostMojo::SetUsers(const user_manager::UserList& users) {
   // services.
   VLOG(1) << "Emitting login-prompt-visible";
   SessionManagerClient::Get()->EmitLoginPromptVisible();
-
-  // TODO(crbug.com/1305245) - Remove once the issue is fixed.
-  LOG(WARNING) << __func__ << " NotifyLoginOrLockScreenVisible";
   session_manager::SessionManager::Get()->NotifyLoginOrLockScreenVisible();
 
   // If there no available users exist, delay showing the dialogs until after
@@ -415,10 +427,6 @@ void LoginDisplayHostMojo::OnFinalize() {
   ShutdownDisplayHost();
 }
 
-void LoginDisplayHostMojo::SetStatusAreaVisible(bool visible) {
-  SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(visible);
-}
-
 void LoginDisplayHostMojo::StartWizard(OobeScreenId first_screen) {
   EnsureOobeDialogLoaded();
   OobeUI* oobe_ui = GetOobeUI();
@@ -452,7 +460,7 @@ void LoginDisplayHostMojo::OnStartUserAdding() {
 
   CreateExistingUserController();
 
-  SetStatusAreaVisible(true);
+  SystemTrayClientImpl::Get()->SetPrimaryTrayVisible(/*visible=*/true);
   existing_user_controller_->Init(
       user_manager::UserManager::Get()->GetUsersAllowedForMultiProfile());
 }
@@ -498,6 +506,8 @@ void LoginDisplayHostMojo::OnStartSignInScreen() {
 
   CreateExistingUserController();
 
+  ScheduleStartAuthHubInLoginMode();
+
   // Load the UI.
   existing_user_controller_->Init(user_manager::UserManager::Get()->GetUsers());
 
@@ -508,6 +518,23 @@ void LoginDisplayHostMojo::OnStartSignInScreen() {
   OnStartSignInScreenCommon();
 
   login::SecurityTokenSessionController::MaybeDisplayLoginScreenNotification();
+}
+
+void LoginDisplayHostMojo::ScheduleStartAuthHubInLoginMode() {
+  UserDataAuthClient::Get()->WaitForServiceToBeAvailable(
+      base::BindOnce(&LoginDisplayHostMojo::StartAuthHubInLoginMode,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void LoginDisplayHostMojo::StartAuthHubInLoginMode(
+    bool is_cryptohome_available) {
+  if (!is_cryptohome_available) {
+    LOG(ERROR)
+        << "Unable to start AuthHub in login mode, cryptohome is not available";
+    return;
+  }
+
+  AuthHub::Get()->InitializeForMode(AuthHubMode::kLoginScreen);
 }
 
 void LoginDisplayHostMojo::OnStartAppLaunch() {
@@ -671,7 +698,7 @@ void LoginDisplayHostMojo::OnCancelPasswordChangedFlow() {
 }
 
 void LoginDisplayHostMojo::ShowEnableConsumerKioskScreen() {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 bool LoginDisplayHostMojo::GetKeyboardRemappedPrefValue(
@@ -775,7 +802,7 @@ void LoginDisplayHostMojo::HandleOnFocusPod(const AccountId& account_id) {
 }
 
 bool LoginDisplayHostMojo::HandleFocusLockScreenApps(bool reverse) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return false;
 }
 
@@ -895,7 +922,7 @@ void LoginDisplayHostMojo::OnChallengeResponseKeysPrepared(
     base::OnceCallback<void(bool)> on_auth_complete_callback,
     std::vector<ChallengeResponseKey> challenge_response_keys) {
   if (challenge_response_keys.empty()) {
-    // TODO(crbug.com/826417): Indicate the error in the UI.
+    // TODO(crbug.com/40568975): Indicate the error in the UI.
     std::move(on_auth_complete_callback).Run(false);
     return;
   }

@@ -193,7 +193,7 @@ export class RecordingListView extends HTMLElement {
                                 title=${i18nString(UIStrings.playRecording)}
                                 .data=${
                                   {
-                                    variant: Buttons.Button.Variant.ROUND,
+                                    variant: Buttons.Button.Variant.ICON,
                                     iconName: 'play',
                                      jslogContext: 'play-recording',
                                   } as Buttons.Button.ButtonData
@@ -212,7 +212,7 @@ export class RecordingListView extends HTMLElement {
                         title=${i18nString(UIStrings.deleteRecording)}
                         .data=${
                           {
-                            variant: Buttons.Button.Variant.ROUND,
+                            variant: Buttons.Button.Variant.ICON,
                             iconName: 'bin',
                             jslogContext: 'delete-recording',
                           } as Buttons.Button.ButtonData
@@ -237,7 +237,7 @@ export class RecordingListView extends HTMLElement {
   };
 }
 
-ComponentHelpers.CustomElements.defineComponent(
+customElements.define(
     'devtools-recording-list-view',
     RecordingListView,
 );

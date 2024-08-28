@@ -22,7 +22,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/text_utils.h"
-
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace {
 // Padding that appears around the "Beta" label.
@@ -44,7 +44,7 @@ gfx::FontList GetFont() {
 }  // namespace
 
 BorealisBetaBadge::BorealisBetaBadge() {
-  SetAccessibilityProperties(
+  GetViewAccessibility().SetProperties(
       /*role=*/ax::mojom::Role::kStaticText,
       /*name=*/GetText());
 }
@@ -55,7 +55,8 @@ std::u16string BorealisBetaBadge::GetText() const {
   return l10n_util::GetStringUTF16(IDS_BOREALIS_BETA_BADGE);
 }
 
-gfx::Size BorealisBetaBadge::CalculatePreferredSize() const {
+gfx::Size BorealisBetaBadge::CalculatePreferredSize(
+    const views::SizeBounds& /*available_size*/) const {
   gfx::Rect preferred(gfx::GetStringSize(GetText(), GetFont()));
   preferred.Outset(kInternalPadding);
   return preferred.size();

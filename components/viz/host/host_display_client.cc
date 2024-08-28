@@ -13,6 +13,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include <utility>
 
 #include "components/viz/common/display/use_layered_window.h"
@@ -60,7 +61,7 @@ void HostDisplayClient::CreateLayeredWindowUpdater(
 }
 void HostDisplayClient::AddChildWindowToBrowser(
     gpu::SurfaceHandle child_window) {
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 #endif
 

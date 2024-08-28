@@ -41,6 +41,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/vector2d_conversions.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/bubble_histograms_variant.h"
 #include "ui/views/layout/layout_manager.h"
@@ -162,24 +163,26 @@ class BubbleDialogFrameView : public BubbleFrameView {
 
 // Create a widget to host the bubble.
 Widget* CreateBubbleWidget(BubbleDialogDelegate* bubble) {
-  DCHECK(bubble->owned_by_widget());
   Widget* bubble_widget = new BubbleWidget();
-  Widget::InitParams bubble_params(Widget::InitParams::TYPE_BUBBLE);
+  Widget::InitParams bubble_params(
+      Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      Widget::InitParams::TYPE_BUBBLE);
   bubble_params.delegate = bubble;
   bubble_params.opacity = Widget::InitParams::WindowOpacity::kTranslucent;
   bubble_params.accept_events = bubble->accept_events();
   bubble_params.remove_standard_frame = true;
   bubble_params.layer_type = bubble->GetLayerType();
+  // TODO(crbug.com/41493925): Remove CHECK once native frame dialogs support
+  // autosize.
+  CHECK(!bubble->is_autosized() || bubble->use_custom_frame())
+      << "Autosizing native frame dialogs is not supported.";
+  bubble_params.autosize = bubble->is_autosized();
 
   // Use a window default shadow if the bubble doesn't provides its own.
   if (bubble->GetShadow() == BubbleBorder::NO_SHADOW)
     bubble_params.shadow_type = Widget::InitParams::ShadowType::kDefault;
   else
     bubble_params.shadow_type = Widget::InitParams::ShadowType::kNone;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  bubble_params.background_elevation =
-      ui::ColorProviderKey::ElevationMode::kHigh;
-#endif
   gfx::NativeView parent = gfx::NativeView();
   if (bubble->has_parent()) {
     if (bubble->parent_window()) {
@@ -195,15 +198,6 @@ Widget* CreateBubbleWidget(BubbleDialogDelegate* bubble) {
   bubble->OnBeforeBubbleWidgetInit(&bubble_params, bubble_widget);
   DCHECK(bubble_params.parent || !bubble->has_parent());
   bubble_widget->Init(std::move(bubble_params));
-#if !BUILDFLAG(IS_MAC)
-  // On Mac, having a parent window creates a permanent stacking order, so
-  // there's no need to do this. Also, calling StackAbove() on Mac shows the
-  // bubble implicitly, for which the bubble is currently not ready.
-  if (!base::FeatureList::IsEnabled(views::features::kWidgetLayering)) {
-    if (bubble->has_parent() && parent)
-      bubble_widget->StackAbove(parent);
-  }
-#endif
   return bubble_widget;
 }
 
@@ -310,6 +304,12 @@ class BubbleDialogDelegate::AnchorWidgetObserver : public WidgetObserver,
 
   void OnWidgetBoundsChanged(Widget* widget, const gfx::Rect&) override {
     owner_->OnAnchorBoundsChanged();
+  }
+
+  void OnWidgetThemeChanged(Widget* widget) override {
+    // TODO(dfried): Consider merging BubbleWidget with ThemeCopyingWidget
+    // instead of observing the theme here.
+    owner_->GetWidget()->ThemeChanged();
   }
 
 #if !BUILDFLAG(IS_MAC)
@@ -443,9 +443,11 @@ BubbleDialogDelegate::CloseOnDeactivatePin::~CloseOnDeactivatePin() {
 
 BubbleDialogDelegate::BubbleDialogDelegate(View* anchor_view,
                                            BubbleBorder::Arrow arrow,
-                                           BubbleBorder::Shadow shadow)
+                                           BubbleBorder::Shadow shadow,
+                                           bool autosize)
     : arrow_(arrow),
       shadow_(shadow),
+      autosize_(autosize),
       close_on_deactivate_pins_(std::make_unique<CloseOnDeactivatePin::Pins>()),
       bubble_created_time_(base::TimeTicks::Now()) {
   bubble_uma_logger().set_delegate(this);
@@ -460,6 +462,9 @@ BubbleDialogDelegate::BubbleDialogDelegate(View* anchor_view,
   set_title_margins(layout_provider->GetInsetsMetric(INSETS_DIALOG_TITLE));
   set_footnote_margins(
       layout_provider->GetInsetsMetric(INSETS_DIALOG_FOOTNOTE));
+
+  set_desired_bounds_delegate(base::BindRepeating(
+      &BubbleDialogDelegate::GetDesiredBubbleBounds, base::Unretained(this)));
 
   RegisterWidgetInitializedCallback(base::BindOnce(
       [](BubbleDialogDelegate* bubble_delegate) {
@@ -481,7 +486,9 @@ BubbleDialogDelegate::BubbleDialogDelegate(View* anchor_view,
                 [](base::WeakPtr<BubbleDialogDelegate::BubbleUmaLogger>
                        uma_logger,
                    base::TimeTicks bubble_created_time,
-                   base::TimeTicks presentation_timestamp) {
+                   const viz::FrameTimingDetails& frame_timing_details) {
+                  base::TimeTicks presentation_timestamp =
+                      frame_timing_details.presentation_feedback.timestamp;
                   if (!uma_logger) {
                     return;
                   }
@@ -503,7 +510,6 @@ BubbleDialogDelegate::~BubbleDialogDelegate() {
 Widget* BubbleDialogDelegate::CreateBubble(
     std::unique_ptr<BubbleDialogDelegate> bubble_delegate_unique) {
   BubbleDialogDelegate* const bubble_delegate = bubble_delegate_unique.get();
-  DCHECK(bubble_delegate->owned_by_widget());
 
   // On Mac, MODAL_TYPE_WINDOW is implemented using sheets, which can't be
   // anchored at a specific point - they are always placed near the top center
@@ -538,9 +544,11 @@ BubbleDialogDelegateView::BubbleDialogDelegateView()
 
 BubbleDialogDelegateView::BubbleDialogDelegateView(View* anchor_view,
                                                    BubbleBorder::Arrow arrow,
-                                                   BubbleBorder::Shadow shadow)
-    : BubbleDialogDelegate(anchor_view, arrow, shadow) {
+                                                   BubbleBorder::Shadow shadow,
+                                                   bool autosize)
+    : BubbleDialogDelegate(anchor_view, arrow, shadow, autosize) {
   bubble_uma_logger().set_bubble_view(this);
+  SetOwnedByWidget(false);
 }
 
 BubbleDialogDelegateView::~BubbleDialogDelegateView() {
@@ -736,9 +744,6 @@ gfx::Rect BubbleDialogDelegate::GetAnchorRect() const {
   // translation into account, so undo that here. Without this, features which
   // apply transforms on windows such as ChromeOS overview mode will see bubbles
   // offset.
-  // TODO(sammiequon): Investigate if we can remove |anchor_widget_| and just
-  // replace its calls with anchor_view->GetWidget().
-  DCHECK_EQ(anchor_widget_, anchor_view->GetWidget());
   if (anchor_widget_) {
     gfx::Transform transform =
         anchor_widget_->GetNativeWindow()->layer()->GetTargetTransform();
@@ -909,7 +914,7 @@ void BubbleDialogDelegate::BubbleUmaLogger::LogMetric(
                         bubble_name.value())) {
       return;
     }
-  } else if (!views_metrics::IsValidBubbleNameVariant(bubble_name.value())) {
+  } else if (!views_metrics::IsValidBubbleName(bubble_name.value())) {
     return;
   }
 
@@ -932,7 +937,7 @@ gfx::Rect BubbleDialogDelegate::GetBubbleBounds() {
   gfx::Rect anchor_rect = GetAnchorRect();
   bool has_anchor = GetAnchorView() || anchor_rect != gfx::Rect();
   return GetBubbleFrameView()->GetUpdatedWindowBounds(
-      anchor_rect, arrow(), GetWidget()->client_view()->GetPreferredSize(),
+      anchor_rect, arrow(), GetWidget()->client_view()->GetPreferredSize({}),
       adjust_if_offscreen_ && !anchor_minimized && has_anchor);
 }
 
@@ -953,6 +958,23 @@ ax::mojom::Role BubbleDialogDelegate::GetAccessibleWindowRole() {
   // readers announce the contents of the bubble dialog as soon as it appears,
   // as long as we also fire |ax::mojom::Event::kAlert|.
   return ax::mojom::Role::kAlertDialog;
+}
+
+gfx::Rect BubbleDialogDelegate::GetDesiredBubbleBounds() {
+  CHECK(use_custom_frame())
+      << "GetBubbleBounds() for native frame dialogs is not supported.";
+
+  gfx::Rect bubble_bounds = GetBubbleBounds();
+
+#if BUILDFLAG(IS_MAC)
+  // GetBubbleBounds() doesn't take the Mac NativeWindow's style mask into
+  // account, so we need to adjust the size.
+  gfx::Size actual_size =
+      GetWindowSizeForClientSize(GetWidget(), bubble_bounds.size());
+  bubble_bounds.set_size(actual_size);
+#endif
+
+  return bubble_bounds;
 }
 
 gfx::Size BubbleDialogDelegateView::GetMinimumSize() const {
@@ -988,7 +1010,10 @@ void BubbleDialogDelegate::SetAnchorView(View* anchor_view) {
       anchor_widget_ = nullptr;
     }
     if (anchor_view) {
-      anchor_widget_ = anchor_view->GetWidget();
+      anchor_widget_ = anchor_view->GetProperty(kWidgetForAnchoringKey);
+      if (!anchor_widget_) {
+        anchor_widget_ = anchor_view->GetWidget();
+      }
       if (anchor_widget_) {
         const bool visible = GetWidget() && GetWidget()->IsVisible();
         UpdateHighlightedButton(visible);
@@ -1017,16 +1042,7 @@ void BubbleDialogDelegate::SetAnchorRect(const gfx::Rect& rect) {
 }
 
 void BubbleDialogDelegate::SizeToContents() {
-  gfx::Rect bubble_bounds = GetBubbleBounds();
-#if BUILDFLAG(IS_MAC)
-  // GetBubbleBounds() doesn't take the Mac NativeWindow's style mask into
-  // account, so we need to adjust the size.
-  gfx::Size actual_size =
-      GetWindowSizeForClientSize(GetWidget(), bubble_bounds.size());
-  bubble_bounds.set_size(actual_size);
-#endif
-
-  GetWidget()->SetBounds(bubble_bounds);
+  GetWidget()->SetBounds(GetDesiredWidgetBounds());
 }
 
 std::u16string BubbleDialogDelegate::GetSubtitle() const {
@@ -1092,7 +1108,9 @@ void BubbleDialogDelegate::OnBubbleWidgetVisibilityChanged(bool visible) {
               [](base::WeakPtr<BubbleDialogDelegate::BubbleUmaLogger>
                      uma_logger,
                  base::TimeTicks bubble_created_time,
-                 base::TimeTicks presentation_timestamp) {
+                 const viz::FrameTimingDetails& frame_timing_details) {
+                base::TimeTicks presentation_timestamp =
+                    frame_timing_details.presentation_feedback.timestamp;
                 if (!uma_logger) {
                   return;
                 }
@@ -1118,15 +1136,17 @@ void BubbleDialogDelegate::OnBubbleWidgetVisibilityChanged(bool visible) {
   // the bubble in its entirety rather than just its title and initially focused
   // view.  See http://crbug.com/474622 for details.
   if (visible && ui::IsAlert(GetAccessibleWindowRole())) {
-    GetWidget()->GetRootView()->SetAccessibleRole(GetAccessibleWindowRole());
+    GetWidget()->GetRootView()->GetViewAccessibility().SetRole(
+        GetAccessibleWindowRole());
     GetWidget()->GetRootView()->NotifyAccessibilityEvent(
         ax::mojom::Event::kAlert, true);
   }
 }
 
 void BubbleDialogDelegate::OnDeactivate() {
-  if (ShouldCloseOnDeactivate() && GetWidget())
+  if (ShouldCloseOnDeactivate() && GetWidget()) {
     GetWidget()->CloseWithReason(views::Widget::ClosedReason::kLostFocus);
+  }
 }
 
 void BubbleDialogDelegate::NotifyAnchoredBubbleIsPrimary() {

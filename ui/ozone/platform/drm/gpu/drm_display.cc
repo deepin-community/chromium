@@ -4,6 +4,7 @@
 
 #include "ui/ozone/platform/drm/gpu/drm_display.h"
 
+#include <xf86drm.h>
 #include <xf86drmMode.h>
 
 #include <algorithm>
@@ -17,6 +18,8 @@
 #include "ui/display/types/display_snapshot.h"
 #include "ui/gfx/color_space.h"
 #include "ui/ozone/platform/drm/common/drm_util.h"
+#include "ui/ozone/platform/drm/common/hardware_display_controller_info.h"
+#include "ui/ozone/platform/drm/common/tile_property.h"
 #include "ui/ozone/platform/drm/gpu/drm_device.h"
 #include "ui/ozone/platform/drm/gpu/screen_manager.h"
 
@@ -141,22 +144,29 @@ DrmDisplay::DrmDisplay(const scoped_refptr<DrmDevice>& drm,
   is_hdr_capable_ = display_snapshot.bits_per_channel() > 8 &&
                     display_snapshot.color_space().IsHDR();
   hdr_static_metadata_ = display_snapshot.hdr_static_metadata();
-  current_color_space_ = gfx::ColorSpace::CreateSRGB();
   privacy_screen_property_ =
       std::make_unique<PrivacyScreenProperty>(drm_, connector_.get());
+
+  SkColorSpacePrimaries output_primaries =
+      display_snapshot.color_info().edid_primaries;
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   is_hdr_capable_ =
       is_hdr_capable_ &&
       base::FeatureList::IsEnabled(display::features::kUseHDRTransferFunction);
 
   if (is_hdr_capable_ &&
+      display_snapshot.color_space() == gfx::ColorSpace::CreateHDR10() &&
       base::FeatureList::IsEnabled(
           display::features::kEnableExternalDisplayHDR10Mode)) {
-    current_color_space_ = display_snapshot.color_space();
+    output_primaries = SkNamedPrimariesExt::kRec2020;
     SetColorspaceProperty(display_snapshot.color_space());
     SetHdrOutputMetadata(display_snapshot.color_space());
+  } else {
+    SetColorspaceProperty(gfx::ColorSpace::CreateSRGB());
+    ClearHdrOutputMetadata();
   }
 #endif
+  drm_->plane_manager()->SetOutputColorSpace(crtc_, output_primaries);
 }
 
 DrmDisplay::~DrmDisplay() = default;
@@ -305,6 +315,11 @@ void DrmDisplay::SetColorTemperatureAdjustment(
   drm_->plane_manager()->SetColorTemperatureAdjustment(crtc_, cta);
 }
 
+void DrmDisplay::SetColorCalibration(
+    const display::ColorCalibration& calibration) {
+  drm_->plane_manager()->SetColorCalibration(crtc_, calibration);
+}
+
 void DrmDisplay::SetGammaAdjustment(
     const display::GammaAdjustment& adjustment) {
   drm_->plane_manager()->SetGammaAdjustment(crtc_, adjustment);
@@ -336,9 +351,29 @@ gfx::HDRStaticMetadata::Eotf DrmDisplay::GetEotf(
     case gfx::ColorSpace::TransferID::SCRGB_LINEAR_80_NITS:
       return gfx::HDRStaticMetadata::Eotf::kGammaHdrRange;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return gfx::HDRStaticMetadata::Eotf::kGammaSdrRange;
   }
+}
+
+bool DrmDisplay::ClearHdrOutputMetadata() {
+  DCHECK(connector_);
+
+  ScopedDrmPropertyPtr hdr_output_metadata_property(
+      drm_->GetProperty(connector_.get(), kHdrOutputMetadata));
+  if (!hdr_output_metadata_property) {
+    PLOG(INFO) << "'" << kHdrOutputMetadata << "' property doesn't exist.";
+    return false;
+  }
+
+  if (!drm_->SetProperty(connector_->connector_id,
+                         hdr_output_metadata_property->prop_id, 0)) {
+    PLOG(INFO) << "Cannot set '" << kHdrOutputMetadata
+               << "' property on connector " << connector_->connector_id;
+    return false;
+  }
+
+  return true;
 }
 
 bool DrmDisplay::SetHdrOutputMetadata(const gfx::ColorSpace color_space) {
@@ -346,9 +381,9 @@ bool DrmDisplay::SetHdrOutputMetadata(const gfx::ColorSpace color_space) {
   DCHECK(hdr_static_metadata_.has_value());
   DCHECK(color_space.IsValid());
 
-  drm_hdr_output_metadata* hdr_output_metadata =
+  ScopedDrmHdrOutputMetadataPtr hdr_output_metadata(
       static_cast<drm_hdr_output_metadata*>(
-          malloc(sizeof(drm_hdr_output_metadata)));
+          drmMalloc(sizeof(drm_hdr_output_metadata))));
   hdr_output_metadata->metadata_type = 0;
   hdr_output_metadata->hdmi_metadata_type1.metadata_type = 0;
 
@@ -387,11 +422,14 @@ bool DrmDisplay::SetHdrOutputMetadata(const gfx::ColorSpace color_space) {
   hdr_output_metadata->hdmi_metadata_type1.white_point.y =
       primaries.fWY * kPrimariesFixedPoint;
 
-  ScopedDrmHdrOutputMetadataPtr hdr_output_metadata_blob(hdr_output_metadata);
-
   ScopedDrmPropertyBlob hdr_output_metadata_property_blob =
-      drm_->CreatePropertyBlob(hdr_output_metadata_blob.get(),
+      drm_->CreatePropertyBlob(hdr_output_metadata.get(),
                                sizeof(drm_hdr_output_metadata));
+  if (!hdr_output_metadata_property_blob) {
+    PLOG(INFO) << "Cannot create '" << kHdrOutputMetadata << "' property blob.";
+    return false;
+  }
+
   ScopedDrmPropertyPtr hdr_output_metadata_property(
       drm_->GetProperty(connector_.get(), kHdrOutputMetadata));
   if (!hdr_output_metadata_property) {
@@ -399,7 +437,8 @@ bool DrmDisplay::SetHdrOutputMetadata(const gfx::ColorSpace color_space) {
     return false;
   }
 
-  if (!drm_->SetProperty(connector_->connector_id,
+  if (!hdr_output_metadata_property->prop_id ||
+      !drm_->SetProperty(connector_->connector_id,
                          hdr_output_metadata_property->prop_id,
                          hdr_output_metadata_property_blob->id())) {
     PLOG(INFO) << "Cannot set '" << kHdrOutputMetadata << "' property.";
@@ -410,19 +449,19 @@ bool DrmDisplay::SetHdrOutputMetadata(const gfx::ColorSpace color_space) {
 
 bool DrmDisplay::SetColorspaceProperty(const gfx::ColorSpace color_space) {
   DCHECK(connector_);
-  DCHECK(hdr_static_metadata_.has_value());
   ScopedDrmPropertyPtr color_space_property(
       drm_->GetProperty(connector_.get(), kColorSpace));
   if (!color_space_property) {
     PLOG(INFO) << "'" << kColorSpace << "' property doesn't exist.";
     return false;
   }
-  if (!drm_->SetProperty(
+  if (!color_space_property->prop_id ||
+      !drm_->SetProperty(
           connector_->connector_id, color_space_property->prop_id,
           GetEnumValueForName(*drm_, color_space_property->prop_id,
                               GetNameForColorspace(color_space)))) {
     PLOG(INFO) << "Cannot set '" << GetNameForColorspace(color_space)
-               << "' to 'Colorspace' property.";
+               << "' to '" << kColorSpace << "' property.";
     return false;
   }
   return true;

@@ -12,6 +12,7 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/run_loop.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -24,11 +25,14 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/mock_permission_controller.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "exclusive_access_controller_base.h"
+#include "exclusive_access_manager.h"
+#include "exclusive_access_test.h"
 #include "extensions/common/extension.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "ui/base/ui_base_features.h"
@@ -44,6 +48,17 @@ const char ExclusiveAccessTest::kFullscreenKeyboardLockHTML[] =
 const char ExclusiveAccessTest::kFullscreenPointerLockHTML[] =
     "/fullscreen_pointerlock/fullscreen_pointerlock.html";
 
+MockExclusiveAccessController::MockExclusiveAccessController(
+    ExclusiveAccessManager* manager)
+    : ExclusiveAccessControllerBase(manager) {}
+
+MockExclusiveAccessController::~MockExclusiveAccessController() = default;
+
+bool MockExclusiveAccessController::HandleUserPressedEscape() {
+  escape_pressed_count_++;
+  return false;
+}
+
 ExclusiveAccessTest::ExclusiveAccessTest() {
   // It is important to disable system keyboard lock as low-level test utilities
   // may install a keyboard hook to listen for keyboard events and having an
@@ -54,6 +69,22 @@ ExclusiveAccessTest::ExclusiveAccessTest() {
 ExclusiveAccessTest::~ExclusiveAccessTest() = default;
 
 void ExclusiveAccessTest::SetUpOnMainThread() {
+  permission_controller_ =
+      std::make_unique<content::MockPermissionController>();
+  ON_CALL(*permission_controller_, RequestPermissionsFromCurrentDocument)
+      .WillByDefault(
+          [](content::RenderFrameHost* render_frame_host,
+             content::PermissionRequestDescription request_description,
+             base::OnceCallback<void(
+                 const std::vector<content::PermissionStatus>&)> callback) {
+            std::move(callback).Run(std::vector<content::PermissionStatus>(
+                request_description.permissions.size(),
+                content::PermissionStatus::GRANTED));
+          });
+
+  GetExclusiveAccessManager()
+      ->permission_manager()
+      .set_permission_controller_for_test(permission_controller_.get());
   GetExclusiveAccessManager()
       ->pointer_lock_controller()
       ->bubble_hide_callback_for_test_ = base::BindRepeating(
@@ -64,6 +95,11 @@ void ExclusiveAccessTest::SetUpOnMainThread() {
       ->bubble_hide_callback_for_test_ = base::BindRepeating(
       &ExclusiveAccessTest::OnBubbleHidden, weak_ptr_factory_.GetWeakPtr(),
       &keyboard_lock_bubble_hide_reason_recorder_);
+
+  mock_controller_ = std::make_unique<MockExclusiveAccessController>(
+      GetExclusiveAccessManager());
+  GetExclusiveAccessManager()->exclusive_access_controllers_for_test().insert(
+      mock_controller_.get());
 }
 
 void ExclusiveAccessTest::TearDownOnMainThread() {
@@ -75,12 +111,16 @@ void ExclusiveAccessTest::TearDownOnMainThread() {
       ->keyboard_lock_controller()
       ->bubble_hide_callback_for_test_ =
       base::RepeatingCallback<void(ExclusiveAccessBubbleHideReason)>();
+
+  GetExclusiveAccessManager()->exclusive_access_controllers_for_test().erase(
+      mock_controller_.get());
+  mock_controller_.reset();
 }
 
 // static
 bool ExclusiveAccessTest::IsBubbleDownloadNotification(
     ExclusiveAccessBubble* bubble) {
-  return bubble->notify_download_;
+  return bubble->params_.has_download;
 }
 
 bool ExclusiveAccessTest::RequestKeyboardLock(bool esc_key_locked) {
@@ -98,7 +138,20 @@ bool ExclusiveAccessTest::RequestKeyboardLock(bool esc_key_locked) {
   else
     codes = base::flat_set<ui::DomCode>({ui::DomCode::US_A});
 
-  return content::RequestKeyboardLock(tab, std::move(codes));
+  bool success = false;
+  base::RunLoop run_loop;
+  base::OnceCallback<void(blink::mojom::KeyboardLockRequestResult)> callback =
+      base::BindOnce(
+          [](bool* success, base::RunLoop* run_loop,
+             blink::mojom::KeyboardLockRequestResult result) {
+            *success =
+                result == blink::mojom::KeyboardLockRequestResult::kSuccess;
+            run_loop->Quit();
+          },
+          &success, &run_loop);
+  content::RequestKeyboardLock(tab, std::move(codes), std::move(callback));
+  run_loop.Run();
+  return success;
 }
 
 void ExclusiveAccessTest::RequestToLockPointer(bool user_gesture,
@@ -107,7 +160,11 @@ void ExclusiveAccessTest::RequestToLockPointer(bool user_gesture,
   PointerLockController* pointer_lock_controller =
       GetExclusiveAccessManager()->pointer_lock_controller();
   pointer_lock_controller->fake_pointer_lock_for_test_ = true;
+  base::RunLoop run_loop;
+  pointer_lock_controller->set_lock_state_callback_for_test(
+      run_loop.QuitClosure());
   browser()->RequestPointerLock(tab, user_gesture, last_unlocked_by_target);
+  run_loop.Run();
   pointer_lock_controller->fake_pointer_lock_for_test_ = false;
 }
 
@@ -135,9 +192,11 @@ void ExclusiveAccessTest::LostPointerLock() {
   browser()->LostPointerLock();
 }
 
-bool ExclusiveAccessTest::SendEscapeToExclusiveAccessManager() {
-  content::NativeWebKeyboardEvent event(
-      blink::WebInputEvent::Type::kKeyDown, blink::WebInputEvent::kNoModifiers,
+bool ExclusiveAccessTest::SendEscapeToExclusiveAccessManager(bool is_key_down) {
+  input::NativeWebKeyboardEvent event(
+      is_key_down ? blink::WebInputEvent::Type::kRawKeyDown
+                  : blink::WebInputEvent::Type::kKeyUp,
+      blink::WebInputEvent::kNoModifiers,
       blink::WebInputEvent::GetStaticTimeStampForTests());
   event.windows_key_code = ui::VKEY_ESCAPE;
   return GetExclusiveAccessManager()->HandleUserKeyEvent(event);
@@ -182,6 +241,19 @@ void ExclusiveAccessTest::EnterActiveTabFullscreen() {
   waiter.Wait();
 }
 
+void ExclusiveAccessTest::WaitForTabFullscreenExit() {
+  ui_test_utils::FullscreenWaiter waiter(browser(), {.tab_fullscreen = false});
+  waiter.Wait();
+}
+
+void ExclusiveAccessTest::WaitAndVerifyFullscreenState(bool browser_fullscreen,
+                                                       bool tab_fullscreen) {
+  ui_test_utils::FullscreenWaiter waiter(
+      browser(), {.browser_fullscreen = browser_fullscreen,
+                  .tab_fullscreen = tab_fullscreen});
+  waiter.Wait();
+}
+
 void ExclusiveAccessTest::EnterExtensionInitiatedFullscreen() {
   ui_test_utils::FullscreenWaiter waiter(browser(),
                                          {.browser_fullscreen = true});
@@ -189,6 +261,10 @@ void ExclusiveAccessTest::EnterExtensionInitiatedFullscreen() {
   browser()->ToggleFullscreenModeWithExtension(
       extensions::Extension::GetBaseURLFromExtensionId(kExtensionId));
   waiter.Wait();
+}
+
+bool ExclusiveAccessTest::IsEscKeyHoldTimerRunning() {
+  return GetExclusiveAccessManager()->esc_key_hold_timer_for_test().IsRunning();
 }
 
 void ExclusiveAccessTest::SetEscRepeatWindowLength(
@@ -224,6 +300,14 @@ void ExclusiveAccessTest::SetUserEscapeTimestampForTest(
       ->last_user_escape_time_ = timestamp;
 }
 
-int ExclusiveAccessTest::InitialBubbleDelayMs() const {
-  return ExclusiveAccessBubble::kInitialDelayMs;
+void ExclusiveAccessTest::ExpectMockControllerReceivedEscape(int count) {
+  EXPECT_EQ(count, mock_controller()->escape_pressed_count());
+  mock_controller()->reset_escape_pressed_count();
+}
+
+void ExclusiveAccessTest::Wait(base::TimeDelta duration) {
+  base::RunLoop run_loop;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, run_loop.QuitClosure(), duration);
+  run_loop.Run();
 }

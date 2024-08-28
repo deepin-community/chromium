@@ -7,12 +7,15 @@ package org.chromium.ui.base;
 import android.content.ClipData;
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.util.SparseArray;
 import android.view.MotionEvent;
 import android.view.PointerIcon;
 import android.view.View;
 import android.view.View.DragShadowBuilder;
 import android.view.ViewGroup;
 import android.view.ViewGroup.MarginLayoutParams;
+import android.view.ViewStructure;
+import android.view.autofill.AutofillValue;
 import android.view.inputmethod.InputConnection;
 
 import androidx.annotation.CallSuper;
@@ -162,8 +165,9 @@ public class ViewAndroidDelegate {
     }
 
     /**
-     * Transfer existing anchor views from the old to the new container view. Called by
-     * {@link setContainerView} only.
+     * Transfer existing anchor views from the old to the new container view. Called by {@link
+     * setContainerView} only.
+     *
      * @param oldContainerView Old container view just replaced by a new one.
      */
     public void updateAnchorViews(ViewGroup oldContainerView) {}
@@ -240,6 +244,7 @@ public class ViewAndroidDelegate {
      *
      * @param shadowImage The shadow image for the dragged object.
      * @param dropData The drop data presenting the drag target.
+     * @param windowAndroid The WindowAndroid used to retrieve a relevant Context.
      * @param cursorOffsetX The x offset of the cursor w.r.t. to top-left corner of the drag-image.
      * @param cursorOffsetY The y offset of the cursor w.r.t. to top-left corner of the drag-image.
      * @param dragObjRectWidth The width of the drag object.
@@ -249,18 +254,20 @@ public class ViewAndroidDelegate {
     private boolean startDragAndDrop(
             Bitmap shadowImage,
             DropDataAndroid dropData,
+            WindowAndroid windowAndroid,
             int cursorOffsetX,
             int cursorOffsetY,
             int dragObjRectWidth,
             int dragObjRectHeight) {
         ViewGroup containerView = getContainerViewGroup();
-        if (containerView == null) return false;
+        if (containerView == null || windowAndroid == null) return false;
 
         return getDragAndDropDelegate()
                 .startDragAndDrop(
                         containerView,
                         shadowImage,
                         dropData,
+                        windowAndroid.getContext().get(),
                         cursorOffsetX,
                         cursorOffsetY,
                         dragObjRectWidth,
@@ -421,23 +428,21 @@ public class ViewAndroidDelegate {
 
     /**
      * Notify the client of the position of the top controls.
+     *
      * @param topControlsOffsetY The Y offset of the top controls in physical pixels.
      * @param topContentOffsetY The Y offset of the content in physical pixels.
      * @param topControlsMinHeightOffsetY The current top controls min-height in physical pixels.
-     */
-    @CalledByNative
-    public void onTopControlsChanged(
-            int topControlsOffsetY, int topContentOffsetY, int topControlsMinHeightOffsetY) {}
-
-    /**
-     * Notify the client of the position of the bottom controls.
      * @param bottomControlsOffsetY The Y offset of the bottom controls in physical pixels.
      * @param bottomControlsMinHeightOffsetY The current bottom controls min-height in physical
-     *                                       pixels.
+     *     pixels.
      */
     @CalledByNative
-    public void onBottomControlsChanged(
-            int bottomControlsOffsetY, int bottomControlsMinHeightOffsetY) {}
+    public void onControlsChanged(
+            int topControlsOffsetY,
+            int topContentOffsetY,
+            int topControlsMinHeightOffsetY,
+            int bottomControlsOffsetY,
+            int bottomControlsMinHeightOffsetY) {}
 
     /**
      * @return The Visual Viewport bottom inset in pixels.
@@ -563,9 +568,32 @@ public class ViewAndroidDelegate {
         }
     }
 
+    /**
+     * Forwards requests for a ViewStructure from the Android Autofill API to the implementing View.
+     *
+     * @see View#onProvideAutofillVirtualStructure(ViewStructure structure, int flags)
+     */
+    public void onProvideAutofillVirtualStructure(ViewStructure structure, int flags) {}
+
+    /**
+     * Forwards autofillable values from the Android Autofill API to the implementing View.
+     *
+     * @see View#autofill(SparseArray)
+     */
+    public void autofill(final SparseArray<AutofillValue> values) {}
+
+    /**
+     * Check whether the Android can request a ViewStructure for Autofill.
+     *
+     * @return true iff an AutofillProvider provides a ViewStructure when prompted.
+     */
+    public boolean providesAutofillStructure() {
+        return false;
+    }
+
     /** Destroy and clean up dependencies (e.g. drag state tracker if set). */
     public void destroy() {
-        // TODO(https://crbug.com/1297354): Call this in when destroying WebContents.
+        // TODO(crbug.com/40215126): Call this in when destroying WebContents.
         mDragAndDropDelegateImpl.destroy();
     }
 

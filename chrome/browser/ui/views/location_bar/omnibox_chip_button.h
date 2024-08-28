@@ -43,7 +43,8 @@ class OmniboxChipButton : public views::MdTextButton {
   void AnimationProgressed(const gfx::Animation* animation) override;
 
   // views::MdTextButton:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnThemeChanged() override;
   void UpdateBackgroundColor() override;
 
@@ -89,8 +90,6 @@ class OmniboxChipButton : public views::MdTextButton {
   std::unique_ptr<gfx::SlideAnimation> animation_;
 
   OmniboxChipTheme theme_ = OmniboxChipTheme::kLowVisibility;
-
-  int base_width_ = 0;
 
   // If chip is collapsed. In the collapsed state, only an icon is visible,
   // without text.

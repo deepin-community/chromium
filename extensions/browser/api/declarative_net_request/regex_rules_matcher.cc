@@ -8,6 +8,7 @@
 
 #include "base/containers/contains.h"
 #include "base/logging.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
@@ -72,7 +73,7 @@ bool ActionTypeAllowsMultipleActions(flat::ActionType action_type) {
     case flat::ActionType_modify_headers:
       return true;
     case flat::ActionType_count:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
   return true;
 }
@@ -102,9 +103,12 @@ RegexRulesMatcher::RegexRulesMatcher(
                                 this,
                                 RulesetMatchingStage::kOnHeadersReceived),
       metadata_list_(metadata_list),
+      // See comments for this field in extension_url_pattern_index_matcher.cc
+      // for why different checks are used for `before_request_regex_list` and
+      // `headers_received_regex_list`.
       is_extra_headers_matcher_(
           IsExtraHeadersMatcherInternal(before_request_regex_list) ||
-          IsExtraHeadersMatcherInternal(headers_received_regex_list)) {}
+          headers_received_regex_list->size() > 0) {}
 
 RegexRulesMatcher::~RegexRulesMatcher() = default;
 
@@ -126,9 +130,10 @@ size_t RegexRulesMatcher::GetHeadersReceivedRulesCount() const {
 
 std::vector<RequestAction> RegexRulesMatcher::GetModifyHeadersActions(
     const RequestParams& params,
+    RulesetMatchingStage stage,
     std::optional<uint64_t> min_priority) const {
   const std::vector<RegexRuleInfo>& potential_matches =
-      before_request_matcher_.GetPotentialMatches(params);
+      GetMatcherForStage(stage).GetPotentialMatches(params);
 
   std::vector<const flat_rule::UrlRule*> rules;
   for (const RegexRuleInfo& info : potential_matches) {
@@ -148,9 +153,10 @@ std::vector<RequestAction> RegexRulesMatcher::GetModifyHeadersActions(
 }
 
 std::optional<RequestAction> RegexRulesMatcher::GetAllowAllRequestsAction(
-    const RequestParams& params) const {
+    const RequestParams& params,
+    RulesetMatchingStage stage) const {
   const std::vector<RegexRuleInfo>& potential_matches =
-      before_request_matcher_.GetPotentialMatches(params);
+      GetMatcherForStage(stage).GetPotentialMatches(params);
   auto info = base::ranges::find_if(
       potential_matches, [&params](const RegexRuleInfo& info) {
         return info.regex_rule->action_type() ==
@@ -232,7 +238,7 @@ RegexRulesMatcher::MatchHelper::GetPotentialMatches(
   std::vector<RegexRuleInfo> potential_matches;
   for (int re2_id : potential_re2_ids) {
     auto it = re2_id_to_rules_map_.find(re2_id);
-    DCHECK(it != re2_id_to_rules_map_.end());
+    CHECK(it != re2_id_to_rules_map_.end(), base::NotFatalUntil::M130);
 
     const flat::RegexRule* rule = it->second;
     if (!DoesRuleMetadataMatchRequest(*rule->url_rule(), params)) {
@@ -285,7 +291,7 @@ void RegexRulesMatcher::MatchHelper::InitializeMatcher() {
     // regular expression while indexing the ruleset. That said, there are cases
     // possible where this may happen, for example, the library's implementation
     // may change etc.
-    // TODO(crbug.com/1050780): Notify the extension about the same.
+    // TODO(crbug.com/40118204): Notify the extension about the same.
     if (error_code != re2::RE2::NoError)
       continue;
 
@@ -345,7 +351,7 @@ std::optional<RequestAction> RegexRulesMatcher::CreateActionFromInfo(
       return CreateAllowAllRequestsAction(params, rule);
     case flat::ActionType_modify_headers:
     case flat::ActionType_count:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       break;
   }
 
@@ -381,7 +387,7 @@ RegexRulesMatcher::CreateRegexSubstitutionRedirectAction(
   GURL redirect_url(redirect_str);
 
   // Redirects to JavaScript urls are not allowed.
-  // TODO(crbug.com/1033780): this results in counterintuitive behavior.
+  // TODO(crbug.com/40111509): this results in counterintuitive behavior.
   if (redirect_url.SchemeIs(url::kJavaScriptScheme))
     return std::nullopt;
 
@@ -398,7 +404,7 @@ const RegexRulesMatcher::MatchHelper& RegexRulesMatcher::GetMatcherForStage(
       return headers_received_matcher_;
   }
 
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
   return before_request_matcher_;
 }
 

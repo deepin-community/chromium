@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/signin/web_signin_interceptor.h"
 #include "chrome/browser/ui/views/profiles/dice_web_signin_interception_bubble_view.h"
+
+#include <optional>
 
 #include "base/functional/callback_helpers.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -13,7 +14,7 @@
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_observer.h"
-#include "chrome/browser/signin/signin_features.h"
+#include "chrome/browser/signin/web_signin_interceptor.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -42,8 +43,6 @@
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
-#include <optional>
-
 namespace {
 
 // Returns the avatar button, which is the anchor view for the interception
@@ -61,7 +60,7 @@ AvatarToolbarButton* GetAvatarButton(Browser* browser) {
 // the delegate web view.
 void SimulateEscapeKeyPress(content::WebContents* web_content) {
   // Create the escape key press event.
-  content::NativeWebKeyboardEvent event(
+  input::NativeWebKeyboardEvent event(
       blink::WebKeyboardEvent::Type::kRawKeyDown,
       blink::WebInputEvent::kNoModifiers, base::TimeTicks::Now());
   event.dom_key = ui::DomKey::ESCAPE;
@@ -436,7 +435,7 @@ IN_PROC_BROWSER_TEST_F(DiceWebSigninInterceptionBubbleBrowserTest,
 // tab.
 IN_PROC_BROWSER_TEST_F(DiceWebSigninInterceptionBubbleBrowserTest,
                        OpenLearnMoreLinkInNewTab) {
-  const GURL bubble_url("chrome://signin-dice-web-intercept/");
+  const GURL bubble_url(chrome::kChromeUIDiceWebSigninInterceptURL);
   const GURL learn_more_url = google_util::AppendGoogleLocaleParam(
       GURL(chrome::kSigninInterceptManagedDisclaimerLearnMoreURL),
       g_browser_process->GetApplicationLocale());
@@ -496,7 +495,6 @@ IN_PROC_BROWSER_TEST_F(DiceWebSigninInterceptionBubbleBrowserTest,
   // Equivalent to `kInterceptionBubbleBaseHeight` default.
   bubble->SetHeightAndShowWidget(/*height=*/500);
   EXPECT_FALSE(callback_result_.has_value());
-  EXPECT_TRUE(GetAvatarButton()->IsButtonActionDisabled());
 
   // Take a handle on the bubble, to close it later.
   bubble_handle_ = bubble->GetHandle();
@@ -559,7 +557,6 @@ IN_PROC_BROWSER_TEST_F(DiceWebSigninInterceptionBubbleBrowserTest,
   // Equivalent to `kInterceptionBubbleBaseHeight` default.
   bubble->SetHeightAndShowWidget(/*height=*/500);
   EXPECT_FALSE(callback_result_.has_value());
-  EXPECT_TRUE(GetAvatarButton()->IsButtonActionDisabled());
 
   views::test::WidgetDestroyedWaiter closing_observer(widget);
   EXPECT_FALSE(bubble->GetAccepted());

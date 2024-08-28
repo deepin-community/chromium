@@ -5,17 +5,26 @@
 #include "chrome/browser/plus_addresses/plus_address_service_factory.h"
 
 #include <memory>
+#include <utility>
 
 #include "base/no_destructor.h"
+#include "chrome/browser/affiliations/affiliation_service_factory.h"
+#include "chrome/browser/metrics/variations/google_groups_manager_factory.h"
+#include "chrome/browser/plus_addresses/plus_address_setting_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
+#include "components/affiliations/core/browser/affiliation_service.h"
+#include "components/plus_addresses/affiliations/plus_address_affiliation_source_adapter.h"
 #include "components/plus_addresses/features.h"
-#include "components/plus_addresses/plus_address_http_client.h"
+#include "components/plus_addresses/plus_address_http_client_impl.h"
 #include "components/plus_addresses/plus_address_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/variations/service/google_groups_manager.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
-/* static */
+// static
 plus_addresses::PlusAddressService*
 PlusAddressServiceFactory::GetForBrowserContext(
     content::BrowserContext* context) {
@@ -31,7 +40,8 @@ PlusAddressServiceFactory* PlusAddressServiceFactory::GetInstance() {
 /* static */
 ProfileSelections PlusAddressServiceFactory::CreateProfileSelections() {
   // Feature not enabled? Don't create any service instances.
-  if (!base::FeatureList::IsEnabled(plus_addresses::features::kFeature)) {
+  if (!base::FeatureList::IsEnabled(
+          plus_addresses::features::kPlusAddressesEnabled)) {
     return ProfileSelections::BuildNoProfilesSelected();
   }
   // Otherwise, exclude system accounts and guest accounts, otherwise use one
@@ -48,6 +58,10 @@ PlusAddressServiceFactory::PlusAddressServiceFactory()
     : ProfileKeyedServiceFactory("PlusAddressService",
                                  CreateProfileSelections()) {
   DependsOn(IdentityManagerFactory::GetInstance());
+  DependsOn(WebDataServiceFactory::GetInstance());
+  DependsOn(AffiliationServiceFactory::GetInstance());
+  DependsOn(PlusAddressSettingServiceFactory::GetInstance());
+  DependsOn(GoogleGroupsManagerFactory::GetInstance());
 }
 
 PlusAddressServiceFactory::~PlusAddressServiceFactory() = default;
@@ -64,10 +78,41 @@ PlusAddressServiceFactory::BuildServiceInstanceForBrowserContext(
   }
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
-  return std::make_unique<plus_addresses::PlusAddressService>(
-      identity_manager, profile->GetPrefs(),
-      plus_addresses::PlusAddressHttpClient(identity_manager,
-                                            profile->GetURLLoaderFactory()));
+
+  affiliations::AffiliationService* affiliation_service =
+      AffiliationServiceFactory::GetForProfile(profile);
+
+  // `groups_manager` can be null in tests.
+  GoogleGroupsManager* groups_manager =
+      GoogleGroupsManagerFactory::GetForBrowserContext(context);
+  plus_addresses::PlusAddressService::FeatureEnabledForProfileCheck
+      feature_check =
+          (groups_manager &&
+           base::FeatureList::IsEnabled(
+               plus_addresses::features::kPlusAddressProfileAwareFeatureCheck))
+              ? base::BindRepeating(
+                    &GoogleGroupsManager::IsFeatureEnabledForProfile,
+                    base::Unretained(groups_manager))
+              : base::BindRepeating(&base::FeatureList::IsEnabled);
+
+  std::unique_ptr<plus_addresses::PlusAddressService> plus_address_service =
+      std::make_unique<plus_addresses::PlusAddressService>(
+          identity_manager,
+          PlusAddressSettingServiceFactory::GetForBrowserContext(context),
+          std::make_unique<plus_addresses::PlusAddressHttpClientImpl>(
+              identity_manager, profile->GetURLLoaderFactory()),
+          WebDataServiceFactory::GetPlusAddressWebDataForProfile(
+              profile, ServiceAccessType::EXPLICIT_ACCESS),
+          affiliation_service, std::move(feature_check));
+
+  if (base::FeatureList::IsEnabled(
+          plus_addresses::features::kPlusAddressAffiliations)) {
+    affiliation_service->RegisterSource(
+        std::make_unique<plus_addresses::PlusAddressAffiliationSourceAdapter>(
+            plus_address_service.get()));
+  }
+
+  return plus_address_service;
 }
 
 // Create this service when the profile is created to support populating the

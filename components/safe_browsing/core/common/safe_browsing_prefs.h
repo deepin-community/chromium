@@ -87,6 +87,11 @@ inline constexpr char kSafeBrowsingSawInterstitialScoutReporting[] =
 inline constexpr char kSafeBrowsingScoutReportingEnabled[] =
     "safebrowsing.scout_reporting_enabled";
 
+// Boolean indicating whether Safe Browsing Scout reporting was enabled at the
+// time that extended reporting was deprecated.
+inline constexpr char kSafeBrowsingScoutReportingEnabledWhenDeprecated[] =
+    "safebrowsing.scout_reporting_enabled_when_deprecated";
+
 // Dictionary containing safe browsing triggers and the list of times they have
 // fired recently. The keys are TriggerTypes (4-byte ints) and the values are
 // lists of doubles.
@@ -179,7 +184,7 @@ inline constexpr char kTailoredSecuritySyncFlowLastRunTime[] =
 
 // Integer that maps to TailoredSecurityUserInteractionState. Indicates the
 // last known state of the tailored security sync flow.
-// TODO(crbug.com/1469133): remove this preference value.
+// TODO(crbug.com/40925236): remove this preference value.
 inline constexpr char kTailoredSecuritySyncFlowLastUserInteractionState[] =
     "safebrowsing.aesb_sync_flow_last_user_interaction_state";
 
@@ -230,14 +235,27 @@ inline constexpr char kExtensionTelemetryFileData[] =
 inline constexpr char kHashPrefixRealTimeChecksAllowedByPolicy[] =
     "safebrowsing.hash_prefix_real_time_checks_allowed_by_policy";
 
-// A preference indicating if the user has opted in to Enhanced Safe
-// Browsing before or after the friendlier settings launch. This pref
-// was added after the launch, so a value of `true` indicates that the
-// user is opted in to ESB, and definitely opted in with friendlier
-// settings, but a value of `false` is not definitive. If the user is
-// not opted in to ESB at all, this preference will be `false`.
+// A preference indicating if the user has opted in to Enhanced Safe Browsing
+// before or after the friendlier settings launch. This pref was added after the
+// launch, so a value of `true` indicates that the user is opted in to ESB, and
+// definitely opted in with friendlier settings, but a value of `false` is not
+// definitive. If the user is not opted in to ESB at all, this preference will
+// be `false`.
 inline constexpr char kSafeBrowsingEsbOptInWithFriendlierSettings[] =
     "safebrowsing.esb_opt_in_with_friendlier_settings";
+
+// A preference indicating that the user has seen the IPH telling them automatic
+// deep scans are coming. Since IPH may be delayed for a variety of reasons
+// (startup grace periods, other IPH in the session), we want to wait to enable
+// automatic deep scans until they've actually seen the IPH.
+inline constexpr char kSafeBrowsingAutomaticDeepScanningIPHSeen[] =
+    "safebrowsing.automatic_deep_scanning_iph_seen";
+
+// A preference indicating that the user has already done an automatic
+// deep scan. This addresses an edge case where deep scan notices remain
+// in the bubble after the user performs an automatic deep scan.
+inline constexpr char kSafeBrowsingAutomaticDeepScanPerformed[] =
+    "safe_browsing.automatic_deep_scan_performed";
 
 }  // namespace prefs
 
@@ -340,10 +358,6 @@ bool IsSafeBrowsingEnabled(const PrefService& prefs);
 // Returns whether Safe Browsing enhanced protection is enabled for the user.
 bool IsEnhancedProtectionEnabled(const PrefService& prefs);
 
-// Returns whether the currently active Safe Browsing Extended Reporting
-// preference exists (eg: has been set before).
-bool ExtendedReportingPrefExists(const PrefService& prefs);
-
 // Returns the level of reporting available for the current user.
 ExtendedReportingLevel GetExtendedReportingLevel(const PrefService& prefs);
 
@@ -355,6 +369,14 @@ bool IsExtendedReportingOptInAllowed(const PrefService& prefs);
 // This should be used to decide if any of the reporting preferences are set,
 // regardless of which specific one is set.
 bool IsExtendedReportingEnabled(const PrefService& prefs);
+
+// Returns whether Safe Browsing Extended Reporting is currently enabled.
+// This function does not check the Safe Browsing Extended Reporting deprecation
+// flag, kExtendedReportingRemovePrefDependency, so that the ping manager will
+// keep sending CSBRR pings.
+// TODO(crbug.com/336547987): Remove this temporary function when the mitigation
+// is implemented and the deprecation flag is removed.
+bool IsExtendedReportingEnabledBypassDeprecationFlag(const PrefService& prefs);
 
 // Returns whether the active Extended Reporting pref is currently managed by
 // enterprise policy, meaning the user can't change it.

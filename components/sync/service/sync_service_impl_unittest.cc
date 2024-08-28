@@ -13,6 +13,7 @@
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
@@ -22,6 +23,8 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
@@ -33,14 +36,18 @@
 #include "components/sync/base/sync_util.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/engine/nigori/key_derivation_params.h"
+#include "components/sync/engine/sync_status.h"
 #include "components/sync/service/data_type_manager_impl.h"
 #include "components/sync/service/sync_service_observer.h"
 #include "components/sync/service/sync_token_status.h"
-#include "components/sync/test/fake_data_type_controller.h"
+#include "components/sync/service/trusted_vault_synthetic_field_trial.h"
+#include "components/sync/test/fake_model_type_controller.h"
 #include "components/sync/test/fake_sync_api_component_factory.h"
 #include "components/sync/test/fake_sync_engine.h"
+#include "components/sync/test/mock_model_type_local_data_batch_uploader.h"
 #include "components/sync/test/sync_client_mock.h"
 #include "components/sync/test/sync_service_impl_bundle.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/trusted_vault/test/fake_trusted_vault_client.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -55,17 +62,22 @@ using testing::Invoke;
 using testing::IsEmpty;
 using testing::IsNull;
 using testing::Not;
+using testing::NotNull;
 using testing::Return;
 
 namespace syncer {
 
 namespace {
 
+constexpr char kTestUser[] = "test_user@gmail.com";
+
 MATCHER_P(ContainsDataType, type, "") {
   return arg.Has(type);
 }
 
-constexpr char kTestUser[] = "test_user@gmail.com";
+MATCHER_P(IsValidFieldTrialGroupWithName, expected_name, "") {
+  return arg.is_valid() && arg.name() == expected_name;
+}
 
 SyncCycleSnapshot MakeDefaultSyncCycleSnapshot() {
   // It doesn't matter what exactly we set here, it's only relevant that the
@@ -122,7 +134,15 @@ class SyncServiceImplTest : public ::testing::Test {
 
   void TearDown() override {
     // Kill the service before the profile.
-    ShutdownAndDeleteService();
+    ShutdownAndReleaseService();
+  }
+
+  signin::GaiaIdHash gaia_id_hash() {
+    return signin::GaiaIdHash::FromGaiaId(
+        identity_test_env()
+            ->identity_manager()
+            ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+            .gaia);
   }
 
   void SignInWithoutSyncConsent() {
@@ -145,10 +165,10 @@ class SyncServiceImplTest : public ::testing::Test {
     DCHECK(!service_);
 
     // Default includes a regular controller and a transport-mode controller.
-    DataTypeController::TypeVector controllers;
+    ModelTypeController::TypeVector controllers;
     for (const auto& [type, transport_mode_support] :
          registered_types_and_transport_mode_support) {
-      auto controller = std::make_unique<FakeDataTypeController>(
+      auto controller = std::make_unique<FakeModelTypeController>(
           type, transport_mode_support);
       // Hold a raw pointer to directly interact with the controller.
       controller_map_[type] = controller.get();
@@ -158,8 +178,11 @@ class SyncServiceImplTest : public ::testing::Test {
     std::unique_ptr<SyncClientMock> sync_client =
         sync_service_impl_bundle_.CreateSyncClientMock();
     sync_client_ = sync_client.get();
-    ON_CALL(*sync_client, CreateDataTypeControllers)
+    ON_CALL(*sync_client, CreateModelTypeControllers)
         .WillByDefault(Return(ByMove(std::move(controllers))));
+    ON_CALL(*sync_client, IsPasswordSyncAllowed).WillByDefault(Return(true));
+    ON_CALL(*sync_client, GetIdentityManager)
+        .WillByDefault(Return(identity_manager()));
 
     service_ = std::make_unique<SyncServiceImpl>(
         sync_service_impl_bundle_.CreateBasicInitParams(
@@ -171,32 +194,33 @@ class SyncServiceImplTest : public ::testing::Test {
     DCHECK(!service_);
 
     // Include a regular controller and a transport-mode controller.
-    DataTypeController::TypeVector controllers;
-    controllers.push_back(std::make_unique<FakeDataTypeController>(BOOKMARKS));
-    controllers.push_back(std::make_unique<FakeDataTypeController>(
+    ModelTypeController::TypeVector controllers;
+    controllers.push_back(std::make_unique<FakeModelTypeController>(BOOKMARKS));
+    controllers.push_back(std::make_unique<FakeModelTypeController>(
         DEVICE_INFO, /*enable_transport_only_modle=*/true));
 
     std::unique_ptr<SyncClientMock> sync_client =
         sync_service_impl_bundle_.CreateSyncClientMock();
     sync_client_ = sync_client.get();
-    ON_CALL(*sync_client, CreateDataTypeControllers)
+    ON_CALL(*sync_client, CreateModelTypeControllers)
         .WillByDefault(Return(ByMove(std::move(controllers))));
+    ON_CALL(*sync_client, GetIdentityManager)
+        .WillByDefault(Return(identity_manager()));
 
     SyncServiceImpl::InitParams init_params =
         sync_service_impl_bundle_.CreateBasicInitParams(std::move(sync_client));
 
     prefs()->SetBoolean(prefs::kEnableLocalSyncBackend, true);
-    init_params.identity_manager = nullptr;
 
     service_ = std::make_unique<SyncServiceImpl>(std::move(init_params));
     service_->Initialize();
   }
 
-  void ShutdownAndDeleteService() {
+  std::unique_ptr<SyncServiceImpl> ShutdownAndReleaseService() {
     if (service_) {
       service_->Shutdown();
     }
-    service_.reset();
+    return std::move(service_);
   }
 
   void PopulatePrefsForInitialSyncFeatureSetupComplete() {
@@ -239,7 +263,7 @@ class SyncServiceImplTest : public ::testing::Test {
 
   SyncClientMock* sync_client() { return sync_client_; }
 
-  TestingPrefServiceSimple* prefs() {
+  sync_preferences::TestingPrefServiceSyncable* prefs() {
     return sync_service_impl_bundle_.pref_service();
   }
 
@@ -263,18 +287,20 @@ class SyncServiceImplTest : public ::testing::Test {
     return sync_service_impl_bundle_.trusted_vault_client();
   }
 
-  FakeDataTypeController* get_controller(ModelType type) {
+  FakeModelTypeController* get_controller(ModelType type) {
     return controller_map_[type];
   }
 
  private:
   base::test::SingleThreadTaskEnvironment task_environment_;
+  base::test::ScopedFeatureList feature_list_{
+      syncer::kSyncEnableModelTypeLocalDataBatchUploaders};
   SyncServiceImplBundle sync_service_impl_bundle_;
   std::unique_ptr<SyncServiceImpl> service_;
   raw_ptr<SyncClientMock, DanglingUntriaged> sync_client_ =
       nullptr;  // Owned by |service_|.
   // The controllers are owned by |service_|.
-  std::map<ModelType, FakeDataTypeController*> controller_map_;
+  std::map<ModelType, FakeModelTypeController*> controller_map_;
 };
 
 // Verify that the server URLs are sane.
@@ -294,7 +320,7 @@ TEST_F(SyncServiceImplTest, SuccessfulInitialization) {
   InitializeService();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
 }
@@ -303,7 +329,7 @@ TEST_F(SyncServiceImplTest, SuccessfulLocalBackendInitialization) {
   InitializeServiceWithLocalSyncBackend();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
 }
@@ -325,7 +351,7 @@ TEST_F(SyncServiceImplTest, NeedsConfirmation) {
   InitializeService();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
 
   // Sync should immediately start up in transport mode.
   base::RunLoop().RunUntilIdle();
@@ -423,7 +449,7 @@ TEST_F(SyncServiceImplTest, DisabledByPolicyBeforeInitThenPolicyRemoved) {
             service()->GetTransportState());
   EXPECT_FALSE(service()->IsSyncFeatureEnabled());
   EXPECT_FALSE(service()->IsSyncFeatureActive());
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // On ChromeOS Ash, the first setup is marked as complete automatically.
@@ -452,7 +478,7 @@ TEST_F(SyncServiceImplTest, DisabledByPolicyBeforeInitThenPolicyRemoved) {
   // Sync-the-feature is considered on.
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   EXPECT_TRUE(service()->IsSyncFeatureEnabled());
   EXPECT_TRUE(service()->IsSyncFeatureActive());
 }
@@ -491,7 +517,7 @@ TEST_F(SyncServiceImplTest, AbortedByShutdown) {
   ASSERT_EQ(SyncService::TransportState::INITIALIZING,
             service()->GetTransportState());
 
-  ShutdownAndDeleteService();
+  ShutdownAndReleaseService();
 }
 
 // Certain SyncServiceImpl tests don't apply to Chrome OS, for example
@@ -513,9 +539,7 @@ TEST_F(SyncServiceImplTest, EarlySignOut) {
   signin::PrimaryAccountMutator* account_mutator =
       identity_manager()->GetPrimaryAccountMutator();
   DCHECK(account_mutator) << "Account mutator should only be null on ChromeOS.";
-  account_mutator->ClearPrimaryAccount(
-      signin_metrics::ProfileSignout::kTest,
-      signin_metrics::SignoutDelete::kIgnoreMetric);
+  account_mutator->ClearPrimaryAccount(signin_metrics::ProfileSignout::kTest);
   // Wait for SyncServiceImpl to be notified.
   base::RunLoop().RunUntilIdle();
 
@@ -547,9 +571,7 @@ TEST_F(SyncServiceImplTest, SignOutDisablesSyncTransportAndSyncFeature) {
   signin::PrimaryAccountMutator* account_mutator =
       identity_manager()->GetPrimaryAccountMutator();
   DCHECK(account_mutator) << "Account mutator should only be null on ChromeOS.";
-  account_mutator->ClearPrimaryAccount(
-      signin_metrics::ProfileSignout::kTest,
-      signin_metrics::SignoutDelete::kIgnoreMetric);
+  account_mutator->ClearPrimaryAccount(signin_metrics::ProfileSignout::kTest);
   // Wait for SyncServiceImpl to be notified.
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(SyncService::DisableReasonSet(
@@ -570,15 +592,14 @@ TEST_F(SyncServiceImplTest,
   ASSERT_TRUE(
       service()->GetUserSettings()->IsInitialSyncFeatureSetupComplete());
   ASSERT_EQ(SyncService::DisableReasonSet(), service()->GetDisableReasons());
-  ASSERT_TRUE(component_factory()->HasTransportDataIncludingFirstSync());
+  ASSERT_TRUE(
+      component_factory()->HasTransportDataIncludingFirstSync(gaia_id_hash()));
 
   // Sign-out.
   signin::PrimaryAccountMutator* account_mutator =
       identity_manager()->GetPrimaryAccountMutator();
   DCHECK(account_mutator) << "Account mutator should only be null on ChromeOS.";
-  account_mutator->ClearPrimaryAccount(
-      signin_metrics::ProfileSignout::kTest,
-      signin_metrics::SignoutDelete::kIgnoreMetric);
+  account_mutator->ClearPrimaryAccount(signin_metrics::ProfileSignout::kTest);
   // Wait for SyncServiceImpl to be notified.
   base::RunLoop().RunUntilIdle();
   // These are specific to sync-the-feature and should be cleared.
@@ -587,12 +608,8 @@ TEST_F(SyncServiceImplTest,
   EXPECT_EQ(SyncService::DisableReasonSet(
                 {SyncService::DISABLE_REASON_NOT_SIGNED_IN}),
             service()->GetDisableReasons());
-  EXPECT_FALSE(component_factory()->HasTransportDataIncludingFirstSync());
-#if BUILDFLAG(IS_IOS)
-  SyncPrefs sync_prefs(prefs());
   EXPECT_FALSE(
-      sync_prefs.IsOptedInForBookmarksAndReadingListAccountStorageForTesting());
-#endif  // BUILDFLAG(IS_IOS)
+      component_factory()->HasTransportDataIncludingFirstSync(gaia_id_hash()));
 }
 
 TEST_F(SyncServiceImplTest,
@@ -610,27 +627,16 @@ TEST_F(SyncServiceImplTest,
   ASSERT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
 
-#if BUILDFLAG(IS_IOS)
-  // Opt in bookmarks and reading list account storage.
-  SyncPrefs sync_prefs(prefs());
-  sync_prefs.SetBookmarksAndReadingListAccountStorageOptIn(true);
-#endif  // BUILDFLAG(IS_IOS)
-
   // Sign-out.
   signin::PrimaryAccountMutator* account_mutator =
       identity_manager()->GetPrimaryAccountMutator();
   DCHECK(account_mutator) << "Account mutator should only be null on ChromeOS.";
-  account_mutator->ClearPrimaryAccount(
-      signin_metrics::ProfileSignout::kTest,
-      signin_metrics::SignoutDelete::kIgnoreMetric);
+  account_mutator->ClearPrimaryAccount(signin_metrics::ProfileSignout::kTest);
   // Wait for SyncServiceImpl to be notified.
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_FALSE(component_factory()->HasTransportDataIncludingFirstSync());
-#if BUILDFLAG(IS_IOS)
   EXPECT_FALSE(
-      sync_prefs.IsOptedInForBookmarksAndReadingListAccountStorageForTesting());
-#endif  // BUILDFLAG(IS_IOS)
+      component_factory()->HasTransportDataIncludingFirstSync(gaia_id_hash()));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 
@@ -648,13 +654,7 @@ TEST_F(
   // Sign-in.
   SignInWithoutSyncConsent();
   // Registering CONTACT_INFO which includes addresses.
-  // To disable addresses sync, the kAutofill selectable type will be disabled.
-  // This will also disable the kPayments selectable type. Therefore,
-  // AUTOFILL_WALLET_DATA should be registered, since
-  // SyncUserSettingsImpl::SetSelectedType() (which is used to disable both
-  // selectable types) checks whether at least one of the data types mapped to
-  // the disabled selectable type is registered.
-  InitializeService({{CONTACT_INFO, true}, {AUTOFILL_WALLET_DATA, true}});
+  InitializeService({{CONTACT_INFO, true}});
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // Sync-the-feature is normally enabled in Ash. Triggering a dashboard reset
@@ -677,29 +677,14 @@ TEST_F(
   // UserSelectableType::kAutofill should have been disabled.
   EXPECT_FALSE(service()->GetUserSettings()->GetSelectedTypes().Has(
       UserSelectableType::kAutofill));
-  // kPayments should be disabled when kAutofill is disabled.
-  // TODO(crbug.com/1435431): It shouldn't be disabled once kPayments is
-  // decoupled from kAutofill.
-  if (!base::FeatureList::IsEnabled(kSyncDecoupleAddressPaymentSettings)) {
-    EXPECT_FALSE(service()->GetUserSettings()->GetSelectedTypes().Has(
-        UserSelectableType::kPayments));
-  }
 
   // The user enables addresses sync.
   service()->GetUserSettings()->SetSelectedType(
       syncer::UserSelectableType::kAutofill, true);
-  // TODO(crbug.com/1435431): This should be removed once kPayments is decoupled
-  // from kAutofill.
-  service()->GetUserSettings()->SetSelectedType(
-      syncer::UserSelectableType::kPayments, true);
 
   // UserSelectableType::kAutofill should have been enabled.
   EXPECT_TRUE(service()->GetUserSettings()->GetSelectedTypes().Has(
       UserSelectableType::kAutofill));
-  // TODO(crbug.com/1435431): This should be removed once kPayments is decoupled
-  // from kAutofill.
-  EXPECT_TRUE(service()->GetUserSettings()->GetSelectedTypes().Has(
-      UserSelectableType::kPayments));
 
   // This call represents the passphrase type being determined again after a
   // browser restart.
@@ -708,10 +693,6 @@ TEST_F(
   // UserSelectableType::kAutofill should stay enabled.
   EXPECT_TRUE(service()->GetUserSettings()->GetSelectedTypes().Has(
       UserSelectableType::kAutofill));
-  // TODO(crbug.com/1435431): This should be removed once kPayments is decoupled
-  // from kAutofill.
-  EXPECT_TRUE(service()->GetUserSettings()->GetSelectedTypes().Has(
-      UserSelectableType::kPayments));
 }
 
 TEST_F(
@@ -722,19 +703,20 @@ TEST_F(
       /*enabled_features=*/
       {syncer::kReplaceSyncPromosWithSignInPromos,
        syncer::kSyncEnableContactInfoDataTypeForCustomPassphraseUsers,
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+       switches::kExplicitBrowserSigninUIOnDesktop,
+#endif
        syncer::kSyncEnableContactInfoDataTypeInTransportMode},
       /*disabled_features=*/{});
 
   // Sign-in.
   SignInWithoutSyncConsent();
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  ASSERT_TRUE(prefs()->GetBoolean(::prefs::kExplicitBrowserSignin));
+#endif
+
   // Registering CONTACT_INFO which includes addresses.
-  // To disable addresses sync, the kAutofill selectable type will be disabled.
-  // This will also disable the kPayments selectable type. Therefore,
-  // AUTOFILL_WALLET_DATA should be registered, since
-  // SyncUserSettingsImpl::SetSelectedType() (which is used to disable both
-  // selectable types) checks whether at least one of the data types mapped to
-  // the disabled selectable type is registered.
-  InitializeService({{CONTACT_INFO, true}, {AUTOFILL_WALLET_DATA, true}});
+  InitializeService({{CONTACT_INFO, true}});
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   // Sync-the-feature is normally enabled in Ash. Triggering a dashboard reset
@@ -946,9 +928,7 @@ TEST_F(SyncServiceImplTest, SignOutRevokeAccessToken) {
   // GetPrimaryAccountMutator() returns nullptr on ChromeOS only.
   DCHECK(account_mutator);
 
-  account_mutator->ClearPrimaryAccount(
-      signin_metrics::ProfileSignout::kTest,
-      signin_metrics::SignoutDelete::kIgnoreMetric);
+  account_mutator->ClearPrimaryAccount(signin_metrics::ProfileSignout::kTest);
   EXPECT_TRUE(service()->GetAccessTokenForTest().empty());
 }
 #endif
@@ -961,11 +941,13 @@ TEST_F(SyncServiceImplTest, StopAndClearWillClearDataAndSwitchToTransportMode) {
 
   ASSERT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
-  ASSERT_TRUE(component_factory()->HasTransportDataIncludingFirstSync());
+  ASSERT_TRUE(
+      component_factory()->HasTransportDataIncludingFirstSync(gaia_id_hash()));
 
   service()->StopAndClear();
 
-  EXPECT_FALSE(component_factory()->HasTransportDataIncludingFirstSync());
+  EXPECT_FALSE(
+      component_factory()->HasTransportDataIncludingFirstSync(gaia_id_hash()));
 
   // Even though Sync-the-feature is disabled, there's still an (unconsented)
   // signed-in account, so Sync-the-transport should still be running.
@@ -1001,12 +983,14 @@ TEST_F(SyncServiceImplTest, ClearTransportDataOnInitializeWhenSignedOut) {
   // loading the list of accounts, so wait for it to complete.
   identity_test_env()->WaitForRefreshTokensLoaded();
 
-  ASSERT_TRUE(component_factory()->HasTransportDataIncludingFirstSync());
+  ASSERT_TRUE(
+      component_factory()->HasTransportDataIncludingFirstSync(gaia_id_hash()));
 
   // Don't sign-in before creating the service.
   InitializeService();
 
-  EXPECT_FALSE(component_factory()->HasTransportDataIncludingFirstSync());
+  EXPECT_FALSE(
+      component_factory()->HasTransportDataIncludingFirstSync(gaia_id_hash()));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
 
@@ -1099,6 +1083,31 @@ TEST_F(SyncServiceImplTest, CredentialErrorReturned) {
             service()->GetTransportState());
 
   service()->RemoveObserver(&observer);
+}
+
+TEST_F(SyncServiceImplTest,
+       TransportIsDisabledIfBothAuthErrorAndDisableReason) {
+  prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(true));
+  PopulatePrefsForInitialSyncFeatureSetupComplete();
+  SignInWithSyncConsent();
+  identity_test_env()->SetInvalidRefreshTokenForPrimaryAccount();
+  InitializeService();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_EQ(service()->GetDisableReasons(),
+            SyncService::DisableReasonSet{
+                SyncService::DISABLE_REASON_ENTERPRISE_POLICY});
+
+  // The lower transport state (DISABLED) should be returned.
+  EXPECT_EQ(service()->GetTransportState(),
+            SyncService::TransportState::DISABLED);
+
+  // Remove the disable reason.
+  prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(false));
+  ASSERT_TRUE(service()->GetDisableReasons().empty());
+
+  // Transport is now PAUSED.
+  EXPECT_EQ(service()->GetTransportState(),
+            SyncService::TransportState::PAUSED);
 }
 
 // Verify that credential errors get cleared when a new token is fetched
@@ -1205,7 +1214,7 @@ TEST_F(SyncServiceImplTest, ResetLocalSyncData) {
 
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   EXPECT_TRUE(service()->IsSyncFeatureEnabled());
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
@@ -1256,7 +1265,7 @@ TEST_F(SyncServiceImplTest, DisableSyncOnClient) {
   // details.
   EXPECT_TRUE(
       identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSync));
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   // Since ChromeOS doesn't support signout and so the account is still there
   // and available, Sync will restart in standalone transport mode.
   base::RunLoop().RunUntilIdle();
@@ -1285,7 +1294,7 @@ TEST_F(SyncServiceImplTest, DisableSyncOnClient) {
       identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSync));
   EXPECT_TRUE(
       identity_manager()->HasPrimaryAccount(signin::ConsentLevel::kSignin));
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
@@ -1366,12 +1375,10 @@ TEST_F(SyncServiceImplTest,
 }
 
 TEST_F(SyncServiceImplTest, DisableSyncOnClientClearsPassphrasePrefForAccount) {
-  base::test::ScopedFeatureList enable_keep_account_passphrase(
-      kSyncRememberCustomPassphraseAfterSignout);
   const PassphraseType kPassphraseType = PassphraseType::kCustomPassphrase;
 
   SignInWithoutSyncConsent();
-  InitializeService({{AUTOFILL, false}, {AUTOFILL_WALLET_DATA, false}});
+  InitializeService({{AUTOFILL, false}, {AUTOFILL_WALLET_DATA, true}});
   base::RunLoop().RunUntilIdle();
 
   // This call represents the initial passphrase type coming in from the server.
@@ -1402,13 +1409,11 @@ TEST_F(SyncServiceImplTest, DisableSyncOnClientClearsPassphrasePrefForAccount) {
 
 TEST_F(SyncServiceImplTest,
        DisableSyncOnClientClearsPassphrasePrefForSyncingAccount) {
-  base::test::ScopedFeatureList enable_keep_account_passphrase(
-      kSyncRememberCustomPassphraseAfterSignout);
   const PassphraseType kPassphraseType = PassphraseType::kCustomPassphrase;
 
   PopulatePrefsForInitialSyncFeatureSetupComplete();
   SignInWithSyncConsent();
-  InitializeService({{AUTOFILL, false}, {AUTOFILL_WALLET_DATA, false}});
+  InitializeService({{AUTOFILL, false}, {AUTOFILL_WALLET_DATA, true}});
   base::RunLoop().RunUntilIdle();
 
   // This call represents the initial passphrase type coming in from the server.
@@ -1438,12 +1443,10 @@ TEST_F(SyncServiceImplTest,
 }
 
 TEST_F(SyncServiceImplTest, EncryptionObsoleteClearsPassphrasePrefForAccount) {
-  base::test::ScopedFeatureList enable_keep_account_passphrase(
-      kSyncRememberCustomPassphraseAfterSignout);
   const PassphraseType kPassphraseType = PassphraseType::kCustomPassphrase;
 
   SignInWithoutSyncConsent();
-  InitializeService({{AUTOFILL, false}, {AUTOFILL_WALLET_DATA, false}});
+  InitializeService({{AUTOFILL, false}, {AUTOFILL_WALLET_DATA, true}});
   base::RunLoop().RunUntilIdle();
 
   // This call represents the initial passphrase type coming in from the server.
@@ -1476,21 +1479,21 @@ TEST_F(SyncServiceImplTest, LocalBackendUnimpactedByPolicy) {
   InitializeServiceWithLocalSyncBackend();
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
 
   // The transport should continue active even if kSyncManaged becomes true.
   prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(true));
 
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
 
   // Setting kSyncManaged back to false should also make no difference.
   prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(false));
 
-  EXPECT_TRUE(service()->GetDisableReasons().Empty());
+  EXPECT_TRUE(service()->GetDisableReasons().empty());
   EXPECT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
 }
@@ -1514,7 +1517,7 @@ TEST_F(SyncServiceImplTest, ConfigureDataTypeManagerReason) {
   service()->GetSetupInProgressHandle();
   EXPECT_EQ(CONFIGURE_REASON_RECONFIGURATION,
             data_type_manager()->last_configure_reason_for_test());
-  ShutdownAndDeleteService();
+  ShutdownAndReleaseService();
 
   // Nth sync.
   PopulatePrefsForInitialSyncFeatureSetupComplete();
@@ -1532,7 +1535,7 @@ TEST_F(SyncServiceImplTest, ConfigureDataTypeManagerReason) {
   service()->GetSetupInProgressHandle();
   EXPECT_EQ(CONFIGURE_REASON_RECONFIGURATION,
             data_type_manager()->last_configure_reason_for_test());
-  ShutdownAndDeleteService();
+  ShutdownAndReleaseService();
 }
 
 // Regression test for crbug.com/1043642, can be removed once
@@ -1541,8 +1544,8 @@ TEST_F(SyncServiceImplTest, ShouldProvideDisableReasonsAfterShutdown) {
   SignInWithSyncConsent();
   InitializeService();
   base::RunLoop().RunUntilIdle();
-  service()->Shutdown();
-  EXPECT_FALSE(service()->GetDisableReasons().Empty());
+  std::unique_ptr<SyncServiceImpl> service = ShutdownAndReleaseService();
+  EXPECT_FALSE(service->GetDisableReasons().empty());
 }
 
 TEST_F(SyncServiceImplTest, ShouldSendDataTypesToSyncInvalidationsService) {
@@ -1686,7 +1689,7 @@ TEST_F(SyncServiceImplTest, ShouldNotSubscribeToStopAndClearDataTypes) {
           {DEVICE_INFO, true},
       });
   get_controller(BOOKMARKS)->SetPreconditionState(
-      DataTypeController::PreconditionState::kMustStopAndClearData);
+      ModelTypeController::PreconditionState::kMustStopAndClearData);
 
   EXPECT_CALL(*sync_invalidations_service(),
               SetInterestedDataTypes(AllOf(ContainsDataType(DEVICE_INFO),
@@ -1698,7 +1701,7 @@ TEST_F(SyncServiceImplTest, ShouldNotSubscribeToStopAndClearDataTypes) {
               SetInterestedDataTypes(AllOf(ContainsDataType(DEVICE_INFO),
                                            ContainsDataType(BOOKMARKS))));
   get_controller(BOOKMARKS)->SetPreconditionState(
-      DataTypeController::PreconditionState::kPreconditionsMet);
+      ModelTypeController::PreconditionState::kPreconditionsMet);
   service()->DataTypePreconditionChanged(BOOKMARKS);
   base::RunLoop().RunUntilIdle();
 }
@@ -1713,7 +1716,7 @@ TEST_F(SyncServiceImplTest, ShouldSubscribeToStopAndKeepDataTypes) {
           {DEVICE_INFO, true},
       });
   get_controller(BOOKMARKS)->SetPreconditionState(
-      DataTypeController::PreconditionState::kMustStopAndKeepData);
+      ModelTypeController::PreconditionState::kMustStopAndKeepData);
 
   EXPECT_CALL(*sync_invalidations_service(),
               SetInterestedDataTypes(AllOf(ContainsDataType(DEVICE_INFO),
@@ -1739,7 +1742,7 @@ TEST_F(SyncServiceImplTest, ShouldUnsubscribeWhenStopAndClear) {
               SetInterestedDataTypes(AllOf(ContainsDataType(DEVICE_INFO),
                                            Not(ContainsDataType(BOOKMARKS)))));
   get_controller(BOOKMARKS)->SetPreconditionState(
-      DataTypeController::PreconditionState::kMustStopAndClearData);
+      ModelTypeController::PreconditionState::kMustStopAndClearData);
   service()->DataTypePreconditionChanged(BOOKMARKS);
   base::RunLoop().RunUntilIdle();
 }
@@ -1793,7 +1796,7 @@ TEST_F(SyncServiceImplTest,
   base::RunLoop().RunUntilIdle();
   EXPECT_CALL(*sync_invalidations_service(), StopListeningPermanently())
       .Times(0);
-  ShutdownAndDeleteService();
+  ShutdownAndReleaseService();
 }
 
 TEST_F(SyncServiceImplTest,
@@ -1856,8 +1859,6 @@ TEST_F(SyncServiceImplTest, ShouldReturnErrorDownloadStatus) {
 }
 
 TEST_F(SyncServiceImplTest, ShouldReturnErrorDownloadStatusWhenSyncDisabled) {
-  base::HistogramTester histogram_tester;
-
   PopulatePrefsForInitialSyncFeatureSetupComplete();
   prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(true));
   SignInWithSyncConsent();
@@ -1869,16 +1870,12 @@ TEST_F(SyncServiceImplTest, ShouldReturnErrorDownloadStatusWhenSyncDisabled) {
   service()->OnInvalidationStatusChanged();
   EXPECT_EQ(service()->GetDownloadStatusFor(syncer::BOOKMARKS),
             SyncService::ModelTypeDownloadStatus::kError);
-  histogram_tester.ExpectTotalCount("Sync.ModelTypeUpToDateTime",
-                                    /*expected_count=*/0);
 }
 
 TEST_F(SyncServiceImplTest, ShouldReturnWaitingDownloadStatus) {
   PopulatePrefsForInitialSyncFeatureSetupComplete();
   SignInWithSyncConsent();
   InitializeService();
-
-  ASSERT_THAT(data_type_manager(), IsNull());
 
   bool met_configuring_data_type_manager = false;
   testing::NiceMock<MockSyncServiceObserver> mock_sync_service_observer;
@@ -1887,9 +1884,6 @@ TEST_F(SyncServiceImplTest, ShouldReturnWaitingDownloadStatus) {
                                 SyncService* service) {
         EXPECT_NE(service->GetDownloadStatusFor(syncer::BOOKMARKS),
                   SyncService::ModelTypeDownloadStatus::kError);
-        if (!data_type_manager()) {
-          return;
-        }
         if (data_type_manager()->state() ==
             DataTypeManager::State::CONFIGURING) {
           met_configuring_data_type_manager = true;
@@ -1917,8 +1911,6 @@ TEST_F(SyncServiceImplTest, ShouldReturnWaitingDownloadStatus) {
 }
 
 TEST_F(SyncServiceImplTest, ShouldReturnErrorWhenDataTypeDisabled) {
-  base::HistogramTester histogram_tester;
-
   PopulatePrefsForInitialSyncFeatureSetupComplete();
   SignInWithSyncConsent();
   InitializeService();
@@ -1939,10 +1931,8 @@ TEST_F(SyncServiceImplTest, ShouldReturnErrorWhenDataTypeDisabled) {
             SyncService::ModelTypeDownloadStatus::kError);
 
   SetInvalidationsEnabled();
-  histogram_tester.ExpectTotalCount("Sync.ModelTypeUpToDateTime.BOOKMARK",
-                                    /*expected_count=*/0);
-  histogram_tester.ExpectTotalCount("Sync.ModelTypeUpToDateTime",
-                                    /*expected_count=*/1);
+  EXPECT_EQ(service()->GetDownloadStatusFor(syncer::BOOKMARKS),
+            SyncService::ModelTypeDownloadStatus::kError);
 }
 
 TEST_F(SyncServiceImplTest, ShouldWaitUntilNoInvalidations) {
@@ -1977,8 +1967,6 @@ TEST_F(SyncServiceImplTest, ShouldWaitForInitializedInvalidations) {
 }
 
 TEST_F(SyncServiceImplTest, ShouldWaitForPollRequest) {
-  base::HistogramTester histogram_tester;
-
   PopulatePrefsForInitialSyncFeatureSetupComplete();
   SignInWithSyncConsent();
   InitializeService();
@@ -1988,11 +1976,6 @@ TEST_F(SyncServiceImplTest, ShouldWaitForPollRequest) {
 
   ASSERT_EQ(service()->GetDownloadStatusFor(syncer::BOOKMARKS),
             SyncService::ModelTypeDownloadStatus::kUpToDate);
-
-  histogram_tester.ExpectTotalCount("Sync.ModelTypeUpToDateTime.BOOKMARK",
-                                    /*expected_count=*/1);
-  histogram_tester.ExpectTotalCount("Sync.ModelTypeUpToDateTime",
-                                    /*expected_count=*/1);
 
   // OnInvalidationStatusChanged() is used to only notify observers, this is
   // required for metrics since they are calculated only when SyncService state
@@ -2006,12 +1989,6 @@ TEST_F(SyncServiceImplTest, ShouldWaitForPollRequest) {
   service()->OnInvalidationStatusChanged();
   EXPECT_EQ(service()->GetDownloadStatusFor(syncer::BOOKMARKS),
             SyncService::ModelTypeDownloadStatus::kUpToDate);
-
-  // The histograms should be recorded only once.
-  histogram_tester.ExpectTotalCount("Sync.ModelTypeUpToDateTime.BOOKMARK",
-                                    /*expected_count=*/1);
-  histogram_tester.ExpectTotalCount("Sync.ModelTypeUpToDateTime",
-                                    /*expected_count=*/1);
 
   // Ignore following poll requests once the first sync cycle is completed.
   service()->OnSyncCycleCompleted(MakeDefaultSyncCycleSnapshot());
@@ -2055,16 +2032,6 @@ TEST_F(
 
   SignInWithoutSyncConsent();
 
-  ASSERT_EQ(SyncService::TransportState::START_DEFERRED,
-            service()->GetTransportState());
-
-  // START_DEFERRED is very short-lived upon sign-in, so it doesn't matter
-  // much what the API returns (added here for documentation purposes).
-  EXPECT_EQ(ModelTypeSet(),
-            service()->GetTypesWithPendingDownloadForInitialSync());
-
-  base::RunLoop().RunUntilIdle();
-
   ASSERT_EQ(SyncService::TransportState::INITIALIZING,
             service()->GetTransportState());
 
@@ -2074,7 +2041,9 @@ TEST_F(
             service()->GetTypesWithPendingDownloadForInitialSync());
 
   // Once fully initialized, it is delegated to DataTypeManager.
+  base::RunLoop().RunUntilIdle();
   engine()->TriggerInitializationCompletion(/*success=*/true);
+
   ASSERT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
   EXPECT_EQ(ModelTypeSet(),
@@ -2091,16 +2060,6 @@ TEST_F(SyncServiceImplTest,
   service()->GetUserSettings()->SetInitialSyncFeatureSetupComplete(
       syncer::SyncFirstSetupCompleteSource::BASIC_FLOW);
 
-  ASSERT_EQ(SyncService::TransportState::START_DEFERRED,
-            service()->GetTransportState());
-
-  // START_DEFERRED is very short-lived upon sign-in, so it doesn't matter
-  // much what the API returns (added here for documentation purposes).
-  EXPECT_EQ(ModelTypeSet(),
-            service()->GetTypesWithPendingDownloadForInitialSync());
-
-  base::RunLoop().RunUntilIdle();
-
   ASSERT_EQ(SyncService::TransportState::INITIALIZING,
             service()->GetTransportState());
 
@@ -2110,7 +2069,9 @@ TEST_F(SyncServiceImplTest,
             service()->GetTypesWithPendingDownloadForInitialSync());
 
   // Once fully initialized, it is delegated to DataTypeManager.
+  base::RunLoop().RunUntilIdle();
   engine()->TriggerInitializationCompletion(/*success=*/true);
+
   ASSERT_EQ(SyncService::TransportState::ACTIVE,
             service()->GetTransportState());
   EXPECT_EQ(ModelTypeSet(),
@@ -2161,29 +2122,69 @@ TEST_F(SyncServiceImplTest, EarlyCallToGetTypesWithUnsyncedDataShouldNotCrash) {
 
 TEST_F(SyncServiceImplTest,
        ShouldOnlyForwardEnabledTypesToSyncClientUponGetLocalDataDescriptions) {
-  PopulatePrefsForInitialSyncFeatureSetupComplete();
-  SignInWithSyncConsent();
-  // Only PASSWORDS datatype is enabled.
-  InitializeService({{PASSWORDS, true}});
+  SignInWithoutSyncConsent();
+  // Only DEVICE_INFO datatype is enabled for transport mode.
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}, {AUTOFILL, false}});
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_EQ(service()->GetActiveDataTypes(), ModelTypeSet({NIGORI, PASSWORDS}));
+  ASSERT_EQ(service()->GetActiveDataTypes(),
+            ModelTypeSet({NIGORI, DEVICE_INFO}));
 
-  // PASSWORDS and BOOKMARKS is queried from the sync service.
-  ModelTypeSet requested_types{PASSWORDS, BOOKMARKS};
-  // Only PASSWORDS datatype is queried from the sync client.
-  EXPECT_CALL(*sync_client(),
-              GetLocalDataDescriptions(ModelTypeSet{PASSWORDS}, ::testing::_));
+  // DEVICE_INFO and AUTOFILL are queried from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO, AUTOFILL};
+  // Only the DEVICE_INFO uploader is queried.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  auto autofill_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, GetLocalDataDescription);
+  EXPECT_CALL(*autofill_uploader, GetLocalDataDescription).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
+  get_controller(AUTOFILL)->SetLocalDataBatchUploader(
+      std::move(autofill_uploader));
+
+  service()->GetLocalDataDescriptions(requested_types, base::DoNothing());
+}
+
+TEST_F(SyncServiceImplTest,
+       ShouldNotForwardTypesWithErrorToSyncClientUponGetLocalDataDescriptions) {
+  SignInWithoutSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}, {AUTOFILL_WALLET_DATA, true}});
+  base::RunLoop().RunUntilIdle();
+
+  // Simulate a data type error.
+  service()->ReportDataTypeErrorForTest(AUTOFILL_WALLET_DATA);
+  ASSERT_FALSE(service()->GetActiveDataTypes().Has(AUTOFILL_WALLET_DATA));
+
+  // DEVICE_INFO and AUTOFILL_WALLET_DATA are queried from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO, AUTOFILL_WALLET_DATA};
+  // Only the DEVICE_INFO uploader is queried.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  auto wallet_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, GetLocalDataDescription);
+  EXPECT_CALL(*wallet_uploader, GetLocalDataDescription).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
+  get_controller(AUTOFILL_WALLET_DATA)
+      ->SetLocalDataBatchUploader(std::move(wallet_uploader));
 
   service()->GetLocalDataDescriptions(requested_types, base::DoNothing());
 }
 
 TEST_F(SyncServiceImplTest,
        ShouldNotForwardToSyncClientUponGetLocalDataDescriptionsIfSyncDisabled) {
-  PopulatePrefsForInitialSyncFeatureSetupComplete();
   prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(true));
-  SignInWithSyncConsent();
-  InitializeService({{PASSWORDS, true}, {BOOKMARKS, true}});
+  SignInWithoutSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}});
   base::RunLoop().RunUntilIdle();
 
   // Sync was disabled due to the policy.
@@ -2193,42 +2194,136 @@ TEST_F(SyncServiceImplTest,
   EXPECT_EQ(SyncService::TransportState::DISABLED,
             service()->GetTransportState());
 
-  // PASSWORDS and BOOKMARKS is queried from the sync service.
-  ModelTypeSet requested_types{PASSWORDS, BOOKMARKS};
-  // No query to the sync client.
-  EXPECT_CALL(*sync_client(),
-              GetLocalDataDescriptions(ModelTypeSet{}, ::testing::_))
-      .Times(0);
+  // DEVICE_INFO is queried from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO};
+  // No data type queried from the uploader.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, GetLocalDataDescription).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
 
   service()->GetLocalDataDescriptions(requested_types, base::DoNothing());
 }
 
 TEST_F(SyncServiceImplTest,
-       ShouldOnlyForwardEnabledTypesToSyncClientUponTriggerLocalDataMigration) {
-  PopulatePrefsForInitialSyncFeatureSetupComplete();
-  SignInWithSyncConsent();
-  // Only PASSWORDS datatype is enabled.
-  InitializeService({{PASSWORDS, true}});
+       ShouldReturnEmptyUponGetLocalDataDescriptionsForNotSignedInUsers) {
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}});
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_EQ(service()->GetActiveDataTypes(), ModelTypeSet({NIGORI, PASSWORDS}));
+  ASSERT_TRUE(service()->GetPreferredDataTypes().Has(DEVICE_INFO));
 
-  // PASSWORDS and BOOKMARKS is queried from the sync service.
-  ModelTypeSet requested_types{PASSWORDS, BOOKMARKS};
-  // Only PASSWORDS datatype is queried from the sync client.
-  EXPECT_CALL(*sync_client(),
-              TriggerLocalDataMigration(ModelTypeSet{PASSWORDS}));
+  // DEVICE_INFO is queried from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO};
+  // No data type queried from the uploader.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, GetLocalDataDescription).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
 
-  service()->TriggerLocalDataMigration(ModelTypeSet{PASSWORDS, BOOKMARKS});
+  service()->GetLocalDataDescriptions(requested_types, base::DoNothing());
+}
+
+TEST_F(SyncServiceImplTest,
+       ShouldReturnEmptyUponGetLocalDataDescriptionsForSyncingUsers) {
+  PopulatePrefsForInitialSyncFeatureSetupComplete();
+  SignInWithSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}});
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(service()->GetPreferredDataTypes().Has(DEVICE_INFO));
+
+  // DEVICE_INFO is queried from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO};
+  base::MockOnceCallback<void(std::map<ModelType, LocalDataDescription>)>
+      callback;
+  // No query to the uploader.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, GetLocalDataDescription).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
+
+  // Returns empty.
+  EXPECT_CALL(callback, Run(IsEmpty()));
+
+  service()->GetLocalDataDescriptions(requested_types, callback.Get());
+}
+
+TEST_F(SyncServiceImplTest,
+       ShouldOnlyForwardEnabledTypesToSyncClientUponTriggerLocalDataMigration) {
+  SignInWithoutSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}, {AUTOFILL, false}});
+  base::RunLoop().RunUntilIdle();
+
+  // Only DEVICE_INFO is enabled since AUTOFILL is not supported in
+  // transport-only mode.
+  ASSERT_EQ(service()->GetActiveDataTypes(),
+            ModelTypeSet({NIGORI, DEVICE_INFO}));
+
+  // DEVICE_INFO and AUTOFILL are requested to upload from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO, AUTOFILL};
+  // Only DEVICE_INFO is uploaded.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  auto autofill_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, TriggerLocalDataMigration);
+  EXPECT_CALL(*autofill_uploader, TriggerLocalDataMigration).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
+  get_controller(AUTOFILL)->SetLocalDataBatchUploader(
+      std::move(autofill_uploader));
+
+  service()->TriggerLocalDataMigration(requested_types);
+}
+
+TEST_F(
+    SyncServiceImplTest,
+    ShouldNotForwardTypesWithErrorToSyncClientUponTriggerLocalDataMigration) {
+  SignInWithoutSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}, {AUTOFILL_WALLET_DATA, true}});
+  base::RunLoop().RunUntilIdle();
+
+  // Simulate a data type error.
+  service()->ReportDataTypeErrorForTest(AUTOFILL_WALLET_DATA);
+  ASSERT_FALSE(service()->GetActiveDataTypes().Has(AUTOFILL_WALLET_DATA));
+
+  // DEVICE_INFO and AUTOFILL_WALLET_DATA are requested to upload from the sync
+  // service.
+  ModelTypeSet requested_types{DEVICE_INFO, AUTOFILL_WALLET_DATA};
+  // Only DEVICE_INFO is uploaded.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  auto wallet_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, TriggerLocalDataMigration);
+  EXPECT_CALL(*wallet_uploader, TriggerLocalDataMigration).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
+  get_controller(AUTOFILL_WALLET_DATA)
+      ->SetLocalDataBatchUploader(std::move(wallet_uploader));
+
+  service()->TriggerLocalDataMigration(requested_types);
 }
 
 TEST_F(
     SyncServiceImplTest,
     ShouldNotForwardToSyncClientUponTriggerLocalDataMigrationIfSyncDisabled) {
-  PopulatePrefsForInitialSyncFeatureSetupComplete();
   prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(true));
-  SignInWithSyncConsent();
-  InitializeService({{PASSWORDS, true}, {BOOKMARKS, true}});
+  SignInWithoutSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}});
   base::RunLoop().RunUntilIdle();
 
   // Sync was disabled due to the policy.
@@ -2238,13 +2333,182 @@ TEST_F(
   EXPECT_EQ(SyncService::TransportState::DISABLED,
             service()->GetTransportState());
 
-  // PASSWORDS and BOOKMARKS is queried from the sync service.
-  ModelTypeSet requested_types{PASSWORDS, BOOKMARKS};
-  // No query to the sync client.
-  EXPECT_CALL(*sync_client(), TriggerLocalDataMigration(ModelTypeSet{}))
-      .Times(0);
+  // DEVICE_INFO is requested to upload from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO};
+  // No upload should happen.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, TriggerLocalDataMigration).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
 
   service()->TriggerLocalDataMigration(requested_types);
+}
+
+TEST_F(SyncServiceImplTest,
+       ShouldDoNothingUponTriggerLocalDataMigrationForNotSignedInUsers) {
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}});
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(service()->GetPreferredDataTypes().Has(DEVICE_INFO));
+
+  // DEVICE_INFO is requested to upload from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO};
+  // No upload should happen.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, TriggerLocalDataMigration).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
+
+  service()->TriggerLocalDataMigration(requested_types);
+}
+
+TEST_F(SyncServiceImplTest,
+       ShouldDoNothingUponTriggerLocalDataMigrationForSyncingUsers) {
+  PopulatePrefsForInitialSyncFeatureSetupComplete();
+  SignInWithSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}});
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(service()->GetPreferredDataTypes().Has(DEVICE_INFO));
+
+  // DEVICE_INFO is requested to upload from the sync service.
+  ModelTypeSet requested_types{DEVICE_INFO};
+  // No upload.
+  auto device_info_uploader =
+      std::make_unique<MockModelTypeLocalDataBatchUploader>();
+  EXPECT_CALL(*device_info_uploader, TriggerLocalDataMigration).Times(0);
+  get_controller(DEVICE_INFO)
+      ->SetLocalDataBatchUploader(std::move(device_info_uploader));
+
+  service()->TriggerLocalDataMigration(requested_types);
+}
+
+TEST_F(SyncServiceImplTest, ShouldRecordLocalDataMigrationRequests) {
+  base::HistogramTester histogram_tester;
+  SignInWithoutSyncConsent();
+  InitializeService(
+      /*registered_types_and_transport_mode_support=*/
+      {{DEVICE_INFO, true}});
+  base::RunLoop().RunUntilIdle();
+
+  service()->TriggerLocalDataMigration({DEVICE_INFO, AUTOFILL_WALLET_DATA});
+
+  // The metric records what was requested, regardless of what types are active.
+  EXPECT_THAT(
+      histogram_tester.GetAllSamples("Sync.BatchUpload.Requests3"),
+      base::BucketsAre(
+          base::Bucket(ModelTypeForHistograms::kDeviceInfo, 1),
+          base::Bucket(ModelTypeForHistograms::kAutofillWalletData, 1)));
+}
+
+TEST_F(SyncServiceImplTest, ShouldNotifyOnManagedPrefDisabled) {
+  PopulatePrefsForInitialSyncFeatureSetupComplete();
+  prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(true));
+  SignInWithSyncConsent();
+  InitializeService({{PASSWORDS, true}, {BOOKMARKS, true}});
+  base::RunLoop().RunUntilIdle();
+
+  testing::NiceMock<MockSyncServiceObserver> mock_sync_service_observer;
+  service()->AddObserver(&mock_sync_service_observer);
+
+  EXPECT_CALL(mock_sync_service_observer, OnStateChanged);
+  prefs()->SetManagedPref(prefs::internal::kSyncManaged, base::Value(false));
+
+  service()->RemoveObserver(&mock_sync_service_observer);
+}
+
+TEST_F(SyncServiceImplTest, ShouldCacheTrustedVaultAutoUpgradeDebugInfo) {
+  const int kTestCohort1 = 11;
+  const int kTestCohort2 = 22;
+
+  component_factory()->AllowFakeEngineInitCompletion(false);
+  InitializeService();
+  base::RunLoop().RunUntilIdle();
+  SignInWithSyncConsent();
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  ASSERT_TRUE(
+      service()->GetUserSettings()->IsInitialSyncFeatureSetupComplete());
+#else   // BUILDFLAG(IS_CHROMEOS_ASH)
+  service()->GetUserSettings()->SetInitialSyncFeatureSetupComplete(
+      syncer::SyncFirstSetupCompleteSource::BASIC_FLOW);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_EQ(SyncService::TransportState::INITIALIZING,
+            service()->GetTransportState());
+  ASSERT_THAT(engine(), NotNull());
+
+  {
+    SyncStatus sync_status;
+    sync_status.trusted_vault_debug_info
+        .mutable_auto_upgrade_experiment_group()
+        ->set_cohort(kTestCohort1);
+    sync_status.trusted_vault_debug_info
+        .mutable_auto_upgrade_experiment_group()
+        ->set_type(sync_pb::TrustedVaultAutoUpgradeExperimentGroup::CONTROL);
+    engine()->SetDetailedStatus(sync_status);
+  }
+
+  // Completing initialization should exercise SyncClient's field trial
+  // registration.
+  EXPECT_CALL(*sync_client(),
+              RegisterTrustedVaultAutoUpgradeSyntheticFieldTrial(
+                  IsValidFieldTrialGroupWithName("Cohort11_Control")));
+
+  base::RunLoop().RunUntilIdle();
+  engine()->TriggerInitializationCompletion(/*success=*/true);
+
+  ASSERT_EQ(SyncService::TransportState::ACTIVE,
+            service()->GetTransportState());
+
+  testing::Mock::VerifyAndClearExpectations(sync_client());
+
+  // Verify that the debug info has been cached in prefs.
+  SyncPrefs sync_prefs(prefs());
+  EXPECT_TRUE(
+      sync_prefs.GetCachedTrustedVaultAutoUpgradeExperimentGroup().has_value());
+  EXPECT_EQ(kTestCohort1,
+            sync_prefs.GetCachedTrustedVaultAutoUpgradeExperimentGroup()
+                .value_or(sync_pb::TrustedVaultAutoUpgradeExperimentGroup())
+                .cohort());
+  EXPECT_EQ(sync_pb::TrustedVaultAutoUpgradeExperimentGroup::CONTROL,
+            sync_prefs.GetCachedTrustedVaultAutoUpgradeExperimentGroup()
+                .value_or(sync_pb::TrustedVaultAutoUpgradeExperimentGroup())
+                .type());
+  EXPECT_EQ(0, sync_prefs.GetCachedTrustedVaultAutoUpgradeExperimentGroup()
+                   .value_or(sync_pb::TrustedVaultAutoUpgradeExperimentGroup())
+                   .type_index());
+
+  // The SyncClient API should not be invoked for the second time.
+  EXPECT_CALL(*sync_client(),
+              RegisterTrustedVaultAutoUpgradeSyntheticFieldTrial)
+      .Times(0);
+
+  // Mimic another sync cycle that mutates the experiment group.
+  {
+    SyncStatus sync_status;
+    sync_status.trusted_vault_debug_info
+        .mutable_auto_upgrade_experiment_group()
+        ->set_cohort(kTestCohort2);
+    sync_status.trusted_vault_debug_info
+        .mutable_auto_upgrade_experiment_group()
+        ->set_type(sync_pb::TrustedVaultAutoUpgradeExperimentGroup::CONTROL);
+    engine()->SetDetailedStatus(sync_status);
+    service()->OnSyncCycleCompleted(MakeDefaultSyncCycleSnapshot());
+  }
+
+  EXPECT_EQ(kTestCohort2,
+            sync_prefs.GetCachedTrustedVaultAutoUpgradeExperimentGroup()
+                .value_or(sync_pb::TrustedVaultAutoUpgradeExperimentGroup())
+                .cohort());
 }
 
 }  // namespace

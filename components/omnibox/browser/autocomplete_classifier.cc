@@ -8,7 +8,10 @@
 
 #include "base/auto_reset.h"
 #include "base/feature_list.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "components/history_embeddings/history_embeddings_features.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
@@ -19,7 +22,7 @@
 #include "url/gurl.h"
 
 #if !BUILDFLAG(IS_IOS)
-#include "components/history_clusters/core/config.h"
+#include "components/history_clusters/core/config.h"  // nogncheck
 #endif
 
 AutocompleteClassifier::AutocompleteClassifier(
@@ -78,16 +81,18 @@ int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
          AutocompleteProvider::TYPE_HISTORY_QUICK |
          AutocompleteProvider::TYPE_HISTORY_URL |
          AutocompleteProvider::TYPE_SEARCH |
-#if BUILDFLAG(IS_IOS)
-         (base::FeatureList::IsEnabled(
-              omnibox::kOmniboxPopulateShortcutsDatabase)
-              ? AutocompleteProvider::TYPE_SHORTCUTS
-              : 0) |
-#else
          AutocompleteProvider::TYPE_SHORTCUTS |
-#endif
          AutocompleteProvider::TYPE_HISTORY_FUZZY |
-         AutocompleteProvider::TYPE_CALCULATOR;
+         AutocompleteProvider::TYPE_CALCULATOR |
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+         (history_embeddings::kOmniboxScoped.Get() ||
+                  history_embeddings::kOmniboxUnscoped.Get()
+              ? AutocompleteProvider::TYPE_HISTORY_EMBEDDINGS
+              : 0)
+#else
+         0
+#endif
+      ;
 }
 
 void AutocompleteClassifier::Classify(

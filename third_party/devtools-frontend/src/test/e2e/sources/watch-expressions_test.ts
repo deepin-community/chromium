@@ -4,7 +4,7 @@
 
 import {assert} from 'chai';
 
-import {click, enableExperiment, getBrowserAndPages, step, typeText, waitFor} from '../../shared/helper.js';
+import {click, getBrowserAndPages, step, typeText, waitFor} from '../../shared/helper.js';
 import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   addBreakpointForLine,
@@ -13,7 +13,7 @@ import {
   waitForStackTopMatch,
 } from '../helpers/sources-helpers.js';
 
-describe('Watch Expression Pane', async () => {
+describe('Watch Expression Pane', () => {
   it('collapses children when editing', async () => {
     const {frontend} = getBrowserAndPages();
     await openSourcesPanel();
@@ -44,7 +44,6 @@ describe('Watch Expression Pane', async () => {
 
   it('deobfuscates variable names', async () => {
     const {target, frontend} = getBrowserAndPages();
-    await enableExperiment('evaluateExpressionsWithSourceMaps');
 
     await openSourceCodeEditorForFile('sourcemap-scopes-minified.js', 'sourcemap-scopes-minified.html');
 

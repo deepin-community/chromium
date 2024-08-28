@@ -38,6 +38,7 @@
 #include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom-blink.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
+#include "third_party/blink/public/web/web_link_preview_triggerer.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -93,7 +94,6 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/style/computed_style_base_constants.h"
 #include "third_party/blink/renderer/core/style/cursor_data.h"
-#include "third_party/blink/renderer/core/svg/graphics/svg_image.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image_for_container.h"
 #include "third_party/blink/renderer/core/svg/svg_use_element.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
@@ -540,16 +540,17 @@ bool EventHandler::ShouldShowResizeForNode(const LayoutObject& layout_object,
 
 bool EventHandler::IsSelectingLink(const HitTestResult& result) {
   // If a drag may be starting or we're capturing mouse events for a particular
-  // node, don't treat this as a selection. Note calling
-  // ComputeVisibleSelectionInDOMTreeDeprecated may update layout.
+  // node, don't treat this as a selection.
+  // TODO(editing-dev): The use of UpdateStyleAndLayout needs to be audited. See
+  // http://crbug.com/590369 for more details.
+  frame_->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kSelection);
+
   const bool mouse_selection =
       !capturing_mouse_events_element_ &&
       mouse_event_manager_->MousePressed() &&
       GetSelectionController().MouseDownMayStartSelect() &&
       !mouse_event_manager_->MouseDownMayStartDrag() &&
-      !frame_->Selection()
-           .ComputeVisibleSelectionInDOMTreeDeprecated()
-           .IsNone();
+      !frame_->Selection().ComputeVisibleSelectionInDOMTree().IsNone();
   return mouse_selection && result.IsOverLink();
 }
 
@@ -672,7 +673,7 @@ std::optional<ui::Cursor> EventHandler::SelectCursor(
 
         // TODO(fs): Should pass proper URL. Use StyleImage::GetImage.
         svg_image_holder = SVGImageForContainer::Create(
-            svg_image, size, device_scale_factor, NullURL(),
+            *svg_image, size, device_scale_factor, nullptr,
             frame_->GetDocument()
                 ->GetStyleEngine()
                 .ResolveColorSchemeForEmbedding(&style));
@@ -1058,6 +1059,13 @@ void EventHandler::HandleMouseLeaveEvent(const WebMouseEvent& event) {
   Page* page = frame_->GetPage();
   if (page)
     page->GetChromeClient().ClearToolTip(*frame_);
+
+  WebLinkPreviewTriggerer* triggerer =
+      frame_->GetOrCreateLinkPreviewTriggerer();
+  if (triggerer) {
+    triggerer->MaybeChangedKeyEventModifier(WebInputEvent::kNoModifiers);
+  }
+
   HandleMouseMoveOrLeaveEvent(event, Vector<WebMouseEvent>(),
                               Vector<WebMouseEvent>());
   pointer_event_manager_->RemoveLastMousePosition();
@@ -1512,7 +1520,7 @@ Element* EventHandler::EffectiveMouseEventTargetElement(
 }
 
 void EventHandler::OnScrollbarDestroyed(const Scrollbar& scrollbar) {
-  if (*last_scrollbar_under_mouse_ == scrollbar) {
+  if (last_scrollbar_under_mouse_ == &scrollbar) {
     last_scrollbar_under_mouse_ = nullptr;
   }
 }
@@ -2115,7 +2123,7 @@ void EventHandler::ApplyTouchAdjustment(WebGestureEvent* gesture_event,
           TouchAdjustmentCandidateType::kContextMenu;
       break;
     default:
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
   }
 
   Node* adjusted_node = nullptr;

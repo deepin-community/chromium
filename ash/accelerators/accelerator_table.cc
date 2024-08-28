@@ -32,8 +32,6 @@ namespace ash {
 //      the notification text. Also found in |ash_strings.grd|.
 //    - {true or false} whether the deprecated accelerator is still enabled (we
 //      don't disable a deprecated accelerator abruptly).
-// 5- Don't forget to update the keyboard_shortcut_viewer_metadata.cc and
-//    shortcut_viewer_strings.grdp.
 const AcceleratorData kDeprecatedAccelerators[] = {
     {true, ui::VKEY_OEM_2, ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN,
      AcceleratorAction::kShowShortcutViewer},
@@ -158,6 +156,7 @@ const AcceleratorData kDeveloperAcceleratorData[] = {
      AcceleratorAction::kToggleFullscreen},
     // For testing on Linux desktop where it's hard to rebind the caps lock key.
     {true, ui::VKEY_A, ui::EF_ALT_DOWN, AcceleratorAction::kDevToggleAppList},
+    {true, ui::VKEY_S, ui::EF_ALT_DOWN, AcceleratorAction::kTogglePicker},
 
     // For testing fingerprint ui.
     {true, ui::VKEY_1, kDebugModifier, kTouchFingerprintSensor1},
@@ -181,7 +180,7 @@ const size_t kPreferredActionsLength = std::size(kPreferredActions);
 const AcceleratorAction kReservedActions[] = {
     AcceleratorAction::kPowerPressed, AcceleratorAction::kPowerReleased,
     AcceleratorAction::kLockPressed,  AcceleratorAction::kLockReleased,
-    AcceleratorAction::kSuspend,
+    AcceleratorAction::kSuspend,      AcceleratorAction::kLockScreen,
 };
 
 const size_t kReservedActionsLength = std::size(kReservedActions);
@@ -199,6 +198,7 @@ const AcceleratorAction kActionsAllowedAtLoginOrLockScreen[] = {
     AcceleratorAction::kDebugToggleTabletMode,
     AcceleratorAction::kDevAddRemoveDisplay,
     AcceleratorAction::kDisableCapsLock,
+    AcceleratorAction::kEnableSelectToSpeak,
     AcceleratorAction::kEnableOrToggleDictation,
     AcceleratorAction::kKeyboardBacklightToggle,
     AcceleratorAction::kKeyboardBrightnessDown,
@@ -276,6 +276,7 @@ const AcceleratorAction kActionsAllowedAtModalWindow[] = {
     AcceleratorAction::kDebugToggleTouchScreen,
     AcceleratorAction::kDevAddRemoveDisplay,
     AcceleratorAction::kDisableCapsLock,
+    AcceleratorAction::kEnableSelectToSpeak,
     AcceleratorAction::kEnableOrToggleDictation,
     AcceleratorAction::kExit,
     AcceleratorAction::kKeyboardBacklightToggle,
@@ -343,6 +344,10 @@ const AcceleratorAction kRepeatableActions[] = {
     AcceleratorAction::kMediaPrevTrack,
     AcceleratorAction::kMediaRewind,
     AcceleratorAction::kRestoreTab,
+    AcceleratorAction::kTilingWindowResizeDown,
+    AcceleratorAction::kTilingWindowResizeLeft,
+    AcceleratorAction::kTilingWindowResizeRight,
+    AcceleratorAction::kTilingWindowResizeUp,
     AcceleratorAction::kVolumeDown,
     AcceleratorAction::kVolumeUp,
 };
@@ -361,6 +366,7 @@ const AcceleratorAction kActionsAllowedInAppModeOrPinnedMode[] = {
     AcceleratorAction::kDebugToggleTouchScreen,
     AcceleratorAction::kDevAddRemoveDisplay,
     AcceleratorAction::kDisableCapsLock,
+    AcceleratorAction::kEnableSelectToSpeak,
     AcceleratorAction::kEnableOrToggleDictation,
     AcceleratorAction::kKeyboardBacklightToggle,
     AcceleratorAction::kKeyboardBrightnessDown,
@@ -431,10 +437,14 @@ const AcceleratorAction kActionsNeedingWindow[] = {
     AcceleratorAction::kDesksToggleAssignToAllDesks,
     AcceleratorAction::kMoveActiveWindowBetweenDisplays,
     AcceleratorAction::kRotateWindow,
+    AcceleratorAction::kTilingWindowResizeDown,
+    AcceleratorAction::kTilingWindowResizeLeft,
+    AcceleratorAction::kTilingWindowResizeRight,
+    AcceleratorAction::kTilingWindowResizeUp,
     AcceleratorAction::kToggleFloating,
     AcceleratorAction::kToggleFullscreen,
     AcceleratorAction::kToggleMaximized,
-    AcceleratorAction::kToggleSnapGroupWindowsGroupAndUngroup,
+    AcceleratorAction::kCreateSnapGroup,
     AcceleratorAction::kToggleSnapGroupWindowsMinimizeAndRestore,
     AcceleratorAction::kWindowCycleSnapLeft,
     AcceleratorAction::kWindowCycleSnapRight,
@@ -459,6 +469,7 @@ const AcceleratorAction kActionsKeepingMenuOpen[] = {
     AcceleratorAction::kDesksNewDesk,
     AcceleratorAction::kDesksRemoveCurrentDesk,
     AcceleratorAction::kDisableCapsLock,
+    AcceleratorAction::kEnableSelectToSpeak,
     AcceleratorAction::kEnableOrToggleDictation,
     AcceleratorAction::kKeyboardBacklightToggle,
     AcceleratorAction::kKeyboardBrightnessDown,

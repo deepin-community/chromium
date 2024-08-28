@@ -12,16 +12,25 @@
 #include "ui/views/style/typography.h"
 #include "ui/views/style/typography_provider.h"
 
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
 namespace views {
 
 MenuConfig::MenuConfig() {
-  Init();
-  InitCR2023();
+  InitCommon();
+  InitPlatform();
 }
 
 MenuConfig::~MenuConfig() = default;
 
 int MenuConfig::CornerRadiusForMenu(const MenuController* controller) const {
+#if BUILDFLAG(IS_OZONE)
+  if (!ui::OzonePlatform::GetInstance()->IsWindowCompositingSupported()) {
+    return 0;
+  }
+#endif
   if (controller && controller->use_ash_system_ui_layout()) {
     return controller->rounded_corners().has_value() ? 0
                                                      : touchable_corner_radius;
@@ -49,13 +58,9 @@ bool MenuConfig::ShouldShowAcceleratorText(const MenuItemView* item,
   return true;
 }
 
-void MenuConfig::InitCR2023() {
-  if (!features::IsChromeRefresh2023()) {
-    return;
-  }
-
-  font_list = TypographyProvider::Get().GetFont(style::CONTEXT_MENU,
-                                                style::STYLE_BODY_3_EMPHASIS);
+void MenuConfig::InitCommon() {
+  context_menu_font_list = font_list = TypographyProvider::Get().GetFont(
+      style::CONTEXT_MENU, style::STYLE_BODY_3);
   reserve_dedicated_arrow_column = false;
   menu_horizontal_border_size = 0;
   submenu_horizontal_overlap = 0;
@@ -65,8 +70,6 @@ void MenuConfig::InitCR2023() {
   separator_height = 17;
   separator_spacing_height = 4;
   use_outer_border = false;
-
-  InitPlatformCR2023();
 }
 
 // static

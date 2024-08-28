@@ -24,6 +24,7 @@
 #include "ui/base/models/image_model.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/text_constants.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/focus_ring.h"
@@ -51,14 +52,18 @@ class SeeAllButton : public views::LabelButton {
                 ? u""
                 : l10n_util::GetStringUTF16(
                       IDS_GLANCEABLES_LIST_FOOTER_ACTION_BUTTON_LABEL));
-    SetCallback(std::move(on_see_all_pressed));
-    SetID(base::to_underlying(GlanceablesViewId::kListFooterSeeAllButton));
-    SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_RIGHT);
+    // TODO(b/333770880): Revisit this to see if it can be refactored.
     if (stable_launch) {
       // Explicitly set an empty border to replace the border created by default
       // in LabelButton.
       SetBorder(views::CreateEmptyBorder(0));
+    } else {
+      SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(2, 2)));
     }
+
+    SetCallback(std::move(on_see_all_pressed));
+    SetID(base::to_underlying(GlanceablesViewId::kListFooterSeeAllButton));
+    SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_RIGHT);
     SetImageModel(
         views::Button::STATE_NORMAL,
         ui::ImageModel::FromVectorIcon(vector_icons::kLaunchIcon,
@@ -67,7 +72,8 @@ class SeeAllButton : public views::LabelButton {
     SetTextColorId(views::Button::STATE_NORMAL, cros_tokens::kCrosSysOnSurface);
     TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosButton2,
                                           *label());
-    SetAccessibilityProperties(ax::mojom::Role::kLink, see_all_accessible_name);
+    GetViewAccessibility().SetProperties(ax::mojom::Role::kLink,
+                                         see_all_accessible_name);
     views::FocusRing::Get(this)->SetColorId(cros_tokens::kCrosSysFocusRing);
   }
 
@@ -82,16 +88,16 @@ END_METADATA
 }  // namespace
 
 GlanceablesListFooterView::GlanceablesListFooterView(
-    const std::u16string& see_all_accessible_name,
+    std::u16string title_text,
+    std::u16string see_all_accessible_name,
     base::RepeatingClosure on_see_all_pressed) {
   SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
 
   const auto* const typography_provider = TypographyProvider::Get();
-
-  items_count_label_ = AddChildView(
+  title_label_ = AddChildView(
       views::Builder<views::Label>()
-          .SetID(base::to_underlying(
-              GlanceablesViewId::kListFooterItemsCountLabel))
+          .SetText(title_text)
+          .SetID(base::to_underlying(GlanceablesViewId::kListFooterTitleLabel))
           .SetEnabledColorId(cros_tokens::kCrosSysSecondary)
           .SetFontList(typography_provider->ResolveTypographyToken(
               TypographyToken::kCrosBody2))
@@ -104,24 +110,8 @@ GlanceablesListFooterView::GlanceablesListFooterView(
                                        views::MaximumFlexSizeRule::kUnbounded))
           .Build());
 
-  if (features::AreAnyGlanceablesTimeManagementViewsEnabled()) {
-    items_count_label_->SetText(l10n_util::GetStringUTF16(
-        IDS_GLANCEABLES_LIST_FOOTER_SEE_ALL_TASKS_LABEL));
-  }
-
   see_all_button_ = AddChildView(std::make_unique<SeeAllButton>(
       see_all_accessible_name, on_see_all_pressed));
-}
-
-void GlanceablesListFooterView::UpdateItemsCount(size_t visible_items_count,
-                                                 size_t total_items_count) {
-  // Glanceable tasks in stable launch doesn't show the item count.
-  CHECK(!features::AreAnyGlanceablesTimeManagementViewsEnabled());
-  CHECK_LE(visible_items_count, total_items_count);
-  items_count_label_->SetText(
-      l10n_util::GetStringFUTF16(IDS_GLANCEABLES_LIST_FOOTER_ITEMS_COUNT_LABEL,
-                                 base::NumberToString16(visible_items_count),
-                                 base::NumberToString16(total_items_count)));
 }
 
 BEGIN_METADATA(GlanceablesListFooterView)

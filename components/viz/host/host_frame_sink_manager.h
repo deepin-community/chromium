@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "base/compiler_specific.h"
@@ -18,11 +19,12 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
+#include "components/viz/common/hit_test/hit_test_data_provider.h"
+#include "components/viz/common/hit_test/hit_test_query.h"
+#include "components/viz/common/hit_test/hit_test_region_observer.h"
 #include "components/viz/common/surfaces/frame_sink_bundle_id.h"
 #include "components/viz/common/surfaces/frame_sink_id.h"
 #include "components/viz/host/client_frame_sink_video_capturer.h"
-#include "components/viz/host/hit_test/hit_test_query.h"
-#include "components/viz/host/hit_test/hit_test_region_observer.h"
 #include "components/viz/host/host_frame_sink_client.h"
 #include "components/viz/host/viz_host_export.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -46,21 +48,15 @@ enum class ReportFirstSurfaceActivation { kYes, kNo };
 // UI thread. Manages frame sinks and is intended to replace all usage of
 // FrameSinkManagerImpl.
 class VIZ_HOST_EXPORT HostFrameSinkManager
-    : public mojom::FrameSinkManagerClient {
+    : public mojom::FrameSinkManagerClient,
+      public HitTestDataProvider {
  public:
-  using DisplayHitTestQueryMap =
-      base::flat_map<FrameSinkId, std::unique_ptr<HitTestQuery>>;
-
   HostFrameSinkManager();
 
   HostFrameSinkManager(const HostFrameSinkManager&) = delete;
   HostFrameSinkManager& operator=(const HostFrameSinkManager&) = delete;
 
   ~HostFrameSinkManager() override;
-
-  const DisplayHitTestQueryMap& display_hit_test_query() const {
-    return display_hit_test_query_;
-  }
 
   // Sets a local FrameSinkManagerImpl instance and connects directly to it.
   void SetLocalManager(mojom::FrameSinkManager* frame_sink_manager);
@@ -205,24 +201,46 @@ class VIZ_HOST_EXPORT HostFrameSinkManager
                            std::unique_ptr<CopyOutputRequest> request,
                            bool capture_exact_surface_id = false);
 
+  using ScreenshotDestinationReadyCallback =
+      base::OnceCallback<void(const SkBitmap& copy_output)>;
+  // Sets the callback which is invoked when a `CopyOutputResult` associated
+  // with `destination_token` is received by the host/browser process from the
+  // Viz process. Must be called once per `destination_token`.
+  // This is used to save screenshots for same-document navigations committed in
+  // the renderer process.
+  void SetOnCopyOutputReadyCallback(
+      const blink::SameDocNavigationScreenshotDestinationToken&
+          destination_token,
+      ScreenshotDestinationReadyCallback callback);
+
+  // Invalidates the `ScreenshotDestinationReadyCallback` for
+  // `destination_token`. Used when the destination is no longer eligible for
+  // storing the screenshot (e.g., a later-arrival screenshot after the
+  // destination is destroyed).
+  void InvalidateCopyOutputReadyCallback(
+      const blink::SameDocNavigationScreenshotDestinationToken&
+          destination_token);
+
   void Throttle(const std::vector<FrameSinkId>& ids, base::TimeDelta interval);
   void StartThrottlingAllFrameSinks(base::TimeDelta interval);
   void StopThrottlingAllFrameSinks();
 
-  // Add/Remove an observer to receive notifications of when the host receives
-  // new hit test data.
-  void AddHitTestRegionObserver(HitTestRegionObserver* observer);
-  void RemoveHitTestRegionObserver(HitTestRegionObserver* observer);
+  // HitTestDataProvider implementation.
+  void AddHitTestRegionObserver(HitTestRegionObserver* observer) override;
+  void RemoveHitTestRegionObserver(HitTestRegionObserver* observer) override;
+  const DisplayHitTestQueryMap& GetDisplayHitTestQuery() const override;
 
   void SetHitTestAsyncQueriedDebugRegions(
       const FrameSinkId& root_frame_sink_id,
       const std::vector<FrameSinkId>& hit_test_async_queried_debug_queue);
 
+#if BUILDFLAG(IS_ANDROID)
   // Preserves the back buffer associated with the |root_sink_id|, even after
   // the associated Display has been torn down, and returns an id for this cache
   // entry.
   uint32_t CacheBackBufferForRootSink(const FrameSinkId& root_sink_id);
   void EvictCachedBackBuffer(uint32_t cache_id);
+#endif
 
   void CreateHitTestQueryForSynchronousCompositor(
       const FrameSinkId& frame_sink_id);
@@ -238,6 +256,13 @@ class VIZ_HOST_EXPORT HostFrameSinkManager
   // Ends the frame counting in Viz thread and returns data to the client.
   void StopFrameCountingForTest(
       mojom::FrameSinkManager::StopFrameCountingForTestCallback callback);
+
+  void ClearUnclaimedViewTransitionResources(
+      const blink::ViewTransitionToken& transition_token);
+  bool HasUnclaimedViewTransitionResourcesForTest();
+
+  void SetSameDocNavigationScreenshotSizeForTesting(
+      const gfx::Size& result_size);
 
   const DebugRendererSettings& debug_renderer_settings() const {
     return debug_renderer_settings_;
@@ -317,6 +342,10 @@ class VIZ_HOST_EXPORT HostFrameSinkManager
       const std::vector<int32_t>& thread_ids,
       VerifyThreadIdsDoNotBelongToHostCallback callback) override;
 #endif
+  void OnScreenshotCaptured(
+      const blink::SameDocNavigationScreenshotDestinationToken&
+          destination_token,
+      std::unique_ptr<CopyOutputResult> copy_output_result) override;
 
   // Connections to/from FrameSinkManagerImpl.
   mojo::Remote<mojom::FrameSinkManager> frame_sink_manager_remote_;
@@ -342,11 +371,20 @@ class VIZ_HOST_EXPORT HostFrameSinkManager
   // class.
   base::ObserverList<HitTestRegionObserver>::Unchecked observers_;
 
+#if BUILDFLAG(IS_ANDROID)
   uint32_t next_cache_back_buffer_id_ = 1;
   uint32_t min_valid_cache_back_buffer_id_ = 1;
+#endif
 
   // This is kept in sync with implementation.
   DebugRendererSettings debug_renderer_settings_;
+
+  // When Viz sends the screenshot back to the host process,
+  // `ScreenshotDestinationReadyCallback` is invoked to stash the screenshot to
+  // the correct destination.
+  base::flat_map<blink::SameDocNavigationScreenshotDestinationToken,
+                 ScreenshotDestinationReadyCallback>
+      screenshot_destinations_;
 
   base::WeakPtrFactory<HostFrameSinkManager> weak_ptr_factory_{this};
 };

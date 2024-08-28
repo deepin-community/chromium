@@ -216,7 +216,7 @@ class PlatformAppPathLauncher
 
     app_runtime::LaunchData launch_data;
 
-    // TODO(crbug.com/1354063): This conditional block is being added here
+    // TODO(crbug.com/40235429): This conditional block is being added here
     // temporarily, and should be removed once the underlying type of
     // |launch_data.action_data| is wrapped with std::optional<T>.
     if (action_data_) {
@@ -398,7 +398,7 @@ void LaunchPlatformAppWithCommandLineAndLaunchId(
     if (!in_kiosk_mode) {
       LOG(ERROR) << "App with 'kiosk_only' attribute must be run in "
                  << " ChromeOS kiosk mode.";
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
       return;
     }
   }

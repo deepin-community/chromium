@@ -34,6 +34,7 @@ class WebContents;
 namespace password_manager {
 enum class CredentialType;
 struct InteractionsStats;
+struct PasswordForm;
 class MovePasswordToAccountStoreHelper;
 class PasswordFeatureManager;
 class PasswordFormManagerForUI;
@@ -99,12 +100,10 @@ class ManagePasswordsUIController
       std::unique_ptr<password_manager::PasswordFormManagerForUI> form_manager,
       bool is_update_confirmation) override;
   void OnPasswordAutofilled(
-      const std::vector<raw_ptr<const password_manager::PasswordForm,
-                                VectorExperimental>>& password_forms,
+      base::span<const password_manager::PasswordForm> password_forms,
       const url::Origin& origin,
-      const std::vector<
-          raw_ptr<const password_manager::PasswordForm, VectorExperimental>>*
-          federated_matches) override;
+      base::span<const password_manager::PasswordForm> federated_matches)
+      override;
   void OnCredentialLeak(password_manager::CredentialLeakType leak_dialog_type,
                         const GURL& url,
                         const std::u16string& username) override;
@@ -116,8 +115,12 @@ class ManagePasswordsUIController
   void ShowMovePasswordBubble(
       const password_manager::PasswordForm& form) override;
   void OnBiometricAuthBeforeFillingDeclined() override;
-  void OnAddUsernameSaveClicked(const std::u16string& username) override;
+  void OnAddUsernameSaveClicked(
+      const std::u16string& username,
+      const password_manager::PasswordForm& form_to_update) override;
   void OnKeychainError() override;
+  void OnPasskeySaved(const std::u16string& username,
+                      bool gpm_pin_created) override;
 
   virtual void NotifyUnsyncedCredentialsWillBeDeleted(
       std::vector<password_manager::PasswordForm> unsynced_credentials);
@@ -162,6 +165,8 @@ class ManagePasswordsUIController
   size_t GetTotalNumberCompromisedPasswords() const override;
   bool DidAuthForAccountStoreOptInFail() const override;
   bool BubbleIsManualFallbackForSaving() const override;
+  bool GpmPinCreatedDuringRecentPasskeyCreation() const override;
+  std::u16string GetRecentlySavedPasskeyUsername() const override;
   void OnBubbleShown() override;
   void OnBubbleHidden() override;
   void OnNoInteraction() override;
@@ -182,9 +187,13 @@ class ManagePasswordsUIController
       password_manager::CredentialType credential_type) override;
   void NavigateToPasswordManagerSettingsPage(
       password_manager::ManagePasswordsReferrer referrer) override;
+  void NavigateToPasswordDetailsPageInPasswordManager(
+      const std::string& password_domain_name,
+      password_manager::ManagePasswordsReferrer referrer) override;
   void NavigateToPasswordManagerSettingsAccountStoreToggle(
       password_manager::ManagePasswordsReferrer referrer) override;
-  void SignIn(const AccountInfo& account) override;
+  void SignIn(const AccountInfo& account,
+              const password_manager::PasswordForm& password_to_move) override;
   void OnDialogHidden() override;
   void AuthenticateUserWithMessage(const std::u16string& message,
                                    AvailabilityCallback callback) override;
@@ -265,6 +274,9 @@ class ManagePasswordsUIController
     SHOWN,
     // Same as SHOWN but the icon is to be updated when the bubble is closed.
     SHOWN_PENDING_ICON_UPDATE,
+    // The bubble is to be popped up in the next call to
+    // UpdateBubbleAndIconVisibility() and will be focused automatically.
+    SHOULD_POP_UP_WITH_FOCUS,
   };
 
   bool IsShowingBubble() const {

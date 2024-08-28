@@ -8,10 +8,12 @@
 #include "chrome/browser/android/persisted_tab_data/persisted_tab_data_config_android.h"
 #include "chrome/browser/android/persisted_tab_data/persisted_tab_data_storage_android.h"
 #include "chrome/browser/android/tab_android.h"
-#include "chrome/browser/tab/jni_headers/PersistedTabData_jni.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "content/public/browser/browser_thread.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/tab/jni_headers/PersistedTabData_jni.h"
 
 namespace {
 
@@ -136,7 +138,8 @@ void PersistedTabDataAndroid::From(base::WeakPtr<TabAndroid> tab_android,
                       base::BindOnce(
                           &PersistedTabDataAndroid::RunCallbackOnUIThread,
                           tab_android, user_data_key,
-                          persisted_tab_data_android));
+                          base::UnsafeDanglingUntriaged(
+                              persisted_tab_data_android)));
                 },
                 tab_android->GetWeakPtr(), std::move(supplier_callback),
                 user_data_key));

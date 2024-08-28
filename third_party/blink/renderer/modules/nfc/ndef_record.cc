@@ -4,9 +4,10 @@
 
 #include "third_party/blink/renderer/modules/nfc/ndef_record.h"
 
+#include <string_view>
+
 #include "base/containers/contains.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "services/device/public/mojom/nfc.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
@@ -74,7 +75,7 @@ bool GetBytesOfBufferSource(const V8BufferSource* buffer_source,
   } else if (buffer_source->IsArrayBufferView()) {
     array_piece = DOMArrayPiece(buffer_source->GetAsArrayBufferView().Get());
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
     return true;  // true to be consistent with `exception_state`.
   }
   wtf_size_t checked_length;
@@ -117,8 +118,7 @@ bool IsValidExternalType(const String& input) {
   if (type.empty())
     return false;
 
-  static constexpr base::StringPiece kOtherCharsForCustomType(
-      ":!()+,-=@;$_*'.");
+  static constexpr std::string_view kOtherCharsForCustomType(":!()+,-=@;$_*'.");
   for (wtf_size_t i = 0; i < type.length(); i++) {
     if (!IsASCIIAlphanumeric(type[i]) &&
         !base::Contains(kOtherCharsForCustomType, type[i])) {
@@ -226,7 +226,7 @@ static NDEFRecord* CreateTextRecord(const ScriptState* script_state,
       return nullptr;
     bytes = GetUTF8DataFromString(data);
   } else {
-    NOTREACHED();
+    NOTREACHED_IN_MIGRATION();
   }
 
   return MakeGarbageCollected<NDEFRecord>(id, encoding_label, language,

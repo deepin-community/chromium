@@ -11,6 +11,8 @@
 #include <map>
 #include <memory>
 
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "components/bookmarks/browser/bookmark_client.h"
 
@@ -64,12 +66,22 @@ class TestBookmarkClient : public BookmarkClient {
   bool HasFaviconLoadTasks() const;
 
   // Sets the value returned by
-  // `IsSyncFeatureEnabledIncludingBookmarksForUma()`.
-  void SetIsSyncFeatureEnabledIncludingBookmarksForUma(bool value);
+  // `IsSyncFeatureEnabledIncludingBookmarks()`.
+  void SetIsSyncFeatureEnabledIncludingBookmarks(bool value);
+
+  // Returns sync metadata for account bookmarks,  received via
+  // DecodeAccountBookmarkSyncMetadata() or modified via
+  // SetAccountBookmarkSyncMetadataAndScheduleWrite().
+  const std::string& account_bookmark_sync_metadata() const {
+    return account_bookmark_sync_metadata_;
+  }
+
+  void SetAccountBookmarkSyncMetadataAndScheduleWrite(
+      const std::string& account_bookmark_sync_metadata);
 
   // BookmarkClient:
   LoadManagedNodeCallback GetLoadManagedNodeCallback() override;
-  bool IsSyncFeatureEnabledIncludingBookmarksForUma() override;
+  bool IsSyncFeatureEnabledIncludingBookmarks() override;
   bool CanSetPermanentNodeTitle(const BookmarkNode* permanent_node) override;
   bool IsNodeManaged(const BookmarkNode* node) override;
   std::string EncodeLocalOrSyncableBookmarkSyncMetadata() override;
@@ -85,7 +97,6 @@ class TestBookmarkClient : public BookmarkClient {
       favicon_base::FaviconImageCallback callback,
       base::CancelableTaskTracker* tracker) override;
   void OnBookmarkNodeRemovedUndoable(
-      BookmarkModel* model,
       const BookmarkNode* parent,
       size_t index,
       std::unique_ptr<BookmarkNode> node) override;
@@ -107,6 +118,10 @@ class TestBookmarkClient : public BookmarkClient {
       requests_per_page_url_;
 
   bool is_sync_feature_enabled_including_bookmarks_for_uma = false;
+
+  std::string account_bookmark_sync_metadata_;
+  base::RepeatingClosure account_bookmark_sync_metadata_save_closure_ =
+      base::DoNothing();
 };
 
 }  // namespace bookmarks

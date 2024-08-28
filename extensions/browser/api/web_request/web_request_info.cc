@@ -2,13 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "extensions/browser/api/web_request/web_request_info.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 
+#include "base/check_op.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/values.h"
@@ -20,6 +27,7 @@
 #include "extensions/browser/extension_navigation_ui_data.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
+#include "extensions/common/extension_id.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/upload_bytes_element_reader.h"
 #include "net/base/upload_data_stream.h"
@@ -89,7 +97,7 @@ bool CreateUploadDataSourcesFromResourceRequest(
   for (auto& element : *request.request_body->elements()) {
     switch (element.type()) {
       case network::DataElement::Tag::kDataPipe:
-        // TODO(https://crbug.com/721414): Support data pipe elements.
+        // TODO(crbug.com/41318947): Support data pipe elements.
         break;
 
       case network::DataElement::Tag::kBytes:
@@ -97,7 +105,7 @@ bool CreateUploadDataSourcesFromResourceRequest(
             element.As<network::DataElementBytes>().AsStringPiece()));
         break;
       case network::DataElement::Tag::kFile:
-        // TODO(https://crbug.com/715679): This may not work when network
+        // TODO(crbug.com/41315406): This may not work when network
         // process is sandboxed.
         data_sources->push_back(std::make_unique<FileUploadDataSource>(
             element.As<network::DataElementFile>().path()));
@@ -266,6 +274,67 @@ void WebRequestInfo::EraseDNRActionsForExtension(
           return action.extension_id == extension_id;
         });
   }
+}
+
+void WebRequestInfo::EraseOutprioritizedDNRActions() {
+  if (dnr_actions.has_value()) {
+    std::erase_if(
+        *dnr_actions,
+        [this](const declarative_net_request::RequestAction& action) {
+          // Check that the cache contains the action's extension ID
+          // to make sure that rule matching was performed for that
+          // extension.
+          DCHECK(
+              base::Contains(max_priority_allow_action, action.extension_id));
+
+          uint64_t allow_rule_priority_for_extension = 0u;
+          if (auto& allow_action =
+                  max_priority_allow_action.at(action.extension_id)) {
+            allow_rule_priority_for_extension = allow_action->index_priority;
+          }
+
+          return action.index_priority < allow_rule_priority_for_extension;
+        });
+  }
+}
+
+bool WebRequestInfo::ShouldRecordMatchedAllowRuleInOnHeadersReceived(
+    const declarative_net_request::RequestAction& allow_action) const {
+  CHECK(dnr_actions.has_value());
+
+  // If there are no more relevant actions, `allow_action` should be matched.
+  if (dnr_actions->empty()) {
+    return true;
+  }
+
+  // If the only actions matched modify request headers, then `allow_action`
+  // should match since said actions are no longer relevant in
+  // onHeadersReceived.
+  bool only_request_headers_modified =
+      base::ranges::all_of(*dnr_actions, [](const auto& action) {
+        return action.type == declarative_net_request::RequestAction::Type::
+                                  MODIFY_HEADERS &&
+               action.response_headers_to_modify.empty();
+      });
+  if (only_request_headers_modified) {
+    return true;
+  }
+
+  // Compare allow actions.
+  if ((*dnr_actions)[0].IsAllowOrAllowAllRequests()) {
+    CHECK_EQ(1u, dnr_actions->size());
+
+    // If `allow_action` is from a different extension than `dnr_actions`, then
+    // we record a match since `allow action` could've prevented other action
+    // types from its extension from matching.
+    // If `allow_action` is from the same extension as `dnr_actions`, then it
+    // would've made `dnr_actions` empty through EraseOutprioritizedDNRActions()
+    // if it was higher priority, and if not (and this if statement is reached),
+    // it shouldn't be matched since `dnr_actions` still takes precedence.
+    return allow_action.extension_id != (*dnr_actions)[0].extension_id;
+  }
+
+  return false;
 }
 
 }  // namespace extensions

@@ -37,6 +37,7 @@
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/view.h"
@@ -57,10 +58,12 @@ PowerTrayView::~PowerTrayView() {
   PowerStatus::Get()->RemoveObserver(this);
 }
 
-gfx::Size PowerTrayView::CalculatePreferredSize() const {
+gfx::Size PowerTrayView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   // The battery icon is a lot thinner than other icons, hence the special
   // logic.
-  gfx::Size standard_size = TrayItemView::CalculatePreferredSize();
+  gfx::Size standard_size =
+      TrayItemView::CalculatePreferredSize(available_size);
   if (IsHorizontalAlignment())
     return gfx::Size(kUnifiedTrayBatteryWidth, standard_size.height());
 
@@ -71,7 +74,11 @@ gfx::Size PowerTrayView::CalculatePreferredSize() const {
 void PowerTrayView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   // A valid role must be set prior to setting the name.
   node_data->role = ax::mojom::Role::kImage;
-  node_data->SetNameChecked(GetAccessibleName());
+  std::u16string accessible_name =
+      PowerStatus::Get()->GetAccessibleNameString(/* full_description*/ true);
+  if (!accessible_name.empty()) {
+    node_data->SetNameChecked(accessible_name);
+  }
 }
 
 views::View* PowerTrayView::GetTooltipHandlerForPoint(const gfx::Point& point) {
@@ -93,9 +100,6 @@ void PowerTrayView::HandleLocaleChange() {
 }
 
 void PowerTrayView::UpdateLabelOrImageViewColor(bool active) {
-  if (!chromeos::features::IsJellyEnabled()) {
-    return;
-  }
   TrayItemView::UpdateLabelOrImageViewColor(active);
 
   cros_tokens::CrosSysColorIds icon_fg_token = cros_tokens::kCrosSysOnSurface;
@@ -123,11 +127,15 @@ void PowerTrayView::OnPowerStatusChanged() {
 void PowerTrayView::UpdateStatus(bool icon_color_changed) {
   UpdateImage(icon_color_changed);
   SetVisible(PowerStatus::Get()->IsBatteryPresent());
-  SetAccessibleName(PowerStatus::Get()->GetAccessibleNameString(true));
+  GetViewAccessibility().SetName(
+      PowerStatus::Get()->GetAccessibleNameString(/* full_description */ true));
   tooltip_ = PowerStatus::Get()->GetInlinedStatusString();
   // Currently ChromeVox only reads the inner view when touching the icon.
   // As a result this node's accessible node data will not be read.
-  image_view()->SetAccessibleName(GetAccessibleName());
+  // TODO(crbug.com/325137417): This line should not be needed. Investigate to
+  // confirm and remove.
+  image_view()->GetViewAccessibility().SetName(
+      GetViewAccessibility().GetCachedName());
 }
 
 void PowerTrayView::UpdateImage(bool icon_color_changed) {
@@ -149,25 +157,6 @@ void PowerTrayView::UpdateImage(bool icon_color_changed) {
     return;
   info_ = info;
 
-  if (!chromeos::features::IsJellyEnabled()) {
-    // Note: The icon color changes when the UI is in OOBE mode.
-    const SkColor icon_fg_color =
-        GetColorProvider()->GetColor(kColorAshIconColorPrimary);
-    std::optional<SkColor> badge_color;
-
-    if (features::IsBatterySaverAvailable() &&
-        PowerStatus::Get()->IsBatterySaverActive()) {
-      badge_color = cros_styles::DarkModeEnabled() ? gfx::kGoogleYellow700
-                                                   : gfx::kGoogleYellow800;
-    }
-
-    info = PowerStatus::Get()->GenerateBatteryImageInfo(icon_fg_color,
-                                                        badge_color);
-    info_ = info;
-    image_view()->SetImage(PowerStatus::GetBatteryImage(
-        info, kUnifiedTrayBatteryIconSize, GetColorProvider()));
-    return;
-  }
   UpdateLabelOrImageViewColor(is_active());
 }
 

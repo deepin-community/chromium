@@ -30,7 +30,7 @@ namespace net {
 class QuicSessionPool::Job {
  public:
   Job(QuicSessionPool* pool,
-      const QuicSessionAliasKey& key,
+      QuicSessionAliasKey key,
       std::unique_ptr<CryptoClientConfigHandle> client_config_handle,
       RequestPriority priority,
       const NetLogWithSource& net_log);
@@ -64,6 +64,11 @@ class QuicSessionPool::Job {
     return requests_;
   }
   RequestPriority priority() const { return priority_; }
+  QuicSessionPool* pool() const { return pool_.get(); }
+
+  // Associate this job with another source.
+  void AssociateWithNetLogSource(
+      const NetLogWithSource& http_stream_job_net_log) const;
 
  protected:
   // Set a new `QuicSessionRequest`'s expectations about which callbacks

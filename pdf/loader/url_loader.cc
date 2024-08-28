@@ -92,7 +92,7 @@ void UrlLoader::Open(const UrlRequest& request,
   }
 
   // Modeled on `content::CreateWebURLRequest()`.
-  // TODO(crbug.com/1129291): The original code performs additional validations
+  // TODO(crbug.com/40149338): The original code performs additional validations
   // that we probably don't need in the new process model.
   blink::WebURLRequest blink_request;
   blink_request.SetUrl(
@@ -133,7 +133,7 @@ void UrlLoader::Open(const UrlRequest& request,
   blink_request.SetRequestDestination(
       network::mojom::RequestDestination::kEmbed);
 
-  // TODO(crbug.com/822081): Revisit whether we need universal access.
+  // TODO(crbug.com/40567141): Revisit whether we need universal access.
   blink::WebAssociatedURLLoaderOptions options;
   options.grant_universal_access = true;
   ignore_redirects_ = request.ignore_redirects;
@@ -175,7 +175,7 @@ bool UrlLoader::WillFollowRedirect(
     const blink::WebURLResponse& redirect_response) {
   DCHECK_EQ(state_, LoadingState::kOpening);
 
-  // TODO(crbug.com/1129291): The original code performs additional validations
+  // TODO(crbug.com/40149338): The original code performs additional validations
   // that we probably don't need in the new process model.
 
   // Note that `pp::URLLoader::FollowRedirect()` is not supported, so the
@@ -186,7 +186,7 @@ bool UrlLoader::WillFollowRedirect(
 void UrlLoader::DidSendData(uint64_t bytes_sent,
                             uint64_t total_bytes_to_be_sent) {
   // Doesn't apply to PDF viewer requests.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 // Modeled on `content::PepperURLLoaderHost::DidReceiveResponse()`.
@@ -205,7 +205,7 @@ void UrlLoader::DidReceiveResponse(const blink::WebURLResponse& response) {
 
 void UrlLoader::DidDownloadData(uint64_t data_length) {
   // Doesn't apply to PDF viewer requests.
-  NOTREACHED();
+  NOTREACHED_IN_MIGRATION();
 }
 
 // Modeled on `content::PepperURLLoaderHost::DidReceiveData()`.
@@ -216,7 +216,8 @@ void UrlLoader::DidReceiveData(const char* data, int data_length) {
   if (data_length < 1)
     return;
 
-  buffer_.insert(buffer_.end(), data, data + data_length);
+  // TODO(crbug.com/40284755): spanify to fix the errors.
+  buffer_.insert(buffer_.end(), data, UNSAFE_BUFFERS(data + data_length));
 
   // Defer loading if the buffer is too full.
   if (!deferring_loading_ && buffer_.size() >= buffer_upper_threshold_) {

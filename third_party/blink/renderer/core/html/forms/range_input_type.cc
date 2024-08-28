@@ -198,7 +198,7 @@ void RangeInputType::HandleKeydownEvent(KeyboardEvent& event) {
   if (GetElement().IsDisabledFormControl())
     return;
 
-  const String& key = event.key();
+  const AtomicString key(event.key());
 
   const Decimal current = ParseToNumberOrNaN(GetElement().Value());
   DCHECK(current.IsFinite());
@@ -221,21 +221,21 @@ void RangeInputType::HandleKeydownEvent(KeyboardEvent& event) {
   }
 
   Decimal new_value;
-  if (key == "ArrowUp") {
+  if (key == keywords::kArrowUp) {
     new_value = current + step;
-  } else if (key == "ArrowDown") {
+  } else if (key == keywords::kArrowDown) {
     new_value = current - step;
-  } else if (key == "ArrowLeft") {
+  } else if (key == keywords::kArrowLeft) {
     new_value = dir == TextDirection::kRtl ? current + step : current - step;
-  } else if (key == "ArrowRight") {
+  } else if (key == keywords::kArrowRight) {
     new_value = dir == TextDirection::kRtl ? current - step : current + step;
-  } else if (key == "PageUp") {
+  } else if (key == keywords::kPageUp) {
     new_value = current + big_step;
-  } else if (key == "PageDown") {
+  } else if (key == keywords::kPageDown) {
     new_value = current - big_step;
-  } else if (key == "Home") {
+  } else if (key == keywords::kHome) {
     new_value = step_range.Minimum();
-  } else if (key == "End") {
+  } else if (key == keywords::kEnd) {
     new_value = step_range.Maximum();
   } else {
     return;  // Did not match any key binding.
@@ -274,6 +274,11 @@ void RangeInputType::CreateShadowSubtree() {
 LayoutObject* RangeInputType::CreateLayoutObject(const ComputedStyle&) const {
   // TODO(crbug.com/1131352): input[type=range] should not use flexbox.
   return MakeGarbageCollected<LayoutFlexibleBox>(&GetElement());
+}
+
+void RangeInputType::AdjustStyle(ComputedStyleBuilder& builder) {
+  builder.SetInlineBlockBaselineEdge(EInlineBlockBaselineEdge::kBorderBox);
+  InputTypeView::AdjustStyle(builder);
 }
 
 Decimal RangeInputType::ParseToNumber(const String& src,

@@ -17,7 +17,9 @@
 #include "components/sync/protocol/bookmark_specifics.pb.h"
 #include "components/sync/protocol/collaboration_group_specifics.pb.h"
 #include "components/sync/protocol/contact_info_specifics.pb.h"
+#include "components/sync/protocol/cookie_specifics.pb.h"
 #include "components/sync/protocol/data_type_progress_marker.pb.h"
+#include "components/sync/protocol/deletion_origin.pb.h"
 #include "components/sync/protocol/dictionary_specifics.pb.h"
 #include "components/sync/protocol/encryption.pb.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
@@ -35,17 +37,19 @@
 #include "components/sync/protocol/password_sharing_invitation_specifics.pb.h"
 #include "components/sync/protocol/password_specifics.pb.h"
 #include "components/sync/protocol/persisted_entity_data.pb.h"
+#include "components/sync/protocol/plus_address_setting_specifics.pb.h"
+#include "components/sync/protocol/plus_address_specifics.pb.h"
 #include "components/sync/protocol/power_bookmark_specifics.pb.h"
 #include "components/sync/protocol/preference_specifics.pb.h"
 #include "components/sync/protocol/printer_specifics.pb.h"
 #include "components/sync/protocol/printers_authorization_server_specifics.pb.h"
 #include "components/sync/protocol/priority_preference_specifics.pb.h"
+#include "components/sync/protocol/product_comparison_specifics.pb.h"
 #include "components/sync/protocol/proto_enum_conversions.h"
 #include "components/sync/protocol/proto_value_conversions.h"
 #include "components/sync/protocol/reading_list_specifics.pb.h"
 #include "components/sync/protocol/saved_tab_group_specifics.pb.h"
 #include "components/sync/protocol/search_engine_specifics.pb.h"
-#include "components/sync/protocol/segmentation_specifics.pb.h"
 #include "components/sync/protocol/send_tab_to_self_specifics.pb.h"
 #include "components/sync/protocol/session_specifics.pb.h"
 #include "components/sync/protocol/shared_tab_group_data_specifics.pb.h"
@@ -53,8 +57,10 @@
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/protocol/sync_entity.pb.h"
 #include "components/sync/protocol/sync_invalidations_payload.pb.h"
+#include "components/sync/protocol/tab_group_attribution_metadata.pb.h"
 #include "components/sync/protocol/theme_specifics.pb.h"
 #include "components/sync/protocol/typed_url_specifics.pb.h"
+#include "components/sync/protocol/unencrypted_sharing_message.pb.h"
 #include "components/sync/protocol/unique_position.pb.h"
 #include "components/sync/protocol/user_consent_specifics.pb.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
@@ -250,6 +256,7 @@ VISIT_PROTO_FIELDS(const sync_pb::AutofillProfileSpecifics& proto) {
   VISIT(address_home_apt_num);
   VISIT(address_home_apt_type);
   VISIT(address_home_street_location_and_locality);
+  VISIT(address_home_thoroughfare_number_and_apt);
 
   VISIT_ENUM(address_home_city_status);
   VISIT_ENUM(address_home_state_status);
@@ -273,6 +280,7 @@ VISIT_PROTO_FIELDS(const sync_pb::AutofillProfileSpecifics& proto) {
   VISIT_ENUM(address_home_apt_num_status);
   VISIT_ENUM(address_home_apt_type_status);
   VISIT_ENUM(address_home_street_location_and_locality_status);
+  VISIT_ENUM(address_home_thoroughfare_number_and_apt_status);
 
   VISIT(address_home_language_code);
   VISIT_REP(phone_home_whole_number);
@@ -339,6 +347,30 @@ VISIT_PROTO_FIELDS(const sync_pb::CollaborationGroupSpecifics& proto) {
   VISIT(last_updated_timestamp_millis_since_unix_epoch);
 }
 
+VISIT_PROTO_FIELDS(const sync_pb::ComparisonData& proto) {
+  VISIT(url);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::ProductComparison& proto) {
+  VISIT(name);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::ProductComparisonItem& proto) {
+  VISIT(product_comparison_uuid);
+  VISIT(url);
+  VISIT(unique_position);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::ProductComparisonSpecifics& proto) {
+  VISIT(uuid);
+  VISIT(creation_time_unix_epoch_millis);
+  VISIT(update_time_unix_epoch_millis);
+  VISIT(name);
+  VISIT_REP(data);
+  VISIT(product_comparison);
+  VISIT(product_comparison_item);
+}
+
 VISIT_PROTO_FIELDS(const sync_pb::ContactInfoSpecifics& proto) {
   VISIT(guid);
   VISIT(use_count);
@@ -382,6 +414,7 @@ VISIT_PROTO_FIELDS(const sync_pb::ContactInfoSpecifics& proto) {
   VISIT(address_between_streets_or_landmark);
   VISIT(address_overflow_and_landmark);
   VISIT(address_street_location_and_locality);
+  VISIT(address_thoroughfare_number_and_apt);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::ContactInfoSpecifics::Observation& proto) {
@@ -398,6 +431,32 @@ VISIT_PROTO_FIELDS(const sync_pb::ContactInfoSpecifics::TokenMetadata& proto) {
 VISIT_PROTO_FIELDS(const sync_pb::ContactInfoSpecifics::StringToken& proto) {
   VISIT(value);
   VISIT(metadata);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::CookieSpecifics& proto) {
+  VISIT(unique_key);
+  VISIT(name);
+  VISIT(value);
+  VISIT(domain);
+  VISIT(path);
+  VISIT(creation_time_windows_epoch_micros);
+  VISIT(expiry_time_windows_epoch_micros);
+  VISIT(last_access_time_windows_epoch_micros);
+  VISIT(last_update_time_windows_epoch_micros);
+  VISIT(secure);
+  VISIT(httponly);
+  VISIT_ENUM(site_restrictions);
+  VISIT_ENUM(priority);
+  VISIT_ENUM(source_scheme);
+  VISIT(partition_key);
+  VISIT(source_port);
+  VISIT_ENUM(source_type);
+}
+
+VISIT_PROTO_FIELDS(
+    const sync_pb::CookieSpecifics::SerializedCookiePartitionKey& proto) {
+  VISIT(top_level_site);
+  VISIT(has_cross_site_ancestor);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::CustomNudgeDelay& proto) {
@@ -497,6 +556,13 @@ VISIT_PROTO_FIELDS(const sync_pb::DataTypeProgressMarker& proto) {
 
 VISIT_PROTO_FIELDS(const sync_pb::GarbageCollectionDirective& proto) {
   VISIT(version_watermark);
+  VISIT(collaboration_gc);
+}
+
+VISIT_PROTO_FIELDS(
+    const sync_pb::GarbageCollectionDirective::CollaborationGarbageCollection&
+        proto) {
+  VISIT_REP(active_collaboration_ids);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::DebugEventInfo& proto) {
@@ -511,6 +577,15 @@ VISIT_PROTO_FIELDS(const sync_pb::DebugInfo& proto) {
   VISIT(cryptographer_ready);
   VISIT(cryptographer_has_pending_keys);
   VISIT(events_dropped);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::DeletionOrigin& proto) {
+  VISIT(chromium_version);
+  VISIT(google_play_services_apk_version_name);
+  VISIT(file_name_hash);
+  VISIT(file_line_number);
+  VISIT(file_name_possibly_truncated);
+  VISIT(unique_source_tag_no_pii_possibly_truncated);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::DeviceInfoSpecifics& proto) {
@@ -536,6 +611,8 @@ VISIT_PROTO_FIELDS(const sync_pb::DeviceInfoSpecifics& proto) {
 
 VISIT_PROTO_FIELDS(const sync_pb::FeatureSpecificFields& proto) {
   VISIT(send_tab_to_self_receiving_enabled);
+  VISIT_ENUM(send_tab_to_self_receiving_type);
+  VISIT(floating_workspace_last_signin_time_windows_epoch_micros);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SharingSpecificFields& proto) {
@@ -546,6 +623,7 @@ VISIT_PROTO_FIELDS(const sync_pb::SharingSpecificFields& proto) {
   VISIT(sender_id_fcm_token_v2);
   VISIT_BYTES(sender_id_p256dh_v2);
   VISIT_BYTES(sender_id_auth_secret_v2);
+  VISIT(chime_representative_target_id);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::PhoneAsASecurityKeySpecificFields& proto) {
@@ -588,10 +666,17 @@ VISIT_PROTO_FIELDS(const sync_pb::EntityMetadata& proto) {
   VISIT(base_specifics_hash);
   VISIT(possibly_trimmed_base_specifics);
   VISIT(deleted_by_version);
+  VISIT(collaboration);
+  VISIT(deletion_origin);
+}
+
+VISIT_PROTO_FIELDS(
+    const sync_pb::EntityMetadata::CollaborationMetadata& proto) {
+  VISIT(collaboration_id);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::EntitySpecifics& proto) {
-  static_assert(49 == GetNumModelTypes(),
+  static_assert(53 == GetNumModelTypes(),
                 "When adding a new protocol type, you will likely need to add "
                 "it here as well.");
   VISIT(encrypted);
@@ -608,6 +693,7 @@ VISIT_PROTO_FIELDS(const sync_pb::EntitySpecifics& proto) {
   VISIT(bookmark);
   VISIT(collaboration_group);
   VISIT(contact_info);
+  VISIT(cookie);
   VISIT(device_info);
   VISIT(dictionary);
   VISIT(extension);
@@ -621,16 +707,18 @@ VISIT_PROTO_FIELDS(const sync_pb::EntitySpecifics& proto) {
   VISIT(os_priority_preference);
   VISIT(outgoing_password_sharing_invitation);
   VISIT(password);
+  VISIT(plus_address);
+  VISIT(plus_address_setting);
   VISIT(power_bookmark);
   VISIT(preference);
   VISIT(printer);
   VISIT(printers_authorization_server);
   VISIT(priority_preference);
+  VISIT(product_comparison);
   VISIT(reading_list);
   VISIT(saved_tab_group);
   VISIT(search_engine);
   VISIT(security_event);
-  VISIT(segmentation);
   VISIT(send_tab_to_self);
   VISIT(session);
   VISIT(shared_tab_group_data);
@@ -743,7 +831,6 @@ VISIT_PROTO_FIELDS(const sync_pb::ModelTypeState& proto) {
   VISIT(progress_marker);
   VISIT(type_context);
   VISIT(encryption_key_name);
-  VISIT(initial_sync_done_deprecated);
   VISIT_ENUM(initial_sync_state);
   VISIT(cache_guid);
   VISIT(authenticated_account_id);
@@ -817,22 +904,6 @@ VISIT_PROTO_FIELDS(const sync_pb::CrossUserSharingPrivateKey& proto) {
 VISIT_PROTO_FIELDS(const sync_pb::NigoriSpecifics& proto) {
   VISIT(encryption_keybag);
   VISIT(keybag_is_frozen);
-  VISIT(encrypt_bookmarks);
-  VISIT(encrypt_preferences);
-  VISIT(encrypt_autofill_profile);
-  VISIT(encrypt_autofill);
-  VISIT(encrypt_themes);
-  VISIT(encrypt_typed_urls);
-  VISIT(encrypt_extension_settings);
-  VISIT(encrypt_extensions);
-  VISIT(encrypt_sessions);
-  VISIT(encrypt_app_settings);
-  VISIT(encrypt_apps);
-  VISIT(encrypt_search_engines);
-  VISIT(encrypt_dictionary);
-  VISIT(encrypt_app_list);
-  VISIT(encrypt_arc_package);
-  VISIT(encrypt_reading_list);
   VISIT(encrypt_everything);
   VISIT(server_only_was_missing_keystore_migration_time);
   VISIT(sync_tab_favicons);
@@ -909,12 +980,22 @@ VISIT_PROTO_FIELDS(const sync_pb::HistorySpecifics& proto) {
   VISIT(has_url_keyed_image);
   VISIT_REP(categories);
   VISIT_REP(related_searches);
+  VISIT(app_id);
+}
+
+VISIT_PROTO_FIELDS(
+    const sync_pb::TrustedVaultAutoUpgradeExperimentGroup& proto) {
+  VISIT(cohort);
+  VISIT_ENUM(type);
+  VISIT(type_index);
 }
 
 VISIT_PROTO_FIELDS(
     const sync_pb::NigoriSpecifics::TrustedVaultDebugInfo& proto) {
   VISIT(migration_time);
   VISIT(key_version);
+  VISIT(auto_upgrade_experiment_group);
+  VISIT(auto_upgrade_experiment_group_modification_time_unix_epoch_millis);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::OsPreferenceSpecifics& proto) {
@@ -936,21 +1017,7 @@ VISIT_PROTO_FIELDS(
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::PasswordSharingInvitationData& proto) {
-  VISIT(password_data);
   VISIT(password_group_data);
-}
-
-VISIT_PROTO_FIELDS(
-    const sync_pb::PasswordSharingInvitationData::PasswordData& proto) {
-  VISIT(password_value);
-  VISIT(scheme);
-  VISIT(signon_realm);
-  VISIT(origin);
-  VISIT(username_element);
-  VISIT(username_value);
-  VISIT(password_element);
-  VISIT(display_name);
-  VISIT(avatar_url);
 }
 
 VISIT_PROTO_FIELDS(
@@ -1064,6 +1131,23 @@ VISIT_PROTO_FIELDS(const sync_pb::PersistedEntityData& proto) {
   VISIT(specifics);
 }
 
+VISIT_PROTO_FIELDS(const sync_pb::PlusAddressSettingSpecifics& proto) {
+  VISIT(name);
+  VISIT(bool_value);
+  VISIT(string_value);
+  VISIT(int_value);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::PlusAddressSpecifics& proto) {
+  VISIT(profile_id);
+  VISIT(facet);
+  VISIT(plus_email);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::PlusEmail& proto) {
+  VISIT(email_address);
+}
+
 VISIT_PROTO_FIELDS(const sync_pb::PreferenceSpecifics& proto) {
   VISIT(name);
   VISIT(value);
@@ -1113,12 +1197,14 @@ VISIT_PROTO_FIELDS(const sync_pb::SavedTabGroupSpecifics& proto) {
   VISIT(update_time_windows_epoch_micros);
   VISIT(group);
   VISIT(tab);
+  VISIT(attribution_metadata);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SavedTabGroup& proto) {
   VISIT(position);
   VISIT(title);
   VISIT_ENUM(color);
+  VISIT(pinned_position);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SavedTabGroupTab& proto) {
@@ -1126,6 +1212,21 @@ VISIT_PROTO_FIELDS(const sync_pb::SavedTabGroupTab& proto) {
   VISIT(group_guid);
   VISIT(url);
   VISIT(title);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::AttributionMetadata& proto) {
+  VISIT(created);
+  VISIT(updated);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::AttributionMetadata::Attribution& proto) {
+  VISIT(device_info);
+}
+
+VISIT_PROTO_FIELDS(
+    const sync_pb::AttributionMetadata::Attribution::AttributionDeviceInfo&
+        proto) {
+  VISIT(cache_guid);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SearchEngineSpecifics& proto) {
@@ -1152,6 +1253,21 @@ VISIT_PROTO_FIELDS(const sync_pb::SearchEngineSpecifics& proto) {
   VISIT(starter_pack_id);
 }
 
+VISIT_PROTO_FIELDS(const sync_pb::SendTabToSelfPush& proto) {
+  VISIT(title);
+  VISIT(text);
+  VISIT_REP(icon);
+  VISIT(favicon);
+  VISIT(destination_url);
+  VISIT(placeholder_title);
+  VISIT(placeholder_body);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::SendTabToSelfPush::Image& proto) {
+  VISIT(url);
+  VISIT(alt_text);
+}
+
 VISIT_PROTO_FIELDS(const sync_pb::SendTabToSelfSpecifics& proto) {
   VISIT(guid);
   VISIT(title);
@@ -1161,43 +1277,6 @@ VISIT_PROTO_FIELDS(const sync_pb::SendTabToSelfSpecifics& proto) {
   VISIT(target_device_sync_cache_guid);
   VISIT(opened);
   VISIT(notification_dismissed);
-}
-
-VISIT_PROTO_FIELDS(const sync_pb::SegmentationSpecifics& proto) {
-  VISIT(segmentation_key);
-  VISIT(segment_selection_result);
-  VISIT(device_metadata);
-  VISIT_REP(model_execution_data);
-}
-
-VISIT_PROTO_FIELDS(
-    const sync_pb::SegmentationSpecifics::SegmentSelectionResult& proto) {
-  VISIT(selected_segment);
-  VISIT(expiry_time_windows_epoch_seconds);
-  VISIT(last_updated_time_windows_epoch_seconds);
-}
-
-VISIT_PROTO_FIELDS(
-    const sync_pb::SegmentationSpecifics::DeviceMetadata& proto) {
-  VISIT(cache_guid);
-  VISIT_ENUM(platform_type);
-}
-
-VISIT_PROTO_FIELDS(
-    const sync_pb::SegmentationSpecifics::ModelExecutionData& proto) {
-  VISIT(model_id);
-  VISIT_REP(model_outputs);
-  VISIT(execution_time_windows_epoch_seconds);
-  VISIT(score_expiry_time_windows_epoch_seconds);
-  VISIT(model_version);
-}
-
-VISIT_PROTO_FIELDS(
-    const sync_pb::SegmentationSpecifics::ModelExecutionData::ModelOutput&
-        proto) {
-  VISIT(label);
-  VISIT(score);
-  VISIT(rank);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SessionHeader& proto) {
@@ -1252,16 +1331,17 @@ VISIT_PROTO_FIELDS(const sync_pb::SharedTab& proto) {
 
 VISIT_PROTO_FIELDS(const sync_pb::SharedTabGroupDataSpecifics& proto) {
   VISIT(guid);
-  VISIT(collaboration_id);
   VISIT(last_modification_author);
   VISIT(tab_group);
   VISIT(tab);
+  VISIT(update_time_windows_epoch_micros);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SharingMessageSpecifics& proto) {
   VISIT(message_id);
   VISIT(channel_configuration);
   VISIT_BYTES(payload);
+  VISIT(unencrypted_payload);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SharingMessageSpecifics::
@@ -1271,10 +1351,19 @@ VISIT_PROTO_FIELDS(const sync_pb::SharingMessageSpecifics::
   VISIT(priority);
 }
 
+VISIT_PROTO_FIELDS(const sync_pb::SharingMessageSpecifics::
+                       ChannelConfiguration::ChimeChannelConfiguration& proto) {
+  VISIT_BYTES(device_token);
+  VISIT_ENUM(channel_type);
+  VISIT(type_id);
+  VISIT(representative_target_id);
+}
+
 VISIT_PROTO_FIELDS(
     const sync_pb::SharingMessageSpecifics::ChannelConfiguration& proto) {
   VISIT(fcm);
   VISIT_BYTES(server);
+  VISIT(chime);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SyncCycleCompletedEventInfo& proto) {
@@ -1303,6 +1392,31 @@ VISIT_PROTO_FIELDS(const sync_pb::SyncEntity& proto) {
   VISIT(specifics);
   VISIT(folder);
   VISIT(client_tag_hash);
+  VISIT(collaboration);
+  VISIT(deletion_origin);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::SyncEntity::CollaborationMetadata& proto) {
+  VISIT(collaboration_id);
+  VISIT(attribution_metadata);
+}
+
+VISIT_PROTO_FIELDS(
+    const sync_pb::SyncEntity::CollaborationMetadata::AttributionMetadata&
+        proto) {
+  VISIT(created);
+  VISIT(updated);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::SyncEntity::CollaborationMetadata::
+                       AttributionMetadata::Attribution& proto) {
+  VISIT(user_info);
+}
+
+VISIT_PROTO_FIELDS(
+    const sync_pb::SyncEntity::CollaborationMetadata::AttributionMetadata::
+        Attribution::AttributionUserInfo& proto) {
+  VISIT(gaia_id);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::SyncInvalidationsPayload& proto) {
@@ -1414,11 +1528,13 @@ VISIT_PROTO_FIELDS(const sync_pb::ThemeSpecifics::AutogeneratedTheme& proto) {
 VISIT_PROTO_FIELDS(const sync_pb::TimeRangeDirective& proto) {
   VISIT(start_time_usec);
   VISIT(end_time_usec);
+  VISIT(app_id);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::UrlDirective& proto) {
   VISIT(url);
   VISIT(end_time_usec);
+  VISIT(app_id);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::TypeHint& proto) {
@@ -1432,6 +1548,11 @@ VISIT_PROTO_FIELDS(const sync_pb::TypedUrlSpecifics& proto) {
   VISIT(hidden);
   VISIT_REP(visits);
   VISIT_REP(visit_transitions);
+}
+
+VISIT_PROTO_FIELDS(const sync_pb::UnencryptedSharingMessage& proto) {
+  VISIT(sender_guid);
+  VISIT(sender_device_name);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::UniquePosition& proto) {
@@ -1525,6 +1646,7 @@ VISIT_PROTO_FIELDS(const sync_pb::PaymentInstrument& proto) {
   VISIT(instrument_id);
   VISIT(bank_account);
   VISIT(nickname);
+  VISIT(iban);
 }
 
 VISIT_PROTO_FIELDS(const sync_pb::BankAccountDetails& proto) {

@@ -359,14 +359,16 @@ AppsGridView::AppsGridView(AppListA11yAnnouncer* a11y_announcer,
 
   // Override the a11y name of top level apps grid.
   if (!folder_delegate) {
-    GetViewAccessibility().OverrideName(
-        l10n_util::GetStringUTF16(IDS_ASH_LAUNCHER_APPS_GRID_A11Y_NAME));
+    GetViewAccessibility().SetName(
+        l10n_util::GetStringUTF16(IDS_ASH_LAUNCHER_APPS_GRID_A11Y_NAME),
+        ax::mojom::NameFrom::kAttribute);
   }
 
   if (!IsTabletMode()) {
     // `context_menu_` is only set in clamshell mode. The sort options in tablet
     // mode are handled in RootWindowController with ShelfContextMenuModel.
-    context_menu_ = std::make_unique<AppsGridContextMenu>();
+    context_menu_ = std::make_unique<AppsGridContextMenu>(
+        AppsGridContextMenu::GridType::kAppsGrid);
     set_context_menu_controller(context_menu_.get());
   }
   row_change_animator_ = std::make_unique<AppsGridRowChangeAnimator>(this);
@@ -1122,7 +1124,8 @@ bool AppsGridView::IsAnimatingView(AppListItemView* view) const {
   return view->layer() && view->layer()->GetAnimator()->is_animating();
 }
 
-gfx::Size AppsGridView::CalculatePreferredSize() const {
+gfx::Size AppsGridView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return GetTileGridSize();
 }
 
@@ -2139,6 +2142,11 @@ void AppsGridView::HandleKeyboardAppOperations(ui::KeyboardCode key_code,
                                                bool folder) {
   DCHECK(selected_view_);
 
+  // Do not allow keyboard operations during drag.
+  if (drag_view_) {
+    return;
+  }
+
   if (folder) {
     if (folder_delegate_)
       folder_delegate_->HandleKeyboardReparent(selected_view_, key_code);
@@ -2352,7 +2360,7 @@ void AppsGridView::EndDragFromReparentItemInRootLevel(
       // item.
       MaybeCreateDragReorderAccessibilityEvent();
     } else {
-      NOTREACHED();
+      NOTREACHED_IN_MIGRATION();
     }
   }
 
@@ -3102,7 +3110,9 @@ void AppsGridView::AddPendingPromiseAppRemoval(
     const ui::ImageModel& default_image) {
   auto found = pending_promise_apps_removals_.find(id);
   if (found != pending_promise_apps_removals_.end()) {
-    NOTREACHED();
+    // A promise app might share app id with other apps in the same package.
+    // If a promise app removal is already scheduled to be removed for this
+    // package, just return normally.
     return;
   }
 
@@ -3605,13 +3615,22 @@ void AppsGridView::OnAppListItemViewActivated(
 
   base::RecordAction(base::UserMetricsAction("AppList_ClickOnApp"));
 
+  RecordAppListByCollectionLaunched(pressed_item_view->item()->collection_id(),
+                                    /*is_apps_collections_page=*/false);
+
   // Avoid using |item->id()| as the parameter. In some rare situations,
   // activating the item may destruct it. Using the reference to an object
   // which may be destroyed during the procedure as the function parameter
   // may bring the crash like https://crbug.com/990282.
   const std::string id = pressed_item_view->item()->id();
-  app_list_view_delegate()->ActivateItem(
-      id, event.flags(), AppListLaunchedFrom::kLaunchedFromGrid);
+  const bool is_above_the_fold = IsAboveTheFold(pressed_item_view);
+  app_list_view_delegate()->ActivateItem(id, event.flags(),
+                                         AppListLaunchedFrom::kLaunchedFromGrid,
+                                         is_above_the_fold);
+}
+
+bool AppsGridView::IsAboveTheFold(AppListItemView* item_view) {
+  return false;
 }
 
 void AppsGridView::OnHostDragStartTimerFired() {

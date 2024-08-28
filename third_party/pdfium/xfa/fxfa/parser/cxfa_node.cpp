@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <memory>
 #include <set>
@@ -19,9 +20,13 @@
 #include "core/fxcrt/autorestorer.h"
 #include "core/fxcrt/cfx_read_only_string_stream.h"
 #include "core/fxcrt/cfx_read_only_vector_stream.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/containers/contains.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxcrt/xml/cfx_xmldocument.h"
@@ -34,10 +39,6 @@
 #include "fxjs/xfa/cfxjse_engine.h"
 #include "fxjs/xfa/cfxjse_value.h"
 #include "fxjs/xfa/cjx_node.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/notreached.h"
 #include "xfa/fde/cfde_textout.h"
 #include "xfa/fgas/crt/cfgas_decimal.h"
 #include "xfa/fgas/crt/locale_iface.h"
@@ -375,7 +376,7 @@ namespace {
 
 constexpr uint8_t kMaxExecuteRecursion = 2;
 
-constexpr uint8_t kInvBase64[128] = {
+constexpr std::array<const uint8_t, 128> kInvBase64 = {{
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62,  255,
@@ -385,7 +386,7 @@ constexpr uint8_t kInvBase64[128] = {
     25,  255, 255, 255, 255, 255, 255, 26,  27,  28,  29,  30,  31,  32,  33,
     34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  47,  48,
     49,  50,  51,  255, 255, 255, 255, 255,
-};
+}};
 
 inline uint8_t GetInvBase64(uint8_t x) {
   return (x & 128) == 0 ? kInvBase64[x] : 255;
@@ -407,7 +408,8 @@ DataVector<uint8_t> XFA_Base64Decode(const ByteString& bsStr) {
   if (bsStr.IsEmpty())
     return result;
 
-  DataVector<uint8_t> buffer = XFA_RemoveBase64Whitespace(bsStr.raw_span());
+  DataVector<uint8_t> buffer =
+      XFA_RemoveBase64Whitespace(bsStr.unsigned_span());
   result.reserve(3 * (buffer.size() / 4));
 
   uint32_t dwLimb = 0;
@@ -4304,7 +4306,7 @@ int32_t CXFA_Node::GetSelectedItem(int32_t nIndex) {
   auto it = std::find(wsSaveTextArray.begin(), wsSaveTextArray.end(),
                       wsValueArray[nIndex]);
   return it != wsSaveTextArray.end()
-             ? pdfium::base::checked_cast<int32_t>(it - wsSaveTextArray.begin())
+             ? pdfium::checked_cast<int32_t>(it - wsSaveTextArray.begin())
              : -1;
 }
 
@@ -4316,7 +4318,7 @@ std::vector<int32_t> CXFA_Node::GetSelectedItems() {
     auto it = std::find(wsSaveTextArray.begin(), wsSaveTextArray.end(), value);
     if (it != wsSaveTextArray.end()) {
       iSelArray.push_back(
-          pdfium::base::checked_cast<int32_t>(it - wsSaveTextArray.begin()));
+          pdfium::checked_cast<int32_t>(it - wsSaveTextArray.begin()));
     }
   }
   return iSelArray;
@@ -4351,8 +4353,7 @@ void CXFA_Node::SetItemState(int32_t nIndex,
   auto value_iter = std::find(wsValueArray.begin(), wsValueArray.end(),
                               wsSaveTextArray[nIndex]);
   if (value_iter != wsValueArray.end()) {
-    iSel =
-        pdfium::base::checked_cast<int32_t>(value_iter - wsValueArray.begin());
+    iSel = pdfium::checked_cast<int32_t>(value_iter - wsValueArray.begin());
   }
   if (IsChoiceListMultiSelect()) {
     if (bSelected) {
@@ -4960,11 +4961,11 @@ WideString CXFA_Node::NormalizeNumStr(const WideString& wsValue) {
     return WideString();
 
   WideString wsOutput = wsValue;
-  wsOutput.TrimLeft('0');
+  wsOutput.TrimFront('0');
 
   if (!wsOutput.IsEmpty() && wsOutput.Contains('.') && GetFracDigits() != -1) {
-    wsOutput.TrimRight(L"0");
-    wsOutput.TrimRight(L".");
+    wsOutput.TrimBack(L"0");
+    wsOutput.TrimBack(L".");
   }
   if (wsOutput.IsEmpty() || wsOutput[0] == '.')
     wsOutput.InsertAtFront('0');
@@ -4986,7 +4987,7 @@ WideString CXFA_Node::NumericLimit(const WideString& wsValue) {
   if (iLead == -1 && iTread == -1)
     return wsValue;
 
-  int32_t iCount = pdfium::base::checked_cast<int32_t>(wsValue.GetLength());
+  int32_t iCount = pdfium::checked_cast<int32_t>(wsValue.GetLength());
   if (iCount == 0)
     return wsValue;
 

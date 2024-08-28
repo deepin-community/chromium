@@ -305,7 +305,7 @@ WebDatabaseTable::TypeKey GetKey() {
   return reinterpret_cast<void*>(&table_key);
 }
 
-time_t GetEndTime(const base::Time& end) {
+time_t GetEndTime(base::Time end) {
   if (end.is_null() || end == base::Time::Max()) {
     return std::numeric_limits<time_t>::max();
   }
@@ -646,7 +646,7 @@ std::unique_ptr<AutofillProfile> AddressAutofillTable::GetAutofillProfile(
 
   } while (s.Step());
 
-  // TODO(crbug.com/1464568): Define a proper migration strategy from stored
+  // TODO(crbug.com/40275657): Define a proper migration strategy from stored
   // legacy profiles into i18n ones.
   auto profile = std::make_unique<AutofillProfile>(
       guid, profile_source, AddressCountryCode(country_code));
@@ -733,7 +733,7 @@ AddressAutofillTable::GetAutofillProfileFromLegacyTable(
   return profile;
 }
 
-// TODO(crbug.com/1443393): This function's implementation is very similar to
+// TODO(crbug.com/40267335): This function's implementation is very similar to
 // `GetAutofillProfiles()`. Simplify somehow.
 bool AddressAutofillTable::GetAutofillProfilesFromLegacyTable(
     std::vector<std::unique_ptr<AutofillProfile>>* profiles) const {
@@ -756,22 +756,9 @@ bool AddressAutofillTable::GetAutofillProfilesFromLegacyTable(
   return s.Succeeded();
 }
 
-bool AddressAutofillTable::ClearAllLocalData() {
-  sql::Transaction transaction(db_);
-  if (!transaction.Begin()) {
-    return false;  // Some error, nothing was changed.
-  }
-
-  RemoveAllAutofillProfiles(AutofillProfile::Source::kLocalOrSyncable);
-  bool changed = db_->GetLastChangeCount() > 0;
-
-  transaction.Commit();
-  return changed;
-}
-
 bool AddressAutofillTable::RemoveAutofillDataModifiedBetween(
-    const base::Time& delete_begin,
-    const base::Time& delete_end,
+    base::Time delete_begin,
+    base::Time delete_end,
     std::vector<std::unique_ptr<AutofillProfile>>* profiles) {
   DCHECK(delete_end.is_null() || delete_begin < delete_end);
 

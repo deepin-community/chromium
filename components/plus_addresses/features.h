@@ -12,19 +12,10 @@
 namespace plus_addresses::features {
 
 COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
-BASE_DECLARE_FEATURE(kFeature);
+BASE_DECLARE_FEATURE(kPlusAddressAffiliations);
 
-// Used to control the enterprise plus address feature's autofill suggestion
-// label. Defaults to generic Lorem Ipsum as strings are not yet determined.
 COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
-extern const base::FeatureParam<std::string>
-    kEnterprisePlusAddressSuggestionLabelOverride;
-
-// Used to control the enterprise plus address feature's label in settings.
-// Defaults to generic Lorem Ipsum as strings are not yet determined.
-COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
-extern const base::FeatureParam<std::string>
-    kEnterprisePlusAddressSettingsLabelOverride;
+BASE_DECLARE_FEATURE(kPlusAddressesEnabled);
 
 // Used to control the enterprise plus address feature's OAuth scope.
 COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
@@ -49,6 +40,10 @@ extern const base::FeatureParam<base::TimeDelta>
 COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
 extern const base::FeatureParam<std::string> kPlusAddressManagementUrl;
 
+// Url used to redirect the user to the feature description page.
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+extern const base::FeatureParam<std::string> kPlusAddressLearnMoreUrl;
+
 // Used to exclude certain sites from PlusAddressService. Must be a
 // comma-separated list of site names (eTLD+1).
 COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
@@ -62,6 +57,37 @@ extern const base::FeatureParam<std::string> kPlusAddressErrorReportUrl;
 // a 403.
 COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
 extern const base::FeatureParam<bool> kDisableForForbiddenUsers;
+
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressFallbackFromContextMenu);
+
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressGlobalToggle);
+
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressOfferCreationOnSingleUsernameForms);
+
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressProfileAwareFeatureCheck);
+
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressRefresh);
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressSettingsRefreshDesktop);
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressUserOnboardingEnabled);
+
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressAndSingleFieldFormFill);
+
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(PLUS_ADDRESSES_FEATURES)
+BASE_DECLARE_FEATURE(kPlusAddressAndroidManualFallbackEnabled);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace plus_addresses::features
 

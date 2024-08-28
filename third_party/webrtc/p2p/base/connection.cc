@@ -26,7 +26,7 @@
 #include "p2p/base/p2p_constants.h"
 #include "rtc_base/byte_buffer.h"
 #include "rtc_base/checks.h"
-#include "rtc_base/helpers.h"
+#include "rtc_base/crypto_random.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/net_helper.h"
 #include "rtc_base/network.h"
@@ -42,6 +42,8 @@
 
 namespace cricket {
 namespace {
+
+using webrtc::IceCandidateType;
 
 // Determines whether we have seen at least the given maximum number of
 // pings fail to have a response.
@@ -75,16 +77,16 @@ inline bool TooLongWithoutResponse(
 
 // Helper methods for converting string values of log description fields to
 // enum.
-webrtc::IceCandidateType GetRtcEventLogCandidateType(const Candidate& c) {
+IceCandidateType GetRtcEventLogCandidateType(const Candidate& c) {
   if (c.is_local()) {
-    return webrtc::IceCandidateType::kHost;
+    return IceCandidateType::kHost;
   } else if (c.is_stun()) {
-    return webrtc::IceCandidateType::kSrflx;
+    return IceCandidateType::kSrflx;
   } else if (c.is_prflx()) {
-    return webrtc::IceCandidateType::kPrflx;
+    return IceCandidateType::kPrflx;
   }
   RTC_DCHECK(c.is_relay());
-  return webrtc::IceCandidateType::kRelay;
+  return IceCandidateType::kRelay;
 }
 
 webrtc::IceCandidatePairProtocol GetProtocolByString(
@@ -142,12 +144,6 @@ const int MINIMUM_RTT = 100;    // 0.1 seconds
 const int MAXIMUM_RTT = 60000;  // 60 seconds
 
 const int DEFAULT_RTT_ESTIMATE_HALF_TIME_MS = 500;
-
-// Computes our estimate of the RTT given the current estimate.
-inline int ConservativeRTTEstimate(int rtt) {
-  return rtc::SafeClamp(2 * rtt, MINIMUM_RTT, MAXIMUM_RTT);
-}
-
 // Weighting of the old rtt value to new data.
 const int RTT_RATIO = 3;  // 3 : 1
 
@@ -917,7 +913,8 @@ void Connection::UpdateState(int64_t now) {
   if (!port_)
     return;
 
-  int rtt = ConservativeRTTEstimate(rtt_);
+  // Computes our estimate of the RTT given the current estimate.
+  int rtt = rtc::SafeClamp(2 * rtt_, MINIMUM_RTT, MAXIMUM_RTT);
 
   if (RTC_LOG_CHECK_LEVEL(LS_VERBOSE)) {
     std::string pings;
@@ -1181,8 +1178,10 @@ void Connection::ReceivedPingResponse(
   UpdateReceiving(last_ping_response_received_);
   set_write_state(STATE_WRITABLE);
   set_state(IceCandidatePairState::SUCCEEDED);
+
+  // Smooth the RTT estimate using a moving average.
   if (rtt_samples_ > 0) {
-    rtt_ = rtc::GetNextMovingAverage(rtt_, rtt, RTT_RATIO);
+    rtt_ = (RTT_RATIO * rtt_ + rtt) / (RTT_RATIO + 1);
   } else {
     rtt_ = rtt;
   }
@@ -1692,13 +1691,12 @@ void Connection::MaybeUpdateLocalCandidate(StunRequest* request,
 
   // Create a peer-reflexive candidate based on the local candidate.
   local_candidate_.generate_id();
-  local_candidate_.set_type(PRFLX_PORT_TYPE);
+  local_candidate_.set_type(IceCandidateType::kPrflx);
   // Set the related address and foundation attributes before changing the
   // address.
   local_candidate_.set_related_address(local_candidate_.address());
-  local_candidate_.set_foundation(port()->ComputeFoundation(
-      PRFLX_PORT_TYPE, local_candidate_.protocol(),
-      local_candidate_.relay_protocol(), local_candidate_.address()));
+  local_candidate_.ComputeFoundation(local_candidate_.address(),
+                                     port_->IceTiebreaker());
   local_candidate_.set_priority(priority);
   local_candidate_.set_address(addr->GetAddress());
 

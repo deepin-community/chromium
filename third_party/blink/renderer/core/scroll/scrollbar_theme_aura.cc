@@ -175,18 +175,19 @@ int ScrollbarThemeAura::ScrollbarThickness(
   return scrollbar_size.width() * Proportion(scrollbar_width) * scale_from_dip;
 }
 
-bool ScrollbarThemeAura::HasThumb(const Scrollbar& scrollbar) {
+bool ScrollbarThemeAura::HasThumb(const Scrollbar& scrollbar) const {
   // This method is just called as a paint-time optimization to see if
   // painting the thumb can be skipped. We don't have to be exact here.
   return ThumbLength(scrollbar) > 0;
 }
 
-gfx::Rect ScrollbarThemeAura::BackButtonRect(const Scrollbar& scrollbar) {
+gfx::Rect ScrollbarThemeAura::BackButtonRect(const Scrollbar& scrollbar) const {
   gfx::Size size = ButtonSize(scrollbar);
   return gfx::Rect(scrollbar.X(), scrollbar.Y(), size.width(), size.height());
 }
 
-gfx::Rect ScrollbarThemeAura::ForwardButtonRect(const Scrollbar& scrollbar) {
+gfx::Rect ScrollbarThemeAura::ForwardButtonRect(
+    const Scrollbar& scrollbar) const {
   gfx::Size size = ButtonSize(scrollbar);
   int x, y;
   if (scrollbar.Orientation() == kHorizontalScrollbar) {
@@ -199,7 +200,7 @@ gfx::Rect ScrollbarThemeAura::ForwardButtonRect(const Scrollbar& scrollbar) {
   return gfx::Rect(x, y, size.width(), size.height());
 }
 
-gfx::Rect ScrollbarThemeAura::TrackRect(const Scrollbar& scrollbar) {
+gfx::Rect ScrollbarThemeAura::TrackRect(const Scrollbar& scrollbar) const {
   // The track occupies all space between the two buttons.
   gfx::Size bs = ButtonSize(scrollbar);
   if (scrollbar.Orientation() == kHorizontalScrollbar) {
@@ -214,7 +215,7 @@ gfx::Rect ScrollbarThemeAura::TrackRect(const Scrollbar& scrollbar) {
                    scrollbar.Width(), scrollbar.Height() - 2 * bs.height());
 }
 
-int ScrollbarThemeAura::MinimumThumbLength(const Scrollbar& scrollbar) {
+int ScrollbarThemeAura::MinimumThumbLength(const Scrollbar& scrollbar) const {
   int scrollbar_thickness =
       (scrollbar.Orientation() == kVerticalScrollbar)
           ? WebThemeEngineHelper::GetNativeThemeEngine()
@@ -265,7 +266,8 @@ void ScrollbarThemeAura::PaintTrack(GraphicsContext& context,
       scrollbar.Orientation() == kHorizontalScrollbar
           ? WebThemeEngine::kPartScrollbarHorizontalTrack
           : WebThemeEngine::kPartScrollbarVerticalTrack,
-      state, rect, &extra_params, color_scheme, color_provider);
+      state, rect, &extra_params, color_scheme,
+      scrollbar.GetScrollableArea()->InForcedColorsMode(), color_provider);
 }
 
 void ScrollbarThemeAura::PaintButton(GraphicsContext& gc,
@@ -297,7 +299,7 @@ void ScrollbarThemeAura::PaintButton(GraphicsContext& gc,
       scrollbar.GetScrollableArea()->GetColorProvider(color_scheme);
   WebThemeEngineHelper::GetNativeThemeEngine()->Paint(
       gc.Canvas(), params.part, params.state, rect, &extra_params, color_scheme,
-      color_provider);
+      scrollbar.GetScrollableArea()->InForcedColorsMode(), color_provider);
 }
 
 void ScrollbarThemeAura::PaintThumb(GraphicsContext& gc,
@@ -329,11 +331,13 @@ void ScrollbarThemeAura::PaintThumb(GraphicsContext& gc,
       scrollbar.Orientation() == kHorizontalScrollbar
           ? WebThemeEngine::kPartScrollbarHorizontalThumb
           : WebThemeEngine::kPartScrollbarVerticalThumb,
-      state, rect, &params, color_scheme, color_provider);
+      state, rect, &params, color_scheme,
+      scrollbar.GetScrollableArea()->InForcedColorsMode(), color_provider);
 }
 
 WebThemeEngine::ScrollbarThumbExtraParams
-ScrollbarThemeAura::BuildScrollbarThumbExtraParams(const Scrollbar& scrollbar) {
+ScrollbarThemeAura::BuildScrollbarThumbExtraParams(
+    const Scrollbar& scrollbar) const {
   WebThemeEngine::ScrollbarThumbExtraParams scrollbar_thumb;
 
   if (scrollbar.ScrollbarThumbColor().has_value()) {
@@ -365,7 +369,7 @@ ScrollbarPart ScrollbarThemeAura::PartsToInvalidateOnThumbPositionChange(
 }
 
 bool ScrollbarThemeAura::ShouldCenterOnThumb(const Scrollbar& scrollbar,
-                                             const WebMouseEvent& event) {
+                                             const WebMouseEvent& event) const {
 // TODO(crbug.com/1052397): Revisit once build flag switch of lacros-chrome is
 // complete.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
@@ -379,7 +383,7 @@ bool ScrollbarThemeAura::ShouldCenterOnThumb(const Scrollbar& scrollbar,
 
 bool ScrollbarThemeAura::ShouldSnapBackToDragOrigin(
     const Scrollbar& scrollbar,
-    const WebMouseEvent& event) {
+    const WebMouseEvent& event) const {
   if (!SupportsDragSnapBack())
     return false;
 

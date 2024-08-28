@@ -14,7 +14,6 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -50,6 +49,7 @@ constexpr char kAPKey[] = "ap_key";
 
 constexpr char kHadApps[] = "had_apps";
 constexpr char kUsageStatsEnabledKey[] = "usage_stats_enabled";
+constexpr char kEulaRequired[] = "eula_required";
 
 constexpr char kLastChecked[] = "last_checked";
 constexpr char kLastStarted[] = "last_started";
@@ -331,6 +331,11 @@ int PersistedData::GetInstallDate(const std::string& id) const {
   return delegate_->GetInstallDate(id);
 }
 
+void PersistedData::SetInstallDate(const std::string& id, int install_date) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  delegate_->SetInstallDate(id, install_date);
+}
+
 void PersistedData::GetActiveBits(
     const std::vector<std::string>& ids,
     base::OnceCallback<void(const std::set<std::string>&)> callback) const {
@@ -349,9 +354,9 @@ void PersistedData::SetThrottleUpdatesUntil(const base::Time& time) {
 }
 
 void PersistedData::RegisterApp(const RegistrationRequest& rq) {
-  VLOG(2) << __func__ << ": Registering " << rq.app_id << " at version "
-          << rq.version;
+  VLOG(2) << __func__ << ": Registering " << rq.app_id;
   if (rq.version.IsValid()) {
+    VLOG(2) << __func__ << ": app version " << rq.version;
     SetProductVersion(rq.app_id, rq.version);
   }
   if (!rq.version_path.empty()) {
@@ -388,6 +393,9 @@ void PersistedData::RegisterApp(const RegistrationRequest& rq) {
   } else if (GetDateLastRollCall(rq.app_id) == update_client::kDateUnknown) {
     SetDateLastRollCall(rq.app_id, update_client::kDateFirstTime);
   }
+  if (rq.install_date) {
+    SetInstallDate(rq.app_id, *rq.install_date);
+  }
   if (!rq.cohort.empty()) {
     SetCohort(rq.app_id, rq.cohort);
   }
@@ -409,7 +417,7 @@ bool PersistedData::RemoveApp(const std::string& id) {
                               update_client::kPersistedDataPreference);
   base::Value::Dict* apps = update->FindDict("apps");
 
-  return apps ? apps->Remove(id) : false;
+  return apps ? apps->Remove(base::ToLowerASCII(id)) : false;
 }
 
 std::vector<std::string> PersistedData::GetAppIds() const {
@@ -538,6 +546,23 @@ void PersistedData::SetUsageStatsEnabled(bool usage_stats_enabled) {
   }
 }
 
+bool PersistedData::GetEulaRequired() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return pref_service_ && pref_service_->GetBoolean(kEulaRequired);
+}
+
+void PersistedData::SetEulaRequired(bool eula_required) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (pref_service_) {
+    pref_service_->SetBoolean(kEulaRequired, eula_required);
+  }
+#if BUILDFLAG(IS_WIN)
+  // For backwards compatibility, `eulaaccepted` is recorded in the registry,
+  // since some applications read it from there.
+  SetEulaAccepted(scope_, !eula_required);
+#endif
+}
+
 base::Time PersistedData::GetLastChecked() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return pref_service_->GetTime(kLastChecked);
@@ -610,6 +635,7 @@ void PersistedData::SetLastOSVersion() {
 void RegisterPersistedDataPrefs(scoped_refptr<PrefRegistrySimple> registry) {
   registry->RegisterBooleanPref(kHadApps, false);
   registry->RegisterBooleanPref(kUsageStatsEnabledKey, false);
+  registry->RegisterBooleanPref(kEulaRequired, false);
   registry->RegisterTimePref(kLastChecked, {});
   registry->RegisterTimePref(kLastStarted, {});
   registry->RegisterStringPref(kLastOSVersion, {});

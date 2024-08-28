@@ -20,9 +20,9 @@ class SDLVideoPlayer final : public SDLPlayerBase {
   // player has halted and set |error_status()|.
   SDLVideoPlayer(ClockNowFunctionPtr now_function,
                  TaskRunner& task_runner,
-                 Receiver* receiver,
+                 Receiver& receiver,
                  VideoCodec codec_name,
-                 SDL_Renderer* renderer,
+                 SDL_Renderer& renderer,
                  std::function<void()> error_callback);
 
   ~SDLVideoPlayer() final;
@@ -46,7 +46,7 @@ class SDLVideoPlayer final : public SDLPlayerBase {
   static uint32_t GetSDLPixelFormat(const AVFrame& picture);
 
   // The SDL renderer drawn to.
-  SDL_Renderer* const renderer_;
+  SDL_Renderer& renderer_;
 
   // The SDL texture to which the current frame's image is uploaded for
   // accelerated 2D rendering.

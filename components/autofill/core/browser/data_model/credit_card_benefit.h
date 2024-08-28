@@ -63,17 +63,19 @@ class CreditCardBenefitBase {
                         base::Time expiry_time);
 
   // The following is intentional:
-  // - operator==() is defined as member so that it's not publicly accessible.
-  // - The friendships are necessary to allow the subclass's operator==() to
-  //   call the base class's protected operator==(). Limiting friendship to
-  //   the derived class's operator==() does not work nicely until Clang
-  //   implements https://reviews.llvm.org/D103929.
+  // - operator<=>() and ==() are defined as member so that it's not publicly
+  // accessible.
+  // - The friendships are necessary to allow the subclass's operators to call
+  //   the base class's protected operators. Limiting friendship to the derived
+  //   class's operators does not work nicely until Clang implements
+  //   https://reviews.llvm.org/D103929.
   bool operator==(const CreditCardBenefitBase& b) const = default;
+  auto operator<=>(const CreditCardBenefitBase& b) const = default;
   friend class CreditCardFlatRateBenefit;
   friend class CreditCardCategoryBenefit;
   friend class CreditCardMerchantBenefit;
 
-  bool IsValid() const;
+  bool IsValidForWriteFromSync() const;
 
   // Represents the unique identifier for this benefit. Generated in sync
   // server.
@@ -110,8 +112,10 @@ class CreditCardFlatRateBenefit : public CreditCardBenefitBase {
 
   friend bool operator==(const CreditCardFlatRateBenefit&,
                          const CreditCardFlatRateBenefit&) = default;
+  friend auto operator<=>(const CreditCardFlatRateBenefit&,
+                          const CreditCardFlatRateBenefit&) = default;
 
-  bool IsValid() const;
+  bool IsValidForWriteFromSync() const;
 };
 
 // Credit-card-linked benefit that users receive when making an online purchases
@@ -147,8 +151,10 @@ class CreditCardCategoryBenefit : public CreditCardBenefitBase {
 
   friend bool operator==(const CreditCardCategoryBenefit&,
                          const CreditCardCategoryBenefit&) = default;
+  friend auto operator<=>(const CreditCardCategoryBenefit&,
+                          const CreditCardCategoryBenefit&) = default;
 
-  bool IsValid() const;
+  bool IsValidForWriteFromSync() const;
 
   BenefitCategory benefit_category() const { return benefit_category_; }
 
@@ -177,8 +183,10 @@ class CreditCardMerchantBenefit : public CreditCardBenefitBase {
 
   friend bool operator==(const CreditCardMerchantBenefit&,
                          const CreditCardMerchantBenefit&) = default;
+  friend auto operator<=>(const CreditCardMerchantBenefit&,
+                          const CreditCardMerchantBenefit&) = default;
 
-  bool IsValid() const;
+  bool IsValidForWriteFromSync() const;
 
   const base::flat_set<url::Origin>& merchant_domains() const {
     return merchant_domains_;

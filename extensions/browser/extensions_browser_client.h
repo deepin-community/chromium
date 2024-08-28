@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+
 #include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
@@ -19,7 +20,6 @@
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_prefs_observer.h"
 #include "extensions/browser/extensions_browser_api_provider.h"
-#include "extensions/browser/guest_view/web_view/controlled_frame_embedder_url_fetcher.h"
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/view_type.mojom.h"
@@ -29,7 +29,6 @@
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
@@ -246,7 +245,8 @@ class ExtensionsBrowserClient {
       bool is_incognito,
       const Extension* extension,
       const ExtensionSet& extensions,
-      const ProcessMap& process_map) = 0;
+      const ProcessMap& process_map,
+      const GURL& upstream_url) = 0;
 
   // Returns the PrefService associated with |context|.
   virtual PrefService* GetPrefServiceForContext(
@@ -265,6 +265,7 @@ class ExtensionsBrowserClient {
 
   virtual mojo::PendingRemote<network::mojom::URLLoaderFactory>
   GetControlledFrameEmbedderURLLoader(
+      const url::Origin& app_origin,
       int frame_tree_node_id,
       content::BrowserContext* browser_context) = 0;
 
@@ -464,6 +465,14 @@ class ExtensionsBrowserClient {
       content::BrowserContext* context,
       const ExtensionId& extension_id,
       const std::vector<api::declarative_net_request::Rule>& rules) const;
+
+  // Notifies the extension telemetry service when declarativeNetRequest
+  // redirect action is invoked.
+  virtual void NotifyExtensionDeclarativeNetRequestRedirectAction(
+      content::BrowserContext* context,
+      const ExtensionId& extension_id,
+      const GURL& request_url,
+      const GURL& redirect_url) const;
 
   // TODO(zackhan): This is a temporary implementation of notifying the
   // extension telemetry service when there are web requests initiated from
